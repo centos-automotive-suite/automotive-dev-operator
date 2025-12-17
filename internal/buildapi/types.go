@@ -22,20 +22,11 @@ const (
 	ModeImage Mode = "image"
 	// ModePackage creates traditional, mutable, package-based disk images
 	ModePackage Mode = "package"
-	// ModeDisk creates a disk image from an existing bootc container
-	ModeDisk Mode = "disk"
 )
 
-// IsValid checks if a string value is non-empty after trimming whitespace
-func IsValid(s string) bool {
-	return strings.TrimSpace(s) != ""
+func (m Mode) IsValid() bool {
+	return strings.TrimSpace(string(m)) != ""
 }
-
-func (d Distro) IsValid() bool       { return IsValid(string(d)) }
-func (t Target) IsValid() bool       { return IsValid(string(t)) }
-func (a Architecture) IsValid() bool { return IsValid(string(a)) }
-func (e ExportFormat) IsValid() bool { return IsValid(string(e)) }
-func (m Mode) IsValid() bool         { return IsValid(string(m)) }
 
 // IsBootc returns true if this is bootc mode
 func (m Mode) IsBootc() bool {

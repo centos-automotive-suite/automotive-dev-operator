@@ -657,41 +657,7 @@ func createPushSecret(ctx context.Context, k8sClient client.Client, namespace, b
 	return secretName, nil
 }
 
-// Shell metacharacters that must be blocked to prevent injection attacks
-var shellMetachars = []string{";", "|", "&", "$", "`", "(", ")", "{", "}", "<", ">", "!", "\\", "'", "\"", "\n", "\r"}
-
-// validateInput validates a string for dangerous characters and length
-func validateInput(value, fieldName string, maxLen int, allowEmpty bool, extraChars ...string) error {
-	if value == "" {
-		if allowEmpty {
-			return nil
-		}
-		return fmt.Errorf("%s is required", fieldName)
-	}
-
-	// Combine shell metacharacters with any additional blocked characters
-	blockedChars := append(shellMetachars, extraChars...)
-	for _, char := range blockedChars {
-		if strings.Contains(value, char) {
-			return fmt.Errorf("%s contains invalid character: %q", fieldName, char)
-		}
-	}
-
-	if len(value) > maxLen {
-		return fmt.Errorf("%s too long (max %d characters)", fieldName, maxLen)
-	}
-	return nil
-}
-
-func validateContainerRef(ref string) error {
-	return validateInput(ref, "container reference", 500, true)
-}
-
-func validateBuildName(name string) error {
-	return validateInput(name, "build name", 253, false, "/")
-}
-
-func (a *APIServer) createBuild(c *gin.Context) {
+func createBuild(c *gin.Context) {
 	var req BuildRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
@@ -914,7 +880,6 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			BuildDiskImage:         req.BuildDiskImage,
 			ExportOCI:              req.ExportOCI,
 			BuilderImage:           req.BuilderImage,
-			ContainerRef:           req.ContainerRef,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
@@ -936,6 +901,12 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	if pushSecretName != "" {
 		if err := setSecretOwnerRef(ctx, k8sClient, namespace, pushSecretName, imageBuild); err != nil {
 			log.Printf("WARNING: failed to set owner reference on push secret %s: %v (cleanup may require manual intervention)", pushSecretName, err)
+		}
+	}
+
+	if pushSecretName != "" {
+		if err := setOwnerRef(ctx, k8sClient, namespace, pushSecretName, imageBuild); err != nil {
+			// best-effort
 		}
 	}
 

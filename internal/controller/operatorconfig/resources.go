@@ -26,13 +26,65 @@ func getOperatorImage() string {
 	return defaultOperatorImage
 }
 
+// buildWebUIContainers builds the container list for WebUI deployment, conditionally including oauth-proxy
+func (r *OperatorConfigReconciler) buildWebUIContainers(isOpenShift bool) []corev1.Container {
+	containers := []corev1.Container{
+		{
+			Name:            "webui",
+			Image:           defaultWebUIImage,
+			ImagePullPolicy: corev1.PullAlways,
+			Ports: []corev1.ContainerPort{
+				{
+					ContainerPort: 8080,
+					Name:          "http",
+				},
+			},
+			Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("500m"),
+					corev1.ResourceMemory: resource.MustParse("512Mi"),
+				},
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("128Mi"),
+				},
+			},
+			SecurityContext: &corev1.SecurityContext{
+				AllowPrivilegeEscalation: boolPtr(false),
+				Capabilities: &corev1.Capabilities{
+					Drop: []corev1.Capability{"ALL"},
+				},
+				ReadOnlyRootFilesystem: boolPtr(true),
+				RunAsNonRoot:           boolPtr(true),
+				RunAsUser:              int64Ptr(1001),
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{
+					Name:      "nginx-config",
+					MountPath: "/etc/nginx/nginx.conf",
+					SubPath:   "nginx.conf",
+				},
+				{
+					Name:      "nginx-cache",
+					MountPath: "/var/cache/nginx",
+				},
+				{
+					Name:      "nginx-run",
+					MountPath: "/var/run",
+				},
+			},
+		},
+	}
+	return defaultOperatorImage
+}
+
 // buildBuildAPIContainers builds the container list for build-API deployment, conditionally including oauth-proxy
 func (r *OperatorConfigReconciler) buildBuildAPIContainers(isOpenShift bool) []corev1.Container {
 	containers := []corev1.Container{
 		{
 			Name:            "build-api",
 			Image:           getOperatorImage(),
-			ImagePullPolicy: corev1.PullIfNotPresent,
+			ImagePullPolicy: corev1.PullAlways,
 			Command:         []string{"/build-api"},
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
@@ -161,7 +213,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(isOpenShift bool) *ap
 						{
 							Name:            "init-secrets",
 							Image:           getOperatorImage(),
-							ImagePullPolicy: corev1.PullIfNotPresent,
+							ImagePullPolicy: corev1.PullAlways,
 							Command:         []string{"/init-secrets"},
 							Env: []corev1.EnvVar{
 								{

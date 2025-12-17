@@ -22,9 +22,9 @@ USER 1001
 
 ENV CGO_ENABLED=0
 ENV GOCACHE=/workspace/.cache
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o manager cmd/main.go
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o build-api cmd/build-api/main.go
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o init-secrets cmd/init-secrets/main.go
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w" -o manager cmd/main.go
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w" -o build-api cmd/build-api/main.go
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w" -o init-secrets cmd/init-secrets/main.go
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
