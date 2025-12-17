@@ -1,0 +1,1 @@
+build-bootc base.aib.yml --name qemu-bootc --target qemu -push quay.io/bzlotnik/bootc-base:latest --build-disk-image --format qcow2 --export-oci quay.io/bzlotnik/bootc-base:latest-disk --registry-username bzlotnik --registry-password KwBxd4ZFJciD4+g7neUviN5+NOER/9h0wk1vpZ8TcSmFjaaTMbmB7geRhSCHvoXY

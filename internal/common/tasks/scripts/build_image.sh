@@ -56,8 +56,6 @@ else
   export STORAGE_DRIVER=vfs
 fi
 
-umask 0077
-
 TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 REGISTRY="image-registry.openshift-image-registry.svc:5000"
 NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
@@ -258,38 +256,40 @@ case "$arch" in
 esac
 
 
+USE_OVERRIDE=false
+if [ -f "$AIB_OVERRIDE_ARGS_FILE" ]; then
+  USE_OVERRIDE=true
+  override_format=$(get_flag_value "--format" $AIB_ARGS)
+  if [ -z "$override_format" ]; then
+    override_format=$(get_flag_value "--export" $AIB_ARGS)
+  fi
+  override_distro=$(get_flag_value "--distro" $AIB_ARGS)
+  override_target=$(get_flag_value "--target" $AIB_ARGS)
+  [ -n "$override_distro" ] && cleanName="$override_distro-${cleanName#*-}"
+  [ -n "$override_target" ] && cleanName="${cleanName%-*}-$override_target"
+  if [ -n "$override_format" ]; then
+    case "$override_format" in
+      image|raw)
+        file_extension=".raw" ;;
+      qcow2)
+        file_extension=".qcow2" ;;
+      *)
+        file_extension=".$override_format" ;;
+    esac
+  fi
+  exportFile=${cleanName}${file_extension}
+fi
+
 CONTAINER_PUSH="$(params.container-push)"
 BUILD_DISK_IMAGE="$(params.build-disk-image)"
 EXPORT_OCI="$(params.export-oci)"
 BUILDER_IMAGE="$(params.builder-image)"
-CLUSTER_REGISTRY_ROUTE="$(params.cluster-registry-route)"
-CONTAINER_REF="$(params.container-ref)"
 
-echo "=== Build Configuration ==="
-echo "BUILD_MODE: $BUILD_MODE"
-echo "CONTAINER_PUSH: ${CONTAINER_PUSH:-<empty>}"
-echo "BUILD_DISK_IMAGE: $BUILD_DISK_IMAGE"
-echo "EXPORT_OCI: ${EXPORT_OCI:-<empty>}"
-echo "==========================="
-
-if [ -n "$CONTAINER_PUSH" ]; then
-  BOOTC_CONTAINER_NAME="$CONTAINER_PUSH"
-else
-  BOOTC_CONTAINER_NAME="localhost/aib-build:$(params.distro)-$(params.target)"
-fi
+BOOTC_CONTAINER_NAME="localhost/aib-build:$(params.distro)-$(params.target)"
 
 BUILD_CONTAINER_ARG=""
-LOCAL_BUILDER_IMAGE="localhost/aib-build:$(params.distro)-$TARGET_ARCH"
-
-# For bootc/disk builds, if no builder-image is provided but cluster-registry-route is set,
-# use the image that prepare-builder cached in the cluster registry
-if [ -z "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; } && [ -n "$CLUSTER_REGISTRY_ROUTE" ]; then
-  NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
-  BUILDER_IMAGE="${CLUSTER_REGISTRY_ROUTE}/${NAMESPACE}/aib-build:$(params.distro)-$TARGET_ARCH"
-  echo "Using builder image from cluster registry: $BUILDER_IMAGE"
-fi
-
-if [ -n "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; }; then
+LOCAL_BUILDER_IMAGE="localhost/aib-build:$(params.distro)"
+if [ -n "$BUILDER_IMAGE" ] && [ "$BUILD_MODE" = "bootc" ]; then
   echo "Pulling builder image to local storage: $BUILDER_IMAGE"
 
   TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || echo "")
@@ -317,50 +317,34 @@ EOF
   BUILD_CONTAINER_ARG="--build-container $LOCAL_BUILDER_IMAGE"
 fi
 
-# Build command execution using arrays for security (no eval)
-# Parse BUILD_CONTAINER_ARG safely
-declare -a BUILD_CONTAINER_ARGS=()
-if [ -n "$LOCAL_BUILDER_IMAGE" ]; then
-  BUILD_CONTAINER_ARGS=("--build-container" "$LOCAL_BUILDER_IMAGE")
-fi
-
-# Parse FORMAT_ARG safely
-declare -a FORMAT_ARGS=()
-if [ -n "$FORMAT_ARG" ]; then
-  # FORMAT_ARG is "--format <value>" or similar
-  for word in $FORMAT_ARG; do
-    FORMAT_ARGS+=("$word")
-  done
-fi
-
-# Common build arguments used across all modes
-declare -a COMMON_BUILD_ARGS=(
-  --build-dir=/output/_build
-  --osbuild-manifest=/output/image.json
-)
-
-case "$BUILD_MODE" in
+if [ "$USE_OVERRIDE" = true ]; then
+  build_command="aib --verbose \
+  build \
+  $CUSTOM_DEFS \
+  --build-dir=/output/_build \
+  --osbuild-manifest=/output/image.json \
+  $AIB_ARGS \
+  $MANIFEST_FILE \
+  /output/${exportFile}"
+  echo "Running the build command (override): $build_command"
+  eval "$build_command"
+else
+  case "$BUILD_MODE" in
     bootc)
-      # Build bootc container and optionally disk image in a single command
-      # aib build takes: manifest out [disk] where disk is optional
-      declare -a DISK_OUTPUT_ARGS=()
-      if [ "$BUILD_DISK_IMAGE" = "true" ]; then
-        DISK_OUTPUT_ARGS=("/output/${exportFile}")
-      fi
-
-      echo "Running bootc build"
-      aib --verbose build \
-        --distro "$(params.distro)" \
-        --target "$(params.target)" \
-        "--arch=${arch}" \
-        "${COMMON_BUILD_ARGS[@]}" \
-        "${FORMAT_ARGS[@]}" \
-        "${BUILD_CONTAINER_ARGS[@]}" \
-        "${CUSTOM_DEFS_ARGS[@]}" \
-        "${AIB_EXTRA_ARGS[@]}" \
-        "$MANIFEST_FILE" \
-        "$BOOTC_CONTAINER_NAME" \
-        "${DISK_OUTPUT_ARGS[@]}"
+      build_command="aib --verbose build \
+      --distro $(params.distro) \
+      --target $(params.target) \
+      --arch=${arch} \
+      --build-dir=/output/_build \
+      --osbuild-manifest=/output/image.json \
+      $BUILD_CONTAINER_ARG \
+      $CUSTOM_DEFS \
+      $AIB_ARGS \
+      $MANIFEST_FILE \
+      $BOOTC_CONTAINER_NAME \
+      /output/${exportFile}"
+      echo "Running bootc build: $build_command"
+      eval "$build_command"
 
       if [ -n "$CONTAINER_PUSH" ]; then
         echo "Pushing container to registry: $CONTAINER_PUSH"
@@ -370,60 +354,46 @@ case "$BUILD_MODE" in
           "docker://$CONTAINER_PUSH"
         echo "Container pushed successfully to $CONTAINER_PUSH"
       fi
-
-      if [ "$BUILD_DISK_IMAGE" = "true" ]; then
-        echo "Disk image created: /output/${exportFile}"
-        # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
-      fi
       ;;
-    image|package)
-      echo "Running $BUILD_MODE build"
-      aib-dev --verbose build \
-        "${CUSTOM_DEFS_ARGS[@]}" \
-        --distro "$(params.distro)" \
-        --target "$(params.target)" \
-        "--arch=${arch}" \
-        "${FORMAT_ARGS[@]}" \
-        "${COMMON_BUILD_ARGS[@]}" \
-        "${AIB_EXTRA_ARGS[@]}" \
-        "$MANIFEST_FILE" \
-        "/output/${exportFile}"
+    image)
+      build_command="aib --verbose \
+      build \
+      $CUSTOM_DEFS \
+      --distro $(params.distro) \
+      --target $(params.target) \
+      --arch=${arch} \
+      --export $(params.export-format) \
+      --mode image \
+      --build-dir=/output/_build \
+      --osbuild-manifest=/output/image.json \
+      $AIB_ARGS \
+      $MANIFEST_FILE \
+      /output/${exportFile}"
+      echo "Running the build command: $build_command"
+      eval "$build_command"
       ;;
-    disk)
-      # Disk mode: create disk image from existing bootc container
-      if [ -z "$CONTAINER_REF" ]; then
-        echo "Error: container-ref is required for disk mode"
-        exit 1
-      fi
-      # Validate container reference for shell injection
-      validate_arg "$CONTAINER_REF" "container-ref"
-      echo "Creating disk image from container: $CONTAINER_REF"
-
-      # Pull the container image first
-      echo "Pulling container image..."
-      # Try without auth first (for public images), fall back to auth file if needed
-      if ! skopeo copy "docker://$CONTAINER_REF" "containers-storage:$CONTAINER_REF" 2>/dev/null; then
-        echo "Public pull failed, trying with auth..."
-        skopeo copy --authfile="$REGISTRY_AUTH_FILE" \
-          "docker://$CONTAINER_REF" \
-          "containers-storage:$CONTAINER_REF"
-      fi
-
-      # to-disk-image only accepts: --format, --build-container, src_container, out
-      echo "Running to-disk-image"
-      aib --verbose to-disk-image \
-        "${FORMAT_ARGS[@]}" \
-        "${BUILD_CONTAINER_ARGS[@]}" \
-        "$CONTAINER_REF" \
-        "/output/${exportFile}"
-
-      # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
+    package)
+      build_command="aib-dev --verbose \
+      build \
+      $CUSTOM_DEFS \
+      --distro $(params.distro) \
+      --target $(params.target) \
+      --arch=${arch} \
+      --format $(params.export-format) \
+      --build-dir=/output/_build \
+      --osbuild-manifest=/output/image.json \
+      $AIB_ARGS \
+      $MANIFEST_FILE \
+      /output/${exportFile}"
+      echo "Running the build command: $build_command"
+      eval "$build_command"
       ;;
     *)
-      echo "Error: Unknown build mode '$BUILD_MODE'. Supported modes: bootc, image, package, disk"
+      echo "Error: Unknown build mode '$BUILD_MODE'. Supported modes: bootc, image, package"
       exit 1
       ;;
   esac
+fi
 
 echo "Build completed. Contents of output directory:"
 ls -la /output/ || true

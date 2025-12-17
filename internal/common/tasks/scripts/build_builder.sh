@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-echo "Prepare builder for distro: $DISTRO, arch: $TARGET_ARCH"
+echo "Prepare builder for distro: $DISTRO"
 
 # If BUILDER_IMAGE is provided, use it directly
 if [ -n "$BUILDER_IMAGE" ]; then
@@ -21,7 +21,7 @@ else
   REGISTRY="image-registry.openshift-image-registry.svc:5000"
 fi
 
-TARGET_IMAGE="${REGISTRY}/${NAMESPACE}/aib-build:${DISTRO}-${TARGET_ARCH}"
+TARGET_IMAGE="${REGISTRY}/${NAMESPACE}/aib-build:$DISTRO"
 
 mkdir -p $HOME/.config
 cat > $HOME/.authjson <<EOF
@@ -70,7 +70,7 @@ else
 fi
 
 # Local image name (what we'll actually use - nested containers can access this)
-LOCAL_IMAGE="localhost/aib-build:${DISTRO}-${TARGET_ARCH}"
+LOCAL_IMAGE="localhost/aib-build:$DISTRO"
 
 # Check if image already exists in cluster registry
 echo "Checking if $TARGET_IMAGE exists in cluster registry..."
@@ -107,27 +107,9 @@ mount --bind "$destPath" "$osbuildPath"
 echo "Running: aib build-builder --distro $DISTRO"
 aib --verbose build-builder --distro "$DISTRO"
 
-# Find what image was actually created by aib (it might use distro-target naming)
-echo "Checking for created builder images..."
-ACTUAL_IMAGE=""
-for img in $(podman images --format "{{.Repository}}:{{.Tag}}" | grep "localhost/aib-build:"); do
-    echo "Found image: $img"
-    if [[ "$img" == *"$DISTRO"* ]]; then
-        ACTUAL_IMAGE="$img"
-        echo "Using image: $ACTUAL_IMAGE"
-        break
-    fi
-done
-
-if [ -z "$ACTUAL_IMAGE" ]; then
-    echo "ERROR: Could not find builder image containing '$DISTRO'"
-    podman images | grep aib-build || echo "No aib-build images found"
-    exit 1
-fi
-
 echo "Pushing to cluster registry: $TARGET_IMAGE"
 skopeo copy --authfile="$REGISTRY_AUTH_FILE" \
-  "containers-storage:$ACTUAL_IMAGE" \
+  "containers-storage:$LOCAL_IMAGE" \
   "docker://$TARGET_IMAGE"
 
 echo "Builder image ready: $TARGET_IMAGE"

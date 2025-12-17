@@ -193,13 +193,12 @@ func (r *ImageBuildReconciler) handleBuildingState(ctx context.Context, imageBui
 				return ctrl.Result{}, err
 			}
 
-			// Only update status if PipelineRunName is not already set
-			if latestImageBuild.Status.PipelineRunName != pr.Name {
-				latestImageBuild.Status.PipelineRunName = pr.Name
-				if err := r.Status().Update(ctx, latestImageBuild); err != nil {
-					log.Error(err, "Failed to update ImageBuild with PipelineRun name")
-					return ctrl.Result{}, err
-				}
+			patch := client.MergeFrom(latestImageBuild.DeepCopy())
+			latestImageBuild.Status.TaskRunName = pr.Name
+
+			if err := r.Status().Patch(ctx, latestImageBuild, patch); err != nil {
+				log.Error(err, "Failed to patch ImageBuild with existing PipelineRun name")
+				return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 			}
 
 			// Update local imageBuild and immediately check build progress
@@ -273,8 +272,6 @@ func (r *ImageBuildReconciler) handleCompletedState(ctx context.Context, imageBu
 }
 
 func (r *ImageBuildReconciler) checkBuildProgress(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild) (ctrl.Result, error) {
-	log := r.Log.WithValues("imagebuild", types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace})
-
 	pipelineRun := &tektonv1.PipelineRun{}
 	err := r.Get(ctx, types.NamespacedName{
 		Name:      imageBuild.Status.PipelineRunName,
@@ -337,12 +334,11 @@ func (r *ImageBuildReconciler) checkBuildProgress(ctx context.Context, imageBuil
 		if imageBuild.Spec.Publishers != nil && imageBuild.Spec.Publishers.Registry != nil {
 			// Start push task
 			if err := r.createPushTaskRun(ctx, imageBuild); err != nil {
-				log.Error(err, "Failed to create push TaskRun")
+				r.Log.Error(err, "Failed to create push TaskRun")
 				fresh.Status.Phase = "Failed"
 				fresh.Status.Message = fmt.Sprintf("Failed to start push: %v", err)
-				if patchErr := r.Status().Patch(ctx, fresh, patch); patchErr != nil {
-					log.Error(patchErr, "Failed to patch status after push TaskRun creation failure")
-					return ctrl.Result{}, patchErr
+				if err := r.Status().Patch(ctx, fresh, patch); err != nil {
+					return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 				}
 				return ctrl.Result{}, nil
 			}
@@ -350,8 +346,7 @@ func (r *ImageBuildReconciler) checkBuildProgress(ctx context.Context, imageBuil
 			fresh.Status.Phase = "Pushing"
 			fresh.Status.Message = "Pushing artifact to registry"
 			if err := r.Status().Patch(ctx, fresh, patch); err != nil {
-				log.Error(err, "Failed to patch status to Pushing")
-				return ctrl.Result{}, err
+				return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 			}
 			return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 		}
@@ -566,20 +561,6 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 				StringVal: clusterRegistryRoute,
 			},
 		})
-
-		// Let prepare-builder task handle building the image automatically
-		// when builder-image is empty for bootc builds
-	}
-
-	// Add container-ref param for disk mode
-	if imageBuild.Spec.ContainerRef != "" {
-		params = append(params, tektonv1.Param{
-			Name: "container-ref",
-			Value: tektonv1.ParamValue{
-				Type:      tektonv1.ParamTypeString,
-				StringVal: imageBuild.Spec.ContainerRef,
-			},
-		})
 	}
 
 	pipelineWorkspaces := []tektonv1.WorkspaceBinding{
@@ -680,7 +661,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 		return fmt.Errorf("failed to get fresh ImageBuild: %w", err)
 	}
 
-	fresh.Status.PipelineRunName = pipelineRun.Name
+	fresh.Status.TaskRunName = pipelineRun.Name
 	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update ImageBuild with PipelineRun name: %w", err)
 	}
@@ -790,9 +771,8 @@ func (r *ImageBuildReconciler) handlePushingState(ctx context.Context, imageBuil
 		// No push TaskRun yet, create one
 		if err := r.createPushTaskRun(ctx, imageBuild); err != nil {
 			log.Error(err, "Failed to create push TaskRun")
-			if statusErr := r.updateStatus(ctx, imageBuild, "Failed", fmt.Sprintf("Failed to create push TaskRun: %v", err)); statusErr != nil {
-				log.Error(statusErr, "Failed to update status after push TaskRun creation failure")
-				return ctrl.Result{}, statusErr
+			if err := r.updateStatus(ctx, imageBuild, "Failed", fmt.Sprintf("Failed to create push TaskRun: %v", err)); err != nil {
+				return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 			}
 			return ctrl.Result{}, nil
 		}
@@ -809,9 +789,8 @@ func (r *ImageBuildReconciler) handlePushingState(ctx context.Context, imageBuil
 		if errors.IsNotFound(err) {
 			// TaskRun was deleted, try to recreate
 			imageBuild.Status.PushTaskRunName = ""
-			if statusErr := r.Status().Update(ctx, imageBuild); statusErr != nil {
-				log.Error(statusErr, "Failed to clear PushTaskRunName in status")
-				return ctrl.Result{}, statusErr
+			if err := r.Status().Update(ctx, imageBuild); err != nil {
+				return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 			}
 			return ctrl.Result{Requeue: true}, nil
 		}
@@ -846,8 +825,7 @@ func (r *ImageBuildReconciler) handlePushingState(ctx context.Context, imageBuil
 	}
 
 	if err := r.Status().Patch(ctx, fresh, patch); err != nil {
-		log.Error(err, "Failed to patch status after push completion")
-		return ctrl.Result{}, err
+		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 
 	// Update artifact info if serving
@@ -1132,51 +1110,37 @@ server {
 }
 
 // cleanupTransientSecrets deletes any transient secrets created for this build
-// Uses retry logic to handle transient API errors
 func (r *ImageBuildReconciler) cleanupTransientSecrets(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild, log logr.Logger) {
 	// Cleanup registry auth secret (EnvSecretRef)
 	if imageBuild.Spec.EnvSecretRef != "" {
-		r.deleteSecretWithRetry(ctx, imageBuild.Namespace, imageBuild.Spec.EnvSecretRef, "registry auth", log)
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      imageBuild.Spec.EnvSecretRef,
+				Namespace: imageBuild.Namespace,
+			},
+		}
+		if err := r.Delete(ctx, secret); err != nil && !errors.IsNotFound(err) {
+			log.Error(err, "Failed to delete registry auth secret", "secret", imageBuild.Spec.EnvSecretRef)
+		} else if err == nil {
+			log.Info("Deleted registry auth secret", "secret", imageBuild.Spec.EnvSecretRef)
+		}
 	}
 
 	// Cleanup push secret (Publishers.Registry.Secret)
 	if imageBuild.Spec.Publishers != nil && imageBuild.Spec.Publishers.Registry != nil {
 		secretName := imageBuild.Spec.Publishers.Registry.Secret
 		if secretName != "" {
-			r.deleteSecretWithRetry(ctx, imageBuild.Namespace, secretName, "push", log)
-		}
-	}
-}
-
-// deleteSecretWithRetry attempts to delete a secret with exponential backoff retry
-func (r *ImageBuildReconciler) deleteSecretWithRetry(ctx context.Context, namespace, secretName, secretType string, log logr.Logger) {
-	maxRetries := 3
-	backoff := 100 * time.Millisecond
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: namespace,
-			},
-		}
-		err := r.Delete(ctx, secret)
-		if err == nil {
-			log.Info("Deleted "+secretType+" secret", "secret", secretName)
-			return
-		}
-		if errors.IsNotFound(err) {
-			// Already deleted, nothing to do
-			return
-		}
-
-		// Transient error - retry with backoff
-		if attempt < maxRetries {
-			log.V(1).Info("Retrying secret deletion", "secret", secretName, "attempt", attempt, "error", err.Error())
-			time.Sleep(backoff)
-			backoff *= 2 // Exponential backoff
-		} else {
-			log.Error(err, "Failed to delete "+secretType+" secret after retries (manual cleanup may be required)", "secret", secretName, "attempts", maxRetries)
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      secretName,
+					Namespace: imageBuild.Namespace,
+				},
+			}
+			if err := r.Delete(ctx, secret); err != nil && !errors.IsNotFound(err) {
+				log.Error(err, "Failed to delete push secret", "secret", secretName)
+			} else if err == nil {
+				log.Info("Deleted push secret", "secret", secretName)
+			}
 		}
 	}
 }

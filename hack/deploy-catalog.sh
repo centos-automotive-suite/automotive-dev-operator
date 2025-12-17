@@ -103,10 +103,11 @@ uninstall_operator() {
     oc delete installplan -n ${NAMESPACE} --all --ignore-not-found=true 2>/dev/null || true
 
     echo "Deleting operator-managed resources..."
-    oc delete deployment ado-build-api ado-controller-manager -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete service ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete route ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete serviceaccount ado-controller-manager -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete deployment ado-webui ado-build-api ado-controller-manager -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete service ado-webui ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete route ado-webui ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete serviceaccount ado-controller-manager ado-webui -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete configmap ado-webui-nginx-config -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
     oc delete secret ado-oauth-secrets -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
 
     echo "Waiting for operator pods to terminate..."
@@ -210,8 +211,8 @@ make bundle IMG=${OPERATOR_IMG} VERSION=${VERSION}
 echo ""
 echo "Fixing OPERATOR_IMAGE env var in bundle..."
 # The bundle generator doesn't replace env var values, only container images
-# We need to manually update the OPERATOR_IMAGE env var to use the internal registry with unique tag
-OPERATOR_IMG_INTERNAL="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/automotive-dev-operator:${OPERATOR_TAG}"
+# We need to manually update the OPERATOR_IMAGE env var to use the internal registry
+OPERATOR_IMG_INTERNAL="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/automotive-dev-operator:latest"
 sed -i.bak "s|value: controller:latest|value: ${OPERATOR_IMG_INTERNAL}|g" bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml
 rm -f bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml.bak
 
@@ -247,24 +248,6 @@ entries:
 ---
 EOF
 ./bin/opm render bundle/ --output yaml >> catalog/automotive-dev-operator.yaml
-
-# Add openshift-pipelines dependency (opm render doesn't include dependencies.yaml)
-# Use awk for portable multi-line insertion after the olm.package version line
-awk '
-/^- type: olm\.package$/ { in_pkg=1 }
-in_pkg && /version:/ {
-    print
-    print "- type: olm.package.required"
-    print "  value:"
-    print "    packageName: openshift-pipelines-operator-rh"
-    print "    versionRange: \">=1.12.0\""
-    in_pkg=0
-    next
-}
-{ print }
-' catalog/automotive-dev-operator.yaml > catalog/automotive-dev-operator.yaml.tmp
-mv catalog/automotive-dev-operator.yaml.tmp catalog/automotive-dev-operator.yaml
-
 # Update bundle image reference to internal registry (handles both empty and existing image refs)
 sed -i.bak "s|^image:.*|image: ${BUNDLE_IMG_INTERNAL}|g" catalog/automotive-dev-operator.yaml
 rm -f catalog/automotive-dev-operator.yaml.bak
