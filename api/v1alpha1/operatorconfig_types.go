@@ -46,6 +46,29 @@ type BuildConfig struct {
 	ServeExpiryHours int32 `json:"serveExpiryHours,omitempty"`
 }
 
+// BuildAPIConfig defines configuration for the Build API server
+type BuildAPIConfig struct {
+	// MaxManifestSize is the maximum allowed manifest size in bytes
+	// Default: 10485760 (10MB)
+	// +optional
+	MaxManifestSize int64 `json:"maxManifestSize,omitempty"`
+
+	// MaxUploadFileSize is the maximum size for individual uploaded files in bytes
+	// Default: 1073741824 (1GB)
+	// +optional
+	MaxUploadFileSize int64 `json:"maxUploadFileSize,omitempty"`
+
+	// MaxTotalUploadSize is the maximum total upload size per request in bytes
+	// Default: 2147483648 (2GB)
+	// +optional
+	MaxTotalUploadSize int64 `json:"maxTotalUploadSize,omitempty"`
+
+	// MaxLogStreamDurationMinutes is the maximum duration for log streaming in minutes
+	// Default: 120 (2 hours)
+	// +optional
+	MaxLogStreamDurationMinutes int32 `json:"maxLogStreamDurationMinutes,omitempty"`
+}
+
 // OperatorConfigSpec defines the desired state of OperatorConfig
 type OperatorConfigSpec struct {
 	// WebUI determines if the web UI should be deployed
@@ -55,6 +78,10 @@ type OperatorConfigSpec struct {
 	// OSBuilds defines the configuration for OS build operations
 	// +optional
 	OSBuilds *OSBuildsConfig `json:"osBuilds,omitempty"`
+
+	// BuildAPI defines configuration for the Build API server
+	// +optional
+	BuildAPI *BuildAPIConfig `json:"buildAPI,omitempty"`
 }
 
 // OSBuildsConfig defines configuration for OS build operations
