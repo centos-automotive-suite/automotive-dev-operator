@@ -1,5 +1,25 @@
-#!/bin/sh
+#!/bin/bash
 set -e
+
+validate_arg() {
+  local arg="$1"
+  local name="$2"
+  # Block shell metacharacters that could be used for injection
+  if [[ "$arg" =~ [\;\|\&\$\`\(\)\{\}\<\>\!\\] ]]; then
+    echo "ERROR: Invalid characters in $name: $arg"
+    exit 1
+  fi
+}
+
+validate_custom_def() {
+  local def="$1"
+  # Custom defs should be KEY=VALUE format only
+  if [[ ! "$def" =~ ^[a-zA-Z_][a-zA-Z0-9_]*=.*$ ]]; then
+    echo "ERROR: Invalid custom definition format: $def (expected KEY=VALUE)"
+    exit 1
+  fi
+  validate_arg "$def" "custom definition"
+}
 
 
 # Make the internal registry trusted
@@ -35,6 +55,8 @@ else
   echo "Warning: /dev/fuse not available, using vfs driver"
   export STORAGE_DRIVER=vfs
 fi
+
+umask 0077
 
 TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 REGISTRY="image-registry.openshift-image-registry.svc:5000"
@@ -182,30 +204,51 @@ if [ -z "$BUILD_MODE" ]; then
   BUILD_MODE="bootc"
 fi
 
-CUSTOM_DEFS=""
-CUSTOM_DEFS_FILE="$(workspaces.manifest-config-workspace.path)/custom-definitions.env"
-if [ -f "$CUSTOM_DEFS_FILE" ]; then
-  echo "Processing custom definitions from $CUSTOM_DEFS_FILE"
-  while read -r line || [[ -n "$line" ]]; do
-    for def in $line; do
-      CUSTOM_DEFS+=" --define $def"
+# Generic file loader for validated arguments
+load_args_from_file() {
+  local file="$1"
+  local description="$2"
+  local validator="$3"
+  local -n result_array=$4  # nameref to output array
+
+  if [ ! -f "$file" ]; then
+    return 1
+  fi
+
+  echo "Loading $description from $file"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip empty lines and comments
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    for item in $line; do
+      $validator "$item" "$description"
+      result_array+=("$item")
     done
-  done < "$CUSTOM_DEFS_FILE"
-else
-  echo "No custom-definitions.env file found"
+  done < "$file"
+  echo "Loaded ${#result_array[@]} items for $description"
+  return 0
+}
+
+# Load custom definitions
+declare -a CUSTOM_DEFS_ARGS=()
+CUSTOM_DEFS_FILE="$(workspaces.manifest-config-workspace.path)/custom-definitions.env"
+if load_args_from_file "$CUSTOM_DEFS_FILE" "custom definitions" validate_custom_def temp_defs; then
+  for def in "${temp_defs[@]}"; do
+    CUSTOM_DEFS_ARGS+=("--define" "$def")
+  done
 fi
 
+# Load AIB arguments (override or extra)
+declare -a AIB_EXTRA_ARGS=()
+USE_AIB_OVERRIDE=false
 AIB_OVERRIDE_ARGS_FILE="$(workspaces.manifest-config-workspace.path)/aib-override-args.txt"
 AIB_EXTRA_ARGS_FILE="$(workspaces.manifest-config-workspace.path)/aib-extra-args.txt"
-AIB_ARGS=""
-if [ -f "$AIB_OVERRIDE_ARGS_FILE" ]; then
-  echo "Using override automotive-image-builder args from $AIB_OVERRIDE_ARGS_FILE"
-  AIB_ARGS="$(cat "$AIB_OVERRIDE_ARGS_FILE")"
-elif [ -f "$AIB_EXTRA_ARGS_FILE" ]; then
-  echo "Adding extra automotive-image-builder args from $AIB_EXTRA_ARGS_FILE"
-  AIB_ARGS="$(cat "$AIB_EXTRA_ARGS_FILE")"
+
+if load_args_from_file "$AIB_OVERRIDE_ARGS_FILE" "AIB override args" validate_arg AIB_EXTRA_ARGS; then
+  USE_AIB_OVERRIDE=true
+elif load_args_from_file "$AIB_EXTRA_ARGS_FILE" "AIB extra args" validate_arg AIB_EXTRA_ARGS; then
+  :  # Extra args loaded successfully
 else
-  echo "No extra/override AIB args file found"
+  echo "No AIB extra/override args files found"
 fi
 
 arch="$(params.target-architecture)"
@@ -229,15 +272,15 @@ get_flag_value() {
   [ -n "$val" ] && echo "$val"
 }
 
-USE_OVERRIDE=false
-if [ -f "$AIB_OVERRIDE_ARGS_FILE" ]; then
-  USE_OVERRIDE=true
-  override_format=$(get_flag_value "--format" $AIB_ARGS)
+# Handle override args for file naming
+if [ "$USE_AIB_OVERRIDE" = true ]; then
+  aib_args_str="${AIB_EXTRA_ARGS[*]}"
+  override_format=$(get_flag_value "--format" "$aib_args_str")
   if [ -z "$override_format" ]; then
-    override_format=$(get_flag_value "--export" $AIB_ARGS)
+    override_format=$(get_flag_value "--export" "$aib_args_str")
   fi
-  override_distro=$(get_flag_value "--distro" $AIB_ARGS)
-  override_target=$(get_flag_value "--target" $AIB_ARGS)
+  override_distro=$(get_flag_value "--distro" "$aib_args_str")
+  override_target=$(get_flag_value "--target" "$aib_args_str")
   [ -n "$override_distro" ] && cleanName="$override_distro-${cleanName#*-}"
   [ -n "$override_target" ] && cleanName="${cleanName%-*}-$override_target"
   if [ -n "$override_format" ]; then
@@ -308,42 +351,59 @@ EOF
   BUILD_CONTAINER_ARG="--build-container $LOCAL_BUILDER_IMAGE"
 fi
 
-if [ "$USE_OVERRIDE" = true ]; then
-  build_command="aib --verbose \
-  build \
-  $CUSTOM_DEFS \
-  --build-dir=/output/_build \
-  --osbuild-manifest=/output/image.json \
-  $AIB_ARGS \
-  $MANIFEST_FILE \
-  /output/${exportFile}"
-  echo "Running the build command (override): $build_command"
-  eval "$build_command"
+# Build command execution using arrays for security (no eval)
+# Parse BUILD_CONTAINER_ARG safely
+declare -a BUILD_CONTAINER_ARGS=()
+if [ -n "$LOCAL_BUILDER_IMAGE" ]; then
+  BUILD_CONTAINER_ARGS=("--build-container" "$LOCAL_BUILDER_IMAGE")
+fi
+
+# Parse FORMAT_ARG safely
+declare -a FORMAT_ARGS=()
+if [ -n "$FORMAT_ARG" ]; then
+  # FORMAT_ARG is "--format <value>" or similar
+  for word in $FORMAT_ARG; do
+    FORMAT_ARGS+=("$word")
+  done
+fi
+
+# Common build arguments used across all modes
+declare -a COMMON_BUILD_ARGS=(
+  --build-dir=/output/_build
+  --osbuild-manifest=/output/image.json
+)
+
+if [ "$USE_AIB_OVERRIDE" = true ]; then
+  echo "Running the build command (override mode)"
+  aib --verbose build \
+    "${CUSTOM_DEFS_ARGS[@]}" \
+    "${COMMON_BUILD_ARGS[@]}" \
+    "${AIB_EXTRA_ARGS[@]}" \
+    "$MANIFEST_FILE" \
+    "/output/${exportFile}"
 else
   case "$BUILD_MODE" in
     bootc)
       # Build bootc container and optionally disk image in a single command
       # aib build takes: manifest out [disk] where disk is optional
-      DISK_OUTPUT=""
+      declare -a DISK_OUTPUT_ARGS=()
       if [ "$BUILD_DISK_IMAGE" = "true" ]; then
-        DISK_OUTPUT="/output/${exportFile}"
+        DISK_OUTPUT_ARGS=("/output/${exportFile}")
       fi
 
-      build_command="aib --verbose build \
-      --distro $(params.distro) \
-      --target $(params.target) \
-      --arch=${arch} \
-      --build-dir=/output/_build \
-      --osbuild-manifest=/output/image.json \
-      $FORMAT_ARG \
-      $BUILD_CONTAINER_ARG \
-      $CUSTOM_DEFS \
-      $AIB_ARGS \
-      $MANIFEST_FILE \
-      $BOOTC_CONTAINER_NAME \
-      $DISK_OUTPUT"
-      echo "Running bootc build: $build_command"
-      eval "$build_command"
+      echo "Running bootc build"
+      aib --verbose build \
+        --distro "$(params.distro)" \
+        --target "$(params.target)" \
+        "--arch=${arch}" \
+        "${COMMON_BUILD_ARGS[@]}" \
+        "${FORMAT_ARGS[@]}" \
+        "${BUILD_CONTAINER_ARGS[@]}" \
+        "${CUSTOM_DEFS_ARGS[@]}" \
+        "${AIB_EXTRA_ARGS[@]}" \
+        "$MANIFEST_FILE" \
+        "$BOOTC_CONTAINER_NAME" \
+        "${DISK_OUTPUT_ARGS[@]}"
 
       if [ -n "$CONTAINER_PUSH" ]; then
         echo "Pushing container to registry: $CONTAINER_PUSH"
@@ -359,37 +419,18 @@ else
         # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
       fi
       ;;
-    image)
-      build_command="aib-dev --verbose \
-      build \
-      $CUSTOM_DEFS \
-      --distro $(params.distro) \
-      --target $(params.target) \
-      --arch=${arch} \
-      $FORMAT_ARG \
-      --build-dir=/output/_build \
-      --osbuild-manifest=/output/image.json \
-      $AIB_ARGS \
-      $MANIFEST_FILE \
-      /output/${exportFile}"
-      echo "Running the build command: $build_command"
-      eval "$build_command"
-      ;;
-    package)
-      build_command="aib-dev --verbose \
-      build \
-      $CUSTOM_DEFS \
-      --distro $(params.distro) \
-      --target $(params.target) \
-      --arch=${arch} \
-      $FORMAT_ARG \
-      --build-dir=/output/_build \
-      --osbuild-manifest=/output/image.json \
-      $AIB_ARGS \
-      $MANIFEST_FILE \
-      /output/${exportFile}"
-      echo "Running the build command: $build_command"
-      eval "$build_command"
+    image|package)
+      echo "Running $BUILD_MODE build"
+      aib-dev --verbose build \
+        "${CUSTOM_DEFS_ARGS[@]}" \
+        --distro "$(params.distro)" \
+        --target "$(params.target)" \
+        "--arch=${arch}" \
+        "${FORMAT_ARGS[@]}" \
+        "${COMMON_BUILD_ARGS[@]}" \
+        "${AIB_EXTRA_ARGS[@]}" \
+        "$MANIFEST_FILE" \
+        "/output/${exportFile}"
       ;;
     disk)
       # Disk mode: create disk image from existing bootc container
@@ -397,6 +438,8 @@ else
         echo "Error: container-ref is required for disk mode"
         exit 1
       fi
+      # Validate container reference for shell injection
+      validate_arg "$CONTAINER_REF" "container-ref"
       echo "Creating disk image from container: $CONTAINER_REF"
 
       # Pull the container image first
@@ -410,13 +453,12 @@ else
       fi
 
       # to-disk-image only accepts: --format, --build-container, src_container, out
-      build_command="aib --verbose to-disk-image \
-      $FORMAT_ARG \
-      $BUILD_CONTAINER_ARG \
-      $CONTAINER_REF \
-      /output/${exportFile}"
-      echo "Running to-disk-image: $build_command"
-      eval "$build_command"
+      echo "Running to-disk-image"
+      aib --verbose to-disk-image \
+        "${FORMAT_ARGS[@]}" \
+        "${BUILD_CONTAINER_ARGS[@]}" \
+        "$CONTAINER_REF" \
+        "/output/${exportFile}"
 
       # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
       ;;

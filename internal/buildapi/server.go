@@ -35,11 +35,30 @@ import (
 	authnv1 "k8s.io/api/authentication/v1"
 )
 
+// APILimits holds configurable limits for the API server
+type APILimits struct {
+	MaxManifestSize             int64
+	MaxUploadFileSize           int64
+	MaxTotalUploadSize          int64
+	MaxLogStreamDurationMinutes int32
+}
+
+// DefaultAPILimits returns the default limits
+func DefaultAPILimits() APILimits {
+	return APILimits{
+		MaxManifestSize:             10 * 1024 * 1024,       // 10MB
+		MaxUploadFileSize:           1 * 1024 * 1024 * 1024, // 1GB
+		MaxTotalUploadSize:          2 * 1024 * 1024 * 1024, // 2GB
+		MaxLogStreamDurationMinutes: 120,                    // 2 hours
+	}
+}
+
 type APIServer struct {
 	server *http.Server
 	router *gin.Engine
 	addr   string
 	log    logr.Logger
+	limits APILimits
 }
 
 //go:embed openapi.yaml
@@ -47,16 +66,42 @@ var embeddedOpenAPI []byte
 
 // NewAPIServer creates a new API server
 func NewAPIServer(addr string, logger logr.Logger) *APIServer {
+	return NewAPIServerWithLimits(addr, logger, DefaultAPILimits())
+}
+
+// NewAPIServerWithLimits creates a new API server with custom limits
+func NewAPIServerWithLimits(addr string, logger logr.Logger, limits APILimits) *APIServer {
 	// Gin mode should be controlled by environment, not by which constructor is used
 	if os.Getenv("GIN_MODE") == "" {
 		// Default to release mode for production safety
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	a := &APIServer{addr: addr, log: logger}
+	a := &APIServer{addr: addr, log: logger, limits: limits}
 	a.router = a.createRouter()
 	a.server = &http.Server{Addr: addr, Handler: a.router}
 	return a
+}
+
+// LoadLimitsFromConfig loads API limits from OperatorConfig, using defaults for unset values
+func LoadLimitsFromConfig(cfg *automotivev1alpha1.BuildAPIConfig) APILimits {
+	limits := DefaultAPILimits()
+	if cfg == nil {
+		return limits
+	}
+	if cfg.MaxManifestSize > 0 {
+		limits.MaxManifestSize = cfg.MaxManifestSize
+	}
+	if cfg.MaxUploadFileSize > 0 {
+		limits.MaxUploadFileSize = cfg.MaxUploadFileSize
+	}
+	if cfg.MaxTotalUploadSize > 0 {
+		limits.MaxTotalUploadSize = cfg.MaxTotalUploadSize
+	}
+	if cfg.MaxLogStreamDurationMinutes > 0 {
+		limits.MaxLogStreamDurationMinutes = cfg.MaxLogStreamDurationMinutes
+	}
+	return limits
 }
 
 // Start implements manager.Runnable
@@ -103,8 +148,6 @@ func (a *APIServer) createRouter() *gin.Engine {
 		v1.GET("/openapi.yaml", func(c *gin.Context) {
 			c.Data(http.StatusOK, "application/yaml", embeddedOpenAPI)
 		})
-
-		v1.GET("/builds/:name/logs/sse", a.handleStreamLogsSSE)
 
 		buildsGroup := v1.Group("/builds")
 		buildsGroup.Use(a.authMiddleware())
@@ -188,7 +231,7 @@ func (a *APIServer) authMiddleware() gin.HandlerFunc {
 
 func (a *APIServer) handleCreateBuild(c *gin.Context) {
 	a.log.Info("create build", "reqID", c.GetString("reqID"))
-	createBuild(c)
+	a.createBuild(c)
 }
 
 func (a *APIServer) handleListBuilds(c *gin.Context) {
@@ -205,14 +248,7 @@ func (a *APIServer) handleGetBuild(c *gin.Context) {
 func (a *APIServer) handleStreamLogs(c *gin.Context) {
 	name := c.Param("name")
 	a.log.Info("logs requested", "build", name, "reqID", c.GetString("reqID"))
-	streamLogs(c, name)
-}
-
-func (a *APIServer) handleStreamLogsSSE(c *gin.Context) {
-	name := c.Param("name")
-	a.log.Info("logs SSE requested", "build", name, "reqID", c.GetString("reqID"))
-
-	streamLogsSSE(c, name)
+	a.streamLogs(c, name)
 }
 
 func (a *APIServer) handleListArtifacts(c *gin.Context) {
@@ -250,10 +286,10 @@ func (a *APIServer) handleGetBuildTemplate(c *gin.Context) {
 func (a *APIServer) handleUploadFiles(c *gin.Context) {
 	name := c.Param("name")
 	a.log.Info("uploads", "build", name, "reqID", c.GetString("reqID"))
-	uploadFiles(c, name)
+	a.uploadFiles(c, name)
 }
 
-func streamLogs(c *gin.Context, name string) {
+func (a *APIServer) streamLogs(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
 	k8sClient, err := getClientFromRequest(c)
@@ -262,7 +298,10 @@ func streamLogs(c *gin.Context, name string) {
 		return
 	}
 
-	ctx := c.Request.Context()
+	// Limit maximum streaming duration
+	streamDuration := time.Duration(a.limits.MaxLogStreamDurationMinutes) * time.Minute
+	ctx, cancel := context.WithTimeout(c.Request.Context(), streamDuration)
+	defer cancel()
 	var podName string
 
 	ib := &automotivev1alpha1.ImageBuild{}
@@ -279,33 +318,26 @@ func streamLogs(c *gin.Context, name string) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "logs not available yet"})
 		return
 	}
+
+	// Get REST config and create Kubernetes clientset
 	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	quickCS, err := kubernetes.NewForConfig(restCfg)
+	cs, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	pods, err := quickCS.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/pipelineRun=" + tr + ",tekton.dev/memberOf=tasks"})
+
+	// Find the build pod
+	pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/pipelineRun=" + tr + ",tekton.dev/memberOf=tasks"})
 	if err != nil || len(pods.Items) == 0 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "logs not available yet"})
 		return
 	}
 	podName = pods.Items[0].Name
-
-	cfg, err := getRESTConfigFromRequest(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	cs, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
 
 	// Set up streaming response
 	c.Writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -434,238 +466,6 @@ func streamLogs(c *gin.Context, name string) {
 	if f, ok := c.Writer.(http.Flusher); ok {
 		f.Flush()
 	}
-}
-
-func streamLogsSSE(c *gin.Context, name string) {
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-	c.Writer.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	c.Writer.WriteHeader(http.StatusOK)
-
-	namespace := resolveNamespace()
-
-	k8sClient, err := getClientFromRequest(c)
-	if err != nil {
-		sendSSEEvent(c, "message", "", fmt.Sprintf("ERROR: Client error: %v", err))
-		c.Writer.Flush()
-		return
-	}
-
-	ctx := c.Request.Context()
-	var podName string
-
-	ib := &automotivev1alpha1.ImageBuild{}
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ib); err != nil {
-		if k8serrors.IsNotFound(err) {
-			sendSSEEvent(c, "message", "", "ERROR: Build not found")
-		} else {
-			sendSSEEvent(c, "message", "", fmt.Sprintf("ERROR: Build lookup error: %v", err))
-		}
-		c.Writer.Flush()
-		return
-	}
-	tr := strings.TrimSpace(ib.Status.PipelineRunName)
-	if tr == "" {
-		sendSSEEvent(c, "waiting", "", "Build not started yet, waiting for logs...")
-		c.Writer.Flush()
-		return
-	}
-	restCfg, err := getRESTConfigFromRequest(c)
-	if err != nil {
-		sendSSEEvent(c, "message", "", fmt.Sprintf("ERROR: Config error: %v", err))
-		c.Writer.Flush()
-		return
-	}
-	quickCS, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		sendSSEEvent(c, "message", "", fmt.Sprintf("ERROR: Kubernetes client error: %v", err))
-		c.Writer.Flush()
-		return
-	}
-	pods, err := quickCS.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/pipelineRun=" + tr + ",tekton.dev/memberOf=tasks"})
-	if err != nil || len(pods.Items) == 0 {
-		sendSSEEvent(c, "waiting", "", "Build pods not ready yet, waiting for logs...")
-		c.Writer.Flush()
-		return
-	}
-	podName = pods.Items[0].Name
-
-	cfg, err := getRESTConfigFromRequest(c)
-	if err != nil {
-		sendSSEEvent(c, "message", "", fmt.Sprintf("Config error: %v", err))
-		c.Writer.Flush()
-		return
-	}
-	cs, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		sendSSEEvent(c, "message", "", fmt.Sprintf("Kubernetes client error: %v", err))
-		c.Writer.Flush()
-		return
-	}
-
-	sendSSEEvent(c, "connected", "", "Log stream connected")
-	c.Writer.Flush()
-
-	var hadStream bool
-	streamed := make(map[string]bool)
-	var lastErrs []string
-
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				sendSSEEvent(c, "ping", "", "")
-				c.Writer.Flush()
-			}
-		}
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			sendSSEEvent(c, "disconnected", "", "Connection closed")
-			c.Writer.Flush()
-			return
-		default:
-		}
-
-		pod, err := cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
-		if err != nil {
-			sendSSEEvent(c, "error", "", fmt.Sprintf("Error: %v", err))
-			c.Writer.Flush()
-			return
-		}
-
-		stepNames := make([]string, 0, len(pod.Spec.Containers))
-		for _, container := range pod.Spec.Containers {
-			if strings.HasPrefix(container.Name, "step-") {
-				stepNames = append(stepNames, container.Name)
-			}
-		}
-		if len(stepNames) == 0 {
-			for _, container := range pod.Spec.Containers {
-				stepNames = append(stepNames, container.Name)
-			}
-		}
-
-		var errs []string
-
-		for _, cName := range stepNames {
-			if streamed[cName] {
-				continue
-			}
-
-			req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true})
-			stream, err := req.Stream(ctx)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", cName, err))
-				continue
-			}
-
-			if !hadStream {
-				c.Writer.Flush()
-			}
-			hadStream = true
-
-			stepName := strings.TrimPrefix(cName, "step-")
-			sendSSEEvent(c, "step", stepName, "===== Logs from "+stepName+" =====")
-			c.Writer.Flush()
-
-			func() {
-				defer stream.Close()
-
-				buf := make([]byte, 4096)
-				var lineBuffer strings.Builder
-
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-
-					n, err := stream.Read(buf)
-					if n > 0 {
-						chunk := string(buf[:n])
-						lineBuffer.WriteString(chunk)
-
-						lines := strings.Split(lineBuffer.String(), "\n")
-						lineBuffer.Reset()
-
-						if len(lines) > 1 {
-							lineBuffer.WriteString(lines[len(lines)-1])
-							lines = lines[:len(lines)-1]
-						}
-
-						for _, line := range lines {
-							if strings.TrimSpace(line) != "" {
-								sendSSEEvent(c, "log", stepName, line)
-								c.Writer.Flush()
-							}
-						}
-					}
-
-					if err != nil {
-						if err != io.EOF {
-							sendSSEEvent(c, "error", stepName, fmt.Sprintf("Stream error: %v", err))
-							c.Writer.Flush()
-						}
-						return
-					}
-				}
-			}()
-
-			streamed[cName] = true
-		}
-
-		if len(errs) > 0 {
-			lastErrs = errs
-		}
-
-		if len(streamed) == len(stepNames) {
-			break
-		}
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			break
-		}
-
-		time.Sleep(2 * time.Second)
-		if !hadStream {
-			sendSSEEvent(c, "waiting", "", "Waiting for logs...")
-			c.Writer.Flush()
-		}
-	}
-
-	if !hadStream {
-		sendSSEEvent(c, "error", "", "logs unavailable: "+strings.Join(lastErrs, "; "))
-		c.Writer.Flush()
-		return
-	}
-
-	sendSSEEvent(c, "completed", "", "Log streaming completed")
-	c.Writer.Flush()
-}
-
-func sendSSEEvent(c *gin.Context, event, step, data string) {
-	if event != "" {
-		c.Writer.WriteString("event: " + event + "\n")
-	}
-	if step != "" {
-		c.Writer.WriteString("id: " + step + "\n")
-	}
-	if data != "" {
-		escapedData := strings.ReplaceAll(data, "\n", "\\n")
-		c.Writer.WriteString("data: " + escapedData + "\n")
-	}
-	c.Writer.WriteString("\n")
 }
 
 func createRegistrySecret(ctx context.Context, k8sClient client.Client, namespace, buildName string, creds *RegistryCredentials) (string, error) {
@@ -816,31 +616,82 @@ func createPushSecret(ctx context.Context, k8sClient client.Client, namespace, b
 	return secretName, nil
 }
 
-func createBuild(c *gin.Context) {
-	var req BuildRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid JSON: %v", err)})
-		return
+// Shell metacharacters that must be blocked to prevent injection attacks
+var shellMetachars = []string{";", "|", "&", "$", "`", "(", ")", "{", "}", "<", ">", "!", "\\", "'", "\"", "\n", "\r"}
+
+// validateInput validates a string for dangerous characters and length
+func validateInput(value, fieldName string, maxLen int, allowEmpty bool, extraChars ...string) error {
+	if value == "" {
+		if allowEmpty {
+			return nil
+		}
+		return fmt.Errorf("%s is required", fieldName)
 	}
 
-	// Debug logging for containerRef
-	fmt.Printf("DEBUG: Received request - Mode: %s, ContainerRef: %q\n", req.Mode, req.ContainerRef)
+	// Combine shell metacharacters with any additional blocked characters
+	blockedChars := append(shellMetachars, extraChars...)
+	for _, char := range blockedChars {
+		if strings.Contains(value, char) {
+			return fmt.Errorf("%s contains invalid character: %q", fieldName, char)
+		}
+	}
+
+	if len(value) > maxLen {
+		return fmt.Errorf("%s too long (max %d characters)", fieldName, maxLen)
+	}
+	return nil
+}
+
+func validateContainerRef(ref string) error {
+	return validateInput(ref, "container reference", 500, true)
+}
+
+func validateBuildName(name string) error {
+	return validateInput(name, "build name", 253, false, "/")
+}
+
+func (a *APIServer) createBuild(c *gin.Context) {
+	var req BuildRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		return
+	}
 
 	needsUpload := strings.Contains(req.Manifest, "source_path")
 
-	// Disk mode uses ContainerRef instead of a manifest
-	if req.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+	// Validate build name
+	if err := validateBuildName(req.Name); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Validate manifest size
+	if int64(len(req.Manifest)) > a.limits.MaxManifestSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("manifest too large (max %d bytes)", a.limits.MaxManifestSize)})
+		return
+	}
+
+	// Validate mode-specific requirements
 	if req.Mode == ModeDisk {
 		if req.ContainerRef == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "container-ref is required for disk mode"})
 			return
 		}
+		if err := validateContainerRef(req.ContainerRef); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	} else if req.Manifest == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "manifest is required"})
 		return
+	}
+
+	// Validate optional container references
+	for field, value := range map[string]string{"container-push": req.ContainerPush, "export-oci": req.ExportOCI} {
+		if err := validateContainerRef(value); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid %s: %v", field, err)})
+			return
+		}
 	}
 
 	if req.Distro == "" {
@@ -1222,7 +1073,7 @@ func getBuildTemplate(c *gin.Context, name string) {
 	})
 }
 
-func uploadFiles(c *gin.Context, name string) {
+func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
 	k8sClient, err := getClientFromRequest(c)
@@ -1265,6 +1116,11 @@ func uploadFiles(c *gin.Context, name string) {
 		return
 	}
 
+	if c.Request.ContentLength > a.limits.MaxTotalUploadSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("upload too large (max %d bytes)", a.limits.MaxTotalUploadSize)})
+		return
+	}
+
 	reader, err := c.Request.MultipartReader()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid multipart: %v", err)})
@@ -1277,6 +1133,7 @@ func uploadFiles(c *gin.Context, name string) {
 		return
 	}
 
+	var totalBytesUploaded int64
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
@@ -1313,8 +1170,20 @@ func uploadFiles(c *gin.Context, name string) {
 			_ = os.Remove(tmpName)
 		}()
 
-		if _, err := io.Copy(tmp, part); err != nil {
+		limitedReader := io.LimitReader(part, a.limits.MaxUploadFileSize+1)
+		n, err := io.Copy(tmp, limitedReader)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if n > a.limits.MaxUploadFileSize {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file %s exceeds maximum size (%d bytes)", dest, a.limits.MaxUploadFileSize)})
+			return
+		}
+
+		totalBytesUploaded += n
+		if totalBytesUploaded > a.limits.MaxTotalUploadSize {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("total upload size exceeds maximum (%d bytes)", a.limits.MaxTotalUploadSize)})
 			return
 		}
 
