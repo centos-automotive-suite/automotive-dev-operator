@@ -304,7 +304,7 @@ aib build --target qemu manifest.aib.yml localhost/my-image:latest disk.qcow2
 Creates traditional disk images using `aib-dev`:
 
 ```bash
-aib-dev build --distro cs9 --target qemu --format qcow2 manifest.aib.yml disk.qcow2
+aib-dev build --target qemu --format qcow2 manifest.aib.yml disk.qcow2
 ```
 
 - Mutable, package-based images
@@ -316,7 +316,7 @@ aib-dev build --distro cs9 --target qemu --format qcow2 manifest.aib.yml disk.qc
 Similar to image mode but focused on package installation:
 
 ```bash
-aib-dev build --distro cs9 --target qemu --format image manifest.aib.yml disk.raw
+aib-dev build --target qemu --format image manifest.aib.yml disk.raw
 ```
 
 ## Integration with This Operator
@@ -330,7 +330,6 @@ The `caib` CLI wraps the Build API to orchestrate AIB builds on Kubernetes:
 bin/caib build \
   --name my-build \
   --manifest simple.aib.yml \
-  --distro cs9 \
   --target qemu \
   --arch arm64 \
   --mode bootc \

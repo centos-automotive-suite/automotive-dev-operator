@@ -1,59 +1,115 @@
-# PatternFly AI Coding Support
+# Centos Automotive Suite Console Plugin
 
-## Who is this for?
-This repository is for individuals and AI agents who want to prototype PatternFly applications using the latest best practices, with AI assistance (Cursor, Copilot, ChatGPT, etc.).
+OpenShift Console plugin for the Centos Automotive Suite. This plugin provides a web interface for managing automotive OS image builds directly from the OpenShift Console.
 
-## Quick Start (TL;DR)
-1. **Clone or copy this repo (or at least the `.pf-ai-documentation/` directory and `.cursor/rules/` files) into your project.**
-2. **Open your project in Cursor or your preferred AI coding tool.**
-3. (Optional) **Set up context7 MCP for always-up-to-date PatternFly docs.**
+## Features
 
-## Goal
-The primary aim is to offer a comprehensive, AI-friendly knowledge base and starting point for prototyping PatternFly applications. By indexing relevant documentation and providing context files, this repo ensures that any AI model can deliver accurate, consistent, and best-practice guidance while you code.
+- **Build List**: View all image builds with status, timestamps, and filtering
+- **Create Builds**: Start new builds from a manifest with support for:
+  - bootc
+  - Traditional ostree-based images
+  - Package-based disk images
+- **Build Details**: View build configuration, logs, and download artifacts
+- **Real-time Logs**: Stream build logs as they're generated
+- **Artifact Download**: Download completed build artifacts
 
-## Core Components
-The core components of this repository are the README and markdown files found throughout the project. These files provide indexed documentation, guidelines, and best practices to support AI-assisted PatternFly development, regardless of which AI coding tool you use.
+## Development
 
-- **Table of Contents:** See [`.pf-ai-documentation/README.md`](documentation/README.md) for a full table of contents and navigation to all rules, guides, and best practices.
+### Prerequisites
 
-## Using This Documentation with Cursor and AI Tools
+- Node.js 18+
+- npm or yarn
+- Access to an OpenShift cluster with the Centos Automotive Suite installed
 
-> **Important:**
-> Simply providing a link to this repository is not enough for Cursor (or most AI tools) to load all the context and instructions. These tools only index files that are present in your local project workspace.
+### Local Development
 
-### Best Practice: Add Documentation Locally
-To get the full benefit of these docs and rules:
-1. **Clone or copy this repository (or at least the `.pf-ai-documentation/` directory and `.cursor/rules/` files) into your project.**
-2. **Open your project in Cursor (or your preferred AI coding tool).**
-3. **Keep your local docs up to date** by pulling changes from this repo as it evolves.
+1. Install dependencies:
+   ```sh
+   npm install
+   ```
 
-### Why Local Files Matter
-- Cursor and similar tools only use files present in your local workspace for context and code search.
-- If the documentation and rules are not present locally, the AI will not "see" them, even if you provide a link.
+2. Start the development server:
+   ```sh
+   npm run start
+   ```
 
-### For Maximum Effectiveness
-- Use context7 or another MCP server to supplement your local docs with the latest upstream PatternFly documentation.
-- Encourage your team to read and follow the local documentation and rules for consistent, best-practice PatternFly development.
+3. In another terminal, log into your OpenShift cluster and start the console:
+   ```sh
+   oc login
+   ./start-console.sh
+   ```
 
-## Setting Up context7 MCP for Latest Docs (Optional)
-> **How to set up context7 MCP server:**
-> 1. Ensure you have Node.js v18+ and an MCP-compatible client (e.g., Cursor, VS Code with MCP extension, Windsurf, Claude Desktop).
-> 2. Add context7 as an MCP server in your client's configuration. For example, in Cursor, add this to your `~/.cursor/mcp.json`:
->    ```json
->    {
->      "mcpServers": {
->        "context7": {
->          "command": "npx",
->          "args": ["-y", "@upstash/context7-mcp@latest"]
->        }
->      }
->    }
->    ```
-> 3. Save and restart your client/editor.
-> 4. For more details and setup instructions for other editors, see the official guide: https://github.com/upstash/context7#installation
+4. Navigate to http://localhost:9000/automotive-dev/builds
 
-## Reference Documentation
-- [PatternFly.org](https://www.patternfly.org/)
-- [PatternFly React GitHub Repository](https://github.com/patternfly/patternfly-react)
+### Building
 
-> For all rules and examples, consult both PatternFly.org and the official GitHub repository. When using AI tools, leverage context7 to fetch the latest docs from these sources.
+Build for production:
+```sh
+npm run build
+```
+
+Build for development:
+```sh
+npm run build-dev
+```
+
+## Docker Image
+
+Build the container image:
+```sh
+docker build -t quay.io/my-repository/automotive-dev-console-plugin:latest .
+# For Apple Silicon: add --platform=linux/amd64
+```
+
+Push the image:
+```sh
+docker push quay.io/my-repository/automotive-dev-console-plugin:latest
+```
+
+## Deployment
+
+Deploy using Helm:
+
+```sh
+helm upgrade -i automotive-dev-console-plugin charts/openshift-console-plugin \
+  -n automotive-dev-system \
+  --create-namespace \
+  --set plugin.image=quay.io/my-repository/automotive-dev-console-plugin:latest
+```
+
+### Helm Configuration
+
+Key values:
+- `plugin.image`: Container image location (required)
+- `plugin.proxy[0].service.name`: Name of the build-api service (default: `build-api`)
+- `plugin.proxy[0].service.port`: Port of the build-api service (default: `8080`)
+
+See [values.yaml](charts/openshift-console-plugin/values.yaml) for all options.
+
+## Project Structure
+
+```
+src/
+  api/
+    buildApi.ts       # API client for build-api
+    types.ts          # TypeScript types for API
+  components/
+    BuildListPage.tsx     # Main build list view
+    BuildDetailsPage.tsx  # Build details with logs and artifacts
+    CreateBuildPage.tsx   # Form to create new builds
+  hooks/
+    useBuilds.ts      # Data fetching hooks for builds
+    useLogs.ts        # Log streaming hook
+console-extensions.json   # Plugin extension declarations
+package.json              # Plugin metadata
+charts/                   # Helm chart for deployment
+```
+
+## i18n
+
+Translations are in `locales/en/plugin__automotive-dev-console-plugin.json`.
+
+After adding new translatable strings, run:
+```sh
+npm run i18n
+```

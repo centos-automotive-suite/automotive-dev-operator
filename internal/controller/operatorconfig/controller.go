@@ -5,11 +5,9 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	routev1 "github.com/openshift/api/route/v1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -25,39 +23,11 @@ const (
 	finalizerName     = "operatorconfig.automotive.sdv.cloud.redhat.com/finalizer"
 )
 
-// isNoMatchError checks if error is "no matches for kind" error (CRD doesn't exist)
-func isNoMatchError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errMsg := err.Error()
-	return errMsg == "no matches for kind \"Route\" in version \"route.openshift.io/v1\"" ||
-		errMsg == "no matches for kind \"Ingress\" in version \"networking.k8s.io/v1\""
-}
-
-// detectOpenShift checks if we're running on OpenShift by looking for OpenShift-specific APIs
-func (r *OperatorConfigReconciler) detectOpenShift(ctx context.Context) bool {
-	if r.IsOpenShift != nil {
-		return *r.IsOpenShift
-	}
-
-	route := &routev1.Route{}
-	route.Name = "test"
-	route.Namespace = "default"
-	err := r.Get(ctx, client.ObjectKey{Name: "test", Namespace: "default"}, route)
-
-	isOpenShift := !isNoMatchError(err)
-	r.IsOpenShift = &isOpenShift
-	r.Log.Info("Platform detected", "isOpenShift", isOpenShift)
-	return isOpenShift
-}
-
 // OperatorConfigReconciler reconciles an OperatorConfig object
 type OperatorConfigReconciler struct {
 	client.Client
-	Scheme      *runtime.Scheme
-	Log         logr.Logger
-	IsOpenShift *bool
+	Scheme *runtime.Scheme
+	Log    logr.Logger
 }
 
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=operatorconfigs,verbs=get;list;watch;create;update;patch;delete
@@ -67,10 +37,8 @@ type OperatorConfigReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tekton.dev,resources=tasks;pipelines;pipelineruns,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=console.openshift.io,resources=consoleplugins,verbs=get;list;watch;create;update;patch;delete
 
 func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("operatorconfig", req.NamespacedName)
@@ -102,12 +70,12 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Handle deletion
 	if !config.DeletionTimestamp.IsZero() {
 		log.Info("Handling deletion")
-		if err := r.cleanupWebUI(ctx); err != nil {
-			log.Error(err, "Failed to cleanup WebUI")
-			return ctrl.Result{}, err
-		}
 		if err := r.cleanupOSBuilds(ctx); err != nil {
 			log.Error(err, "Failed to cleanup OSBuilds")
+			return ctrl.Result{}, err
+		}
+		if err := r.cleanupConsolePlugin(ctx); err != nil {
+			log.Error(err, "Failed to cleanup ConsolePlugin")
 			return ctrl.Result{}, err
 		}
 		log.Info("Removing finalizer")
@@ -120,48 +88,16 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	// Reconcile WebUI
-	log.Info("Processing WebUI configuration", "webUI", config.Spec.WebUI, "generation", config.Generation)
 	statusChanged := false
-	if config.Spec.WebUI {
-		if err := r.deployWebUI(ctx, config); err != nil {
-			log.Error(err, "Failed to deploy WebUI")
-			if config.Status.Phase != "Failed" || config.Status.WebUIDeployed {
-				config.Status.Phase = "Failed"
-				config.Status.Message = fmt.Sprintf("Failed to deploy WebUI: %v", err)
-				config.Status.WebUIDeployed = false
-				statusChanged = true
-			}
-			if statusChanged {
-				_ = r.Status().Update(ctx, config)
-			}
-			return ctrl.Result{}, err
-		}
-		if config.Status.Phase != "Ready" || !config.Status.WebUIDeployed {
-			config.Status.Phase = "Ready"
-			config.Status.Message = "WebUI deployed successfully"
-			config.Status.WebUIDeployed = true
-			statusChanged = true
-		}
-	} else {
-		if err := r.cleanupWebUI(ctx); err != nil {
-			log.Error(err, "Failed to cleanup WebUI")
-			if config.Status.Phase != "Failed" {
-				config.Status.Phase = "Failed"
-				config.Status.Message = fmt.Sprintf("Failed to cleanup WebUI: %v", err)
-				statusChanged = true
-			}
-			if statusChanged {
-				_ = r.Status().Update(ctx, config)
-			}
-			return ctrl.Result{}, err
-		}
-		if config.Status.Phase != "Ready" || config.Status.WebUIDeployed {
-			config.Status.Phase = "Ready"
-			config.Status.Message = "WebUI disabled"
-			config.Status.WebUIDeployed = false
-			statusChanged = true
-		}
+
+	// Always deploy build-api
+	log.Info("Deploying build-api")
+	if err := r.deployBuildAPI(ctx, config); err != nil {
+		log.Error(err, "Failed to deploy build-api")
+		config.Status.Phase = "Failed"
+		config.Status.Message = fmt.Sprintf("Failed to deploy build-api: %v", err)
+		_ = r.Status().Update(ctx, config)
+		return ctrl.Result{}, err
 	}
 
 	// Reconcile OSBuilds
@@ -205,8 +141,49 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
+	// Reconcile ConsolePlugin
+	log.Info("Processing ConsolePlugin configuration", "consolePlugin", config.Spec.ConsolePlugin, "generation", config.Generation)
+	if config.Spec.ConsolePlugin != nil && config.Spec.ConsolePlugin.Enabled {
+		if err := r.deployConsolePlugin(ctx, config); err != nil {
+			log.Error(err, "Failed to deploy ConsolePlugin")
+			if config.Status.Phase != "Failed" || config.Status.ConsolePluginDeployed {
+				config.Status.Phase = "Failed"
+				config.Status.Message = fmt.Sprintf("Failed to deploy ConsolePlugin: %v", err)
+				config.Status.ConsolePluginDeployed = false
+				statusChanged = true
+			}
+			if statusChanged {
+				_ = r.Status().Update(ctx, config)
+			}
+			return ctrl.Result{}, err
+		}
+		if !config.Status.ConsolePluginDeployed {
+			config.Status.ConsolePluginDeployed = true
+			config.Status.Phase = "Ready"
+			config.Status.Message = "ConsolePlugin deployed successfully"
+			statusChanged = true
+		}
+	} else {
+		if err := r.cleanupConsolePlugin(ctx); err != nil {
+			log.Error(err, "Failed to cleanup ConsolePlugin")
+			if config.Status.Phase != "Failed" {
+				config.Status.Phase = "Failed"
+				config.Status.Message = fmt.Sprintf("Failed to cleanup ConsolePlugin: %v", err)
+				statusChanged = true
+			}
+			if statusChanged {
+				_ = r.Status().Update(ctx, config)
+			}
+			return ctrl.Result{}, err
+		}
+		if config.Status.ConsolePluginDeployed {
+			config.Status.ConsolePluginDeployed = false
+			statusChanged = true
+		}
+	}
+
 	if statusChanged {
-		log.Info("Updating status", "phase", config.Status.Phase, "webUIDeployed", config.Status.WebUIDeployed, "osBuildsDeployed", config.Status.OSBuildsDeployed)
+		log.Info("Updating status", "phase", config.Status.Phase, "osBuildsDeployed", config.Status.OSBuildsDeployed, "consolePluginDeployed", config.Status.ConsolePluginDeployed)
 		if err := r.Status().Update(ctx, config); err != nil {
 			log.Error(err, "Failed to update status")
 			return ctrl.Result{}, err
@@ -215,262 +192,6 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	log.Info("=== Reconciliation completed successfully ===")
 	return ctrl.Result{}, nil
-}
-
-func (r *OperatorConfigReconciler) deployWebUI(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
-	r.Log.Info("Starting WebUI deployment")
-
-	// Create cookie secrets for OAuth proxies
-	r.Log.Info("Ensuring OAuth secrets")
-	if err := r.ensureOAuthSecrets(ctx, owner); err != nil {
-		r.Log.Error(err, "Failed to ensure OAuth secrets")
-		return fmt.Errorf("failed to ensure OAuth secrets: %w", err)
-	}
-	r.Log.Info("OAuth secrets ensured successfully")
-
-	// Update ServiceAccount with OAuth redirect annotations
-	r.Log.Info("Updating ServiceAccount OAuth annotations")
-	if err := r.updateServiceAccountOAuthAnnotations(ctx); err != nil {
-		r.Log.Error(err, "Failed to update ServiceAccount OAuth annotations")
-		return fmt.Errorf("failed to update ServiceAccount OAuth annotations: %w", err)
-	}
-	r.Log.Info("ServiceAccount OAuth annotations updated successfully")
-
-	// Create/update nginx ConfigMap
-	r.Log.Info("Creating/updating nginx ConfigMap")
-	nginxConfigMap := r.buildWebUINginxConfigMap()
-	if err := r.createOrUpdate(ctx, nginxConfigMap, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update nginx configmap")
-		return fmt.Errorf("failed to create/update nginx configmap: %w", err)
-	}
-	r.Log.Info("Nginx ConfigMap created/updated successfully")
-
-	// Create/update deployment
-	r.Log.Info("Creating/updating webui deployment")
-	isOpenShift := r.detectOpenShift(ctx)
-	deployment := r.buildWebUIDeployment(isOpenShift)
-	if err := r.createOrUpdate(ctx, deployment, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update webui deployment")
-		return fmt.Errorf("failed to create/update webui deployment: %w", err)
-	}
-	r.Log.Info("WebUI deployment created/updated successfully")
-
-	// Create/update service
-	r.Log.Info("Creating/updating webui service")
-	service := r.buildWebUIService(isOpenShift)
-	if err := r.createOrUpdate(ctx, service, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update webui service")
-		return fmt.Errorf("failed to create/update webui service: %w", err)
-	}
-	r.Log.Info("WebUI service created/updated successfully")
-
-	// Create/update route (OpenShift)
-	r.Log.Info("Creating/updating webui route")
-	route := r.buildWebUIRoute()
-	if err := r.createOrUpdate(ctx, route, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update webui route (this is expected on non-OpenShift clusters)")
-	} else {
-		r.Log.Info("WebUI route created/updated successfully")
-	}
-
-	// Create/update ingress (Kubernetes)
-	r.Log.Info("Creating/updating webui ingress")
-	ingress := r.buildWebUIIngress()
-	if err := r.createOrUpdate(ctx, ingress, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update webui ingress (this is expected if ingress controller is not installed)")
-	} else {
-		r.Log.Info("WebUI ingress created/updated successfully")
-	}
-
-	// Create/update build-api deployment
-	r.Log.Info("Creating/updating build-api deployment")
-	buildAPIDeployment := r.buildBuildAPIDeployment(isOpenShift)
-	if err := r.createOrUpdate(ctx, buildAPIDeployment, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update build-api deployment")
-		return fmt.Errorf("failed to create/update build-api deployment: %w", err)
-	}
-	r.Log.Info("Build-API deployment created/updated successfully")
-
-	// Create/update build-api service
-	r.Log.Info("Creating/updating build-api service")
-	buildAPIService := r.buildBuildAPIService(isOpenShift)
-	if err := r.createOrUpdate(ctx, buildAPIService, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update build-api service")
-		return fmt.Errorf("failed to create/update build-api service: %w", err)
-	}
-	r.Log.Info("Build-API service created/updated successfully")
-
-	// Create/update build-api route (OpenShift)
-	r.Log.Info("Creating/updating build-api route")
-	buildAPIRoute := r.buildBuildAPIRoute()
-	if err := r.createOrUpdate(ctx, buildAPIRoute, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update build-api route (this is expected on non-OpenShift clusters)")
-	} else {
-		r.Log.Info("Build-API route created/updated successfully")
-	}
-
-	// Create/update build-api ingress (Kubernetes)
-	r.Log.Info("Creating/updating build-api ingress")
-	buildAPIIngress := r.buildBuildAPIIngress()
-	if err := r.createOrUpdate(ctx, buildAPIIngress, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update build-api ingress (this is expected if ingress controller is not installed)")
-	} else {
-		r.Log.Info("Build-API ingress created/updated successfully")
-	}
-
-	r.Log.Info("WebUI deployment completed successfully")
-	return nil
-}
-
-func (r *OperatorConfigReconciler) ensureOAuthSecrets(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
-	secrets := []string{"ado-webui-oauth-proxy", "ado-build-api-oauth-proxy"}
-
-	for _, secretName := range secrets {
-		secret := &corev1.Secret{}
-		err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: operatorNamespace}, secret)
-
-		if err != nil {
-			if !errors.IsNotFound(err) {
-				return fmt.Errorf("failed to get secret %s: %w", secretName, err)
-			}
-
-			// Secret doesn't exist, create it
-			secret = r.buildOAuthSecret(secretName)
-			// Don't set controller reference - cleanup handled by finalizer
-			if err := r.Create(ctx, secret); err != nil {
-				return fmt.Errorf("failed to create secret %s: %w", secretName, err)
-			}
-			r.Log.Info("Created OAuth secret", "name", secretName)
-		}
-	}
-
-	return nil
-}
-
-func (r *OperatorConfigReconciler) updateServiceAccountOAuthAnnotations(ctx context.Context) error {
-	sa := &corev1.ServiceAccount{}
-	err := r.Get(ctx, client.ObjectKey{Name: "ado-controller-manager", Namespace: operatorNamespace}, sa)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// ServiceAccount doesn't exist (likely running locally in dev mode)
-			r.Log.Info("ServiceAccount not found, skipping OAuth annotation update (running locally?)")
-			return nil
-		}
-		return fmt.Errorf("failed to get ServiceAccount: %w", err)
-	}
-
-	if sa.Annotations == nil {
-		sa.Annotations = make(map[string]string)
-	}
-
-	annotations := map[string]string{
-		"serviceaccounts.openshift.io/oauth-redirectreference.webui":    `{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"ado-webui"}}`,
-		"serviceaccounts.openshift.io/oauth-redirectreference.buildapi": `{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"ado-build-api"}}`,
-	}
-
-	updated := false
-	for key, value := range annotations {
-		if sa.Annotations[key] != value {
-			sa.Annotations[key] = value
-			updated = true
-		}
-	}
-
-	if updated {
-		if err := r.Update(ctx, sa); err != nil {
-			return fmt.Errorf("failed to update ServiceAccount annotations: %w", err)
-		}
-		r.Log.Info("Updated ServiceAccount OAuth annotations")
-	}
-
-	return nil
-}
-
-func (r *OperatorConfigReconciler) cleanupWebUI(ctx context.Context) error {
-	// Delete deployment
-	deployment := &appsv1.Deployment{}
-	deployment.Name = "ado-webui"
-	deployment.Namespace = operatorNamespace
-	if err := r.Delete(ctx, deployment); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete webui deployment: %w", err)
-	}
-
-	// Delete service
-	service := &corev1.Service{}
-	service.Name = "ado-webui"
-	service.Namespace = operatorNamespace
-	if err := r.Delete(ctx, service); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete webui service: %w", err)
-	}
-
-	// Delete route
-	route := &routev1.Route{}
-	route.Name = "ado-webui"
-	route.Namespace = operatorNamespace
-	if err := r.Delete(ctx, route); err != nil && !errors.IsNotFound(err) && !isNoMatchError(err) {
-		r.Log.Error(err, "Failed to delete webui route (ignoring, expected on non-OpenShift clusters)")
-	}
-
-	// Delete ingress
-	ingress := &networkingv1.Ingress{}
-	ingress.Name = "ado-webui"
-	ingress.Namespace = operatorNamespace
-	if err := r.Delete(ctx, ingress); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete webui ingress: %w", err)
-	}
-
-	// Delete nginx ConfigMap
-	configMap := &corev1.ConfigMap{}
-	configMap.Name = "ado-webui-nginx-config"
-	configMap.Namespace = operatorNamespace
-	if err := r.Delete(ctx, configMap); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete nginx configmap: %w", err)
-	}
-
-	// Delete build-api deployment
-	buildAPIDeployment := &appsv1.Deployment{}
-	buildAPIDeployment.Name = "ado-build-api"
-	buildAPIDeployment.Namespace = operatorNamespace
-	if err := r.Delete(ctx, buildAPIDeployment); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build-api deployment: %w", err)
-	}
-
-	// Delete build-api service
-	buildAPIService := &corev1.Service{}
-	buildAPIService.Name = "ado-build-api"
-	buildAPIService.Namespace = operatorNamespace
-	if err := r.Delete(ctx, buildAPIService); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build-api service: %w", err)
-	}
-
-	// Delete build-api route (OpenShift only - ignore errors on non-OpenShift clusters)
-	buildAPIRoute := &routev1.Route{}
-	buildAPIRoute.Name = "ado-build-api"
-	buildAPIRoute.Namespace = operatorNamespace
-	if err := r.Delete(ctx, buildAPIRoute); err != nil && !errors.IsNotFound(err) && !isNoMatchError(err) {
-		r.Log.Error(err, "Failed to delete build-api route (ignoring, expected on non-OpenShift clusters)")
-	}
-
-	// Delete build-api ingress
-	buildAPIIngress := &networkingv1.Ingress{}
-	buildAPIIngress.Name = "ado-build-api"
-	buildAPIIngress.Namespace = operatorNamespace
-	if err := r.Delete(ctx, buildAPIIngress); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build-api ingress: %w", err)
-	}
-
-	// Delete OAuth secrets
-	secrets := []string{"ado-webui-oauth-proxy", "ado-build-api-oauth-proxy"}
-	for _, secretName := range secrets {
-		secret := &corev1.Secret{}
-		secret.Name = secretName
-		secret.Namespace = operatorNamespace
-		if err := r.Delete(ctx, secret); err != nil && !errors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete secret %s: %w", secretName, err)
-		}
-	}
-
-	return nil
 }
 
 func (r *OperatorConfigReconciler) createOrUpdate(ctx context.Context, obj client.Object, owner *automotivev1alpha1.OperatorConfig) error {
@@ -602,13 +323,43 @@ func (r *OperatorConfigReconciler) createOrUpdatePipeline(ctx context.Context, p
 	return r.Update(ctx, pipeline)
 }
 
+func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	r.Log.Info("Starting build-api deployment")
+
+	// Create/update nginx configuration
+	nginxConfig := r.buildBuildAPINginxConfigMap()
+	if err := r.createOrUpdate(ctx, nginxConfig, config); err != nil {
+		r.Log.Error(err, "Failed to create/update build-api nginx config")
+		return fmt.Errorf("failed to create/update build-api nginx config: %w", err)
+	}
+	r.Log.Info("Build-API nginx config created/updated successfully")
+
+	// Create/update build-api deployment
+	deployment := r.buildBuildAPIDeployment()
+	if err := r.createOrUpdate(ctx, deployment, config); err != nil {
+		r.Log.Error(err, "Failed to create/update build-api deployment")
+		return fmt.Errorf("failed to create/update build-api deployment: %w", err)
+	}
+	r.Log.Info("Build-API deployment created/updated successfully")
+
+	// Create/update build-api service
+	service := r.buildBuildAPIService()
+	if err := r.createOrUpdate(ctx, service, config); err != nil {
+		r.Log.Error(err, "Failed to create/update build-api service")
+		return fmt.Errorf("failed to create/update build-api service: %w", err)
+	}
+	r.Log.Info("Build-API service created/updated successfully")
+
+	r.Log.Info("Build-API deployment completed successfully")
+	return nil
+}
+
 func (r *OperatorConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&automotivev1alpha1.OperatorConfig{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
-		Owns(&corev1.ServiceAccount{}).
 		Owns(&tektonv1.Task{}).
 		Owns(&tektonv1.Pipeline{}).
 		Complete(r)

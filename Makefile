@@ -135,7 +135,6 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
-	go build -o bin/init-secrets cmd/init-secrets/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
@@ -146,7 +145,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) buildx build --platform $(BUILD_PLATFORM) --load -t ${IMG} .
+	$(CONTAINER_TOOL) buildx build --no-cache --platform $(BUILD_PLATFORM) --load -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -369,3 +368,23 @@ webui-docker-build: ## Build webui docker image
 .PHONY: webui-docker-push
 webui-docker-push: ## Push webui docker image
 	$(CONTAINER_TOOL) push $(IMAGE_TAG_BASE)-webui:latest
+
+##@ Console Plugin
+
+CONSOLE_PLUGIN_IMG ?= $(IMAGE_TAG_BASE)-console-plugin:latest
+
+.PHONY: console-plugin-install
+console-plugin-install: ## Install console plugin dependencies
+	cd webui && yarn install --ignore-engines
+
+.PHONY: console-plugin-build
+console-plugin-build: console-plugin-install ## Build the console plugin
+	cd webui && yarn build
+
+.PHONY: console-plugin-docker-build
+console-plugin-docker-build: ## Build console plugin docker image
+	$(CONTAINER_TOOL) buildx build --platform $(BUILD_PLATFORM) --load -t $(CONSOLE_PLUGIN_IMG) -f webui/Dockerfile webui
+
+.PHONY: console-plugin-docker-push
+console-plugin-docker-push: ## Push console plugin docker image
+	$(CONTAINER_TOOL) push $(CONSOLE_PLUGIN_IMG)

@@ -97,9 +97,9 @@ rules:
   - patch
   - update
 - apiGroups:
-  - networking.k8s.io
+  - console.openshift.io
   resources:
-  - ingresses
+  - consoleplugins
   verbs:
   - create
   - delete

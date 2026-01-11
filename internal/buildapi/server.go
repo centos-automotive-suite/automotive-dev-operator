@@ -695,7 +695,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 
 	if req.Distro == "" {
-		req.Distro = "cs9"
+		req.Distro = "autosd"
 	}
 	if req.Target == "" {
 		req.Target = "qemu"

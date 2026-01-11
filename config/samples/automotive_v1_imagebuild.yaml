@@ -12,7 +12,7 @@ metadata:
 spec:
   #architecture: "arm64"
   architecture: "amd64"
-  distro: "cs9"
+  distro: "autosd"
   target: "qemu"
   mode: "image"
   exportFormat: "qcow2"

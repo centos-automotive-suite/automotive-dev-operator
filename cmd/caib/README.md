@@ -1,6 +1,6 @@
 # caib — Cloud Automotive Image Builder CLI
 
-`caib` is a CLI that talks to the Automotive Dev Build API to create, monitor, and download automotive OS image builds.
+`caib` is a CLI that talks to the Automotive CentOS Suite API to create, monitor, and download automotive OS image builds.
 
 ## Installation
 

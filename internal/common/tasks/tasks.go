@@ -408,7 +408,7 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					Type: tektonv1.ParamTypeString,
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "cs9",
+						StringVal: "autosd",
 					},
 					Description: "Build for this distro specification",
 				},
