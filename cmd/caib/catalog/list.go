@@ -49,7 +49,7 @@ func newListCmd() *cobra.Command {
 
 	addCommonFlags(cmd)
 	cmd.Flags().StringVar(&listArchitecture, "architecture", "", "Filter by architecture (amd64, arm64)")
-	cmd.Flags().StringVar(&listDistro, "distro", "", "Filter by distribution (cs9, autosd10-sig)")
+	cmd.Flags().StringVar(&listDistro, "distro", "", "Filter by distribution (autosd, autosd10-sig)")
 	cmd.Flags().StringVar(&listTarget, "target", "", "Filter by hardware target (qemu, raspberry-pi)")
 	cmd.Flags().StringVar(&listPhase, "phase", "", "Filter by phase (Available, Unavailable, etc)")
 	cmd.Flags().StringVar(&listTags, "tags", "", "Filter by tags (comma-separated)")

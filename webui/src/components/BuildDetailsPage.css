@@ -1,0 +1,28 @@
+.automotive-dev__details-header {
+  margin-top: var(--pf-v6-global--spacer--md);
+}
+
+.automotive-dev__tab-content {
+  padding-top: var(--pf-v6-global--spacer--md);
+}
+
+.automotive-dev__logs-container {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.automotive-dev__logs-alert {
+  margin-bottom: var(--pf-v6-global--spacer--sm);
+}
+
+.automotive-dev__logs-block {
+  font-family: var(--pf-v6-global--FontFamily--monospace);
+  font-size: var(--pf-v6-global--FontSize--sm);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.automotive-dev__artifacts-title {
+  margin-top: var(--pf-v6-global--spacer--lg);
+  margin-bottom: var(--pf-v6-global--spacer--md);
+}

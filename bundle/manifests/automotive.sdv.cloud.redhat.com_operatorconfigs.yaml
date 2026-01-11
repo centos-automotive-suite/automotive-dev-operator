@@ -15,8 +15,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.webUI
-      name: WebUI
+    - jsonPath: .spec.consolePlugin.enabled
+      name: Console Plugin
       type: boolean
     - jsonPath: .spec.osBuilds.enabled
       name: OS Builds
@@ -52,6 +52,54 @@ spec:
           spec:
             description: OperatorConfigSpec defines the desired state of OperatorConfig
             properties:
+              buildAPI:
+                description: BuildAPI defines configuration for the Build API server
+                properties:
+                  maxLogStreamDurationMinutes:
+                    description: |-
+                      MaxLogStreamDurationMinutes is the maximum duration for log streaming in minutes
+                      Default: 120 (2 hours)
+                    format: int32
+                    type: integer
+                  maxManifestSize:
+                    description: |-
+                      MaxManifestSize is the maximum allowed manifest size in bytes
+                      Default: 10485760 (10MB)
+                    format: int64
+                    type: integer
+                  maxTotalUploadSize:
+                    description: |-
+                      MaxTotalUploadSize is the maximum total upload size per request in bytes
+                      Default: 2147483648 (2GB)
+                    format: int64
+                    type: integer
+                  maxUploadFileSize:
+                    description: |-
+                      MaxUploadFileSize is the maximum size for individual uploaded files in bytes
+                      Default: 1073741824 (1GB)
+                    format: int64
+                    type: integer
+                type: object
+              consolePlugin:
+                description: |-
+                  ConsolePlugin defines configuration for the OpenShift Console plugin
+                  The console plugin integrates with the OpenShift Console to provide
+                  a native UI experience for managing automotive image builds.
+                  Disabled by default.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled determines if the OpenShift Console plugin
+                      should be deployed
+                    type: boolean
+                  image:
+                    description: |-
+                      Image specifies the console plugin container image
+                      If not specified, defaults to the image built into the operator
+                    type: string
+                required:
+                - enabled
+                type: object
               osBuilds:
                 description: OSBuilds defines the configuration for OS build operations
                 properties:
@@ -94,16 +142,14 @@ spec:
                 required:
                 - enabled
                 type: object
-              webUI:
-                default: true
-                description: WebUI determines if the web UI should be deployed
-                type: boolean
-            required:
-            - webUI
             type: object
           status:
             description: OperatorConfigStatus defines the observed state of OperatorConfig
             properties:
+              consolePluginDeployed:
+                description: ConsolePluginDeployed indicates if the Console Plugin
+                  is currently deployed
+                type: boolean
               message:
                 description: Message provides detail about the current phase
                 type: string
@@ -120,9 +166,6 @@ spec:
                 description: Phase represents the current phase (Ready, Reconciling,
                   Failed)
                 type: string
-              webUIDeployed:
-                description: WebUIDeployed indicates if the WebUI is currently deployed
-                type: boolean
             type: object
         type: object
     served: true

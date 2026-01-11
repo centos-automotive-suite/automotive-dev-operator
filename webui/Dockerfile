@@ -1,21 +1,17 @@
-FROM node:18-alpine AS builder
+FROM registry.access.redhat.com/ubi9/nodejs-20:latest AS build
+USER root
+RUN command -v yarn || npm i -g yarn
 
-WORKDIR /app
+ADD . /usr/src/app
+WORKDIR /usr/src/app
+RUN yarn install
+ENV NODE_OPTIONS="--max-old-space-size=768"
+ENV NODE_ENV="production"
+RUN yarn build
 
-COPY webui/package*.json ./
+FROM registry.access.redhat.com/ubi9/nginx-120:latest
 
-RUN npm ci
+COPY --from=build /usr/src/app/dist /usr/share/nginx/html
+USER 1001
 
-COPY webui/ .
-
-RUN npm run build
-
-FROM nginx:alpine
-
-COPY --from=builder /app/build /usr/share/nginx/html
-
-COPY config/webui/nginx.conf /etc/nginx/nginx.conf
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
