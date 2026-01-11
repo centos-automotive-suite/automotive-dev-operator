@@ -70,8 +70,27 @@ type BuildAPIConfig struct {
 	MaxLogStreamDurationMinutes int32 `json:"maxLogStreamDurationMinutes,omitempty"`
 }
 
+// ConsolePluginConfig defines configuration for the OpenShift Console plugin
+type ConsolePluginConfig struct {
+	// Enabled determines if the OpenShift Console plugin should be deployed
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled"`
+
+	// Image specifies the console plugin container image
+	// If not specified, defaults to the image built into the operator
+	// +optional
+	Image string `json:"image,omitempty"`
+}
+
 // OperatorConfigSpec defines the desired state of OperatorConfig
 type OperatorConfigSpec struct {
+	// ConsolePlugin defines configuration for the OpenShift Console plugin
+	// The console plugin integrates with the OpenShift Console to provide
+	// a native UI experience for managing automotive image builds.
+	// Disabled by default.
+	// +optional
+	ConsolePlugin *ConsolePluginConfig `json:"consolePlugin,omitempty"`
+
 	// OSBuilds defines the configuration for OS build operations
 	// +optional
 	OSBuilds *OSBuildsConfig `json:"osBuilds,omitempty"`
@@ -132,10 +151,14 @@ type OperatorConfigStatus struct {
 
 	// OSBuildsDeployed indicates if the OS Builds Tekton tasks are currently deployed
 	OSBuildsDeployed bool `json:"osBuildsDeployed,omitempty"`
+
+	// ConsolePluginDeployed indicates if the Console Plugin is currently deployed
+	ConsolePluginDeployed bool `json:"consolePluginDeployed,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Console Plugin",type="boolean",JSONPath=".spec.consolePlugin.enabled"
 // +kubebuilder:printcolumn:name="OS Builds",type="boolean",JSONPath=".spec.osBuilds.enabled"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"

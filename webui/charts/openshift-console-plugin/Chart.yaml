@@ -1,0 +1,6 @@
+apiVersion: v2
+name: automotive-dev-console-plugin
+description: OpenShift Console plugin for Automotive CentOS Suite
+type: application
+version: 0.1.0
+appVersion: "0.0.1"

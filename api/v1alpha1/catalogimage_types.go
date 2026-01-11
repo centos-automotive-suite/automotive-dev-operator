@@ -79,7 +79,7 @@ type CatalogImageMetadata struct {
 	Variant string `json:"variant,omitempty"`
 
 	// Distro is the distribution identifier
-	// Common values include: cs9, autosd10-sig, autosd9, cs8, fedora-39, fedora-40, rhel9, rhel8
+	// Common values include: autosd, autosd10-sig, autosd9, cs8, fedora-39, fedora-40, rhel9, rhel8
 	// Run 'aib list-dist' to see all available distributions
 	// +optional
 	Distro string `json:"distro,omitempty"`

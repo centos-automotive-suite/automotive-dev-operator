@@ -15,6 +15,9 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.consolePlugin.enabled
+      name: Console Plugin
+      type: boolean
     - jsonPath: .spec.osBuilds.enabled
       name: OS Builds
       type: boolean
@@ -76,6 +79,26 @@ spec:
                       Default: 1073741824 (1GB)
                     format: int64
                     type: integer
+                type: object
+              consolePlugin:
+                description: |-
+                  ConsolePlugin defines configuration for the OpenShift Console plugin
+                  The console plugin integrates with the OpenShift Console to provide
+                  a native UI experience for managing automotive image builds.
+                  Disabled by default.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled determines if the OpenShift Console plugin
+                      should be deployed
+                    type: boolean
+                  image:
+                    description: |-
+                      Image specifies the console plugin container image
+                      If not specified, defaults to the image built into the operator
+                    type: string
+                required:
+                - enabled
                 type: object
               osBuilds:
                 description: OSBuilds defines the configuration for OS build operations
@@ -173,6 +196,10 @@ spec:
           status:
             description: OperatorConfigStatus defines the observed state of OperatorConfig
             properties:
+              consolePluginDeployed:
+                description: ConsolePluginDeployed indicates if the Console Plugin
+                  is currently deployed
+                type: boolean
               message:
                 description: Message provides detail about the current phase
                 type: string

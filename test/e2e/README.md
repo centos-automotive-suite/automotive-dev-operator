@@ -1,6 +1,6 @@
 # End-to-End Tests
 
-This directory contains end-to-end tests for the Automotive Dev Operator.
+This directory contains end-to-end tests for the CentOS Suite Operator.
 
 ## Prerequisites
 

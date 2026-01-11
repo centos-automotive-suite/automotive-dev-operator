@@ -1,0 +1,16 @@
+.automotive-dev__create-title {
+  margin-top: var(--pf-v6-global--spacer--md);
+}
+
+.automotive-dev__form-error {
+  margin-bottom: var(--pf-v6-global--spacer--md);
+}
+
+.automotive-dev__manifest-input {
+  font-family: var(--pf-v6-global--FontFamily--monospace);
+  font-size: var(--pf-v6-global--FontSize--sm);
+}
+
+.automotive-dev__advanced-section {
+  padding-top: var(--pf-v6-global--spacer--md);
+}

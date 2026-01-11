@@ -1,36 +1,30 @@
 #!/bin/bash
 set -e
 
-# Usage help
-show_help() {
-    cat << EOF
-Usage: $0 [COMMAND]
-
-Commands:
-  (default)   Full redeploy: uninstall existing operator, build, and install
-  uninstall   Uninstall the operator only
-  build       Build and push images only (no install)
-  help        Show this help message
-
-Examples:
-  $0              # Full redeploy (most common)
-  $0 uninstall    # Just uninstall
-  $0 build        # Just build images
-EOF
-    exit 0
-}
-
-# Parse command (default: full redeploy)
-COMMAND="${1:-redeploy}"
-case "$COMMAND" in
-    help|-h|--help)
-        show_help
+# Parse command line options
+COMMAND=""
+case ${1:-} in
+    install)
+        COMMAND="install"
         ;;
-    uninstall|build|redeploy)
+    uninstall|remove)
+        COMMAND="uninstall"
+        ;;
+    redeploy|reinstall)
+        COMMAND="redeploy"
+        ;;
+    clean)
+        COMMAND="clean"
         ;;
     *)
-        echo "Unknown command: $COMMAND"
-        echo "Run '$0 help' for usage"
+        echo "Usage: $0 {install|uninstall|redeploy|clean}"
+        echo ""
+        echo "Commands:"
+        echo "  install    - Deploy the operator catalog and install operator"
+        echo "  uninstall  - Uninstall the operator and remove resources"
+        echo "  redeploy   - Uninstall and reinstall (equivalent to uninstall + install)"
+        echo "  clean      - Thorough cleanup of all operator resources"
+        echo ""
         exit 1
         ;;
 esac
@@ -66,12 +60,8 @@ echo "Using OpenShift internal registry: ${INTERNAL_REGISTRY}"
 
 REGISTRY=${REGISTRY:-${INTERNAL_REGISTRY}}
 CATALOG_NAMESPACE=${CATALOG_NAMESPACE:-openshift-marketplace}
-
-# Use git SHA for unique operator image tag to avoid node-level caching issues
-GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
-OPERATOR_TAG="${GIT_SHA}-$(date +%s)"
-OPERATOR_IMG="${REGISTRY}/${NAMESPACE}/automotive-dev-operator:${OPERATOR_TAG}"
-
+OPERATOR_IMG="${REGISTRY}/${NAMESPACE}/automotive-dev-operator:latest"
+CONSOLE_PLUGIN_IMG="${REGISTRY}/${NAMESPACE}/automotive-dev-console-plugin:latest"
 BUNDLE_IMG="${REGISTRY}/${CATALOG_NAMESPACE}/automotive-dev-operator-bundle:v${VERSION}"
 CATALOG_IMG="${REGISTRY}/${CATALOG_NAMESPACE}/automotive-dev-operator-catalog:v${VERSION}"
 CONTAINER_TOOL=${CONTAINER_TOOL:-podman}
@@ -102,16 +92,26 @@ uninstall_operator() {
     echo "Deleting InstallPlans (if exist)..."
     oc delete installplan -n ${NAMESPACE} --all --ignore-not-found=true 2>/dev/null || true
 
-    echo "Deleting operator-managed resources..."
-    oc delete deployment ado-webui ado-build-api ado-controller-manager -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete service ado-webui ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    echo "Force-deleting all operator-managed resources..."
+    # Delete ALL resources that might be left over
+    oc delete deployment ado-webui ado-build-api ado-controller-manager automotive-dev-console-plugin -n ${NAMESPACE} --ignore-not-found=true --force --grace-period=0 2>/dev/null || true
+    oc delete service ado-webui ado-build-api automotive-dev-console-plugin -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
     oc delete route ado-webui ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
     oc delete serviceaccount ado-controller-manager ado-webui -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete configmap ado-webui-nginx-config -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete secret ado-oauth-secrets -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete configmap ado-webui-nginx-config automotive-dev-console-plugin -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete secret ado-oauth-secrets ado-webui-oauth-proxy ado-build-api-oauth-proxy automotive-dev-console-plugin-cert -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
 
-    echo "Waiting for operator pods to terminate..."
-    oc wait --for=delete pod -l control-plane=controller-manager -n ${NAMESPACE} --timeout=60s 2>/dev/null || true
+    # Also delete any console plugin resources (cluster-scoped)
+    echo "Deleting console plugin resources (cluster-scoped)..."
+    oc delete consoleplugin automotive-dev-console-plugin --ignore-not-found=true 2>/dev/null || true
+
+    echo "Waiting for all pods to terminate..."
+    oc wait --for=delete pod -l control-plane=controller-manager -n ${NAMESPACE} --timeout=30s 2>/dev/null || true
+    oc wait --for=delete pod -l app.kubernetes.io/part-of=automotive-dev-operator -n ${NAMESPACE} --timeout=30s 2>/dev/null || true
+
+    echo "Force-deleting any stuck pods..."
+    oc delete pods -l control-plane=controller-manager -n ${NAMESPACE} --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true
+    oc delete pods -l app.kubernetes.io/part-of=automotive-dev-operator -n ${NAMESPACE} --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true
 
     echo "Deleting CatalogSource to force catalog refresh..."
     oc delete catalogsource automotive-dev-operator-catalog -n ${CATALOG_NAMESPACE} --ignore-not-found=true
@@ -122,14 +122,38 @@ uninstall_operator() {
     echo ""
 }
 
-# Handle uninstall command
+clean_all() {
+    echo "=========================================="
+    echo "Thorough cleanup of all resources"
+    echo "=========================================="
+
+    # First do normal uninstall
+    uninstall_operator
+
+    echo "Cleaning up Tekton resources..."
+    oc delete tasks,pipelines,pipelineruns -n ${NAMESPACE} -l automotive.sdv.cloud.redhat.com/managed-by --ignore-not-found=true 2>/dev/null || true
+
+    echo "Cleaning up catalog resources..."
+    oc delete catalogsource automotive-dev-operator-catalog -n ${CATALOG_NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+
+    echo "Removing operator images from registry..."
+    oc delete imagestream automotive-dev-operator automotive-dev-console-plugin -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete imagestream automotive-dev-operator-bundle automotive-dev-operator-catalog -n ${CATALOG_NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+
+    echo "Clean complete."
+    echo ""
+}
+
 if [ "$COMMAND" = "uninstall" ]; then
     uninstall_operator
-    echo "Done."
     exit 0
 fi
 
-# For redeploy, uninstall first
+if [ "$COMMAND" = "clean" ]; then
+    clean_all
+    exit 0
+fi
+
 if [ "$COMMAND" = "redeploy" ]; then
     uninstall_operator
 fi
@@ -142,6 +166,7 @@ echo "Operator Namespace: ${NAMESPACE}"
 echo "Catalog Namespace: ${CATALOG_NAMESPACE}"
 echo "Registry: ${REGISTRY}"
 echo "Operator Image: ${OPERATOR_IMG}"
+echo "Console Plugin Image: ${CONSOLE_PLUGIN_IMG}"
 echo "Bundle Image: ${BUNDLE_IMG}"
 echo "Catalog Image: ${CATALOG_IMG}"
 echo "=========================================="
@@ -204,17 +229,49 @@ else
     ${CONTAINER_TOOL} push ${OPERATOR_IMG} --tls-verify=false
 fi
 
+# Build and push console plugin image
+if [ -d "webui" ] && [ -f "webui/package.json" ]; then
+    echo ""
+    echo "Building console plugin image..."
+    make console-plugin-docker-build CONSOLE_PLUGIN_IMG=${CONSOLE_PLUGIN_IMG} BUILD_PLATFORM=${BUILD_PLATFORM:-linux/amd64}
+
+    echo ""
+    echo "Pushing console plugin image..."
+    ${CONTAINER_TOOL} push ${CONSOLE_PLUGIN_IMG} --tls-verify=false
+else
+    echo ""
+    echo "Skipping console plugin build (webui directory not found)"
+fi
+
 echo ""
 echo "Generating bundle..."
 make bundle IMG=${OPERATOR_IMG} VERSION=${VERSION}
 
 echo ""
-echo "Fixing OPERATOR_IMAGE env var in bundle..."
-# The bundle generator doesn't replace env var values, only container images
-# We need to manually update the OPERATOR_IMAGE env var to use the internal registry
+echo "Fixing images in bundle to use internal registry..."
+# The bundle generator doesn't replace env var values or related images
+# We need to manually update them to use the internal registry
 OPERATOR_IMG_INTERNAL="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/automotive-dev-operator:latest"
-sed -i.bak "s|value: controller:latest|value: ${OPERATOR_IMG_INTERNAL}|g" bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml
-rm -f bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml.bak
+CONSOLE_PLUGIN_IMG_INTERNAL="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/automotive-dev-console-plugin:latest"
+
+# Add relatedImages section (bundle generator doesn't include this)
+sed -i.bak '67a\
+  relatedImages:\
+  - name: manager\
+    image: quay.io/rh-sdv-cloud/automotive-dev-operator:latest\
+  - name: console-plugin\
+    image: quay.io/rh-sdv-cloud/automotive-dev-console-plugin:latest\
+' bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml
+
+# Fix environment variable values
+sed -i.bak2 "s|value: controller:latest|value: ${OPERATOR_IMG_INTERNAL}|g" bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml
+sed -i.bak3 "s|value: quay.io/rh-sdv-cloud/automotive-dev-console-plugin:latest|value: ${CONSOLE_PLUGIN_IMG_INTERNAL}|g" bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml
+
+# Fix related images
+sed -i.bak4 "s|image: quay.io/rh-sdv-cloud/automotive-dev-operator:latest|image: ${OPERATOR_IMG_INTERNAL}|g" bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml
+sed -i.bak5 "s|image: quay.io/rh-sdv-cloud/automotive-dev-console-plugin:latest|image: ${CONSOLE_PLUGIN_IMG_INTERNAL}|g" bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml
+
+rm -f bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml.bak*
 
 echo ""
 echo "Building bundle image..."
@@ -281,8 +338,7 @@ echo "To view the catalog pods:"
 echo "  oc get pods -n openshift-marketplace | grep automotive-dev-operator"
 echo ""
 
-# Install operator (for redeploy command)
-if [ "$COMMAND" = "redeploy" ]; then
+if [ "$COMMAND" = "install" ] || [ "$COMMAND" = "redeploy" ]; then
     echo ""
     echo "=========================================="
     echo "Installing Operator"
@@ -329,12 +385,42 @@ if [ "$COMMAND" = "redeploy" ]; then
 
     echo ""
     echo "Waiting for operator deployment to be available..."
-    for i in {1..30}; do
+    for i in {1..60}; do
         if oc get deployment ado-controller-manager -n ${NAMESPACE} &>/dev/null; then
-            oc wait --for=condition=Available deployment/ado-controller-manager -n ${NAMESPACE} --timeout=300s && break
+            echo "  Deployment found, checking readiness..."
+            if oc wait --for=condition=Available deployment/ado-controller-manager -n ${NAMESPACE} --timeout=30s 2>/dev/null; then
+                echo "  Deployment is available!"
+                break
+            fi
         fi
-        echo "  Deployment not yet created, checking pod status..."
-        oc get pods -n ${NAMESPACE} 2>/dev/null | grep -v "^NAME" || true
+
+        # Check pod status and show any issues
+        echo "  Checking pod status (attempt $i/60)..."
+        PODS=$(oc get pods -n ${NAMESPACE} --no-headers 2>/dev/null || echo "")
+        if [ -n "$PODS" ]; then
+            echo "$PODS" | while read line; do
+                POD_NAME=$(echo "$line" | awk '{print $1}')
+                POD_STATUS=$(echo "$line" | awk '{print $3}')
+
+                if [[ "$POD_STATUS" == "CrashLoopBackOff" || "$POD_STATUS" == "Error" || "$POD_STATUS" == "Failed" ]]; then
+                    echo "  ERROR: Pod $POD_NAME in $POD_STATUS state!"
+                    echo "  Pod logs:"
+                    oc logs "$POD_NAME" -n ${NAMESPACE} --tail=20 2>/dev/null || echo "    (no logs available)"
+                    echo "  Pod events:"
+                    oc get events --field-selector involvedObject.name="$POD_NAME" -n ${NAMESPACE} --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -5 || echo "    (no events)"
+                    echo ""
+                elif [[ "$POD_STATUS" == "Pending" ]]; then
+                    # Check why it's pending
+                    REASON=$(oc get pod "$POD_NAME" -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="PodScheduled")].reason}' 2>/dev/null || echo "")
+                    if [ -n "$REASON" ]; then
+                        echo "  Pod $POD_NAME pending: $REASON"
+                    fi
+                fi
+            done
+        else
+            echo "  No pods found yet..."
+        fi
+
         sleep 5
     done
 

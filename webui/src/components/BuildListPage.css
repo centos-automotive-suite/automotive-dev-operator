@@ -1,0 +1,7 @@
+.automotive-dev__build-row {
+  cursor: pointer;
+}
+
+.automotive-dev__build-row:hover {
+  background-color: var(--pf-v6-global--BackgroundColor--150);
+}

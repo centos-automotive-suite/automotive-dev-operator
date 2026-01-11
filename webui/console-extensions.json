@@ -1,0 +1,44 @@
+[
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "automotive-dev",
+      "name": "%plugin__automotive-dev-console-plugin~Centos Automotive Suite%",
+      "perspective": "admin"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "automotive-builds",
+      "name": "%plugin__automotive-dev-console-plugin~Image Builds%",
+      "href": "/automotive-dev/builds",
+      "perspective": "admin",
+      "section": "automotive-dev"
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "exact": true,
+      "path": "/automotive-dev/builds",
+      "component": { "$codeRef": "BuildListPage" }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "exact": true,
+      "path": "/automotive-dev/builds/~new",
+      "component": { "$codeRef": "CreateBuildPage" }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "exact": false,
+      "path": "/automotive-dev/builds/:name",
+      "component": { "$codeRef": "BuildDetailsPage" }
+    }
+  }
+]

@@ -20,7 +20,7 @@ metadata:
           "spec": {
             "architecture": "amd64",
             "automotiveImageBuilder": "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0",
-            "distro": "cs9",
+            "distro": "autosd",
             "exportFormat": "qcow2",
             "manifestConfigMap": "mpp",
             "mode": "image",
@@ -51,7 +51,7 @@ metadata:
           },
           "spec": {
             "architecture": "amd64",
-            "distro": "cs9",
+            "distro": "autosd",
             "exportFormat": "qcow2",
             "target": "qemu",
             "location": {

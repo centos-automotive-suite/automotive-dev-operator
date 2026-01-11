@@ -97,7 +97,9 @@ aib-dev build --distro autosd --format raw --mode package manifest.aib.yml disk.
 
 ## Build Pipeline Internals
 
-### Manifest Processing Engine
+```bash
+aib-dev build --target qemu --format qcow2 manifest.aib.yml disk.qcow2
+```
 
 AIB processes .aib.yml manifests through several phases:
 
@@ -111,10 +113,9 @@ AIB processes .aib.yml manifests through several phases:
 - Checks required fields and data types
 - Validates file paths and size formats
 
-**3. Variable Substitution**
-- Processes `--define` parameters
-- Supports environment variable expansion
-- Handles conditional sections
+```bash
+aib-dev build --target qemu --format image manifest.aib.yml disk.raw
+```
 
 **4. Dependency Resolution**
 - Resolves RPM package dependencies
@@ -125,11 +126,16 @@ AIB processes .aib.yml manifests through several phases:
 
 AIB uses different backends depending on build type:
 
-#### Bootc Backend
-- **Container Engine**: Uses buildah for container construction
-- **Base Image**: Starts from bootc-compatible base (CentOS/AutoSD)
-- **Layer Management**: Optimizes container layers for size
-- **Registry Integration**: Handles push/pull operations with authentication
+```bash
+# Create a build
+bin/caib build \
+  --name my-build \
+  --manifest simple.aib.yml \
+  --target qemu \
+  --arch arm64 \
+  --mode bootc \
+  --export qcow2 \
+  --follow --download
 
 #### OSTree Backend (aib-dev image mode)
 - **Repository Management**: Creates/manages ostree repositories

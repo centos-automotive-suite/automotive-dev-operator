@@ -7,6 +7,13 @@ metadata:
   name: config
   namespace: automotive-dev-operator-system
 spec:
+  # ConsolePlugin enables the OpenShift Console plugin for managing builds
+  # Now enabled by default to test the fixes
+  consolePlugin:
+    enabled: true
+    # Image will be automatically set by operator from environment variable
+    # No need to specify image - operator will use internal registry
+
   # OSBuilds configuration for OS build operations
   osBuilds:
     # Enable Tekton tasks for OS builds
@@ -28,26 +35,7 @@ spec:
     # Example: "2Gi"
     # memoryVolumeSize: "2Gi"
 
-    # Optional: Node selector for scheduling build pods to specific nodes
-    # Build pods will only run on nodes with matching labels
-    # Common use cases:
-    #   - Route builds to dedicated build nodes: {"workload": "builds"}
-    #   - Use nodes with fast storage: {"disktype": "ssd"}
-    #   - Target specific node pools: {"node-pool": "compute-intensive"}
-    # nodeSelector:
-    #   dedicated: "builds"
-    #   disktype: "ssd"
-
-    # Optional: Tolerations for exclusive access to tainted nodes
-    # Enables scheduling on nodes tainted for dedicated automotive builds
-    # First taint nodes: kubectl taint nodes <node> automotive.sdv.cloud.redhat.com/dedicated=builds:NoSchedule
-    # Then configure tolerations to access those nodes:
-    # tolerations:
-    # - key: "automotive.sdv.cloud.redhat.com/dedicated"
-    #   operator: "Equal"
-    #   value: "builds"
-    #   effect: "NoSchedule"
-    # - key: "node.kubernetes.io/dedicated"
-    #   operator: "Equal"
-    #   value: "automotive"
-    #   effect: "NoExecute"
+    # Optional: Runtime class to use for build pods
+    # Useful for kata containers or other alternative runtimes
+    # More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+    # runtimeClassName: "kata"
