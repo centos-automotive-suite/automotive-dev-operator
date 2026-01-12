@@ -1,5 +1,5 @@
 #!/bin/sh
-set -ex
+set -e
 
 # Trim whitespace/newlines from the filename
 exportFile=$(echo "$(params.artifact-filename)" | tr -d '[:space:]')

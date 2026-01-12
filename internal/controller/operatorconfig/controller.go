@@ -282,6 +282,27 @@ func (r *OperatorConfigReconciler) deployWebUI(ctx context.Context, owner *autom
 		r.Log.Info("WebUI ingress created/updated successfully")
 	}
 
+	r.Log.Info("WebUI deployment completed successfully")
+	return nil
+}
+
+func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
+	r.Log.Info("Starting Build-API deployment")
+
+	// Ensure OAuth secret for build-api
+	if err := r.ensureBuildAPIOAuthSecret(ctx, owner); err != nil {
+		r.Log.Error(err, "Failed to ensure build-api OAuth secret")
+		return fmt.Errorf("failed to ensure build-api OAuth secret: %w", err)
+	}
+
+	// Update ServiceAccount with build-api OAuth redirect annotation
+	if err := r.updateBuildAPIServiceAccountAnnotation(ctx); err != nil {
+		r.Log.Error(err, "Failed to update ServiceAccount build-api OAuth annotation")
+		return fmt.Errorf("failed to update ServiceAccount build-api OAuth annotation: %w", err)
+	}
+
+	isOpenShift := r.detectOpenShift(ctx)
+
 	// Create/update build-api deployment
 	r.Log.Info("Creating/updating build-api deployment")
 	buildAPIDeployment := r.buildBuildAPIDeployment(isOpenShift)
@@ -318,7 +339,49 @@ func (r *OperatorConfigReconciler) deployWebUI(ctx context.Context, owner *autom
 		r.Log.Info("Build-API ingress created/updated successfully")
 	}
 
-	r.Log.Info("WebUI deployment completed successfully")
+	r.Log.Info("Build-API deployment completed successfully")
+	return nil
+}
+
+func (r *OperatorConfigReconciler) ensureBuildAPIOAuthSecret(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
+	secretName := "ado-build-api-oauth-proxy"
+	secret := &corev1.Secret{}
+	err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: operatorNamespace}, secret)
+
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to get secret %s: %w", secretName, err)
+		}
+		// Secret doesn't exist, create it
+		secret = r.buildOAuthSecret(secretName)
+		if err := r.Create(ctx, secret); err != nil {
+			return fmt.Errorf("failed to create secret %s: %w", secretName, err)
+		}
+		r.Log.Info("Created OAuth secret", "name", secretName)
+	}
+	return nil
+}
+
+func (r *OperatorConfigReconciler) updateBuildAPIServiceAccountAnnotation(ctx context.Context) error {
+	sa := &corev1.ServiceAccount{}
+	if err := r.Get(ctx, client.ObjectKey{Name: "ado-controller-manager", Namespace: operatorNamespace}, sa); err != nil {
+		return fmt.Errorf("failed to get service account: %w", err)
+	}
+
+	if sa.Annotations == nil {
+		sa.Annotations = make(map[string]string)
+	}
+
+	buildAPIAnnotation := `{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"ado-build-api"}}`
+	if sa.Annotations["serviceaccounts.openshift.io/oauth-redirectreference.buildapi"] == buildAPIAnnotation {
+		return nil // Already set
+	}
+
+	sa.Annotations["serviceaccounts.openshift.io/oauth-redirectreference.buildapi"] = buildAPIAnnotation
+	if err := r.Update(ctx, sa); err != nil {
+		return fmt.Errorf("failed to update service account: %w", err)
+	}
+	r.Log.Info("Updated ServiceAccount with build-api OAuth annotation")
 	return nil
 }
 
@@ -427,40 +490,8 @@ func (r *OperatorConfigReconciler) cleanupWebUI(ctx context.Context) error {
 		return fmt.Errorf("failed to delete nginx configmap: %w", err)
 	}
 
-	// Delete build-api deployment
-	buildAPIDeployment := &appsv1.Deployment{}
-	buildAPIDeployment.Name = "ado-build-api"
-	buildAPIDeployment.Namespace = operatorNamespace
-	if err := r.Delete(ctx, buildAPIDeployment); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build-api deployment: %w", err)
-	}
-
-	// Delete build-api service
-	buildAPIService := &corev1.Service{}
-	buildAPIService.Name = "ado-build-api"
-	buildAPIService.Namespace = operatorNamespace
-	if err := r.Delete(ctx, buildAPIService); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build-api service: %w", err)
-	}
-
-	// Delete build-api route (OpenShift only - ignore errors on non-OpenShift clusters)
-	buildAPIRoute := &routev1.Route{}
-	buildAPIRoute.Name = "ado-build-api"
-	buildAPIRoute.Namespace = operatorNamespace
-	if err := r.Delete(ctx, buildAPIRoute); err != nil && !errors.IsNotFound(err) && !isNoMatchError(err) {
-		r.Log.Error(err, "Failed to delete build-api route (ignoring, expected on non-OpenShift clusters)")
-	}
-
-	// Delete build-api ingress
-	buildAPIIngress := &networkingv1.Ingress{}
-	buildAPIIngress.Name = "ado-build-api"
-	buildAPIIngress.Namespace = operatorNamespace
-	if err := r.Delete(ctx, buildAPIIngress); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build-api ingress: %w", err)
-	}
-
-	// Delete OAuth secrets
-	secrets := []string{"ado-webui-oauth-proxy", "ado-build-api-oauth-proxy"}
+	// Delete WebUI OAuth secret
+	secrets := []string{"ado-webui-oauth-proxy"}
 	for _, secretName := range secrets {
 		secret := &corev1.Secret{}
 		secret.Name = secretName
@@ -468,6 +499,50 @@ func (r *OperatorConfigReconciler) cleanupWebUI(ctx context.Context) error {
 		if err := r.Delete(ctx, secret); err != nil && !errors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete secret %s: %w", secretName, err)
 		}
+	}
+
+	return nil
+}
+
+func (r *OperatorConfigReconciler) cleanupBuildAPI(ctx context.Context) error {
+	// Delete build-api deployment
+	deployment := &appsv1.Deployment{}
+	deployment.Name = "ado-build-api"
+	deployment.Namespace = operatorNamespace
+	if err := r.Delete(ctx, deployment); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete build-api deployment: %w", err)
+	}
+
+	// Delete build-api service
+	service := &corev1.Service{}
+	service.Name = "ado-build-api"
+	service.Namespace = operatorNamespace
+	if err := r.Delete(ctx, service); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete build-api service: %w", err)
+	}
+
+	// Delete build-api route (OpenShift only)
+	route := &routev1.Route{}
+	route.Name = "ado-build-api"
+	route.Namespace = operatorNamespace
+	if err := r.Delete(ctx, route); err != nil && !errors.IsNotFound(err) && !isNoMatchError(err) {
+		r.Log.Error(err, "Failed to delete build-api route (ignoring, expected on non-OpenShift clusters)")
+	}
+
+	// Delete build-api ingress
+	ingress := &networkingv1.Ingress{}
+	ingress.Name = "ado-build-api"
+	ingress.Namespace = operatorNamespace
+	if err := r.Delete(ctx, ingress); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete build-api ingress: %w", err)
+	}
+
+	// Delete build-api OAuth secret
+	secret := &corev1.Secret{}
+	secret.Name = "ado-build-api-oauth-proxy"
+	secret.Namespace = operatorNamespace
+	if err := r.Delete(ctx, secret); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete build-api OAuth secret: %w", err)
 	}
 
 	return nil
@@ -494,6 +569,11 @@ func (r *OperatorConfigReconciler) createOrUpdate(ctx context.Context, obj clien
 
 func (r *OperatorConfigReconciler) deployOSBuilds(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
 	r.Log.Info("Starting OSBuilds deployment")
+
+	// Deploy build-api (required for CLI access to builds)
+	if err := r.deployBuildAPI(ctx, config); err != nil {
+		return fmt.Errorf("failed to deploy build-api: %w", err)
+	}
 
 	// Convert OSBuildsConfig to BuildConfig for task generation
 	var buildConfig *tasks.BuildConfig
@@ -569,6 +649,11 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context) error {
 		return fmt.Errorf("failed to delete pipeline: %w", err)
 	}
 	r.Log.Info("Pipeline deleted")
+
+	// Cleanup build-api
+	if err := r.cleanupBuildAPI(ctx); err != nil {
+		return fmt.Errorf("failed to cleanup build-api: %w", err)
+	}
 
 	r.Log.Info("OSBuilds cleanup completed successfully")
 	return nil

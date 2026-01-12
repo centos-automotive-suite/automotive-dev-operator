@@ -1,26 +1,39 @@
 #!/bin/bash
 set -e
 
-# Parse command line options
-UNINSTALL=false
-INSTALL=false
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --uninstall)
-            UNINSTALL=true
-            shift
-            ;;
-        --install)
-            INSTALL=true
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Usage: $0 [--uninstall] [--install]"
-            exit 1
-            ;;
-    esac
-done
+# Usage help
+show_help() {
+    cat << EOF
+Usage: $0 [COMMAND]
+
+Commands:
+  (default)   Full redeploy: uninstall existing operator, build, and install
+  uninstall   Uninstall the operator only
+  build       Build and push images only (no install)
+  help        Show this help message
+
+Examples:
+  $0              # Full redeploy (most common)
+  $0 uninstall    # Just uninstall
+  $0 build        # Just build images
+EOF
+    exit 0
+}
+
+# Parse command (default: full redeploy)
+COMMAND="${1:-redeploy}"
+case "$COMMAND" in
+    help|-h|--help)
+        show_help
+        ;;
+    uninstall|build|redeploy)
+        ;;
+    *)
+        echo "Unknown command: $COMMAND"
+        echo "Run '$0 help' for usage"
+        exit 1
+        ;;
+esac
 
 # Configuration
 VERSION=${VERSION:-0.0.1}
@@ -53,7 +66,12 @@ echo "Using OpenShift internal registry: ${INTERNAL_REGISTRY}"
 
 REGISTRY=${REGISTRY:-${INTERNAL_REGISTRY}}
 CATALOG_NAMESPACE=${CATALOG_NAMESPACE:-openshift-marketplace}
-OPERATOR_IMG="${REGISTRY}/${NAMESPACE}/automotive-dev-operator:latest"
+
+# Use git SHA for unique operator image tag to avoid node-level caching issues
+GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
+OPERATOR_TAG="${GIT_SHA}-$(date +%s)"
+OPERATOR_IMG="${REGISTRY}/${NAMESPACE}/automotive-dev-operator:${OPERATOR_TAG}"
+
 BUNDLE_IMG="${REGISTRY}/${CATALOG_NAMESPACE}/automotive-dev-operator-bundle:v${VERSION}"
 CATALOG_IMG="${REGISTRY}/${CATALOG_NAMESPACE}/automotive-dev-operator-catalog:v${VERSION}"
 CONTAINER_TOOL=${CONTAINER_TOOL:-podman}
@@ -95,11 +113,24 @@ uninstall_operator() {
     echo "Waiting for operator pods to terminate..."
     oc wait --for=delete pod -l control-plane=controller-manager -n ${NAMESPACE} --timeout=60s 2>/dev/null || true
 
+    echo "Deleting CatalogSource to force catalog refresh..."
+    oc delete catalogsource automotive-dev-operator-catalog -n ${CATALOG_NAMESPACE} --ignore-not-found=true
+    echo "Waiting for catalog pod to terminate..."
+    oc wait --for=delete pod -l olm.catalogSource=automotive-dev-operator-catalog -n ${CATALOG_NAMESPACE} --timeout=60s 2>/dev/null || true
+
     echo "Operator uninstall complete."
     echo ""
 }
 
-if [ "$UNINSTALL" = true ]; then
+# Handle uninstall command
+if [ "$COMMAND" = "uninstall" ]; then
+    uninstall_operator
+    echo "Done."
+    exit 0
+fi
+
+# For redeploy, uninstall first
+if [ "$COMMAND" = "redeploy" ]; then
     uninstall_operator
 fi
 
@@ -180,8 +211,8 @@ make bundle IMG=${OPERATOR_IMG} VERSION=${VERSION}
 echo ""
 echo "Fixing OPERATOR_IMAGE env var in bundle..."
 # The bundle generator doesn't replace env var values, only container images
-# We need to manually update the OPERATOR_IMAGE env var to use the internal registry
-OPERATOR_IMG_INTERNAL="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/automotive-dev-operator:latest"
+# We need to manually update the OPERATOR_IMAGE env var to use the internal registry with unique tag
+OPERATOR_IMG_INTERNAL="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/automotive-dev-operator:${OPERATOR_TAG}"
 sed -i.bak "s|value: controller:latest|value: ${OPERATOR_IMG_INTERNAL}|g" bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml
 rm -f bundle/manifests/automotive-dev-operator.clusterserviceversion.yaml.bak
 
@@ -268,7 +299,8 @@ echo "To view the catalog pods:"
 echo "  oc get pods -n openshift-marketplace | grep automotive-dev-operator"
 echo ""
 
-if [ "$INSTALL" = true ]; then
+# Install operator (for redeploy command)
+if [ "$COMMAND" = "redeploy" ]; then
     echo ""
     echo "=========================================="
     echo "Installing Operator"
