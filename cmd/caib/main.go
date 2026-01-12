@@ -179,22 +179,22 @@ Examples:
 		Run:  runDisk,
 	}
 
-	// Legacy build command (traditional ostree/package-based)
-	buildLegacyCmd := &cobra.Command{
-		Use:   "build-legacy <manifest.aib.yml>",
-		Short: "Build traditional disk image (ostree or package-based)",
-		Long: `Build a traditional disk image using ostree or package-based mode.
+	// Dev build command (traditional ostree/package-based)
+	buildDevCmd := &cobra.Command{
+		Use:   "build-dev <manifest.aib.yml>",
+		Short: "Build disk image for development (ostree or package-based)",
+		Long: `Build a disk image using ostree or package-based mode for development workflows.
 
-This is for legacy workflows. For new projects, use 'caib build' (bootc).
+This creates standalone disk images without bootc container integration.
 
 Examples:
   # Ostree-based image
-  caib build-legacy manifest.aib.yml --mode image --format qcow2 -o disk.qcow2
+  caib build-dev manifest.aib.yml --mode image --format qcow2 -o disk.qcow2
 
   # Package-based image
-  caib build-legacy manifest.aib.yml --mode package --format raw -o disk.raw`,
+  caib build-dev manifest.aib.yml --mode package --format raw -o disk.raw`,
 		Args: cobra.ExactArgs(1),
-		Run:  runBuildLegacy,
+		Run:  runBuildDev,
 	}
 
 	// Deprecated aliases (hidden but functional for backwards compatibility)
@@ -207,12 +207,21 @@ Examples:
 		Hidden:     true,
 	}
 
+	buildLegacyAliasCmd := &cobra.Command{
+		Use:        "build-legacy <manifest.aib.yml>",
+		Short:      "Build disk image (deprecated: use 'build-dev' instead)",
+		Args:       cobra.ExactArgs(1),
+		Run:        runBuildDev,
+		Deprecated: "use 'build-dev' instead",
+		Hidden:     true,
+	}
+
 	buildTraditionalAliasCmd := &cobra.Command{
 		Use:        "build-traditional <manifest.aib.yml>",
-		Short:      "Build traditional disk image (deprecated: use 'build-legacy' instead)",
+		Short:      "Build traditional disk image (deprecated: use 'build-dev' instead)",
 		Args:       cobra.ExactArgs(1),
-		Run:        runBuildLegacy,
-		Deprecated: "use 'build-legacy' instead",
+		Run:        runBuildDev,
+		Deprecated: "use 'build-dev' instead",
 		Hidden:     true,
 	}
 
@@ -281,33 +290,33 @@ Examples:
 	diskCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for build to complete")
 	diskCmd.Flags().BoolVarP(&followLogs, "follow", "f", true, "follow build logs")
 
-	// build-legacy command flags (traditional ostree/package builds)
-	buildLegacyCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL")
-	buildLegacyCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
-	buildLegacyCmd.Flags().StringVarP(&buildName, "name", "n", "", "name for the ImageBuild")
-	buildLegacyCmd.Flags().StringVarP(&distro, "distro", "d", "autosd", "distribution to build")
-	buildLegacyCmd.Flags().StringVarP(&target, "target", "t", "qemu", "target platform")
-	buildLegacyCmd.Flags().StringVarP(&architecture, "arch", "a", getDefaultArch(), "architecture (amd64, arm64)")
-	buildLegacyCmd.Flags().StringVar(&mode, "mode", "", "build mode: image (ostree) or package (required)")
-	buildLegacyCmd.Flags().StringVar(&exportFormat, "format", "", "export format: qcow2, raw, simg, etc. (required)")
-	buildLegacyCmd.Flags().StringVarP(&outputDir, "output", "o", "", "download artifact to file")
-	buildLegacyCmd.Flags().StringVar(&compressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
-	buildLegacyCmd.Flags().StringVar(&exportOCI, "push", "", "push disk image as OCI artifact to registry")
-	buildLegacyCmd.Flags().StringVar(&registryUsername, "registry-username", "", "registry username (or REGISTRY_USERNAME env)")
-	buildLegacyCmd.Flags().StringVar(&registryPassword, "registry-password", "", "registry password (or REGISTRY_PASSWORD env)")
-	buildLegacyCmd.Flags().StringVar(&automotiveImageBuilder, "aib-image", "quay.io/centos-sig-automotive/automotive-image-builder:latest", "AIB container image")
-	buildLegacyCmd.Flags().StringVar(&storageClass, "storage-class", "", "Kubernetes storage class")
-	buildLegacyCmd.Flags().StringArrayVarP(&customDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
-	buildLegacyCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes")
-	buildLegacyCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for build to complete")
-	buildLegacyCmd.Flags().BoolVarP(&followLogs, "follow", "f", true, "follow build logs")
-	_ = buildLegacyCmd.MarkFlagRequired("mode")
-	_ = buildLegacyCmd.MarkFlagRequired("format")
+	// build-dev command flags (traditional ostree/package builds)
+	buildDevCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL")
+	buildDevCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	buildDevCmd.Flags().StringVarP(&buildName, "name", "n", "", "name for the ImageBuild")
+	buildDevCmd.Flags().StringVarP(&distro, "distro", "d", "autosd", "distribution to build")
+	buildDevCmd.Flags().StringVarP(&target, "target", "t", "qemu", "target platform")
+	buildDevCmd.Flags().StringVarP(&architecture, "arch", "a", getDefaultArch(), "architecture (amd64, arm64)")
+	buildDevCmd.Flags().StringVar(&mode, "mode", "", "build mode: image (ostree) or package (required)")
+	buildDevCmd.Flags().StringVar(&exportFormat, "format", "", "export format: qcow2, raw, simg, etc. (required)")
+	buildDevCmd.Flags().StringVarP(&outputDir, "output", "o", "", "download artifact to file")
+	buildDevCmd.Flags().StringVar(&compressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
+	buildDevCmd.Flags().StringVar(&exportOCI, "push", "", "push disk image as OCI artifact to registry")
+	buildDevCmd.Flags().StringVar(&registryUsername, "registry-username", "", "registry username (or REGISTRY_USERNAME env)")
+	buildDevCmd.Flags().StringVar(&registryPassword, "registry-password", "", "registry password (or REGISTRY_PASSWORD env)")
+	buildDevCmd.Flags().StringVar(&automotiveImageBuilder, "aib-image", "quay.io/centos-sig-automotive/automotive-image-builder:latest", "AIB container image")
+	buildDevCmd.Flags().StringVar(&storageClass, "storage-class", "", "Kubernetes storage class")
+	buildDevCmd.Flags().StringArrayVarP(&customDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
+	buildDevCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes")
+	buildDevCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "wait for build to complete")
+	buildDevCmd.Flags().BoolVarP(&followLogs, "follow", "f", true, "follow build logs")
+	_ = buildDevCmd.MarkFlagRequired("mode")
+	_ = buildDevCmd.MarkFlagRequired("format")
 
 	// Add all commands
-	rootCmd.AddCommand(buildCmd, diskCmd, buildLegacyCmd, downloadCmd, listCmd, catalog.NewCatalogCmd())
+	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, downloadCmd, listCmd, catalog.NewCatalogCmd())
 	// Add deprecated aliases for backwards compatibility
-	rootCmd.AddCommand(buildBootcAliasCmd, buildTraditionalAliasCmd)
+	rootCmd.AddCommand(buildBootcAliasCmd, buildLegacyAliasCmd, buildTraditionalAliasCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -664,16 +673,21 @@ func extractOCIArtifactBlob(ociLayoutPath, destPath string) error {
 	return nil
 }
 
-// runBuildLegacy handles the 'build-legacy' command (traditional ostree/package builds)
-func runBuildLegacy(cmd *cobra.Command, args []string) {
+// runBuildDev handles the 'build-dev' command (traditional ostree/package builds)
+func runBuildDev(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 	manifest = args[0]
 
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required"))
+		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER env)"))
 	}
+
+	// Auto-generate build name if not provided
 	if buildName == "" {
-		handleError(fmt.Errorf("--name is required"))
+		base := strings.TrimSuffix(filepath.Base(manifest), ".aib.yml")
+		base = strings.TrimSuffix(base, ".yml")
+		buildName = fmt.Sprintf("%s-%s", base, time.Now().Format("20060102-150405"))
+		fmt.Printf("Auto-generated build name: %s\n", buildName)
 	}
 
 	api, err := createBuildAPIClient(serverURL, &authToken)
@@ -708,7 +722,7 @@ func runBuildLegacy(cmd *cobra.Command, args []string) {
 		StorageClass:           storageClass,
 		CustomDefs:             customDefs,
 		Compression:            compressionAlgo,
-		ServeArtifact:          downloadFile != "",
+		ServeArtifact:          outputDir != "" && exportOCI == "",
 		ExportOCI:              exportOCI,
 	}
 
@@ -737,8 +751,8 @@ func runBuildLegacy(cmd *cobra.Command, args []string) {
 		handleFileUploads(ctx, api, resp.Name, localRefs)
 	}
 
-	if waitForBuild || followLogs || downloadFile != "" {
-		waitForBuildCompletion(ctx, api, resp.Name, downloadFile)
+	if waitForBuild || followLogs || outputDir != "" {
+		waitForBuildCompletion(ctx, api, resp.Name, outputDir)
 	}
 }
 
@@ -842,11 +856,7 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 			// Handle completed/failed builds
 			if st.Phase == "Completed" {
 				if downloadTo != "" {
-					outDir := filepath.Dir(downloadTo)
-					if outDir == "" || outDir == "." {
-						outDir = "./output"
-					}
-					if err := downloadArtifactViaAPI(ctx, serverURL, name, outDir); err != nil {
+					if err := downloadArtifactViaAPI(ctx, serverURL, name, downloadTo); err != nil {
 						fmt.Printf("Download failed: %v\n", err)
 					}
 				}
