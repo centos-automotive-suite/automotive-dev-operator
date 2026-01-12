@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -418,20 +419,18 @@ func runBuild(cmd *cobra.Command, args []string) {
 
 	// Show push locations after successful build completion
 	if containerPush != "" {
-		fmt.Printf("✓ Container image pushed to: %s\n", containerPush)
+		fmt.Printf("Container image pushed to: %s\n", containerPush)
 	}
 	if exportOCI != "" {
-		fmt.Printf("✓ Disk image pushed to: %s\n", exportOCI)
+		fmt.Printf("Disk image pushed to: %s\n", exportOCI)
 	}
 
 	if outputDir != "" {
 		if exportOCI != "" {
-			// Download via OCI registry (pushed as artifact)
 			if err := pullOCIArtifact(exportOCI, outputDir, registryUsername, registryPassword); err != nil {
 				handleError(fmt.Errorf("failed to download OCI artifact: %w", err))
 			}
 		} else {
-			// Download directly from cluster via artifact API
 			if err := downloadArtifactViaAPI(ctx, serverURL, buildName, outputDir); err != nil {
 				handleError(fmt.Errorf("failed to download artifact: %w", err))
 			}
@@ -439,7 +438,6 @@ func runBuild(cmd *cobra.Command, args []string) {
 	}
 }
 
-// runDisk handles the 'disk' command (create disk from existing container)
 func runDisk(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 	containerRef = args[0]
@@ -462,8 +460,6 @@ func runDisk(cmd *cobra.Command, args []string) {
 		buildName = fmt.Sprintf("disk-%s-%s", imagePart, time.Now().Format("20060102-150405"))
 		fmt.Printf("Auto-generated build name: %s\n", buildName)
 	}
-
-	// Note: diskFormat can be empty - AIB will default to raw (or infer from output filename extension)
 
 	api, err := createBuildAPIClient(serverURL, &authToken)
 	if err != nil {
@@ -974,10 +970,15 @@ func streamLogsToStdout(body io.Reader, state *logStreamState) error {
 	state.active = true
 	state.reset()
 
-	_, err := io.Copy(os.Stdout, body)
+	// Use line-by-line streaming for real-time output
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // Handle long lines
+	for scanner.Scan() {
+		fmt.Println(scanner.Text())
+	}
 	state.active = false
 
-	if err != nil {
+	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("log stream interrupted: %w", err)
 	}
 
