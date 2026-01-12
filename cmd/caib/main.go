@@ -679,10 +679,15 @@ func runBuildDev(cmd *cobra.Command, args []string) {
 	manifest = args[0]
 
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required"))
+		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER env)"))
 	}
+
+	// Auto-generate build name if not provided
 	if buildName == "" {
-		handleError(fmt.Errorf("--name is required"))
+		base := strings.TrimSuffix(filepath.Base(manifest), ".aib.yml")
+		base = strings.TrimSuffix(base, ".yml")
+		buildName = fmt.Sprintf("%s-%s", base, time.Now().Format("20060102-150405"))
+		fmt.Printf("Auto-generated build name: %s\n", buildName)
 	}
 
 	api, err := createBuildAPIClient(serverURL, &authToken)
@@ -851,11 +856,7 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 			// Handle completed/failed builds
 			if st.Phase == "Completed" {
 				if downloadTo != "" {
-					outDir := filepath.Dir(downloadTo)
-					if outDir == "" || outDir == "." {
-						outDir = "./output"
-					}
-					if err := downloadArtifactViaAPI(ctx, serverURL, name, outDir); err != nil {
+					if err := downloadArtifactViaAPI(ctx, serverURL, name, downloadTo); err != nil {
 						fmt.Printf("Download failed: %v\n", err)
 					}
 				}
