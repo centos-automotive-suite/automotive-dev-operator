@@ -63,20 +63,21 @@ BUILD_NAME="$ARGUMENTS"
 PUSH_IMAGE="${PUSH_REGISTRY}:latest"
 OUTPUT_DIR="./output"
 
-bin/caib build-traditional simple.aib.yml \
+bin/caib build-dev simple.aib.yml \
   --server "$CAIB_SERVER" \
   --token "$TOKEN" \
   --name "$BUILD_NAME" \
   --arch arm64 \
   --target qemu \
-  --export qcow2 \
+  --mode image \
+  --format qcow2 \
   --compress gzip \
   --push "$PUSH_IMAGE" \
   --registry-username "$REGISTRY_USERNAME" \
   --registry-password "$REGISTRY_PASSWORD" \
   --wait \
   --follow \
-  --download "$OUTPUT_DIR"
+  -o "$OUTPUT_DIR"
 ```
 
 ### 6. Monitor Build (if not using --follow)

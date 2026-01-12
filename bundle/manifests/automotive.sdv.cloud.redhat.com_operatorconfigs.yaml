@@ -52,6 +52,34 @@ spec:
           spec:
             description: OperatorConfigSpec defines the desired state of OperatorConfig
             properties:
+              buildAPI:
+                description: BuildAPI defines configuration for the Build API server
+                properties:
+                  maxLogStreamDurationMinutes:
+                    description: |-
+                      MaxLogStreamDurationMinutes is the maximum duration for log streaming in minutes
+                      Default: 120 (2 hours)
+                    format: int32
+                    type: integer
+                  maxManifestSize:
+                    description: |-
+                      MaxManifestSize is the maximum allowed manifest size in bytes
+                      Default: 10485760 (10MB)
+                    format: int64
+                    type: integer
+                  maxTotalUploadSize:
+                    description: |-
+                      MaxTotalUploadSize is the maximum total upload size per request in bytes
+                      Default: 2147483648 (2GB)
+                    format: int64
+                    type: integer
+                  maxUploadFileSize:
+                    description: |-
+                      MaxUploadFileSize is the maximum size for individual uploaded files in bytes
+                      Default: 1073741824 (1GB)
+                    format: int64
+                    type: integer
+                type: object
               osBuilds:
                 description: OSBuilds defines the configuration for OS build operations
                 properties:

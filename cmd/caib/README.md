@@ -51,12 +51,12 @@ bin/caib build manifest.aib.yml \
   --follow
 ```
 
-### Build a Traditional (Non-Bootc) Image
+### Build a Development (Non-Bootc) Image
 
-Build an ostree-based or package-based disk image:
+Build an ostree-based or package-based disk image for development:
 
 ```bash
-bin/caib build-legacy manifest.aib.yml \
+bin/caib build-dev manifest.aib.yml \
   --arch arm64 \
   --mode image \
   --format qcow2 \
@@ -174,12 +174,12 @@ bin/caib disk quay.io/myorg/my-os:v1 \
   --follow
 ```
 
-### build-legacy
+### build-dev
 
-Builds a traditional (ostree or package-based) disk image. For legacy workflows; new projects should use `build`.
+Builds a disk image (ostree or package-based) for development workflows. Creates standalone disk images without bootc container integration.
 
 ```bash
-bin/caib build-legacy <manifest.aib.yml> [flags]
+bin/caib build-dev <manifest.aib.yml> [flags]
 ```
 
 **Required flags:**
@@ -213,7 +213,7 @@ bin/caib build-legacy <manifest.aib.yml> [flags]
 
 ```bash
 # Build ostree-based image and download
-bin/caib build-legacy my-manifest.aib.yml \
+bin/caib build-dev my-manifest.aib.yml \
   --arch arm64 \
   --mode image \
   --format qcow2 \
@@ -221,7 +221,7 @@ bin/caib build-legacy my-manifest.aib.yml \
   --follow
 
 # Build and push to OCI registry
-bin/caib build-legacy my-manifest.aib.yml \
+bin/caib build-dev my-manifest.aib.yml \
   --arch arm64 \
   --mode image \
   --format qcow2 \
@@ -260,13 +260,13 @@ bin/caib list [flags]
 | `--server` | `$CAIB_SERVER` | Build API server URL |
 | `--token` | `$CAIB_TOKEN` | Bearer token |
 
-## Bootc vs Legacy Builds
+## Bootc vs Dev Builds
 
-| Aspect | `build` (bootc) | `build-legacy` |
-|--------|-----------------|----------------|
+| Aspect | `build` (bootc) | `build-dev` |
+|--------|-----------------|-------------|
 | Output | Container image (+ optional disk) | Disk image only |
 | Update mechanism | `bootc switch/upgrade` | Requires re-imaging |
-| Use case | OTA-updatable systems | Standalone disk images |
+| Use case | OTA-updatable systems | Development/standalone disk images |
 | Mode | Always `bootc` | `image` or `package` |
 
 ## Authentication
