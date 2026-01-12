@@ -2,6 +2,7 @@ package buildapi
 
 import (
 	"archive/tar"
+	"bufio"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -298,6 +299,9 @@ func (a *APIServer) streamLogs(c *gin.Context, name string) {
 		return
 	}
 
+	// Parse optional 'since' parameter to prevent log replay on reconnect
+	sinceTime := parseSinceTime(c.Query("since"))
+
 	// Limit maximum streaming duration
 	streamDuration := time.Duration(a.limits.MaxLogStreamDurationMinutes) * time.Minute
 	ctx, cancel := context.WithTimeout(c.Request.Context(), streamDuration)
@@ -331,28 +335,27 @@ func (a *APIServer) streamLogs(c *gin.Context, name string) {
 		return
 	}
 
-	// Find the build pod
-	pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/pipelineRun=" + tr + ",tekton.dev/memberOf=tasks"})
-	if err != nil || len(pods.Items) == 0 {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "logs not available yet"})
-		return
-	}
-	podName = pods.Items[0].Name
-
-	// Set up streaming response
+	// Set up streaming response with anti-buffering headers
 	c.Writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	c.Writer.Header().Set("Transfer-Encoding", "chunked")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Header().Set("X-Accel-Buffering", "no") // nginx
+	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
+	c.Writer.Header().Set("Pragma", "no-cache") // HTTP/1.0 compat
 
 	c.Writer.WriteHeader(http.StatusOK)
 	_, _ = c.Writer.Write([]byte("Waiting for logs...\n"))
 	c.Writer.Flush()
 
+	pipelineRunSelector := "tekton.dev/pipelineRun=" + tr + ",tekton.dev/memberOf=tasks"
+
 	var hadStream bool
-	streamed := make(map[string]bool)
-	var lastErrs []string
+	// Track streamed containers per pod: map[podName]map[containerName]bool
+	streamedContainers := make(map[string]map[string]bool)
+	// Track completed pods
+	completedPods := make(map[string]bool)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -360,96 +363,135 @@ func (a *APIServer) streamLogs(c *gin.Context, name string) {
 		default:
 		}
 
-		pod, err := cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+		// List all pods for this PipelineRun
+		pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: pipelineRunSelector})
 		if err != nil {
-			fmt.Fprintf(c.Writer, "\n[Error: %v]\n", err)
+			fmt.Fprintf(c.Writer, "\n[Error listing pods: %v]\n", err)
 			c.Writer.Flush()
-			return
+			time.Sleep(2 * time.Second)
+			continue
 		}
 
-		stepNames := make([]string, 0, len(pod.Spec.Containers))
-		for _, c := range pod.Spec.Containers {
-			if strings.HasPrefix(c.Name, "step-") {
-				stepNames = append(stepNames, c.Name)
-			}
-		}
-		if len(stepNames) == 0 {
-			for _, c := range pod.Spec.Containers {
-				stepNames = append(stepNames, c.Name)
-			}
-		}
-
-		var errs []string
-
-		for _, cName := range stepNames {
-			if streamed[cName] {
-				continue
-			}
-
-			req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true})
-			stream, err := req.Stream(ctx)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", cName, err))
-				continue
-			}
-
+		if len(pods.Items) == 0 {
+			// No pods yet, keep waiting
 			if !hadStream {
+				_, _ = c.Writer.Write([]byte("."))
 				c.Writer.Flush()
 			}
-			hadStream = true
+			time.Sleep(2 * time.Second)
+			continue
+		}
 
-			_, _ = c.Writer.Write([]byte("\n===== Logs from " + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
-			c.Writer.Flush()
-			// Stream with proper error handling and context cancellation
-			func() {
-				defer stream.Close()
+		// Process each pod
+		allPodsComplete := true
+		for _, pod := range pods.Items {
+			podName = pod.Name
 
-				// Create a buffer for chunked reading
-				buf := make([]byte, 4096)
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
+			// Skip already completed pods
+			if completedPods[podName] {
+				continue
+			}
 
-					n, err := stream.Read(buf)
-					if n > 0 {
-						if _, writeErr := c.Writer.Write(buf[:n]); writeErr != nil {
+			// Initialize container tracking for this pod
+			if streamedContainers[podName] == nil {
+				streamedContainers[podName] = make(map[string]bool)
+			}
+
+			// Get step containers
+			stepNames := make([]string, 0, len(pod.Spec.Containers))
+			for _, cont := range pod.Spec.Containers {
+				if strings.HasPrefix(cont.Name, "step-") {
+					stepNames = append(stepNames, cont.Name)
+				}
+			}
+			if len(stepNames) == 0 {
+				for _, cont := range pod.Spec.Containers {
+					stepNames = append(stepNames, cont.Name)
+				}
+			}
+
+			// Stream logs from each container
+			for _, cName := range stepNames {
+				if streamedContainers[podName][cName] {
+					continue
+				}
+
+				req := cs.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: cName, Follow: true, SinceTime: sinceTime})
+				stream, err := req.Stream(ctx)
+				if err != nil {
+					// Container might not be ready yet
+					continue
+				}
+
+				if !hadStream {
+					c.Writer.Flush()
+				}
+				hadStream = true
+
+				// Show which task/step we're streaming from
+				taskName := pod.Labels["tekton.dev/pipelineTask"]
+				if taskName == "" {
+					taskName = podName
+				}
+				_, _ = c.Writer.Write([]byte("\n===== Logs from " + taskName + "/" + strings.TrimPrefix(cName, "step-") + " =====\n\n"))
+				c.Writer.Flush()
+
+				// Stream line-by-line for real-time output
+				func() {
+					defer stream.Close()
+					scanner := bufio.NewScanner(stream)
+					// Increase max line size to handle long log lines
+					scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+					for scanner.Scan() {
+						select {
+						case <-ctx.Done():
+							return
+						default:
+						}
+						line := scanner.Bytes()
+						if _, writeErr := c.Writer.Write(line); writeErr != nil {
+							return
+						}
+						if _, writeErr := c.Writer.Write([]byte("\n")); writeErr != nil {
 							return
 						}
 						c.Writer.Flush()
 					}
-
-					if err != nil {
-						if err != io.EOF {
-							var errMsg []byte
-							errMsg = fmt.Appendf(errMsg, "\n[Stream error: %v]\n", err)
-							_, _ = c.Writer.Write(errMsg)
-							c.Writer.Flush()
-						}
-						return
+					if err := scanner.Err(); err != nil && err != io.EOF {
+						var errMsg []byte
+						errMsg = fmt.Appendf(errMsg, "\n[Stream error: %v]\n", err)
+						_, _ = c.Writer.Write(errMsg)
+						c.Writer.Flush()
 					}
-				}
-			}()
+				}()
 
-			streamed[cName] = true
+				streamedContainers[podName][cName] = true
+			}
+
+			// Check if this pod is complete
+			if len(streamedContainers[podName]) == len(stepNames) &&
+				(pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed) {
+				completedPods[podName] = true
+			} else {
+				allPodsComplete = false
+			}
 		}
 
-		if len(errs) > 0 {
-			lastErrs = errs
+		// Check if build is complete by looking at ImageBuild status
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ib); err == nil {
+			if ib.Status.Phase == "Completed" || ib.Status.Phase == "Failed" {
+				// Build is done, stop streaming
+				break
+			}
 		}
 
-		if len(streamed) == len(stepNames) {
-			break
+		// Don't break based on pod completion - rely on ImageBuild status.
+		// There can be gaps between tasks where new pods haven't started yet.
+		// Only sleep if we haven't streamed anything yet (waiting for first pod)
+		if !hadStream || allPodsComplete {
+			time.Sleep(2 * time.Second)
 		}
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			break
-		}
-
-		time.Sleep(2 * time.Second)
 		if !hadStream {
-			// keep-alive to prevent router/proxy 504s while waiting
 			_, _ = c.Writer.Write([]byte("."))
 			if f, ok := c.Writer.(http.Flusher); ok {
 				f.Flush()
@@ -458,11 +500,10 @@ func (a *APIServer) streamLogs(c *gin.Context, name string) {
 	}
 
 	if !hadStream {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "logs unavailable: " + strings.Join(lastErrs, "; ")})
-		return
+		_, _ = c.Writer.Write([]byte("\n[No logs available]\n"))
+	} else {
+		_, _ = c.Writer.Write([]byte("\n[Log streaming completed]\n"))
 	}
-
-	_, _ = c.Writer.Write([]byte("\n[Log streaming completed]\n"))
 	if f, ok := c.Writer.(http.Flusher); ok {
 		f.Flush()
 	}
@@ -1809,6 +1850,17 @@ func setSecretOwnerRef(ctx context.Context, c client.Client, namespace, secretNa
 func writeJSON(c *gin.Context, status int, v any) {
 	c.Header("Cache-Control", "no-store")
 	c.IndentedJSON(status, v)
+}
+
+func parseSinceTime(sinceParam string) *metav1.Time {
+	if sinceParam == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, sinceParam)
+	if err != nil {
+		return nil
+	}
+	return &metav1.Time{Time: t}
 }
 
 func resolveNamespace() string {

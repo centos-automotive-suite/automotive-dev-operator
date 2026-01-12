@@ -113,6 +113,11 @@ uninstall_operator() {
     echo "Waiting for operator pods to terminate..."
     oc wait --for=delete pod -l control-plane=controller-manager -n ${NAMESPACE} --timeout=60s 2>/dev/null || true
 
+    echo "Deleting CatalogSource to force catalog refresh..."
+    oc delete catalogsource automotive-dev-operator-catalog -n ${CATALOG_NAMESPACE} --ignore-not-found=true
+    echo "Waiting for catalog pod to terminate..."
+    oc wait --for=delete pod -l olm.catalogSource=automotive-dev-operator-catalog -n ${CATALOG_NAMESPACE} --timeout=60s 2>/dev/null || true
+
     echo "Operator uninstall complete."
     echo ""
 }

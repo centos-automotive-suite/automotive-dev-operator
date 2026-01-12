@@ -416,6 +416,14 @@ func runBuild(cmd *cobra.Command, args []string) {
 		waitForBuildCompletion(ctx, api, resp.Name, "")
 	}
 
+	// Show push locations after successful build completion
+	if containerPush != "" {
+		fmt.Printf("✓ Container image pushed to: %s\n", containerPush)
+	}
+	if exportOCI != "" {
+		fmt.Printf("✓ Disk image pushed to: %s\n", exportOCI)
+	}
+
 	if outputDir != "" {
 		if exportOCI != "" {
 			// Download via OCI registry (pushed as artifact)
@@ -498,6 +506,11 @@ func runDisk(cmd *cobra.Command, args []string) {
 
 	if waitForBuild || followLogs || outputDir != "" {
 		waitForBuildCompletion(ctx, api, resp.Name, "")
+	}
+
+	// Show push location after successful build completion
+	if exportOCI != "" {
+		fmt.Printf("✓ Disk image pushed to: %s\n", exportOCI)
 	}
 
 	if outputDir != "" {
@@ -814,13 +827,11 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 	defer cancel()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
 	userFollowRequested := followLogs
 	var lastPhase, lastMessage string
-	logFollowWarned := false
-	logRetryFailureWarned := false
-	logStreamActive := false
-	logRetryCount := 0
-	const maxLogRetries = 24 // Try for ~2 minutes (24 * 5s = 120s) before giving up
+	pendingWarningShown := false
+	retryLimitWarningShown := false
 
 	logClient := &http.Client{
 		Timeout: 10 * time.Minute,
@@ -829,13 +840,13 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 			IdleConnTimeout:       2 * time.Minute,
 		},
 	}
+	streamState := &logStreamState{}
 
 	for {
 		select {
 		case <-timeoutCtx.Done():
 			handleError(fmt.Errorf("timed out waiting for build"))
 		case <-ticker.C:
-			// First, check build status
 			reqCtx, cancelReq := context.WithTimeout(ctx, 2*time.Minute)
 			st, err := api.GetBuild(reqCtx, name)
 			cancelReq()
@@ -844,8 +855,8 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 				continue
 			}
 
-			// Update status display (only if not actively streaming logs)
-			if !logStreamActive && (!userFollowRequested || logRetryCount > maxLogRetries) {
+			// Update status display (only when not streaming)
+			if !streamState.active && (!userFollowRequested || !streamState.canRetry()) {
 				if st.Phase != lastPhase || st.Message != lastMessage {
 					fmt.Printf("status: %s - %s\n", st.Phase, st.Message)
 					lastPhase = st.Phase
@@ -853,7 +864,7 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 				}
 			}
 
-			// Handle completed/failed builds
+			// Handle terminal build states
 			if st.Phase == "Completed" {
 				if downloadTo != "" {
 					if err := downloadArtifactViaAPI(ctx, serverURL, name, downloadTo); err != nil {
@@ -866,50 +877,71 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 				handleError(fmt.Errorf("build failed: %s", st.Message))
 			}
 
-			// Only attempt log streaming if:
-			// 1. User requested it
-			// 2. Build is in active phase (Building, Running, etc.)
-			// 3. We haven't exceeded retry limit
-			// 4. We're not already streaming
-			if followLogs && !logStreamActive && logRetryCount <= maxLogRetries {
-				buildIsActive := st.Phase == "Building" || st.Phase == "Running" || st.Phase == "Uploading"
-				if buildIsActive || (st.Phase != "Pending" && st.Phase != "Completed" && st.Phase != "Failed") {
-					// First attempt - show helpful message
-					if logRetryCount == 0 && buildIsActive {
-						fmt.Println("Build is active. Attempting to stream logs...")
-						logFollowWarned = false // Reset so we can show retry messages
-					}
+			// Attempt log streaming for active builds
+			if !followLogs || streamState.active || !streamState.canRetry() {
+				continue
+			}
 
-					if err := tryLogStreaming(ctx, logClient, name, &logStreamActive, &logRetryCount, &logFollowWarned); err != nil {
-						// Log streaming failed, will retry next iteration if under limit
-						logRetryCount++
-						if logRetryCount > maxLogRetries && !logRetryFailureWarned {
-							fmt.Printf("Log streaming failed after %d attempts (~2 minutes). Falling back to status updates only.\n", maxLogRetries)
-							logRetryFailureWarned = true
-						}
-					} else {
-						// Streaming succeeded, reset retry count
-						logRetryCount = 0
-						followLogs = userFollowRequested // Reset for potential future streams
+			if st.Phase == "Pending" {
+				streamState.reset()
+				if userFollowRequested && !pendingWarningShown {
+					fmt.Println("Waiting for build to start before streaming logs...")
+					pendingWarningShown = true
+				}
+				continue
+			}
+
+			if isBuildActive(st.Phase) {
+				if streamState.retryCount == 0 {
+					fmt.Println("Build is active. Attempting to stream logs...")
+					pendingWarningShown = false
+				}
+
+				if err := tryLogStreaming(ctx, logClient, name, streamState); err != nil {
+					streamState.retryCount++
+					if !streamState.canRetry() && !retryLimitWarningShown {
+						fmt.Printf("Log streaming failed after %d attempts (~2 minutes). Falling back to status updates only.\n", maxLogRetries)
+						retryLimitWarningShown = true
 					}
-				} else if st.Phase == "Pending" {
-					// Build not yet started, reset retry count and wait
-					logRetryCount = 0
-					if userFollowRequested && !logFollowWarned {
-						fmt.Println("Waiting for build to start before streaming logs...")
-						logFollowWarned = true // Prevent spam
-					}
+				} else {
+					followLogs = userFollowRequested
 				}
 			}
 		}
 	}
 }
 
+// logStreamState encapsulates state for log streaming with automatic reconnection
+type logStreamState struct {
+	active       bool
+	retryCount   int
+	warningShown bool
+	startTime    time.Time
+	completed    bool // Set when stream ends normally, prevents reconnection
+}
+
+const maxLogRetries = 24 // ~2 minutes at 5s intervals
+
+func (s *logStreamState) canRetry() bool {
+	return s.retryCount <= maxLogRetries && !s.completed
+}
+
+func (s *logStreamState) reset() {
+	s.retryCount = 0
+	s.warningShown = false
+}
+
+func isBuildActive(phase string) bool {
+	return phase == "Building" || phase == "Running" || phase == "Uploading"
+}
+
 // tryLogStreaming attempts to stream logs and returns error if it fails
-func tryLogStreaming(ctx context.Context, logClient *http.Client, name string, logStreamActive *bool, logRetryCount *int, logFollowWarned *bool) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(serverURL, "/")+"/v1/builds/"+url.PathEscape(name)+"/logs?follow=1", nil)
-	if strings.TrimSpace(authToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(authToken))
+func tryLogStreaming(ctx context.Context, logClient *http.Client, name string, state *logStreamState) error {
+	logURL := buildLogURL(name, state.startTime)
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, logURL, nil)
+	if authToken := strings.TrimSpace(authToken); authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
 
 	resp, err := logClient.Do(req)
@@ -919,31 +951,55 @@ func tryLogStreaming(ctx context.Context, logClient *http.Client, name string, l
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		fmt.Println("Streaming logs...")
-		*logStreamActive = true
-		*logFollowWarned = false
-		*logRetryCount = 0
-		_, copyErr := io.Copy(os.Stdout, resp.Body)
-		*logStreamActive = false
-		if copyErr != nil {
-			return fmt.Errorf("log stream interrupted: %w", copyErr)
-		}
-		return nil // Streaming completed successfully
+		return streamLogsToStdout(resp.Body, state)
 	}
 
-	// Handle error responses
+	return handleLogStreamError(resp, state)
+}
+
+func buildLogURL(buildName string, startTime time.Time) string {
+	logURL := strings.TrimRight(serverURL, "/") + "/v1/builds/" + url.PathEscape(buildName) + "/logs?follow=1"
+	if !startTime.IsZero() {
+		logURL += "&since=" + url.QueryEscape(startTime.Format(time.RFC3339))
+	}
+	return logURL
+}
+
+func streamLogsToStdout(body io.Reader, state *logStreamState) error {
+	if state.startTime.IsZero() {
+		state.startTime = time.Now()
+	}
+
+	fmt.Println("Streaming logs...")
+	state.active = true
+	state.reset()
+
+	_, err := io.Copy(os.Stdout, body)
+	state.active = false
+
+	if err != nil {
+		return fmt.Errorf("log stream interrupted: %w", err)
+	}
+
+	// Stream ended normally (server closed connection after sending all logs)
+	// Mark as completed to prevent reconnection attempts
+	state.completed = true
+	return nil
+}
+
+func handleLogStreamError(resp *http.Response, state *logStreamState) error {
 	body, _ := io.ReadAll(resp.Body)
 	msg := strings.TrimSpace(string(body))
 
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
-		if !*logFollowWarned {
-			fmt.Printf("log stream not ready (HTTP %d). Retrying... (attempt %d/24)\n", resp.StatusCode, *logRetryCount+1)
-			*logFollowWarned = true
+		if !state.warningShown {
+			fmt.Printf("log stream not ready (HTTP %d). Retrying... (attempt %d/%d)\n",
+				resp.StatusCode, state.retryCount+1, maxLogRetries)
+			state.warningShown = true
 		}
 		return fmt.Errorf("log endpoint not ready (HTTP %d)", resp.StatusCode)
 	}
 
-	// Other errors - show message and stop trying
 	if msg != "" {
 		fmt.Printf("log stream error (%d): %s\n", resp.StatusCode, msg)
 	} else {

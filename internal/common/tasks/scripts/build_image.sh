@@ -473,31 +473,36 @@ echo "Build completed. Contents of output directory:"
 ls -la /output/ || true
 
 pushd /output
-ln -sf ./${exportFile} ./disk.img
-
-echo "copying build artifacts to shared workspace..."
-
 mkdir -p $(workspaces.shared-workspace.path)
 
-if [ -d "/output/${exportFile}" ]; then
-    echo "${exportFile} is a directory, copying recursively..."
-    cp -rv "/output/${exportFile}" $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
-else
-    echo "${exportFile} is a regular file, copying..."
-    cp -v "/output/${exportFile}" $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
-fi
+# Check if disk image was created (only exists when BUILD_DISK_IMAGE=true or non-bootc mode)
+DISK_IMAGE_EXISTS=false
+if [ -e "/output/${exportFile}" ]; then
+    DISK_IMAGE_EXISTS=true
+    ln -sf ./${exportFile} ./disk.img
 
-pushd $(workspaces.shared-workspace.path)
-if [ -d "${exportFile}" ]; then
-    echo "Creating symlink to directory ${exportFile}"
-    ln -sf ${exportFile} disk.img
-elif [ -f "${exportFile}" ]; then
-    echo "Creating symlink to file ${exportFile}"
-    ln -sf ${exportFile} disk.img
+    echo "copying build artifacts to shared workspace..."
+
+    if [ -d "/output/${exportFile}" ]; then
+        echo "${exportFile} is a directory, copying recursively..."
+        cp -rv "/output/${exportFile}" $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
+    else
+        echo "${exportFile} is a regular file, copying..."
+        cp -v "/output/${exportFile}" $(workspaces.shared-workspace.path)/ || echo "Failed to copy ${exportFile}"
+    fi
+
+    pushd $(workspaces.shared-workspace.path)
+    if [ -d "${exportFile}" ]; then
+        echo "Creating symlink to directory ${exportFile}"
+        ln -sf ${exportFile} disk.img
+    elif [ -f "${exportFile}" ]; then
+        echo "Creating symlink to file ${exportFile}"
+        ln -sf ${exportFile} disk.img
+    fi
+    popd
 else
-    echo "Warning: ${exportFile} not found in workspace, cannot create symlink"
+    echo "No disk image created (container-only build)"
 fi
-popd
 
 cp -v /output/image.json $(workspaces.shared-workspace.path)/image.json || echo "Failed to copy image.json"
 
@@ -578,7 +583,12 @@ case "$COMPRESSION" in
 esac
 
 final_name=""
-if [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
+
+# For container-only builds (no disk image), record the container push URL as the artifact
+if [ "$DISK_IMAGE_EXISTS" = "false" ] && [ -n "$CONTAINER_PUSH" ]; then
+  echo "Container-only build completed. Container pushed to: $CONTAINER_PUSH"
+  final_name="container:$CONTAINER_PUSH"
+elif [ -d "$(workspaces.shared-workspace.path)/${exportFile}" ]; then
   echo "Preparing compressed parts for directory ${exportFile}..."
   final_compressed_name="${exportFile}${EXT_DIR}"
   parts_dir="$(workspaces.shared-workspace.path)/${final_compressed_name}-parts"
