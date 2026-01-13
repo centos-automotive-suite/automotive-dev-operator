@@ -237,18 +237,14 @@ if load_args_from_file "$CUSTOM_DEFS_FILE" "custom definitions" validate_custom_
   done
 fi
 
-# Load AIB arguments (override or extra)
+# Load AIB extra arguments
 declare -a AIB_EXTRA_ARGS=()
-USE_AIB_OVERRIDE=false
-AIB_OVERRIDE_ARGS_FILE="$(workspaces.manifest-config-workspace.path)/aib-override-args.txt"
 AIB_EXTRA_ARGS_FILE="$(workspaces.manifest-config-workspace.path)/aib-extra-args.txt"
 
-if load_args_from_file "$AIB_OVERRIDE_ARGS_FILE" "AIB override args" validate_arg AIB_EXTRA_ARGS; then
-  USE_AIB_OVERRIDE=true
-elif load_args_from_file "$AIB_EXTRA_ARGS_FILE" "AIB extra args" validate_arg AIB_EXTRA_ARGS; then
+if load_args_from_file "$AIB_EXTRA_ARGS_FILE" "AIB extra args" validate_arg AIB_EXTRA_ARGS; then
   :  # Extra args loaded successfully
 else
-  echo "No AIB extra/override args files found"
+  echo "No AIB extra args file found"
 fi
 
 arch="$(params.target-architecture)"
@@ -261,40 +257,6 @@ case "$arch" in
     ;;
 esac
 
-get_flag_value() {
-  flag_name="$1"; shift
-  args_str="$*"
-  val=$(echo "$args_str" | sed -nE "s/.*${flag_name}=([^ ]+).*/\1/p" | head -n1)
-  if [ -n "$val" ]; then
-    echo "$val"; return 0
-  fi
-  val=$(echo "$args_str" | awk -v f="$flag_name" '{for (i=1;i<=NF;i++) if ($i==f && (i+1)<=NF) {print $(i+1); exit}}')
-  [ -n "$val" ] && echo "$val"
-}
-
-# Handle override args for file naming
-if [ "$USE_AIB_OVERRIDE" = true ]; then
-  aib_args_str="${AIB_EXTRA_ARGS[*]}"
-  override_format=$(get_flag_value "--format" "$aib_args_str")
-  if [ -z "$override_format" ]; then
-    override_format=$(get_flag_value "--export" "$aib_args_str")
-  fi
-  override_distro=$(get_flag_value "--distro" "$aib_args_str")
-  override_target=$(get_flag_value "--target" "$aib_args_str")
-  [ -n "$override_distro" ] && cleanName="$override_distro-${cleanName#*-}"
-  [ -n "$override_target" ] && cleanName="${cleanName%-*}-$override_target"
-  if [ -n "$override_format" ]; then
-    case "$override_format" in
-      image|raw)
-        file_extension=".raw" ;;
-      qcow2)
-        file_extension=".qcow2" ;;
-      *)
-        file_extension=".$override_format" ;;
-    esac
-  fi
-  exportFile=${cleanName}${file_extension}
-fi
 
 CONTAINER_PUSH="$(params.container-push)"
 BUILD_DISK_IMAGE="$(params.build-disk-image)"
@@ -310,7 +272,11 @@ echo "BUILD_DISK_IMAGE: $BUILD_DISK_IMAGE"
 echo "EXPORT_OCI: ${EXPORT_OCI:-<empty>}"
 echo "==========================="
 
-BOOTC_CONTAINER_NAME="localhost/aib-build:$(params.distro)-$(params.target)"
+if [ -n "$CONTAINER_PUSH" ]; then
+  BOOTC_CONTAINER_NAME="$CONTAINER_PUSH"
+else
+  BOOTC_CONTAINER_NAME="localhost/aib-build:$(params.distro)-$(params.target)"
+fi
 
 BUILD_CONTAINER_ARG=""
 LOCAL_BUILDER_IMAGE="localhost/aib-build:$(params.distro)-$TARGET_ARCH"
@@ -373,16 +339,7 @@ declare -a COMMON_BUILD_ARGS=(
   --osbuild-manifest=/output/image.json
 )
 
-if [ "$USE_AIB_OVERRIDE" = true ]; then
-  echo "Running the build command (override mode)"
-  aib --verbose build \
-    "${CUSTOM_DEFS_ARGS[@]}" \
-    "${COMMON_BUILD_ARGS[@]}" \
-    "${AIB_EXTRA_ARGS[@]}" \
-    "$MANIFEST_FILE" \
-    "/output/${exportFile}"
-else
-  case "$BUILD_MODE" in
+case "$BUILD_MODE" in
     bootc)
       # Build bootc container and optionally disk image in a single command
       # aib build takes: manifest out [disk] where disk is optional
@@ -467,7 +424,6 @@ else
       exit 1
       ;;
   esac
-fi
 
 echo "Build completed. Contents of output directory:"
 ls -la /output/ || true

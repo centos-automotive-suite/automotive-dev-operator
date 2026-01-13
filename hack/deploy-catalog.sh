@@ -174,7 +174,7 @@ if [ ${#ARCHS_ARRAY[@]} -gt 1 ]; then
     for arch in ${CLUSTER_ARCHS}; do
         echo ""
         echo "Building for linux/${arch}..."
-        ${CONTAINER_TOOL} buildx build --platform linux/${arch} --load -t ${OPERATOR_IMG}-${arch} .
+        ${CONTAINER_TOOL} buildx build -f Dockerfile --platform linux/${arch} --load -t ${OPERATOR_IMG}-${arch} .
         echo "Pushing ${OPERATOR_IMG}-${arch}..."
         ${CONTAINER_TOOL} push ${OPERATOR_IMG}-${arch} --tls-verify=false
     done
