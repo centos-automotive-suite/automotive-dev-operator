@@ -310,7 +310,11 @@ echo "BUILD_DISK_IMAGE: $BUILD_DISK_IMAGE"
 echo "EXPORT_OCI: ${EXPORT_OCI:-<empty>}"
 echo "==========================="
 
-BOOTC_CONTAINER_NAME="localhost/aib-build:$(params.distro)-$(params.target)"
+if [ -n "$CONTAINER_PUSH" ]; then
+  BOOTC_CONTAINER_NAME="$CONTAINER_PUSH"
+else
+  BOOTC_CONTAINER_NAME="localhost/aib-build:$(params.distro)-$(params.target)"
+fi
 
 BUILD_CONTAINER_ARG=""
 LOCAL_BUILDER_IMAGE="localhost/aib-build:$(params.distro)-$TARGET_ARCH"
