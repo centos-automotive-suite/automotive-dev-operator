@@ -179,7 +179,6 @@ interface BuildFormData {
   mode: string;
   automotiveImageBuilder: string;
   aibExtraArgs: string;
-  aibOverrideArgs: string;
   serveArtifact: boolean;
   compression?: string;
   registryCredentials: RegistryCredentials;
@@ -196,7 +195,6 @@ interface BuildTemplateResponse {
   mode: string;
   automotiveImageBuilder: string;
   aibExtraArgs?: string[];
-  aibOverrideArgs?: string[];
   serveArtifact: boolean;
   compression?: string;
   sourceFiles?: string[];
@@ -316,7 +314,6 @@ const CreateBuildPage: React.FC = () => {
     automotiveImageBuilder:
       "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0",
     aibExtraArgs: "",
-    aibOverrideArgs: "",
     serveArtifact: true,
     compression: "gzip",
     registryCredentials: {
@@ -522,7 +519,6 @@ const CreateBuildPage: React.FC = () => {
       automotiveImageBuilder:
         t?.automotiveImageBuilder ?? prev.automotiveImageBuilder,
       aibExtraArgs: (t?.aibExtraArgs ?? []).join(" "),
-      aibOverrideArgs: (t?.aibOverrideArgs ?? []).join(" "),
       serveArtifact: t?.serveArtifact ?? prev.serveArtifact,
       compression: t?.compression ?? prev.compression ?? "gzip",
       registryCredentials: t?.registryCredentials ?? prev.registryCredentials,
@@ -691,9 +687,6 @@ const CreateBuildPage: React.FC = () => {
         aibExtraArgs: formData.aibExtraArgs
           ? formData.aibExtraArgs.split(" ").filter((arg) => arg.trim())
           : [],
-        aibOverrideArgs: formData.aibOverrideArgs
-          ? formData.aibOverrideArgs.split(" ").filter((arg) => arg.trim())
-          : [],
         serveArtifact: formData.serveArtifact,
         registryCredentials: formData.registryCredentials.enabled ? formData.registryCredentials : undefined,
       };
@@ -732,7 +725,6 @@ const CreateBuildPage: React.FC = () => {
           automotiveImageBuilder:
             "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0",
           aibExtraArgs: "",
-          aibOverrideArgs: "",
           serveArtifact: true,
           compression: "gzip",
           registryCredentials: {
@@ -2093,22 +2085,6 @@ const CreateBuildPage: React.FC = () => {
                                           handleInputChange("aibExtraArgs", value)
                                         }
                                         placeholder=""
-                                      />
-                                    </FormGroup>
-                                  </GridItem>
-
-                                  <GridItem span={6}>
-                                    <FormGroup
-                                      label={<PopoverLabel label="AIB Override Arguments" popoverContent="arguments to be passed as-is to automotive-image-builder" />}
-                                      fieldId="aibOverrideArgs"
-                                    >
-                                      <TextInput
-                                        id="aibOverrideArgs"
-                                        value={formData.aibOverrideArgs}
-                                        onChange={(_event, value) =>
-                                          handleInputChange("aibOverrideArgs", value)
-                                        }
-                                        placeholder="Complete override of AIB arguments"
                                       />
                                     </FormGroup>
                                   </GridItem>

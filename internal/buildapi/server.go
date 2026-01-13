@@ -812,10 +812,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	if len(req.CustomDefs) > 0 {
 		cmData["custom-definitions.env"] = strings.Join(req.CustomDefs, "\n")
 	}
-	if len(req.AIBOverrideArgs) > 0 {
-		// If override is provided, prefer it and ignore the regular extra args
-		cmData["aib-override-args.txt"] = strings.Join(req.AIBOverrideArgs, " ")
-	} else if len(req.AIBExtraArgs) > 0 {
+	if len(req.AIBExtraArgs) > 0 {
 		cmData["aib-extra-args.txt"] = strings.Join(req.AIBExtraArgs, " ")
 	}
 
@@ -1057,20 +1054,15 @@ func getBuildTemplate(c *gin.Context, name string) {
 
 	// Rehydrate advanced args
 	var aibExtra []string
-	var aibOverride []string
 	if v, ok := cm.Data["aib-extra-args.txt"]; ok {
 		fields := strings.Fields(strings.TrimSpace(v))
 		aibExtra = append(aibExtra, fields...)
-	}
-	if v, ok := cm.Data["aib-override-args.txt"]; ok {
-		fields := strings.Fields(strings.TrimSpace(v))
-		aibOverride = append(aibOverride, fields...)
 	}
 
 	manifestFileName := "manifest.aib.yml"
 	var manifest string
 	for k, v := range cm.Data {
-		if k == "custom-definitions.env" || k == "aib-extra-args.txt" || k == "aib-override-args.txt" {
+		if k == "custom-definitions.env" || k == "aib-extra-args.txt" {
 			continue
 		}
 		manifestFileName = k
@@ -1106,7 +1098,6 @@ func getBuildTemplate(c *gin.Context, name string) {
 			AutomotiveImageBuilder: build.Spec.AutomotiveImageBuilder,
 			CustomDefs:             nil,
 			AIBExtraArgs:           aibExtra,
-			AIBOverrideArgs:        aibOverride,
 			ServeArtifact:          build.Spec.ServeArtifact,
 			Compression:            build.Spec.Compression,
 		},
