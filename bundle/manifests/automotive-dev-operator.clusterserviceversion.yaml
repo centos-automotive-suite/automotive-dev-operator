@@ -72,6 +72,9 @@ spec:
       kind: ImageBuild
       name: imagebuilds.automotive.sdv.cloud.redhat.com
       version: v1alpha1
+    - kind: ImageReseal
+      name: imagereseals.automotive.sdv.cloud.redhat.com
+      version: v1alpha1
     - description: Image is the Schema for the images API
       displayName: Image
       kind: Image
@@ -153,6 +156,7 @@ spec:
           resources:
           - catalogimages
           - imagebuilds
+          - imagereseals
           - images
           - operatorconfigs
           verbs:
@@ -168,6 +172,7 @@ spec:
           resources:
           - catalogimages/finalizers
           - imagebuilds/finalizers
+          - imagereseals/finalizers
           - images/finalizers
           - operatorconfigs/finalizers
           verbs:
@@ -177,6 +182,7 @@ spec:
           resources:
           - catalogimages/status
           - imagebuilds/status
+          - imagereseals/status
           - images/status
           - operatorconfigs/status
           verbs:

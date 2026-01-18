@@ -599,12 +599,15 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 							Operator: corev1.NodeSelectorOpIn,
 							Values:   []string{imageBuild.Spec.Architecture},
 						},
+						{
+							Key:      "aib-build",
+							Operator: corev1.NodeSelectorOpExists,
+						},
 					},
 				},
 			},
 		},
 	}
-
 	// prepare podTemplate with runtime class fallback
 	podTemplate := &pod.PodTemplate{
 		Affinity: &corev1.Affinity{NodeAffinity: nodeAffinity},

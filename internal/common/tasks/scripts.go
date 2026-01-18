@@ -15,3 +15,6 @@ var PushArtifactScript string
 
 //go:embed scripts/build_builder.sh
 var BuildBuilderScript string
+
+//go:embed scripts/reseal_image.sh
+var ResealImageScript string

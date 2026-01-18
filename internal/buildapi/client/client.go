@@ -100,6 +100,31 @@ func (c *Client) GetBuild(ctx context.Context, name string) (*buildapi.BuildResp
 	return &out, nil
 }
 
+func (c *Client) GetReseal(ctx context.Context, name string) (*buildapi.BuildResponse, error) {
+	endpoint := c.resolve(path.Join("/v1/reseals", url.PathEscape(name)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("get reseal failed: %s: %s", resp.Status, string(b))
+	}
+	var out buildapi.BuildResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) ListBuilds(ctx context.Context) ([]buildapi.BuildListItem, error) {
 	endpoint := c.resolve("/v1/builds")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

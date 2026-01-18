@@ -22,6 +22,10 @@ const (
 	ModeImage Mode = "image"
 	// ModePackage creates traditional, mutable, package-based disk images
 	ModePackage Mode = "package"
+	// ModeDisk creates a disk image from an existing bootc container
+	ModeDisk Mode = "disk"
+	// ModeReseal reseals an existing bootc container
+	ModeReseal Mode = "reseal"
 )
 
 func (m Mode) IsValid() bool {
@@ -103,6 +107,16 @@ type BuildRequest struct {
 	BuildDiskImage bool   `json:"buildDiskImage,omitempty"` // Build disk image from bootc container
 	ExportOCI      string `json:"exportOci,omitempty"`      // Registry URL to push disk as OCI artifact
 	BuilderImage   string `json:"builderImage,omitempty"`   // Custom builder image
+
+	// Seal configuration for bootc builds
+	SealKeySecretRef         string `json:"sealKeySecretRef,omitempty"`         // Secret containing seal private key (existing secret)
+	SealKeyPasswordSecretRef string `json:"sealKeyPasswordSecretRef,omitempty"` // Secret containing seal key password (existing secret)
+	SealKey                  string `json:"sealKey,omitempty"`                  // Seal private key content (API will create secret)
+	SealKeyPassword          string `json:"sealKeyPassword,omitempty"`          // Seal key password (API will create secret)
+
+	// Reseal configuration (mode=reseal)
+	ResealMode            string `json:"resealMode,omitempty"`            // Reseal operation: reseal
+	ResealSourceContainer string `json:"resealSourceContainer,omitempty"` // Source container to reseal
 }
 
 type RegistryCredentials struct {

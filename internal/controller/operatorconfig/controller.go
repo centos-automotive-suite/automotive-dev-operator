@@ -358,6 +358,7 @@ func (r *OperatorConfigReconciler) deployOSBuilds(ctx context.Context, config *a
 		tasks.GenerateBuildAutomotiveImageTask(operatorNamespace, buildConfig, ""),
 		tasks.GeneratePushArtifactRegistryTask(operatorNamespace),
 		tasks.GeneratePrepareBuilderTask(operatorNamespace),
+		tasks.GenerateResealTask(operatorNamespace),
 	}
 
 	for _, task := range tektonTasks {
@@ -396,7 +397,7 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context) error {
 	r.Log.Info("Cleaning up OSBuilds resources")
 
 	// Delete Tekton tasks
-	taskNames := []string{"build-automotive-image", "push-artifact-registry"}
+	taskNames := []string{"build-automotive-image", "push-artifact-registry", "prepare-builder", "reseal-bootc-image"}
 	for _, taskName := range taskNames {
 		task := &tektonv1.Task{}
 		task.Name = taskName
