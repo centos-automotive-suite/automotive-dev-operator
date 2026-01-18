@@ -15,9 +15,6 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.webUI
-      name: WebUI
-      type: boolean
     - jsonPath: .spec.osBuilds.enabled
       name: OS Builds
       type: boolean
@@ -122,12 +119,6 @@ spec:
                 required:
                 - enabled
                 type: object
-              webUI:
-                default: true
-                description: WebUI determines if the web UI should be deployed
-                type: boolean
-            required:
-            - webUI
             type: object
           status:
             description: OperatorConfigStatus defines the observed state of OperatorConfig
@@ -148,9 +139,6 @@ spec:
                 description: Phase represents the current phase (Ready, Reconciling,
                   Failed)
                 type: string
-              webUIDeployed:
-                description: WebUIDeployed indicates if the WebUI is currently deployed
-                type: boolean
             type: object
         type: object
     served: true

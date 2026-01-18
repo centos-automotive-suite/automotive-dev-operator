@@ -45,15 +45,14 @@ metadata:
               "enabled": true,
               "pvcSize": "8Gi",
               "serveExpiryHours": 24
-            },
-            "webUI": true
+            }
           }
         }
       ]
     capabilities: Basic Install
     categories: Developer Tools
     containerImage: quay.io/rh-sdv-cloud/automotive-dev-operator:latest
-    createdAt: "2026-01-11T20:06:42Z"
+    createdAt: "2026-01-18T12:22:52Z"
     operatorframework.io/suggested-namespace: automotive-dev-operator-system
     operators.operatorframework.io/builder: operator-sdk-v1.42.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
@@ -297,9 +296,8 @@ spec:
                     fieldRef:
                       fieldPath: metadata.namespace
                 - name: OPERATOR_IMAGE
-                  value: image-registry.openshift-image-registry.svc:5000/automotive-dev-operator-system/automotive-dev-operator:latest
-                image: default-route-openshift-image-registry.apps.automotive1.ocp.automotive.sig.centos.org/automotive-dev-operator-system/automotive-dev-operator:latest
-                imagePullPolicy: IfNotPresent
+                  value: image-registry.openshift-image-registry.svc:5000/automotive-dev-operator-system/automotive-dev-operator:b68c2a2-1768738717
+                image: default-route-openshift-image-registry.apps.automotive1.ocp.automotive.sig.centos.org/automotive-dev-operator-system/automotive-dev-operator:b68c2a2-1768738717
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -336,8 +334,7 @@ spec:
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
-                image: default-route-openshift-image-registry.apps.automotive1.ocp.automotive.sig.centos.org/automotive-dev-operator-system/automotive-dev-operator:latest
-                imagePullPolicy: IfNotPresent
+                image: default-route-openshift-image-registry.apps.automotive1.ocp.automotive.sig.centos.org/automotive-dev-operator-system/automotive-dev-operator:b68c2a2-1768738717
                 name: init-oauth-secrets
                 resources:
                   limits:

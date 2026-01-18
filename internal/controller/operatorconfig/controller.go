@@ -102,10 +102,6 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Handle deletion
 	if !config.DeletionTimestamp.IsZero() {
 		log.Info("Handling deletion")
-		if err := r.cleanupWebUI(ctx); err != nil {
-			log.Error(err, "Failed to cleanup WebUI")
-			return ctrl.Result{}, err
-		}
 		if err := r.cleanupOSBuilds(ctx); err != nil {
 			log.Error(err, "Failed to cleanup OSBuilds")
 			return ctrl.Result{}, err
@@ -120,49 +116,7 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	// Reconcile WebUI
-	log.Info("Processing WebUI configuration", "webUI", config.Spec.WebUI, "generation", config.Generation)
 	statusChanged := false
-	if config.Spec.WebUI {
-		if err := r.deployWebUI(ctx, config); err != nil {
-			log.Error(err, "Failed to deploy WebUI")
-			if config.Status.Phase != "Failed" || config.Status.WebUIDeployed {
-				config.Status.Phase = "Failed"
-				config.Status.Message = fmt.Sprintf("Failed to deploy WebUI: %v", err)
-				config.Status.WebUIDeployed = false
-				statusChanged = true
-			}
-			if statusChanged {
-				_ = r.Status().Update(ctx, config)
-			}
-			return ctrl.Result{}, err
-		}
-		if config.Status.Phase != "Ready" || !config.Status.WebUIDeployed {
-			config.Status.Phase = "Ready"
-			config.Status.Message = "WebUI deployed successfully"
-			config.Status.WebUIDeployed = true
-			statusChanged = true
-		}
-	} else {
-		if err := r.cleanupWebUI(ctx); err != nil {
-			log.Error(err, "Failed to cleanup WebUI")
-			if config.Status.Phase != "Failed" {
-				config.Status.Phase = "Failed"
-				config.Status.Message = fmt.Sprintf("Failed to cleanup WebUI: %v", err)
-				statusChanged = true
-			}
-			if statusChanged {
-				_ = r.Status().Update(ctx, config)
-			}
-			return ctrl.Result{}, err
-		}
-		if config.Status.Phase != "Ready" || config.Status.WebUIDeployed {
-			config.Status.Phase = "Ready"
-			config.Status.Message = "WebUI disabled"
-			config.Status.WebUIDeployed = false
-			statusChanged = true
-		}
-	}
 
 	// Reconcile OSBuilds
 	log.Info("Processing OSBuilds configuration", "osBuilds", config.Spec.OSBuilds, "generation", config.Generation)
@@ -206,7 +160,7 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if statusChanged {
-		log.Info("Updating status", "phase", config.Status.Phase, "webUIDeployed", config.Status.WebUIDeployed, "osBuildsDeployed", config.Status.OSBuildsDeployed)
+		log.Info("Updating status", "phase", config.Status.Phase, "osBuildsDeployed", config.Status.OSBuildsDeployed)
 		if err := r.Status().Update(ctx, config); err != nil {
 			log.Error(err, "Failed to update status")
 			return ctrl.Result{}, err
@@ -215,75 +169,6 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	log.Info("=== Reconciliation completed successfully ===")
 	return ctrl.Result{}, nil
-}
-
-func (r *OperatorConfigReconciler) deployWebUI(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
-	r.Log.Info("Starting WebUI deployment")
-
-	// Create cookie secrets for OAuth proxies
-	r.Log.Info("Ensuring OAuth secrets")
-	if err := r.ensureOAuthSecrets(ctx, owner); err != nil {
-		r.Log.Error(err, "Failed to ensure OAuth secrets")
-		return fmt.Errorf("failed to ensure OAuth secrets: %w", err)
-	}
-	r.Log.Info("OAuth secrets ensured successfully")
-
-	// Update ServiceAccount with OAuth redirect annotations
-	r.Log.Info("Updating ServiceAccount OAuth annotations")
-	if err := r.updateServiceAccountOAuthAnnotations(ctx); err != nil {
-		r.Log.Error(err, "Failed to update ServiceAccount OAuth annotations")
-		return fmt.Errorf("failed to update ServiceAccount OAuth annotations: %w", err)
-	}
-	r.Log.Info("ServiceAccount OAuth annotations updated successfully")
-
-	// Create/update nginx ConfigMap
-	r.Log.Info("Creating/updating nginx ConfigMap")
-	nginxConfigMap := r.buildWebUINginxConfigMap()
-	if err := r.createOrUpdate(ctx, nginxConfigMap, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update nginx configmap")
-		return fmt.Errorf("failed to create/update nginx configmap: %w", err)
-	}
-	r.Log.Info("Nginx ConfigMap created/updated successfully")
-
-	// Create/update deployment
-	r.Log.Info("Creating/updating webui deployment")
-	isOpenShift := r.detectOpenShift(ctx)
-	deployment := r.buildWebUIDeployment(isOpenShift)
-	if err := r.createOrUpdate(ctx, deployment, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update webui deployment")
-		return fmt.Errorf("failed to create/update webui deployment: %w", err)
-	}
-	r.Log.Info("WebUI deployment created/updated successfully")
-
-	// Create/update service
-	r.Log.Info("Creating/updating webui service")
-	service := r.buildWebUIService(isOpenShift)
-	if err := r.createOrUpdate(ctx, service, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update webui service")
-		return fmt.Errorf("failed to create/update webui service: %w", err)
-	}
-	r.Log.Info("WebUI service created/updated successfully")
-
-	// Create/update route (OpenShift)
-	r.Log.Info("Creating/updating webui route")
-	route := r.buildWebUIRoute()
-	if err := r.createOrUpdate(ctx, route, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update webui route (this is expected on non-OpenShift clusters)")
-	} else {
-		r.Log.Info("WebUI route created/updated successfully")
-	}
-
-	// Create/update ingress (Kubernetes)
-	r.Log.Info("Creating/updating webui ingress")
-	ingress := r.buildWebUIIngress()
-	if err := r.createOrUpdate(ctx, ingress, owner); err != nil {
-		r.Log.Error(err, "Failed to create/update webui ingress (this is expected if ingress controller is not installed)")
-	} else {
-		r.Log.Info("WebUI ingress created/updated successfully")
-	}
-
-	r.Log.Info("WebUI deployment completed successfully")
-	return nil
 }
 
 func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
@@ -382,125 +267,6 @@ func (r *OperatorConfigReconciler) updateBuildAPIServiceAccountAnnotation(ctx co
 		return fmt.Errorf("failed to update service account: %w", err)
 	}
 	r.Log.Info("Updated ServiceAccount with build-api OAuth annotation")
-	return nil
-}
-
-func (r *OperatorConfigReconciler) ensureOAuthSecrets(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
-	secrets := []string{"ado-webui-oauth-proxy", "ado-build-api-oauth-proxy"}
-
-	for _, secretName := range secrets {
-		secret := &corev1.Secret{}
-		err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: operatorNamespace}, secret)
-
-		if err != nil {
-			if !errors.IsNotFound(err) {
-				return fmt.Errorf("failed to get secret %s: %w", secretName, err)
-			}
-
-			// Secret doesn't exist, create it
-			secret = r.buildOAuthSecret(secretName)
-			// Don't set controller reference - cleanup handled by finalizer
-			if err := r.Create(ctx, secret); err != nil {
-				return fmt.Errorf("failed to create secret %s: %w", secretName, err)
-			}
-			r.Log.Info("Created OAuth secret", "name", secretName)
-		}
-	}
-
-	return nil
-}
-
-func (r *OperatorConfigReconciler) updateServiceAccountOAuthAnnotations(ctx context.Context) error {
-	sa := &corev1.ServiceAccount{}
-	err := r.Get(ctx, client.ObjectKey{Name: "ado-controller-manager", Namespace: operatorNamespace}, sa)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// ServiceAccount doesn't exist (likely running locally in dev mode)
-			r.Log.Info("ServiceAccount not found, skipping OAuth annotation update (running locally?)")
-			return nil
-		}
-		return fmt.Errorf("failed to get ServiceAccount: %w", err)
-	}
-
-	if sa.Annotations == nil {
-		sa.Annotations = make(map[string]string)
-	}
-
-	annotations := map[string]string{
-		"serviceaccounts.openshift.io/oauth-redirectreference.webui":    `{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"ado-webui"}}`,
-		"serviceaccounts.openshift.io/oauth-redirectreference.buildapi": `{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"ado-build-api"}}`,
-	}
-
-	updated := false
-	for key, value := range annotations {
-		if sa.Annotations[key] != value {
-			sa.Annotations[key] = value
-			updated = true
-		}
-	}
-
-	if updated {
-		if err := r.Update(ctx, sa); err != nil {
-			return fmt.Errorf("failed to update ServiceAccount annotations: %w", err)
-		}
-		r.Log.Info("Updated ServiceAccount OAuth annotations")
-	}
-
-	return nil
-}
-
-func (r *OperatorConfigReconciler) cleanupWebUI(ctx context.Context) error {
-	// Delete deployment
-	deployment := &appsv1.Deployment{}
-	deployment.Name = "ado-webui"
-	deployment.Namespace = operatorNamespace
-	if err := r.Delete(ctx, deployment); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete webui deployment: %w", err)
-	}
-
-	// Delete service
-	service := &corev1.Service{}
-	service.Name = "ado-webui"
-	service.Namespace = operatorNamespace
-	if err := r.Delete(ctx, service); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete webui service: %w", err)
-	}
-
-	// Delete route
-	route := &routev1.Route{}
-	route.Name = "ado-webui"
-	route.Namespace = operatorNamespace
-	if err := r.Delete(ctx, route); err != nil && !errors.IsNotFound(err) && !isNoMatchError(err) {
-		r.Log.Error(err, "Failed to delete webui route (ignoring, expected on non-OpenShift clusters)")
-	}
-
-	// Delete ingress
-	ingress := &networkingv1.Ingress{}
-	ingress.Name = "ado-webui"
-	ingress.Namespace = operatorNamespace
-	if err := r.Delete(ctx, ingress); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete webui ingress: %w", err)
-	}
-
-	// Delete nginx ConfigMap
-	configMap := &corev1.ConfigMap{}
-	configMap.Name = "ado-webui-nginx-config"
-	configMap.Namespace = operatorNamespace
-	if err := r.Delete(ctx, configMap); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete nginx configmap: %w", err)
-	}
-
-	// Delete WebUI OAuth secret
-	secrets := []string{"ado-webui-oauth-proxy"}
-	for _, secretName := range secrets {
-		secret := &corev1.Secret{}
-		secret.Name = secretName
-		secret.Namespace = operatorNamespace
-		if err := r.Delete(ctx, secret); err != nil && !errors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete secret %s: %w", secretName, err)
-		}
-	}
-
 	return nil
 }
 

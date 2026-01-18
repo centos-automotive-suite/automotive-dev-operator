@@ -71,10 +71,6 @@ type BuildAPIConfig struct {
 
 // OperatorConfigSpec defines the desired state of OperatorConfig
 type OperatorConfigSpec struct {
-	// WebUI determines if the web UI should be deployed
-	// +kubebuilder:default=true
-	WebUI bool `json:"webUI"`
-
 	// OSBuilds defines the configuration for OS build operations
 	// +optional
 	OSBuilds *OSBuildsConfig `json:"osBuilds,omitempty"`
@@ -133,16 +129,12 @@ type OperatorConfigStatus struct {
 	// Message provides detail about the current phase
 	Message string `json:"message,omitempty"`
 
-	// WebUIDeployed indicates if the WebUI is currently deployed
-	WebUIDeployed bool `json:"webUIDeployed,omitempty"`
-
 	// OSBuildsDeployed indicates if the OS Builds Tekton tasks are currently deployed
 	OSBuildsDeployed bool `json:"osBuildsDeployed,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="WebUI",type="boolean",JSONPath=".spec.webUI"
 // +kubebuilder:printcolumn:name="OS Builds",type="boolean",JSONPath=".spec.osBuilds.enabled"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"

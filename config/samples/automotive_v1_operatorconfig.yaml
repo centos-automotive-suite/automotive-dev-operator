@@ -7,9 +7,6 @@ metadata:
   name: automotive-dev
   namespace: automotive-dev-operator-system
 spec:
-  # WebUI determines if the web UI should be deployed
-  webUI: true
-
   # OSBuilds configuration for OS build operations
   osBuilds:
     # Enable Tekton tasks for OS builds

@@ -348,24 +348,3 @@ build-caib: ## Build the caib tool
 build-api-server: ## Build the api server
 	go build -o bin/build-api cmd/build-api/main.go
 
-##@ WebUI
-
-.PHONY: webui-install
-webui-install: ## Install webui dependencies
-	cd webui && npm install
-
-.PHONY: webui-build
-webui-build: webui-install ## Build the webui
-	cd webui && npm run build
-
-.PHONY: webui-dev
-webui-dev: ## Start webui in development mode
-	cd webui && npm start
-
-.PHONY: webui-docker-build
-webui-docker-build: ## Build webui docker image
-	$(CONTAINER_TOOL) build -t $(IMAGE_TAG_BASE)-webui:latest -f webui/Dockerfile .
-
-.PHONY: webui-docker-push
-webui-docker-push: ## Push webui docker image
-	$(CONTAINER_TOOL) push $(IMAGE_TAG_BASE)-webui:latest

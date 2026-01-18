@@ -103,11 +103,10 @@ uninstall_operator() {
     oc delete installplan -n ${NAMESPACE} --all --ignore-not-found=true 2>/dev/null || true
 
     echo "Deleting operator-managed resources..."
-    oc delete deployment ado-webui ado-build-api ado-controller-manager -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete service ado-webui ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete route ado-webui ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete serviceaccount ado-controller-manager ado-webui -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete configmap ado-webui-nginx-config -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete deployment ado-build-api ado-controller-manager -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete service ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete route ado-build-api -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
+    oc delete serviceaccount ado-controller-manager -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
     oc delete secret ado-oauth-secrets -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
 
     echo "Waiting for operator pods to terminate..."
