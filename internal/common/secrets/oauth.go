@@ -22,13 +22,6 @@ func EnsureOAuthSecrets(ctx context.Context, c client.Client, namespace string) 
 		labels map[string]string
 	}{
 		{
-			name: "ado-webui-oauth-proxy",
-			labels: map[string]string{
-				"app.kubernetes.io/name":    "ado-webui",
-				"app.kubernetes.io/part-of": "automotive-dev-operator",
-			},
-		},
-		{
 			name: "ado-build-api-oauth-proxy",
 			labels: map[string]string{
 				"app.kubernetes.io/name":      "automotive-dev-operator",

@@ -71,8 +71,7 @@ The e2e test suite verifies:
    - Controller manager is running
 
 2. **OperatorConfig Resource**:
-   - Creates OperatorConfig with `webUI` and `osBuilds` enabled
-   - Verifies WebUI deployment is created
+   - Creates OperatorConfig with `osBuilds` enabled
    - Verifies Build API deployment is created
    - Verifies Tekton tasks and pipelines are created when osBuilds is enabled
    - Tests disabling osBuilds removes Tekton resources

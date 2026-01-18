@@ -63,7 +63,6 @@ func main() {
 	ctx := context.Background()
 
 	secretsToEnsure := []string{
-		"ado-webui-oauth-proxy",
 		"ado-build-api-oauth-proxy",
 	}
 

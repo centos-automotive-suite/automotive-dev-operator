@@ -29,11 +29,6 @@ make manifests                # Generate CRDs, RBAC, webhooks
 go run ./cmd/main.go          # Run controller locally
 go run ./cmd/build-api/ --kubeconfig-path ~/.kube/config  # Run API server locally
 
-# WebUI
-cd webui && npm install       # Install dependencies
-cd webui && npm start         # Start dev server (set WEBUI_PROXY_TARGET and DEV_BEARER_TOKEN)
-make webui-build              # Build for production
-
 # Kubernetes deployment (preferred method)
 ./hack/deploy-catalog.sh --uninstall --install  # Redeploy operator (use this for testing changes)
 
@@ -50,18 +45,17 @@ This is a Kubernetes operator for automotive OS image building, built with Kubeb
 ### Custom Resources (api/v1alpha1/)
 - **ImageBuild**: Triggers an automotive OS image build via Tekton TaskRuns. Supports traditional AIB manifests and bootc container builds.
 - **Image**: Represents a built image with location metadata (registry storage).
-- **OperatorConfig**: Cluster-wide operator configuration (WebUI, OS builds settings, memory volumes).
+- **OperatorConfig**: Cluster-wide operator configuration (OS builds settings, memory volumes).
 
 ### Controllers (internal/controller/)
 - **imagebuild/**: Reconciles ImageBuild CRs, creates Tekton TaskRuns, manages build lifecycle.
 - **image/**: Manages Image CRs and their status.
-- **operatorconfig/**: Deploys/undeploys optional components (WebUI, Tekton tasks) based on OperatorConfig.
+- **operatorconfig/**: Deploys/undeploys optional components (Tekton tasks) based on OperatorConfig.
 
 ### Components
 - **Controller Manager** (cmd/main.go): Main operator process running all controllers.
-- **Build API** (cmd/build-api/, internal/buildapi/): REST API for build operations, used by CLI and WebUI.
+- **Build API** (cmd/build-api/, internal/buildapi/): REST API for build operations, used by CLI.
 - **caib CLI** (cmd/caib/): CLI tool for creating/monitoring builds. See cmd/caib/README.md for usage.
-- **WebUI** (webui/): React-based web interface for managing builds.
 - **Init Secrets** (cmd/init-secrets/): Init container for OAuth secret setup.
 
 ### Key Integrations

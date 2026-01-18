@@ -151,46 +151,6 @@ var _ = Describe("controller", Ordered, func() {
 			}
 			EventuallyWithOffset(1, verifyTektonPipeline, 2*time.Minute, 5*time.Second).Should(Succeed())
 
-			By("verifying WebUI deployment is created")
-			verifyWebUIDeployment := func() error {
-				cmd = exec.Command("kubectl", "get", "deployment", "ado-webui", "-n", namespace, "-o", "jsonpath={.status.availableReplicas}")
-				output, err := utils.Run(cmd)
-				if err != nil {
-					return err
-				}
-				if string(output) != "1" {
-					cmd = exec.Command("kubectl", "get", "pods", "-l", "app=ado-webui", "-n", namespace, "-o", "wide")
-					podsOutput, _ := utils.Run(cmd)
-
-					cmd = exec.Command("kubectl", "describe", "pod", "-l", "app=ado-webui", "-n", namespace)
-					describeOutput, _ := utils.Run(cmd)
-
-					descStr := string(describeOutput)
-					if len(descStr) > 5000 {
-						descStr = descStr[len(descStr)-5000:]
-					}
-
-					return fmt.Errorf("webui deployment not available, availableReplicas: %s\n\nPods:\n%s\n\nPod Details (last 5000 chars):\n%s",
-						output, string(podsOutput), descStr)
-				}
-				return nil
-			}
-			EventuallyWithOffset(1, verifyWebUIDeployment, 3*time.Minute, 5*time.Second).Should(Succeed())
-
-			By("verifying WebUI ingress is created")
-			verifyWebUIIngress := func() error {
-				cmd = exec.Command("kubectl", "get", "ingress", "ado-webui", "-n", namespace, "-o", "jsonpath={.metadata.name}")
-				output, err := utils.Run(cmd)
-				if err != nil {
-					return err
-				}
-				if string(output) != "ado-webui" {
-					return fmt.Errorf("webui ingress not found, got: %s", output)
-				}
-				return nil
-			}
-			EventuallyWithOffset(1, verifyWebUIIngress, 4*time.Minute, 5*time.Second).Should(Succeed())
-
 			By("verifying Build API deployment is created")
 			verifyBuildAPIDeployment := func() error {
 				cmd = exec.Command("kubectl", "get", "deployment", "ado-build-api", "-n", namespace, "-o", "jsonpath={.status.availableReplicas}")

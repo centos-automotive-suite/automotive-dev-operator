@@ -8,7 +8,6 @@ The CentOS Automotive Suite Operator enables automotive OS image building throug
 
 - **ImageBuild Custom Resource**: Declaratively define and trigger automotive OS image builds
 - **Multiple Build Modes**: Support for traditional AIB manifests and bootc container builds
-- **Web UI**: Optional React-based web interface for managing builds and viewing artifacts
 - **CLI Tool (caib)**: Command-line interface for creating and monitoring builds
 - **Artifact Management**: Serve built images via OpenShift Routes or push to OCI registries
 - **Tekton Integration**: Uses OpenShift Pipelines (Tekton) for scalable build execution
@@ -179,8 +178,7 @@ make uninstall
 
 ### Optional Components
 
-When `OperatorConfig.spec.webUI` is enabled:
-- **Web UI**: React-based interface accessible via OpenShift Route
+When `OperatorConfig.spec.osBuilds.enabled` is true:
 - **Build API**: REST API for programmatic access
 
 ### CLI Tool
@@ -194,7 +192,7 @@ This operator is built with the Kubebuilder framework and uses:
 - **Controller Runtime**: Manages Custom Resources and reconciliation loops
 - **OpenShift Pipelines (Tekton)**: Executes build workflows as TaskRuns
 - **Automotive Image Builder**: External tool for creating automotive OS images
-- **OpenShift Routes**: Exposes web UI and artifact serving endpoints
+- **OpenShift Routes**: Exposes build API and artifact serving endpoints
 
 ### Dependencies
 

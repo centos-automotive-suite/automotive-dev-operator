@@ -13,7 +13,6 @@ env:
     REGISTRY: quay.io
     REPOSITORY: ${{ vars.REPOSITORY }}
     OPERATOR_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator
-    WEBUI_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/aib-webui
     AIB_BASE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/aib-base-dev
     VERSION: ${{ github.sha }}
     AIB_CLI_BINARY: "caib"
@@ -103,90 +102,6 @@ jobs:
                   ${{ env.OPERATOR_IMAGE }}:latest-amd64 \
                   ${{ env.OPERATOR_IMAGE }}:latest-arm64
 
-    build-webui-arm64:
-        runs-on: ubuntu-24.04-arm
-        if: github.ref == 'refs/heads/main'
-        steps:
-            - uses: actions/checkout@v4
-
-            - name: Set up Docker Buildx
-              uses: docker/setup-buildx-action@v3
-
-            - name: Login to Quay.io
-              uses: docker/login-action@v3
-              with:
-                  registry: ${{ env.REGISTRY }}
-                  username: ${{ secrets.REGISTRY_USER }}
-                  password: ${{ secrets.REGISTRY_PASSWORD }}
-
-            - name: Build and push webui (ARM64)
-              uses: docker/build-push-action@v5
-              with:
-                  context: .
-                  file: ./webui/Dockerfile
-                  platforms: linux/arm64
-                  push: true
-                  tags: |
-                      ${{ env.WEBUI_IMAGE }}:${{ env.VERSION }}-arm64
-                      ${{ env.WEBUI_IMAGE }}:latest-arm64
-                  cache-from: type=gha
-                  cache-to: type=gha,mode=max
-
-    build-webui-amd64:
-        runs-on: ubuntu-latest
-        if: github.ref == 'refs/heads/main'
-        steps:
-            - uses: actions/checkout@v4
-
-            - name: Set up Docker Buildx
-              uses: docker/setup-buildx-action@v3
-
-            - name: Login to Quay.io
-              uses: docker/login-action@v3
-              with:
-                  registry: ${{ env.REGISTRY }}
-                  username: ${{ secrets.REGISTRY_USER }}
-                  password: ${{ secrets.REGISTRY_PASSWORD }}
-
-            - name: Build and push webui (AMD64)
-              uses: docker/build-push-action@v5
-              with:
-                  context: .
-                  file: ./webui/Dockerfile
-                  platforms: linux/amd64
-                  push: true
-                  tags: |
-                      ${{ env.WEBUI_IMAGE }}:${{ env.VERSION }}-amd64
-                      ${{ env.WEBUI_IMAGE }}:latest-amd64
-                  cache-from: type=gha
-                  cache-to: type=gha,mode=max
-
-    create-webui-multiarch-manifest:
-        needs: [build-webui-arm64, build-webui-amd64]
-        runs-on: ubuntu-latest
-        if: github.ref == 'refs/heads/main'
-        steps:
-            - uses: actions/checkout@v4
-
-            - name: Set up Docker Buildx
-              uses: docker/setup-buildx-action@v3
-
-            - name: Login to Quay.io
-              uses: docker/login-action@v3
-              with:
-                  registry: ${{ env.REGISTRY }}
-                  username: ${{ secrets.REGISTRY_USER }}
-                  password: ${{ secrets.REGISTRY_PASSWORD }}
-
-            - name: Create and push multi-arch manifest (webui)
-              run: |
-                  docker buildx imagetools create -t ${{ env.WEBUI_IMAGE }}:${{ env.VERSION }} \
-                  ${{ env.WEBUI_IMAGE }}:${{ env.VERSION }}-amd64 \
-                  ${{ env.WEBUI_IMAGE }}:${{ env.VERSION }}-arm64
-                  docker buildx imagetools create -t ${{ env.WEBUI_IMAGE }}:latest \
-                  ${{ env.WEBUI_IMAGE }}:latest-amd64 \
-                  ${{ env.WEBUI_IMAGE }}:latest-arm64
-
     retag-on-release:
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/tags/')
@@ -203,11 +118,10 @@ jobs:
                   username: ${{ secrets.REGISTRY_USER }}
                   password: ${{ secrets.REGISTRY_PASSWORD }}
 
-            - name: Create tag aliases for operator and webui
+            - name: Create tag alias for operator
               run: |
                   # Alias the existing multi-arch manifests built on main (by sha) to the git tag
                   docker buildx imagetools create -t ${{ env.OPERATOR_IMAGE }}:${{ github.ref_name }} ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}
-                  docker buildx imagetools create -t ${{ env.WEBUI_IMAGE }}:${{ github.ref_name }} ${{ env.WEBUI_IMAGE }}:${{ env.VERSION }}
 
     build-caib-arm64:
         runs-on: ubuntu-24.04-arm
@@ -328,9 +242,6 @@ jobs:
                   popd >/dev/null
                   pushd config/build-api >/dev/null
                   ../../bin/kustomize edit set image controller=${{ env.OPERATOR_IMAGE }}:${TAG}
-                  popd >/dev/null
-                  pushd config/webui >/dev/null
-                  ../../bin/kustomize edit set image quay.io/rh-sdv-cloud/aib-webui=${{ env.WEBUI_IMAGE }}:${TAG}
                   popd >/dev/null
                   mkdir -p dist
                   ./bin/kustomize build config/default > dist/install-${TAG}.yaml
