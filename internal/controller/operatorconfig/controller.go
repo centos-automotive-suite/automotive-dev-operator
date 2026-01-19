@@ -435,6 +435,12 @@ func (r *OperatorConfigReconciler) createOrUpdateTask(ctx context.Context, task 
 		return r.Create(ctx, task)
 	}
 
+	// Skip update if task is marked as unmanaged
+	if existingTask.Annotations != nil && existingTask.Annotations["automotive.sdv.cloud.redhat.com/unmanaged"] == "true" {
+		r.Log.Info("Skipping update for unmanaged task", "name", task.Name)
+		return nil
+	}
+
 	task.ResourceVersion = existingTask.ResourceVersion
 	return r.Update(ctx, task)
 }
@@ -447,6 +453,12 @@ func (r *OperatorConfigReconciler) createOrUpdatePipeline(ctx context.Context, p
 			return fmt.Errorf("failed to get Pipeline: %w", err)
 		}
 		return r.Create(ctx, pipeline)
+	}
+
+	// Skip update if pipeline is marked as unmanaged
+	if existingPipeline.Annotations != nil && existingPipeline.Annotations["automotive.sdv.cloud.redhat.com/unmanaged"] == "true" {
+		r.Log.Info("Skipping update for unmanaged pipeline", "name", pipeline.Name)
+		return nil
 	}
 
 	pipeline.ResourceVersion = existingPipeline.ResourceVersion
