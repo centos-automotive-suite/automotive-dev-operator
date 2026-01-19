@@ -69,6 +69,7 @@ This is a Kubernetes operator for automotive OS image building, built with Kubeb
 - Keep summaries short.
 - Container tool defaults to `podman` (CONTAINER_TOOL variable in Makefile).
 - After modifying types in api/v1alpha1/, run `make generate manifests`.
+- To edit Tekton Tasks/Pipelines without the operator overwriting changes, annotate with `automotive.sdv.cloud.redhat.com/unmanaged=true`. See DEVELOPMENT.md for details.
 
 ## Active Technologies
 - Go 1.22+ (consistent with existing operator codebase) + Kubebuilder, controller-runtime, Kubernetes client-go, container registry client libraries (001-image-catalog)
