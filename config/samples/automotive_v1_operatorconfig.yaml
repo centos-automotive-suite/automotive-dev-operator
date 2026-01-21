@@ -4,7 +4,7 @@ metadata:
   labels:
     app.kubernetes.io/name: automotive-dev-operator
     app.kubernetes.io/managed-by: kustomize
-  name: automotive-dev
+  name: config
   namespace: automotive-dev-operator-system
 spec:
   # OSBuilds configuration for OS build operations
@@ -28,7 +28,12 @@ spec:
     # Example: "2Gi"
     # memoryVolumeSize: "2Gi"
 
-    # Optional: Runtime class to use for build pods
-    # Useful for kata containers or other alternative runtimes
-    # More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
-    # runtimeClassName: "kata"
+    # Optional: Node selector for scheduling build pods to specific nodes
+    # Build pods will only run on nodes with matching labels
+    # Common use cases:
+    #   - Route builds to dedicated build nodes: {"workload": "builds"}
+    #   - Use nodes with fast storage: {"disktype": "ssd"}
+    #   - Target specific node pools: {"node-pool": "compute-intensive"}
+    # nodeSelector:
+    #   dedicated: "builds"
+    #   disktype: "ssd"
