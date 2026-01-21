@@ -631,6 +631,9 @@ func (r *ImageBuildReconciler) createBuildTaskRun(ctx context.Context, imageBuil
 	if buildConfig != nil && buildConfig.RuntimeClassName != "" {
 		podTemplate.RuntimeClassName = &buildConfig.RuntimeClassName
 	}
+	if operatorConfig.Spec.OSBuilds != nil && len(operatorConfig.Spec.OSBuilds.NodeSelector) > 0 {
+		podTemplate.NodeSelector = operatorConfig.Spec.OSBuilds.NodeSelector
+	}
 	if imageBuild.Spec.RuntimeClassName != "" {
 		log.Info("Setting RuntimeClassName from ImageBuild spec", "runtimeClassName", imageBuild.Spec.RuntimeClassName)
 		podTemplate.RuntimeClassName = &imageBuild.Spec.RuntimeClassName

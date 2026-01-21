@@ -96,6 +96,14 @@ spec:
                       MemoryVolumeSize specifies the size limit for memory-backed volumes (required if UseMemoryVolumes is true)
                       Example: "2Gi"
                     type: string
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      NodeSelector specifies node labels that build pods must match for scheduling
+                      These labels are added to the pod template used by Tekton PipelineRuns
+                      Example: {"dedicated": "builds", "disktype": "ssd"}
+                    type: object
                   pvcSize:
                     description: |-
                       PVCSize specifies the size for persistent volume claims created for build workspaces

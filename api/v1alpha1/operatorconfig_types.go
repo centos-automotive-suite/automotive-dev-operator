@@ -115,6 +115,12 @@ type OSBuildsConfig struct {
 	// Example: "default-route-openshift-image-registry.apps.mycluster.example.com"
 	// +optional
 	ClusterRegistryRoute string `json:"clusterRegistryRoute,omitempty"`
+
+	// NodeSelector specifies node labels that build pods must match for scheduling
+	// These labels are added to the pod template used by Tekton PipelineRuns
+	// Example: {"dedicated": "builds", "disktype": "ssd"}
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 // OperatorConfigStatus defines the observed state of OperatorConfig
