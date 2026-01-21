@@ -37,6 +37,7 @@ import (
 
 	securityv1 "github.com/openshift/api/security/v1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/catalogimage"
@@ -51,6 +52,7 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+// init registers the API types required by the controller manager with the package-level scheme.
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
@@ -58,6 +60,7 @@ func init() {
 	utilruntime.Must(securityv1.AddToScheme(scheme))
 	utilruntime.Must(tektonv1.AddToScheme(scheme))
 	utilruntime.Must(routev1.Install(scheme))
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 }

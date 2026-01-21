@@ -876,6 +876,11 @@ func handleFileUploads(
 	fmt.Println("Local files uploaded. Build will proceed.")
 }
 
+// waitForBuildCompletion waits for the build identified by name to reach a terminal state.
+// It polls the build status periodically, prints status updates, and (when enabled) streams build logs with retry/backoff.
+// When the build completes successfully it prints jumpstarter information (if present) and, if downloadTo is non-empty,
+// downloads the build artifact into that path. The function respects the package-level timeout and followLogs flags,
+// and will call handleError (which exits the process) on timeout or when the build fails.
 func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, name, downloadTo string) {
 	fmt.Println("Waiting for build to complete...")
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Minute)
@@ -921,6 +926,16 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 
 			// Handle terminal build states
 			if st.Phase == "Completed" {
+				fmt.Println("Build completed successfully!")
+				if st.Jumpstarter != nil && st.Jumpstarter.Available {
+					fmt.Println("\nJumpstarter is available for device flashing.")
+					if st.Jumpstarter.ExporterSelector != "" {
+						fmt.Printf("  Exporter selector: %s\n", st.Jumpstarter.ExporterSelector)
+					}
+					if st.Jumpstarter.FlashCmd != "" {
+						fmt.Printf("  Flash command: %s\n", st.Jumpstarter.FlashCmd)
+					}
+				}
 				if downloadTo != "" {
 					if err := downloadArtifactViaAPI(ctx, serverURL, name, downloadTo); err != nil {
 						fmt.Printf("Download failed: %v\n", err)

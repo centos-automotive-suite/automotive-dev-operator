@@ -1101,6 +1101,12 @@ func listBuilds(c *gin.Context) {
 	writeJSON(c, http.StatusOK, resp)
 }
 
+// getBuild handles an HTTP request to retrieve an ImageBuild by name and writes a JSON BuildResponse.
+// It looks up the ImageBuild in the resolved namespace and responds with 200 and the build's status
+// fields when found. If the build is in the Completed phase and the OperatorConfig indicates Jumpstarter
+// availability, the response includes Jumpstarter information (Available, ExporterSelector, and FlashCmd
+// with placeholders substituted). Responds with 404 when the ImageBuild is not found and 500 on internal
+// errors.
 func getBuild(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 	k8sClient, err := getClientFromRequest(c)
@@ -1118,6 +1124,33 @@ func getBuild(c *gin.Context, name string) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
 		return
+	}
+
+	// For completed builds, check if Jumpstarter is available and get target mapping
+	var jumpstarterInfo *JumpstarterInfo
+	if build.Status.Phase == "Completed" {
+		operatorConfig := &automotivev1alpha1.OperatorConfig{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "config", Namespace: namespace}, operatorConfig); err == nil {
+			if operatorConfig.Status.JumpstarterAvailable {
+				jumpstarterInfo = &JumpstarterInfo{Available: true}
+				if operatorConfig.Spec.Jumpstarter != nil {
+					if mapping, ok := operatorConfig.Spec.Jumpstarter.TargetMappings[build.Spec.Target]; ok {
+						jumpstarterInfo.ExporterSelector = mapping.Selector
+						flashCmd := mapping.FlashCmd
+						// Replace placeholders in flash command
+						if flashCmd != "" {
+							imageURI := build.Spec.ExportOCI
+							if imageURI == "" {
+								imageURI = build.Status.ArtifactURL
+							}
+							flashCmd = strings.ReplaceAll(flashCmd, "{image_uri}", imageURI)
+							flashCmd = strings.ReplaceAll(flashCmd, "{artifact_url}", build.Status.ArtifactURL)
+						}
+						jumpstarterInfo.FlashCmd = flashCmd
+					}
+				}
+			}
+		}
 	}
 
 	writeJSON(c, http.StatusOK, BuildResponse{
@@ -1139,6 +1172,7 @@ func getBuild(c *gin.Context, name string) {
 			}
 			return ""
 		}(),
+		Jumpstarter: jumpstarterInfo,
 	})
 }
 
