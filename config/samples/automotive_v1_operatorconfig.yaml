@@ -37,3 +37,17 @@ spec:
     # nodeSelector:
     #   dedicated: "builds"
     #   disktype: "ssd"
+
+    # Optional: Tolerations for exclusive access to tainted nodes
+    # Enables scheduling on nodes tainted for dedicated automotive builds
+    # First taint nodes: kubectl taint nodes <node> automotive.sdv.cloud.redhat.com/dedicated=builds:NoSchedule
+    # Then configure tolerations to access those nodes:
+    # tolerations:
+    # - key: "automotive.sdv.cloud.redhat.com/dedicated"
+    #   operator: "Equal"
+    #   value: "builds"
+    #   effect: "NoSchedule"
+    # - key: "node.kubernetes.io/dedicated"
+    #   operator: "Equal"
+    #   value: "automotive"
+    #   effect: "NoExecute"

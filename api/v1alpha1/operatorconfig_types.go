@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -121,6 +122,12 @@ type OSBuildsConfig struct {
 	// Example: {"dedicated": "builds", "disktype": "ssd"}
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations specifies tolerations to be added to build pods
+	// Enables scheduling on tainted nodes for dedicated/exclusive access
+	// Example: [{"key": "automotive.sdv.cloud.redhat.com/dedicated", "operator": "Equal", "value": "builds", "effect": "NoSchedule"}]
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
 // OperatorConfigStatus defines the observed state of OperatorConfig
