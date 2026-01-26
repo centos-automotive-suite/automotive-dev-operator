@@ -160,6 +160,12 @@ func downloadOCIArtifactIfRequested(output, exportOCI, registryUsername, registr
 	}
 }
 
+// main initializes and runs the caib command-line interface.
+// 
+// It constructs the root Cobra command, registers subcommands (build, disk, build-dev, list, catalog),
+// defines flags for each command (including authentication, build options, and output controls),
+// adds deprecated aliases for backwards compatibility, and executes the command tree.
+// On execution error it prints the error and exits with status 1.
 func main() {
 	rootCmd := &cobra.Command{
 		Use:     "caib",
@@ -326,7 +332,7 @@ Examples:
 	buildDevCmd.Flags().StringVarP(&distro, "distro", "d", "autosd", "distribution to build")
 	buildDevCmd.Flags().StringVarP(&target, "target", "t", "qemu", "target platform")
 	buildDevCmd.Flags().StringVarP(&architecture, "arch", "a", getDefaultArch(), "architecture (amd64, arm64)")
-	buildDevCmd.Flags().StringVar(&mode, "mode", "", "build mode: image (ostree) or package (required)")
+	buildDevCmd.Flags().StringVar(&mode, "mode", "image", "build mode: image (ostree) or package (package-based)")
 	buildDevCmd.Flags().StringVar(&exportFormat, "format", "", "export format: qcow2, raw, simg, etc.")
 	buildDevCmd.Flags().StringVarP(&outputDir, "output", "o", "", "download artifact to file from registry (requires --push)")
 	buildDevCmd.Flags().StringVar(&compressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
