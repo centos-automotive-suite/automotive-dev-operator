@@ -16,6 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/yaml"
+
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 )
 
 const (
@@ -387,8 +390,8 @@ func (r *OperatorConfigReconciler) buildOAuthSecret(name string) *corev1.Secret 
 	}
 }
 
-func (r *OperatorConfigReconciler) buildBuildAPIAuthConfigMap() *corev1.ConfigMap {
-	return &corev1.ConfigMap{
+func (r *OperatorConfigReconciler) buildBuildAPIAuthConfigMap(owner *automotivev1alpha1.OperatorConfig) *corev1.ConfigMap {
+	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      buildAPIAuthConfigMapName,
 			Namespace: operatorNamespace,
@@ -399,16 +402,87 @@ func (r *OperatorConfigReconciler) buildBuildAPIAuthConfigMap() *corev1.ConfigMa
 			},
 		},
 		Data: map[string]string{
-			"config": strings.TrimSpace(defaultAuthenticationConfig()), // Use 'config' key to match Jumpstarter
+			"config": generateAuthenticationConfigYAML(owner),
 		},
 	}
+
+	// Set owner reference so ConfigMap is managed by OperatorConfig
+	if owner != nil {
+		configMap.SetOwnerReferences([]metav1.OwnerReference{
+			{
+				APIVersion: owner.APIVersion,
+				Kind:       owner.Kind,
+				Name:       owner.Name,
+				UID:        owner.UID,
+				Controller: func() *bool { b := true; return &b }(),
+			},
+		})
+	}
+
+	return configMap
+}
+
+// generateAuthenticationConfigYAML generates YAML configuration from OperatorConfig spec.
+// Matches Jumpstarter's format: wrapped in "authentication:" key.
+func generateAuthenticationConfigYAML(config *automotivev1alpha1.OperatorConfig) string {
+	// Default configuration
+	internalPrefix := "internal:"
+	var jwtAuthenticators []interface{}
+	clientID := ""
+
+	// Override with spec if provided
+	if config != nil && config.Spec.BuildAPI != nil && config.Spec.BuildAPI.Authentication != nil {
+		auth := config.Spec.BuildAPI.Authentication
+
+		// Set internal prefix
+		if auth.Internal != nil && auth.Internal.Prefix != "" {
+			internalPrefix = auth.Internal.Prefix
+		}
+
+		// Set client ID
+		if auth.ClientID != "" {
+			clientID = auth.ClientID
+		}
+
+		// Convert JWT authenticators to a format that can be marshaled
+		if len(auth.JWT) > 0 {
+			jwtAuthenticators = make([]interface{}, len(auth.JWT))
+			for i, jwt := range auth.JWT {
+				jwtAuthenticators[i] = jwt
+			}
+		}
+	}
+
+	// Build the configuration structure
+	authConfig := map[string]interface{}{
+		"authentication": map[string]interface{}{
+			"internal": map[string]interface{}{
+				"prefix": internalPrefix,
+			},
+			"jwt": jwtAuthenticators,
+		},
+	}
+
+	// Add clientId only if set
+	if clientID != "" {
+		authConfig["authentication"].(map[string]interface{})["clientId"] = clientID
+	}
+
+	// Generate YAML
+	yamlBytes, err := yaml.Marshal(&authConfig)
+	if err != nil {
+		// Fallback to default if marshaling fails
+		return defaultAuthenticationConfig()
+	}
+
+	return strings.TrimSpace(string(yamlBytes))
 }
 
 func defaultAuthenticationConfig() string {
-	return `
-internal:
-  prefix: "internal:"
-jwt: []
+	return `authentication:
+  internal:
+    prefix: "internal:"
+  jwt: []
 `
 }
 

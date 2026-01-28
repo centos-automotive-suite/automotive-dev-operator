@@ -235,7 +235,7 @@ func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *au
 	}
 
 	// Ensure build-api auth configuration
-	if err := r.ensureBuildAPIAuthConfigMap(ctx); err != nil {
+	if err := r.ensureBuildAPIAuthConfigMap(ctx, owner); err != nil {
 		r.Log.Error(err, "Failed to ensure build-api auth config")
 		return fmt.Errorf("failed to ensure build-api auth config: %w", err)
 	}
@@ -408,21 +408,12 @@ func (r *OperatorConfigReconciler) ensureBuildAPIInternalJWTSecret(ctx context.C
 	return nil
 }
 
-func (r *OperatorConfigReconciler) ensureBuildAPIAuthConfigMap(ctx context.Context) error {
-	configMap := &corev1.ConfigMap{}
-	err := r.Get(ctx, client.ObjectKey{Name: buildAPIAuthConfigMapName, Namespace: operatorNamespace}, configMap)
-	if err == nil {
-		return nil
+func (r *OperatorConfigReconciler) ensureBuildAPIAuthConfigMap(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
+	configMap := r.buildBuildAPIAuthConfigMap(owner)
+	if err := r.createOrUpdate(ctx, configMap, owner); err != nil {
+		return fmt.Errorf("failed to create/update build-api auth configmap %s: %w", buildAPIAuthConfigMapName, err)
 	}
-	if !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to get build-api auth configmap %s: %w", buildAPIAuthConfigMapName, err)
-	}
-
-	configMap = r.buildBuildAPIAuthConfigMap()
-	if err := r.Create(ctx, configMap); err != nil {
-		return fmt.Errorf("failed to create build-api auth configmap %s: %w", buildAPIAuthConfigMapName, err)
-	}
-	r.Log.Info("Created build-api auth configmap", "name", buildAPIAuthConfigMapName)
+	r.Log.Info("Build-API auth configmap ensured", "name", buildAPIAuthConfigMapName)
 	return nil
 }
 

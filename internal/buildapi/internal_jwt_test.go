@@ -1,18 +1,12 @@
 package buildapi
 
 import (
-	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 )
-
-func TestInternalJWT(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Internal JWT Suite")
-}
 
 var _ = Describe("validateInternalJWT", func() {
 	var cfg *internalJWTConfig
@@ -36,9 +30,9 @@ var _ = Describe("validateInternalJWT", func() {
 
 	It("should reject token with empty subject", func() {
 		claims := jwt.RegisteredClaims{
-			Issuer:   "test-issuer",
-			Audience: jwt.ClaimStrings{"test-audience"},
-			Subject:  "", // Empty subject
+			Issuer:    "test-issuer",
+			Audience:  jwt.ClaimStrings{"test-audience"},
+			Subject:   "", // Empty subject
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -52,9 +46,9 @@ var _ = Describe("validateInternalJWT", func() {
 
 	It("should accept valid token with non-empty subject", func() {
 		claims := jwt.RegisteredClaims{
-			Issuer:   "test-issuer",
-			Audience: jwt.ClaimStrings{"test-audience"},
-			Subject:  "test-user",
+			Issuer:    "test-issuer",
+			Audience:  jwt.ClaimStrings{"test-audience"},
+			Subject:   "test-user",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -68,9 +62,9 @@ var _ = Describe("validateInternalJWT", func() {
 
 	It("should reject token with wrong issuer", func() {
 		claims := jwt.RegisteredClaims{
-			Issuer:   "wrong-issuer",
-			Audience: jwt.ClaimStrings{"test-audience"},
-			Subject:  "test-user",
+			Issuer:    "wrong-issuer",
+			Audience:  jwt.ClaimStrings{"test-audience"},
+			Subject:   "test-user",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -84,9 +78,9 @@ var _ = Describe("validateInternalJWT", func() {
 
 	It("should reject token with wrong audience", func() {
 		claims := jwt.RegisteredClaims{
-			Issuer:   "test-issuer",
-			Audience: jwt.ClaimStrings{"wrong-audience"},
-			Subject:  "test-user",
+			Issuer:    "test-issuer",
+			Audience:  jwt.ClaimStrings{"wrong-audience"},
+			Subject:   "test-user",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -100,9 +94,9 @@ var _ = Describe("validateInternalJWT", func() {
 
 	It("should reject expired token", func() {
 		claims := jwt.RegisteredClaims{
-			Issuer:   "test-issuer",
-			Audience: jwt.ClaimStrings{"test-audience"},
-			Subject:  "test-user",
+			Issuer:    "test-issuer",
+			Audience:  jwt.ClaimStrings{"test-audience"},
+			Subject:   "test-user",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -134,9 +128,9 @@ var _ = Describe("validateInternalJWT", func() {
 	It("should reject token with invalid signature", func() {
 		wrongKey := []byte("wrong-secret-key-32-bytes-long!")
 		claims := jwt.RegisteredClaims{
-			Issuer:   "test-issuer",
-			Audience: jwt.ClaimStrings{"test-audience"},
-			Subject:  "test-user",
+			Issuer:    "test-issuer",
+			Audience:  jwt.ClaimStrings{"test-audience"},
+			Subject:   "test-user",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

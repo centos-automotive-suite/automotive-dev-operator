@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apiserverv1beta1 "k8s.io/apiserver/pkg/apis/apiserver/v1beta1"
 )
 
 // BuildConfig defines configuration options for build operations
@@ -98,6 +99,33 @@ type BuildAPIConfig struct {
 	// Default: 120 (2 hours)
 	// +optional
 	MaxLogStreamDurationMinutes int32 `json:"maxLogStreamDurationMinutes,omitempty"`
+
+	// Authentication configuration for the Build API server.
+	// +optional
+	Authentication *AuthenticationConfig `json:"authentication,omitempty"`
+}
+
+// AuthenticationConfig defines authentication methods for the Build API.
+type AuthenticationConfig struct {
+	// Internal authentication configuration.
+	// +optional
+	Internal *InternalAuthConfig `json:"internal,omitempty"`
+
+	// JWT authentication configuration for OIDC providers.
+	// +optional
+	JWT []apiserverv1beta1.JWTAuthenticator `json:"jwt,omitempty"`
+
+	// OIDC client ID for caib CLI.
+	// +optional
+	ClientID string `json:"clientId,omitempty"`
+}
+
+// InternalAuthConfig defines the built-in authentication configuration.
+type InternalAuthConfig struct {
+	// Prefix to add to the subject claim of issued tokens.
+	// +kubebuilder:default="internal:"
+	// +optional
+	Prefix string `json:"prefix,omitempty"`
 }
 
 // OperatorConfigSpec defines the desired state of OperatorConfig

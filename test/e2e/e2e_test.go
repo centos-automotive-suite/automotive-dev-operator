@@ -17,7 +17,10 @@ limitations under the License.
 package e2e
 
 import (
+	"crypto/tls"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -356,45 +359,50 @@ var _ = Describe("OIDC Authentication", Ordered, func() {
 			apiURL := "https://" + strings.TrimSpace(string(output))
 
 			By("checking /v1/auth/config endpoint returns 404 when OIDC not configured")
-			cmd = exec.Command("curl", "-k", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-				apiURL+"/v1/auth/config")
-			output, err = utils.Run(cmd)
+			client := &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				},
+			}
+			resp, err := client.Get(apiURL + "/v1/auth/config")
 			Expect(err).NotTo(HaveOccurred())
+			defer func() {
+				_ = resp.Body.Close()
+			}()
 			// Should return 404 or 200 with empty JWT array
-			statusCode := strings.TrimSpace(string(output))
-			Expect(statusCode).To(Or(Equal("404"), Equal("200")))
+			statusCode := resp.StatusCode
+			Expect(statusCode).To(Or(Equal(404), Equal(200)))
 		})
 
 		It("should handle OIDC configuration when provided", func() {
-			By("creating OIDC ConfigMap")
-			oidcConfigYAML := `
-apiVersion: v1
-kind: ConfigMap
+			By("creating OperatorConfig with OIDC authentication")
+			operatorConfigYAML := `
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: OperatorConfig
 metadata:
-  name: ado-build-api-authentication
+  name: config
   namespace: automotive-dev-operator-system
-data:
-  authentication.yaml: |
-    apiVersion: apiserver.config.k8s.io/v1beta1
-    kind: AuthenticationConfiguration
-    jwt:
-      - issuer:
-          url: https://issuer.example.com
-          audiences:
-            - test-audience
-        claimMappings:
-          username:
-            claim: preferred_username
-            prefix: ""
-    clientId: test-client-id
+spec:
+  buildAPI:
+    authentication:
+      clientId: test-client-id
+      jwt:
+        - issuer:
+            url: https://issuer.example.com
+            audiences:
+              - test-audience
+          claimMappings:
+            username:
+              claim: preferred_username
+              prefix: ""
 `
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
-			cmd.Stdin = strings.NewReader(oidcConfigYAML)
+			cmd.Stdin = strings.NewReader(operatorConfigYAML)
 			_, err := utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
-			By("waiting for Build API to reload configuration")
-			time.Sleep(5 * time.Second)
+			By("waiting for operator to reconcile and Build API to reload configuration")
+			time.Sleep(10 * time.Second)
 
 			By("checking /v1/auth/config endpoint returns OIDC config")
 			cmd = exec.Command("kubectl", "get", "route", "ado-build-api",
@@ -405,16 +413,26 @@ data:
 			}
 			apiURL := "https://" + strings.TrimSpace(string(output))
 
-			cmd = exec.Command("curl", "-k", "-s", apiURL+"/v1/auth/config")
-			output, err = utils.Run(cmd)
+			client := &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				},
+			}
+			resp, err := client.Get(apiURL + "/v1/auth/config")
 			Expect(err).NotTo(HaveOccurred())
-			response := string(output)
+			defer func() {
+				_ = resp.Body.Close()
+			}()
+			Expect(resp.StatusCode).To(Equal(200))
+			body, err := io.ReadAll(resp.Body)
+			Expect(err).NotTo(HaveOccurred())
+			response := string(body)
 			Expect(response).To(ContainSubstring("jwt"))
 			Expect(response).To(ContainSubstring("clientId"))
 
-			By("cleaning up OIDC ConfigMap")
-			cmd = exec.Command("kubectl", "delete", "configmap", "ado-build-api-authentication",
-				"-n", namespace, "--ignore-not-found=true")
+			By("cleaning up OIDC configuration from OperatorConfig")
+			cmd = exec.Command("kubectl", "patch", "operatorconfig", "config",
+				"-n", namespace, "--type=json", "-p", `[{"op": "remove", "path": "/spec/buildAPI/authentication"}]`)
 			_, _ = utils.Run(cmd)
 		})
 	})
