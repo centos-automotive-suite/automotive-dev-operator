@@ -31,6 +31,9 @@ WORKDIR /
 COPY --from=builder /workspace/manager .
 COPY --from=builder /workspace/build-api .
 COPY --from=builder /workspace/init-secrets .
+# Include CA bundle so OIDC discovery works without custom CA config
+COPY --from=builder /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/pki/tls/certs/ca-bundle.crt
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

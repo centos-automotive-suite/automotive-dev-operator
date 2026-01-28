@@ -42,3 +42,23 @@ spec:
     #   operator: "Equal"
     #   value: "automotive"
     #   effect: "NoExecute"
+
+  # BuildAPI configuration for the Build API server
+  buildAPI:
+    # Optional: Authentication configuration for OIDC/JWT providers
+    # authentication:
+    #   # OIDC client ID for caib CLI
+    #   clientId: "caib-cli"
+    #   # Internal authentication configuration
+    #   internal:
+    #     prefix: "internal:"
+    #   # JWT/OIDC authentication providers
+    #   jwt:
+    #     - issuer:
+    #         url: "https://sso.redhat.com/auth/realms/EmployeeIDP"
+    #         audiences:
+    #           - "caib-cli"
+    #       claimMappings:
+    #         username:
+    #           claim: "preferred_username"
+    #           prefix: ""
