@@ -4,6 +4,8 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,6 +53,52 @@ func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.httpClie
 
 // WithAuthToken sets an authentication token for API requests.
 func WithAuthToken(t string) Option { return func(c *Client) { c.authToken = t } }
+
+// WithInsecureTLS skips TLS certificate verification (use only for testing)
+func WithInsecureTLS() Option {
+	return func(c *Client) {
+		if c.httpClient.Transport == nil {
+			// Clone default transport to preserve proxy, HTTP/2, connection pooling, and timeout settings
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			c.httpClient.Transport = transport
+		} else if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
+			if transport.TLSClientConfig == nil {
+				transport.TLSClientConfig = &tls.Config{}
+			}
+			transport.TLSClientConfig.InsecureSkipVerify = true
+		}
+	}
+}
+
+// WithCACertificate configures TLS to use a custom CA certificate
+func WithCACertificate(caCertPath string) Option {
+	return func(c *Client) {
+		caCert, err := os.ReadFile(caCertPath)
+		if err != nil {
+			// If file doesn't exist, skip (will use system CAs)
+			return
+		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			// If parsing fails, skip (will use system CAs)
+			return
+		}
+		if c.httpClient.Transport == nil {
+			// Clone default transport to preserve proxy, HTTP/2, connection pooling, and timeout settings
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.TLSClientConfig = &tls.Config{
+				RootCAs: caCertPool,
+			}
+			c.httpClient.Transport = transport
+		} else if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
+			if transport.TLSClientConfig == nil {
+				transport.TLSClientConfig = &tls.Config{}
+			}
+			transport.TLSClientConfig.RootCAs = caCertPool
+		}
+	}
+}
 
 // CreateBuild submits a new build request to the API server.
 //

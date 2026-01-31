@@ -25,6 +25,7 @@ import (
 	"github.com/containers/image/v5/types"
 	"gopkg.in/yaml.v3"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/auth"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/catalog"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
@@ -88,10 +89,46 @@ var (
 )
 
 // createBuildAPIClient creates a build API client with authentication token from flags or kubeconfig
+// It will attempt OIDC re-authentication if token is missing or expired
 func createBuildAPIClient(serverURL string, authToken *string) (*buildapiclient.Client, error) {
-	if strings.TrimSpace(*authToken) == "" {
-		if tok, err := loadTokenFromKubeconfig(); err == nil && strings.TrimSpace(tok) != "" {
-			*authToken = tok
+	ctx := context.Background()
+
+	explicitToken := strings.TrimSpace(*authToken) != "" || os.Getenv("CAIB_TOKEN") != ""
+
+	// If no explicit token, try OIDC if config is available
+	if !explicitToken {
+		token, didAuth, err := auth.GetTokenWithReauth(ctx, serverURL, "")
+		if err != nil {
+			// OIDC is configured but failed - don't silently fall back to kubeconfig
+			// This indicates a real authentication failure that should be reported
+			// Falling back could authenticate with an unexpected identity
+			fmt.Printf("Error: OIDC authentication failed: %v\n", err)
+			// Only try kubeconfig as last resort, but warn the user
+			fmt.Println("Attempting kubeconfig fallback (this may use a different identity)")
+			if tok, err := loadTokenFromKubeconfig(); err == nil && strings.TrimSpace(tok) != "" {
+				*authToken = tok
+			} else {
+				// No kubeconfig available either - return error
+				return nil, fmt.Errorf("OIDC authentication failed and no kubeconfig token available: %w", err)
+			}
+		} else if token != "" {
+			// OIDC succeeded
+			*authToken = token
+			if didAuth {
+				fmt.Println("OIDC authentication successful")
+			}
+		} else {
+			// OIDC not configured (no error, no token) - safe to fall back to kubeconfig
+			if tok, err := loadTokenFromKubeconfig(); err == nil && strings.TrimSpace(tok) != "" {
+				*authToken = tok
+			}
+		}
+	} else {
+		// Token was explicitly provided, use it (but still try kubeconfig if empty)
+		if strings.TrimSpace(*authToken) == "" {
+			if tok, err := loadTokenFromKubeconfig(); err == nil && strings.TrimSpace(tok) != "" {
+				*authToken = tok
+			}
 		}
 	}
 
@@ -99,7 +136,85 @@ func createBuildAPIClient(serverURL string, authToken *string) (*buildapiclient.
 	if strings.TrimSpace(*authToken) != "" {
 		opts = append(opts, buildapiclient.WithAuthToken(strings.TrimSpace(*authToken)))
 	}
+
+	// Configure TLS
+	// Check for custom CA certificate
+	if caCertFile := os.Getenv("SSL_CERT_FILE"); caCertFile != "" {
+		opts = append(opts, buildapiclient.WithCACertificate(caCertFile))
+	} else if caCertFile := os.Getenv("REQUESTS_CA_BUNDLE"); caCertFile != "" {
+		opts = append(opts, buildapiclient.WithCACertificate(caCertFile))
+	}
+
 	return buildapiclient.New(serverURL, opts...)
+}
+
+// executeWithReauth executes an API call and automatically retries with re-authentication on auth errors.
+// On 401: first retries with OIDC re-auth; if that still returns 401, falls back to kubeconfig token and retries once.
+func executeWithReauth(serverURL string, authToken *string, fn func(*buildapiclient.Client) error) error {
+	ctx := context.Background()
+
+	client, err := createBuildAPIClient(serverURL, authToken)
+	if err != nil {
+		return err
+	}
+
+	err = fn(client)
+	if err == nil {
+		return nil
+	}
+
+	if !auth.IsAuthError(err) {
+		return err
+	}
+
+	// Auth error (401) - try re-authentication; token may be rejected, not necessarily expired
+	fmt.Println("Authentication failed (401), re-authenticating...")
+
+	newToken, _, err := auth.GetTokenWithReauth(ctx, serverURL, *authToken)
+	if err != nil {
+		return fmt.Errorf("re-authentication failed: %w", err)
+	}
+
+	*authToken = newToken
+	// If re-auth returned no token (API says OIDC not configured), try kubeconfig before retrying
+	if strings.TrimSpace(*authToken) == "" {
+		if tok, kerr := loadTokenFromKubeconfig(); kerr == nil && strings.TrimSpace(tok) != "" {
+			*authToken = tok
+			client, err = createBuildAPIClient(serverURL, authToken)
+			if err != nil {
+				return err
+			}
+			fmt.Println("Using kubeconfig token, retrying...")
+			return fn(client)
+		}
+	}
+
+	client, err = createBuildAPIClient(serverURL, authToken)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Retrying request...")
+	err = fn(client)
+	if err == nil {
+		return nil
+	}
+
+	// Still 401 after OIDC re-auth (e.g. server OIDC broken, or wrong client/audience) - try kubeconfig fallback
+	if !auth.IsAuthError(err) {
+		return err
+	}
+	if tok, kerr := loadTokenFromKubeconfig(); kerr == nil && strings.TrimSpace(tok) != "" {
+		*authToken = tok
+		client, err = createBuildAPIClient(serverURL, authToken)
+		if err != nil {
+			return err
+		}
+		fmt.Println("Attempting kubeconfig fallback...")
+		return fn(client)
+	}
+
+	return err
 }
 
 // extractRegistryCredentials extracts registry URL and returns registry URL and credentials from env vars
@@ -168,7 +283,6 @@ func downloadOCIArtifactIfRequested(output, exportOCI, registryUsername, registr
 		handleError(fmt.Errorf("failed to download OCI artifact: %w", err))
 	}
 }
-
 func main() {
 	rootCmd := &cobra.Command{
 		Use:     "caib",
@@ -1444,12 +1558,13 @@ func runList(_ *cobra.Command, _ []string) {
 		fmt.Println("Error: --server is required (or set CAIB_SERVER)")
 		os.Exit(1)
 	}
-	api, err := createBuildAPIClient(serverURL, &authToken)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	items, err := api.ListBuilds(ctx)
+
+	var items []buildapitypes.BuildListItem
+	err := executeWithReauth(serverURL, &authToken, func(api *buildapiclient.Client) error {
+		var err error
+		items, err = api.ListBuilds(ctx)
+		return err
+	})
 	if err != nil {
 		fmt.Printf("Error listing ImageBuilds: %v\n", err)
 		os.Exit(1)

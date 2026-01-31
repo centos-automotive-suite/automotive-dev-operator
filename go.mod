@@ -7,9 +7,11 @@ toolchain go1.24.4
 require (
 	github.com/containers/image/v5 v5.36.2
 	github.com/gin-gonic/gin v1.10.1
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/onsi/ginkgo/v2 v2.23.4
 	github.com/onsi/gomega v1.36.3
 	k8s.io/apimachinery v0.33.3
+	k8s.io/apiserver v0.33.3
 	k8s.io/client-go v0.33.3
 	sigs.k8s.io/controller-runtime v0.19.1
 )
@@ -32,6 +34,7 @@ require (
 	github.com/containers/libtrust v0.0.0-20230121012942-c1716e8a8d01 // indirect
 	github.com/containers/ocicrypt v1.2.1 // indirect
 	github.com/containers/storage v1.59.1 // indirect
+	github.com/coreos/go-oidc v2.3.0+incompatible // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
@@ -68,6 +71,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/opencontainers/runtime-spec v1.2.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/pquerna/cachecontrol v0.1.0 // indirect
 	github.com/proglottis/gpgme v0.1.4 // indirect
 	github.com/prometheus/statsd_exporter v0.28.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
@@ -91,7 +95,7 @@ require (
 	golang.org/x/arch v0.21.0 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
 	google.golang.org/api v0.243.0 // indirect
-	k8s.io/apiserver v0.33.3 // indirect
+	gopkg.in/go-jose/go-jose.v2 v2.6.3 // indirect
 	knative.dev/pkg v0.0.0-20250716115900-19d3cc2da0b9 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.6.0 // indirect
@@ -177,5 +181,5 @@ require (
 	k8s.io/utils v0.0.0-20250604170112-4c0f3b243397
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.32.0 // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
+	sigs.k8s.io/yaml v1.6.0
 )
