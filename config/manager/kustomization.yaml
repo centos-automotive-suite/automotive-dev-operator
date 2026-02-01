@@ -6,5 +6,5 @@ configurations:
 - kustomizeconfig.yaml
 images:
 - name: controller
-  newName: default-route-openshift-image-registry.apps.automotive1.ocp.automotive.sig.centos.org/automotive-dev-operator-system/automotive-dev-operator
+  newName: quay.io/rh-sdv-cloud/automotive-dev-operator
   newTag: latest

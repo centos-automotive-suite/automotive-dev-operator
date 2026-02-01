@@ -1,0 +1,134 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: imagereseals.automotive.sdv.cloud.redhat.com
+spec:
+  group: automotive.sdv.cloud.redhat.com
+  names:
+    kind: ImageReseal
+    listKind: ImageResealList
+    plural: imagereseals
+    singular: imagereseal
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.sourceContainer
+      name: Source
+      type: string
+    - jsonPath: .spec.targetContainer
+      name: Target
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ImageReseal is the Schema for the imagereseals API
+          It triggers a reseal operation on a bootc container image, re-signing it with a new Ed25519 key
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ImageResealSpec defines the desired state of ImageReseal
+            properties:
+              automotiveImageBuilder:
+                default: quay.io/centos-sig-automotive/automotive-image-builder:latest
+                description: AutomotiveImageBuilder is the AIB container image to
+                  use for the reseal operation
+                type: string
+              builderImage:
+                description: |-
+                  BuilderImage is the osbuild builder container image to use
+                  Required for reseal operations - the builder runs rpm-ostree compose
+                type: string
+              envSecretRef:
+                description: |-
+                  EnvSecretRef references a secret containing registry credentials
+                  The secret can contain REGISTRY_URL, REGISTRY_USERNAME, REGISTRY_PASSWORD
+                type: string
+              sealKeyPasswordSecretRef:
+                description: |-
+                  SealKeyPasswordSecretRef references a secret containing the password for encrypted keys
+                  The secret should have a key named "password"
+                type: string
+              sealKeySecretRef:
+                description: |-
+                  SealKeySecretRef references a secret containing the Ed25519 private key
+                  The secret should have a key named "private-key" with the PEM-encoded key
+                  If not provided, an ephemeral key will be generated for one-time use
+                type: string
+              sourceContainer:
+                description: SourceContainer is the bootc container image to reseal
+                type: string
+              storageClass:
+                description: StorageClass for the workspace PVC used during reseal
+                type: string
+              targetContainer:
+                description: TargetContainer is the registry URL to push the resealed
+                  container
+                type: string
+            required:
+            - builderImage
+            - sourceContainer
+            - targetContainer
+            type: object
+          status:
+            description: ImageResealStatus defines the observed state of ImageReseal
+            properties:
+              completionTime:
+                description: CompletionTime is when the reseal operation completed
+                format: date-time
+                type: string
+              message:
+                description: Message provides additional details about the current
+                  phase
+                type: string
+              phase:
+                description: Phase represents the current phase of the reseal operation
+                enum:
+                - Pending
+                - Running
+                - Completed
+                - Failed
+                type: string
+              sealedContainer:
+                description: SealedContainer is the URL of the resealed container
+                  after completion
+                type: string
+              startTime:
+                description: StartTime is when the reseal operation started
+                format: date-time
+                type: string
+              taskRunName:
+                description: TaskRunName is the name of the Tekton TaskRun executing
+                  this reseal
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -612,6 +612,11 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					Description: "The Jumpstarter lease ID acquired during flash (empty if flash not enabled)",
 					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.flash-image.results.lease-id)"},
 				},
+				{
+					Name:        "builder-image-ref",
+					Description: "The builder image reference used for the build",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.prepare-builder.results.builder-image-ref)"},
+				},
 			},
 			Tasks: []tektonv1.PipelineTask{
 				{
@@ -1287,6 +1292,148 @@ func GenerateFlashTask(namespace string) *tektonv1.Task {
 					},
 					Script:  FlashImageScript,
 					Timeout: &metav1.Duration{Duration: 4 * time.Hour},
+				},
+			},
+		},
+	}
+}
+
+// GenerateResealTask creates a Tekton Task for resealing bootc container images
+func GenerateResealTask(namespace string) *tektonv1.Task {
+	return &tektonv1.Task{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1",
+			Kind:       "Task",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "reseal-bootc-image",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "automotive-dev-operator",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+			},
+		},
+		Spec: tektonv1.TaskSpec{
+			Params: []tektonv1.ParamSpec{
+				{
+					Name:        "source-container",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Source bootc container to reseal",
+				},
+				{
+					Name:        "container-push",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Registry URL to push resealed container",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "builder-image",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Builder container image for reseal operations",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "automotive-image-builder",
+					Type:        tektonv1.ParamTypeString,
+					Description: "AIB container image to use",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: AutomotiveImageBuilder,
+					},
+				},
+			},
+			Results: []tektonv1.TaskResult{
+				{
+					Name:        "sealed-container",
+					Description: "Reference to the resealed container image",
+				},
+			},
+			Workspaces: []tektonv1.WorkspaceDeclaration{
+				{
+					Name:        "registry-auth",
+					Description: "Optional: Secret containing registry credentials",
+					MountPath:   "/workspace/registry-auth",
+					Optional:    true,
+				},
+				{
+					Name:        "seal-key",
+					Description: "Optional: Secret containing Ed25519 private key for sealing",
+					MountPath:   "/workspace/seal-key",
+					Optional:    true,
+				},
+				{
+					Name:        "seal-key-password",
+					Description: "Optional: Secret containing password for the seal key",
+					MountPath:   "/workspace/seal-key-password",
+					Optional:    true,
+				},
+			},
+			StepTemplate: &tektonv1.StepTemplate{
+				SecurityContext: &corev1.SecurityContext{
+					Privileged: ptr.To(true),
+					SELinuxOptions: &corev1.SELinuxOptions{
+						Type: "unconfined_t",
+					},
+				},
+			},
+			Steps: []tektonv1.Step{
+				{
+					Name:    "reseal",
+					Image:   "$(params.automotive-image-builder)",
+					Timeout: &metav1.Duration{Duration: 30 * time.Minute},
+					Env: []corev1.EnvVar{
+						{
+							Name:  "BUILDER_IMAGE",
+							Value: "$(params.builder-image)",
+						},
+					},
+					Script: ResealImageScript,
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "dev",
+							MountPath: "/dev",
+						},
+						{
+							Name:      "container-storage",
+							MountPath: "/var/lib/containers/storage",
+						},
+						{
+							Name:      "run-osbuild",
+							MountPath: "/run/osbuild",
+						},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "dev",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{
+							Path: "/dev",
+						},
+					},
+				},
+				{
+					Name: "container-storage",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{
+							Medium: corev1.StorageMediumMemory,
+						},
+					},
+				},
+				{
+					Name: "run-osbuild",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{
+							Medium: corev1.StorageMediumMemory,
+						},
+					},
 				},
 			},
 		},

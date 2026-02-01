@@ -29,3 +29,8 @@ var BuildBuilderScript string
 
 // FlashImageScript contains the embedded shell script for flashing images via Jumpstarter.
 var FlashImageScript string
+
+//go:embed scripts/reseal_image.sh
+
+// ResealImageScript contains the embedded shell script for resealing bootc container images.
+var ResealImageScript string
