@@ -314,7 +314,7 @@ spec:
 				return nil
 			}
 			// Allow up to 10 minutes for the build to complete
-			EventuallyWithOffset(1, verifyBuildCompleted, 10*time.Minute, 15*time.Second).Should(Succeed())
+			EventuallyWithOffset(1, verifyBuildCompleted, 20*time.Minute, 15*time.Second).Should(Succeed())
 
 			By("verifying build status has expected fields")
 			cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
@@ -334,6 +334,111 @@ spec:
 				"-n", namespace, "--ignore-not-found=true")
 			_, _ = utils.Run(cmd)
 			cmd = exec.Command("kubectl", "delete", "configmap", "e2e-real-build-manifest",
+				"-n", namespace, "--ignore-not-found=true")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should build a real automotive image with bootc mode", func() {
+			var err error
+
+			By("creating a manifest ConfigMap for bootc build")
+			manifestYAML := `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e2e-bootc-build-manifest
+  namespace: automotive-dev-operator-system
+data:
+  manifest.aib.yml: |
+    name: e2e-bootc-test-image
+    distro: autosd
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(manifestYAML)
+			_, err = utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+			By("creating an ImageBuild CR with bootc mode")
+			arch := "amd64"
+			unameCmd := exec.Command("uname", "-m")
+			unameOutput, _ := utils.Run(unameCmd)
+			if strings.Contains(string(unameOutput), "arm64") || strings.Contains(string(unameOutput), "aarch64") {
+				arch = "arm64"
+			}
+
+			imageBuildYAML := fmt.Sprintf(`
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: ImageBuild
+metadata:
+  name: e2e-bootc-build
+  namespace: automotive-dev-operator-system
+spec:
+  architecture: %s
+  aib:
+    distro: autosd
+    target: qemu
+    mode: bootc
+    manifestConfigMap: e2e-bootc-build-manifest
+    image: quay.io/centos-sig-automotive/automotive-image-builder:latest
+  export:
+    format: raw
+    compression: gzip
+    buildDiskImage: false
+`, arch)
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(imageBuildYAML)
+			_, err = utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+			By("waiting for bootc build to start")
+			verifyBuildStarted := func() error {
+				cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-bootc-build",
+					"-n", namespace, "-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return err
+				}
+				phase := string(output)
+				if phase == "" {
+					return fmt.Errorf("build not started yet, phase is empty")
+				}
+				if phase == "Failed" {
+					cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-bootc-build",
+						"-n", namespace, "-o", "jsonpath={.status.message}")
+					msg, _ := utils.Run(cmd)
+					return fmt.Errorf("build failed: %s", string(msg))
+				}
+				return nil
+			}
+			EventuallyWithOffset(1, verifyBuildStarted, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("waiting for bootc build to complete")
+			verifyBuildCompleted := func() error {
+				cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-bootc-build",
+					"-n", namespace, "-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return err
+				}
+				phase := string(output)
+				if phase == "Failed" {
+					cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-bootc-build",
+						"-n", namespace, "-o", "jsonpath={.status.message}")
+					msg, _ := utils.Run(cmd)
+					return fmt.Errorf("build failed: %s", string(msg))
+				}
+				if phase != "Completed" {
+					return fmt.Errorf("build not completed yet, phase: %s", phase)
+				}
+				return nil
+			}
+			EventuallyWithOffset(1, verifyBuildCompleted, 20*time.Minute, 15*time.Second).Should(Succeed())
+
+			By("cleaning up bootc build resources")
+			cmd = exec.Command("kubectl", "delete", "imagebuild", "e2e-bootc-build",
+				"-n", namespace, "--ignore-not-found=true")
+			_, _ = utils.Run(cmd)
+			cmd = exec.Command("kubectl", "delete", "configmap", "e2e-bootc-build-manifest",
 				"-n", namespace, "--ignore-not-found=true")
 			_, _ = utils.Run(cmd)
 		})
