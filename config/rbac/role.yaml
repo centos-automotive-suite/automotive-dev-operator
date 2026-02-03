@@ -74,6 +74,7 @@ rules:
   resources:
   - catalogimages
   - imagebuilds
+  - imagereseals
   - images
   - operatorconfigs
   verbs:
@@ -89,6 +90,7 @@ rules:
   resources:
   - catalogimages/finalizers
   - imagebuilds/finalizers
+  - imagereseals/finalizers
   - images/finalizers
   - operatorconfigs/finalizers
   verbs:
@@ -98,6 +100,7 @@ rules:
   resources:
   - catalogimages/status
   - imagebuilds/status
+  - imagereseals/status
   - images/status
   - operatorconfigs/status
   verbs:

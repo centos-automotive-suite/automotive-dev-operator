@@ -34,9 +34,10 @@ import (
 )
 
 const (
-	archAMD64   = "amd64"
-	archARM64   = "arm64"
-	phaseFailed = "Failed"
+	archAMD64      = "amd64"
+	archARM64      = "arm64"
+	phaseFailed    = "Failed"
+	phaseCompleted = "Completed"
 )
 
 // getDefaultArch returns the current system architecture in caib format
@@ -86,6 +87,12 @@ var (
 	flashName         string
 	exporterSelector  string
 	leaseDuration     string
+
+	// Reseal options
+	resealName    string
+	sealKeyFile   string
+	sealKeyPasswd string
+	fromBuild     string
 )
 
 // createBuildAPIClient creates a build API client with authentication token from flags or kubeconfig
@@ -395,6 +402,42 @@ Examples:
 		Run:  runFlash,
 	}
 
+	// Reseal command - re-seal a bootc container with a new key
+	resealCmd := &cobra.Command{
+		Use:   "reseal <source-container> <target-container>",
+		Short: "Re-seal a bootc container with a new Ed25519 key",
+		Long: `Re-seal a bootc container image with a new Ed25519 signing key.
+
+Sealed bootc images have their rootfs cryptographically signed. The initramfs
+contains the public key used to verify the rootfs at boot time. If the image
+is modified after sealing, boot verification will fail.
+
+This command re-seals the image with a new key, useful for:
+- Key rotation
+- Signing images with organization-specific keys
+- Creating ephemeral keys for testing
+
+A builder image is required. You can either:
+- Use --from-build to inherit from a previous ImageBuild (recommended)
+- Use --builder-image to specify explicitly
+
+If no seal key is provided, an ephemeral key is generated for one-time use.
+
+Examples:
+  # Reseal using builder from original build (recommended)
+  caib reseal quay.io/org/my-os:latest quay.io/org/my-os:resealed --from-build my-build
+
+  # Reseal with explicit builder image
+  caib reseal quay.io/org/my-os:latest quay.io/org/my-os:resealed \
+    --builder-image quay.io/centos-sig-automotive/aib-build:autosd
+
+  # Reseal with a specific seal key
+  caib reseal quay.io/org/my-os:latest quay.io/org/my-os:resealed \
+    --from-build my-build --key private.pem`,
+		Args: cobra.ExactArgs(2),
+		Run:  runReseal,
+	}
+
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List existing ImageBuilds",
@@ -507,8 +550,25 @@ Examples:
 	flashCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", true, "wait for flash to complete")
 	_ = flashCmd.MarkFlagRequired("client")
 
+	// reseal command flags
+	resealCmd.Flags().StringVar(&serverURL, "server", os.Getenv("CAIB_SERVER"), "REST API server base URL")
+	resealCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	resealCmd.Flags().StringVarP(&resealName, "name", "n", "", "name for the reseal job (auto-generated if omitted)")
+	resealCmd.Flags().StringVar(&sealKeyFile, "key", "", "path to Ed25519 private key file (optional, ephemeral key if not provided)")
+	resealCmd.Flags().StringVar(&sealKeyPasswd, "passwd", "", "password source for encrypted key (see openssl-passphrase-options)")
+	resealCmd.Flags().StringVar(&builderImage, "builder-image", "", "explicit osbuild builder container (overrides --from-build)")
+	resealCmd.Flags().StringVar(&fromBuild, "from-build", "", "inherit builder image from an existing ImageBuild")
+	resealCmd.Flags().StringVar(
+		&automotiveImageBuilder, "aib-image",
+		"quay.io/centos-sig-automotive/automotive-image-builder:latest", "AIB container image",
+	)
+	resealCmd.Flags().StringVar(&storageClass, "storage-class", "", "Kubernetes storage class")
+	resealCmd.Flags().IntVar(&timeout, "timeout", 30, "timeout in minutes")
+	resealCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", true, "wait for reseal to complete")
+	resealCmd.Flags().BoolVarP(&followLogs, "follow", "f", true, "follow reseal logs")
+
 	// Add all commands
-	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, flashCmd, catalog.NewCatalogCmd())
+	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, flashCmd, resealCmd, catalog.NewCatalogCmd())
 	// Add deprecated aliases for backwards compatibility
 	rootCmd.AddCommand(buildBootcAliasCmd, buildLegacyAliasCmd, buildTraditionalAliasCmd)
 
@@ -1275,7 +1335,7 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 			}
 
 			// Handle terminal build states
-			if st.Phase == "Completed" {
+			if st.Phase == phaseCompleted {
 				flashWasExecuted := strings.Contains(st.Message, "flash")
 				if flashWasExecuted {
 					fmt.Println("\n" + strings.Repeat("=", 50))
@@ -1870,7 +1930,7 @@ func waitForFlashCompletion(ctx context.Context, api *buildapiclient.Client, nam
 			}
 
 			// Handle terminal states
-			if st.Phase == "Completed" {
+			if st.Phase == phaseCompleted {
 				fmt.Println("Flash completed successfully!")
 				return
 			}
@@ -1901,6 +1961,148 @@ func waitForFlashCompletion(ctx context.Context, api *buildapiclient.Client, nam
 				if err := tryFlashLogStreaming(ctx, logClient, name, streamState); err != nil {
 					streamState.retryCount++
 				}
+			}
+		}
+	}
+}
+
+// runReseal handles the 'reseal' command
+func runReseal(_ *cobra.Command, args []string) {
+	ctx := context.Background()
+	sourceContainer := args[0]
+	targetContainer := args[1]
+
+	if serverURL == "" {
+		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER env)"))
+	}
+
+	api, err := createBuildAPIClient(serverURL, &authToken)
+	if err != nil {
+		handleError(err)
+	}
+
+	// Resolve builder image from --builder-image or --from-build
+	if builderImage == "" && fromBuild == "" {
+		handleError(fmt.Errorf("either --builder-image or --from-build is required"))
+	}
+
+	if builderImage == "" && fromBuild != "" {
+		// Fetch the ImageBuild to get its builder image
+		fmt.Printf("Looking up builder image from build: %s\n", fromBuild)
+		build, err := api.GetBuild(ctx, fromBuild)
+		if err != nil {
+			handleError(fmt.Errorf("failed to get build %s: %w", fromBuild, err))
+		}
+		if build.BuilderImageUsed == "" {
+			handleError(fmt.Errorf("build %s does not have a recorded builder image", fromBuild))
+		}
+		builderImage = build.BuilderImageUsed
+		fmt.Printf("Using builder image from build: %s\n", builderImage)
+	}
+
+	// Auto-generate name if not provided
+	if resealName == "" {
+		// Extract image name from target container ref
+		parts := strings.Split(targetContainer, "/")
+		imagePart := parts[len(parts)-1]
+		imagePart = strings.Split(imagePart, ":")[0] // remove tag
+		resealName = fmt.Sprintf("reseal-%s-%s", imagePart, time.Now().Format("20060102-150405"))
+		fmt.Printf("Auto-generated reseal name: %s\n", resealName)
+	}
+
+	// Read seal key from file if provided
+	var sealKey string
+	if sealKeyFile != "" {
+		keyBytes, err := os.ReadFile(sealKeyFile)
+		if err != nil {
+			handleError(fmt.Errorf("failed to read seal key file: %w", err))
+		}
+		sealKey = string(keyBytes)
+		fmt.Println("Using seal key from file")
+	} else {
+		fmt.Println("No seal key provided - ephemeral key will be generated")
+	}
+
+	// Extract registry credentials
+	effectiveRegistryURL, registryUsername, registryPassword := extractRegistryCredentials(sourceContainer, targetContainer)
+
+	// Validate credentials
+	if err := validateRegistryCredentials(effectiveRegistryURL, registryUsername, registryPassword); err != nil {
+		handleError(err)
+	}
+
+	req := buildapitypes.ResealRequest{
+		Name:                   resealName,
+		SourceContainer:        sourceContainer,
+		TargetContainer:        targetContainer,
+		SealKey:                sealKey,
+		SealKeyPassword:        sealKeyPasswd,
+		BuilderImage:           builderImage,
+		AutomotiveImageBuilder: automotiveImageBuilder,
+		StorageClass:           storageClass,
+	}
+
+	if effectiveRegistryURL != "" && registryUsername != "" && registryPassword != "" {
+		req.RegistryCredentials = &buildapitypes.RegistryCredentials{
+			Enabled:     true,
+			AuthType:    "username-password",
+			RegistryURL: effectiveRegistryURL,
+			Username:    registryUsername,
+			Password:    registryPassword,
+		}
+	}
+
+	resp, err := api.CreateReseal(ctx, req)
+	if err != nil {
+		handleError(err)
+	}
+	fmt.Printf("Reseal job %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
+
+	if waitForBuild || followLogs {
+		waitForResealCompletion(ctx, api, resp.Name)
+	}
+}
+
+// waitForResealCompletion waits for a reseal job to complete
+func waitForResealCompletion(ctx context.Context, api *buildapiclient.Client, name string) {
+	fmt.Println("Waiting for reseal to complete...")
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var lastPhase, lastMessage string
+
+	for {
+		select {
+		case <-timeoutCtx.Done():
+			handleError(fmt.Errorf("timed out waiting for reseal"))
+		case <-ticker.C:
+			reqCtx, cancelReq := context.WithTimeout(ctx, 30*time.Second)
+			st, err := api.GetReseal(reqCtx, name)
+			cancelReq()
+			if err != nil {
+				fmt.Printf("status check failed: %v\n", err)
+				continue
+			}
+
+			// Update status display
+			if st.Phase != lastPhase || st.Message != lastMessage {
+				fmt.Printf("status: %s - %s\n", st.Phase, st.Message)
+				lastPhase = st.Phase
+				lastMessage = st.Message
+			}
+
+			// Handle terminal states
+			if st.Phase == phaseCompleted {
+				fmt.Println("Reseal completed successfully!")
+				if st.SealedContainer != "" {
+					fmt.Printf("Resealed container: %s\n", st.SealedContainer)
+				}
+				return
+			}
+			if st.Phase == phaseFailed {
+				handleError(fmt.Errorf("reseal failed: %s", st.Message))
 			}
 		}
 	}

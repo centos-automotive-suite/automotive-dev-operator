@@ -202,13 +202,14 @@ type FlashListItem struct {
 
 // BuildResponse is returned by POST and GET build operations
 type BuildResponse struct {
-	Name           string           `json:"name"`
-	Phase          string           `json:"phase"`
-	Message        string           `json:"message"`
-	RequestedBy    string           `json:"requestedBy,omitempty"`
-	StartTime      string           `json:"startTime,omitempty"`
-	CompletionTime string           `json:"completionTime,omitempty"`
-	Jumpstarter    *JumpstarterInfo `json:"jumpstarter,omitempty"`
+	Name             string           `json:"name"`
+	Phase            string           `json:"phase"`
+	Message          string           `json:"message"`
+	RequestedBy      string           `json:"requestedBy,omitempty"`
+	StartTime        string           `json:"startTime,omitempty"`
+	CompletionTime   string           `json:"completionTime,omitempty"`
+	Jumpstarter      *JumpstarterInfo `json:"jumpstarter,omitempty"`
+	BuilderImageUsed string           `json:"builderImageUsed,omitempty"`
 }
 
 // BuildListItem represents a build in the list API
@@ -233,4 +234,50 @@ type (
 type BuildTemplateResponse struct {
 	BuildRequest `json:",inline"`
 	SourceFiles  []string `json:"sourceFiles,omitempty"`
+}
+
+// ResealRequest is the payload to create a reseal operation via the REST API
+type ResealRequest struct {
+	// Name is the reseal job name
+	Name string `json:"name"`
+	// SourceContainer is the bootc container image to reseal
+	SourceContainer string `json:"sourceContainer"`
+	// TargetContainer is the registry URL to push the resealed container
+	TargetContainer string `json:"targetContainer"`
+	// SealKey is the Ed25519 private key PEM content (optional - ephemeral key generated if not provided)
+	SealKey string `json:"sealKey,omitempty"`
+	// SealKeyPassword is the password for encrypted private keys
+	SealKeyPassword string `json:"sealKeyPassword,omitempty"`
+	// BuilderImage is the osbuild builder container image to use
+	BuilderImage string `json:"builderImage,omitempty"`
+	// AutomotiveImageBuilder is the AIB container image to use
+	AutomotiveImageBuilder string `json:"automotiveImageBuilder,omitempty"`
+	// RegistryCredentials for source/target registry authentication
+	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
+	// StorageClass for the workspace PVC
+	StorageClass string `json:"storageClass,omitempty"`
+}
+
+// ResealResponse is returned by POST and GET reseal operations
+type ResealResponse struct {
+	Name            string `json:"name"`
+	Phase           string `json:"phase"`
+	Message         string `json:"message"`
+	SourceContainer string `json:"sourceContainer"`
+	TargetContainer string `json:"targetContainer"`
+	SealedContainer string `json:"sealedContainer,omitempty"`
+	StartTime       string `json:"startTime,omitempty"`
+	CompletionTime  string `json:"completionTime,omitempty"`
+	TaskRunName     string `json:"taskRunName,omitempty"`
+}
+
+// ResealListItem represents a reseal in the list API
+type ResealListItem struct {
+	Name            string `json:"name"`
+	Phase           string `json:"phase"`
+	Message         string `json:"message"`
+	SourceContainer string `json:"sourceContainer"`
+	TargetContainer string `json:"targetContainer"`
+	CreatedAt       string `json:"createdAt"`
+	CompletionTime  string `json:"completionTime,omitempty"`
 }

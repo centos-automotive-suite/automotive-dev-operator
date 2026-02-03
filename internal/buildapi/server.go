@@ -300,6 +300,14 @@ func (a *APIServer) createRouter() *gin.Engine {
 			flashGroup.GET("/:name/logs", a.handleFlashLogs)
 		}
 
+		resealGroup := v1.Group("/reseals")
+		resealGroup.Use(a.authMiddleware())
+		{
+			resealGroup.POST("", a.handleCreateReseal)
+			resealGroup.GET("", a.handleListReseals)
+			resealGroup.GET("/:name", a.handleGetReseal)
+		}
+
 		// Register catalog routes with authentication
 		catalogClient, err := a.getCatalogClient()
 		if err != nil {
@@ -882,6 +890,31 @@ func validateBuildRequest(req *BuildRequest, maxManifestSize int64) error {
 	return nil
 }
 
+func validateResealRequest(req *ResealRequest) error {
+	if req.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if req.SourceContainer == "" {
+		return fmt.Errorf("sourceContainer is required")
+	}
+	if req.TargetContainer == "" {
+		return fmt.Errorf("targetContainer is required")
+	}
+	if req.BuilderImage == "" {
+		return fmt.Errorf("builderImage is required for reseal operations")
+	}
+	if err := validateBuildName(req.Name); err != nil {
+		return err
+	}
+	if err := validateContainerRef(req.SourceContainer); err != nil {
+		return fmt.Errorf("invalid sourceContainer: %v", err)
+	}
+	if err := validateContainerRef(req.TargetContainer); err != nil {
+		return fmt.Errorf("invalid targetContainer: %v", err)
+	}
+	return nil
+}
+
 // applyBuildDefaults sets default values for build request fields
 func applyBuildDefaults(req *BuildRequest) error {
 	if req.Distro == "" {
@@ -987,6 +1020,124 @@ func setupBuildSecrets(
 	}
 
 	return envSecretRef, pushSecretName, nil
+}
+
+type resealSecretRefs struct {
+	envSecretRef             string
+	sealKeySecretRef         string
+	sealKeyPasswordSecretRef string
+}
+
+type resealSecretCleanup struct {
+	ctx         context.Context
+	k8sClient   client.Client
+	namespace   string
+	secretNames []string
+	enabled     bool
+}
+
+func newResealSecretCleanup(ctx context.Context, k8sClient client.Client, namespace string) *resealSecretCleanup {
+	return &resealSecretCleanup{
+		ctx:         ctx,
+		k8sClient:   k8sClient,
+		namespace:   namespace,
+		enabled:     true,
+		secretNames: make([]string, 0, 3),
+	}
+}
+
+func (c *resealSecretCleanup) Track(secretName string) {
+	if secretName != "" {
+		c.secretNames = append(c.secretNames, secretName)
+	}
+}
+
+func (c *resealSecretCleanup) Disable() {
+	c.enabled = false
+}
+
+func (c *resealSecretCleanup) Run() {
+	if !c.enabled {
+		return
+	}
+	for _, secretName := range c.secretNames {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: c.namespace,
+			},
+		}
+		if err := c.k8sClient.Delete(c.ctx, secret); err != nil && !k8serrors.IsNotFound(err) {
+			log.Printf("WARNING: failed to cleanup reseal secret %s: %v", secretName, err)
+		}
+	}
+}
+
+func setupResealSecrets(
+	ctx context.Context, k8sClient client.Client,
+	namespace string, req *ResealRequest,
+) (resealSecretRefs, *resealSecretCleanup, error) {
+	refs := resealSecretRefs{}
+	cleanup := newResealSecretCleanup(ctx, k8sClient, namespace)
+
+	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled {
+		envSecretRef, err := createRegistrySecret(ctx, k8sClient, namespace, req.Name+"-reseal", req.RegistryCredentials)
+		if err != nil {
+			return refs, cleanup, fmt.Errorf("error creating registry secret: %w", err)
+		}
+		refs.envSecretRef = envSecretRef
+		cleanup.Track(envSecretRef)
+	}
+
+	if req.SealKey != "" {
+		refs.sealKeySecretRef = req.Name + "-seal-key"
+		sealKeySecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      refs.sealKeySecretRef,
+				Namespace: namespace,
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by":                  "build-api",
+					"app.kubernetes.io/part-of":                     "automotive-dev",
+					"automotive.sdv.cloud.redhat.com/resource-type": "seal-key",
+					"automotive.sdv.cloud.redhat.com/reseal-name":   req.Name,
+				},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"private-key": []byte(req.SealKey),
+			},
+		}
+		if err := k8sClient.Create(ctx, sealKeySecret); err != nil {
+			return refs, cleanup, fmt.Errorf("error creating seal key secret: %w", err)
+		}
+		cleanup.Track(refs.sealKeySecretRef)
+	}
+
+	if req.SealKeyPassword != "" {
+		refs.sealKeyPasswordSecretRef = req.Name + "-seal-key-password"
+		passwordSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      refs.sealKeyPasswordSecretRef,
+				Namespace: namespace,
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by":                  "build-api",
+					"app.kubernetes.io/part-of":                     "automotive-dev",
+					"automotive.sdv.cloud.redhat.com/resource-type": "seal-key-password",
+					"automotive.sdv.cloud.redhat.com/reseal-name":   req.Name,
+				},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"password": []byte(req.SealKeyPassword),
+			},
+		}
+		if err := k8sClient.Create(ctx, passwordSecret); err != nil {
+			return refs, cleanup, fmt.Errorf("error creating seal key password secret: %w", err)
+		}
+		cleanup.Track(refs.sealKeyPasswordSecretRef)
+	}
+
+	return refs, cleanup, nil
 }
 
 // buildExportSpec creates ExportSpec configuration from build request
@@ -1276,7 +1427,8 @@ func getBuild(c *gin.Context, name string) {
 			}
 			return ""
 		}(),
-		Jumpstarter: jumpstarterInfo,
+		Jumpstarter:      jumpstarterInfo,
+		BuilderImageUsed: build.Status.BuilderImageUsed,
 	})
 }
 
@@ -2446,4 +2598,211 @@ func (a *APIServer) streamFlashLogs(c *gin.Context, name string) {
 
 	_, _ = c.Writer.Write([]byte("\n[Log streaming completed]\n"))
 	c.Writer.Flush()
+}
+
+// Reseal API handlers
+
+func (a *APIServer) handleCreateReseal(c *gin.Context) {
+	a.log.Info("create reseal", "reqID", c.GetString("reqID"))
+	a.createReseal(c)
+}
+
+func (a *APIServer) handleListReseals(c *gin.Context) {
+	a.log.Info("list reseals", "reqID", c.GetString("reqID"))
+	a.listReseals(c)
+}
+
+func (a *APIServer) handleGetReseal(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("get reseal", "reseal", name, "reqID", c.GetString("reqID"))
+	a.getReseal(c, name)
+}
+
+func (a *APIServer) createReseal(c *gin.Context) {
+	var req ResealRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		return
+	}
+
+	if err := validateResealRequest(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	ctx := c.Request.Context()
+	namespace := resolveNamespace()
+
+	// Check if ImageReseal already exists
+	existing := &automotivev1alpha1.ImageReseal{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: namespace}, existing); err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("ImageReseal %s already exists", req.Name)})
+		return
+	} else if !k8serrors.IsNotFound(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error checking existing reseal: %v", err)})
+		return
+	}
+
+	secretRefs, cleanup, err := setupResealSecrets(ctx, k8sClient, namespace, &req)
+	defer cleanup.Run()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Create the ImageReseal CR
+	imageReseal := &automotivev1alpha1.ImageReseal{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      req.Name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "build-api",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+			},
+		},
+		Spec: automotivev1alpha1.ImageResealSpec{
+			SourceContainer:          req.SourceContainer,
+			TargetContainer:          req.TargetContainer,
+			SealKeySecretRef:         secretRefs.sealKeySecretRef,
+			SealKeyPasswordSecretRef: secretRefs.sealKeyPasswordSecretRef,
+			AutomotiveImageBuilder:   req.AutomotiveImageBuilder,
+			BuilderImage:             req.BuilderImage,
+			EnvSecretRef:             secretRefs.envSecretRef,
+			StorageClass:             req.StorageClass,
+		},
+	}
+
+	if err := k8sClient.Create(ctx, imageReseal); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating ImageReseal: %v", err)})
+		return
+	}
+	cleanup.Disable()
+	setResealSecretOwnerRefs(ctx, k8sClient, namespace, imageReseal, secretRefs)
+
+	writeJSON(c, http.StatusAccepted, ResealResponse{
+		Name:            req.Name,
+		Phase:           phasePending,
+		Message:         "Reseal operation triggered",
+		SourceContainer: req.SourceContainer,
+		TargetContainer: req.TargetContainer,
+	})
+}
+
+func (a *APIServer) listReseals(c *gin.Context) {
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	ctx := c.Request.Context()
+	list := &automotivev1alpha1.ImageResealList{}
+	if err := k8sClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error listing reseals: %v", err)})
+		return
+	}
+
+	resp := make([]ResealListItem, 0, len(list.Items))
+	for _, r := range list.Items {
+		var compStr string
+		if r.Status.CompletionTime != nil {
+			compStr = r.Status.CompletionTime.Format(time.RFC3339)
+		}
+		resp = append(resp, ResealListItem{
+			Name:            r.Name,
+			Phase:           r.Status.Phase,
+			Message:         r.Status.Message,
+			SourceContainer: r.Spec.SourceContainer,
+			TargetContainer: r.Spec.TargetContainer,
+			CreatedAt:       r.CreationTimestamp.Format(time.RFC3339),
+			CompletionTime:  compStr,
+		})
+	}
+	writeJSON(c, http.StatusOK, resp)
+}
+
+func (a *APIServer) getReseal(c *gin.Context, name string) {
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	ctx := c.Request.Context()
+	reseal := &automotivev1alpha1.ImageReseal{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, reseal); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching reseal: %v", err)})
+		return
+	}
+
+	var startStr, compStr string
+	if reseal.Status.StartTime != nil {
+		startStr = reseal.Status.StartTime.Format(time.RFC3339)
+	}
+	if reseal.Status.CompletionTime != nil {
+		compStr = reseal.Status.CompletionTime.Format(time.RFC3339)
+	}
+
+	writeJSON(c, http.StatusOK, ResealResponse{
+		Name:            reseal.Name,
+		Phase:           reseal.Status.Phase,
+		Message:         reseal.Status.Message,
+		SourceContainer: reseal.Spec.SourceContainer,
+		TargetContainer: reseal.Spec.TargetContainer,
+		SealedContainer: reseal.Status.SealedContainer,
+		StartTime:       startStr,
+		CompletionTime:  compStr,
+		TaskRunName:     reseal.Status.TaskRunName,
+	})
+}
+
+func setResealSecretOwnerRef(
+	ctx context.Context,
+	c client.Client,
+	namespace, secretName string,
+	owner *automotivev1alpha1.ImageReseal,
+) error {
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {
+		return err
+	}
+	secret.OwnerReferences = []metav1.OwnerReference{
+		*metav1.NewControllerRef(owner, automotivev1alpha1.GroupVersion.WithKind("ImageReseal")),
+	}
+	return c.Update(ctx, secret)
+}
+
+func setResealSecretOwnerRefs(
+	ctx context.Context,
+	c client.Client,
+	namespace string,
+	owner *automotivev1alpha1.ImageReseal,
+	refs resealSecretRefs,
+) {
+	setOwner := func(secretName, secretType string) {
+		if secretName == "" {
+			return
+		}
+		if err := setResealSecretOwnerRef(ctx, c, namespace, secretName, owner); err != nil {
+			log.Printf("WARNING: failed to set owner reference on %s secret %s: %v", secretType, secretName, err)
+		}
+	}
+
+	setOwner(refs.sealKeySecretRef, "seal key")
+	setOwner(refs.sealKeyPasswordSecretRef, "seal key password")
+	setOwner(refs.envSecretRef, "registry")
 }
