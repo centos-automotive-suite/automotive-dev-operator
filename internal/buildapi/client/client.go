@@ -305,6 +305,206 @@ func (c *Client) ListFlash(ctx context.Context) ([]buildapi.FlashListItem, error
 	return out, nil
 }
 
+// CreateContainerBuild submits a new container build request to the API server.
+//
+//nolint:dupl // ContainerBuild methods are intentionally similar to Build methods but work with different types
+func (c *Client) CreateContainerBuild(ctx context.Context, req buildapi.ContainerBuildRequest) (*buildapi.ContainerBuildResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := c.resolve("/v1/container-builds")
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
+	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("create container build failed: %s: %s", resp.Status, string(b))
+	}
+	var out buildapi.ContainerBuildResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetContainerBuild retrieves the status of a specific container build by name.
+func (c *Client) GetContainerBuild(ctx context.Context, name string) (*buildapi.ContainerBuildResponse, error) {
+	endpoint := c.resolve(path.Join("/v1/container-builds", url.PathEscape(name)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("get container build failed: %s: %s", resp.Status, string(b))
+	}
+	var out buildapi.ContainerBuildResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListContainerBuilds retrieves a list of all container builds.
+func (c *Client) ListContainerBuilds(ctx context.Context) ([]buildapi.ContainerBuildListItem, error) {
+	endpoint := c.resolve("/v1/container-builds")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("list container builds failed: %s: %s", resp.Status, string(b))
+	}
+	var out []buildapi.ContainerBuildListItem
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UploadContainerBuildContext uploads files to a container build's upload pod.
+//
+//nolint:dupl // ContainerBuild upload is intentionally similar to Build upload but uses different endpoint
+func (c *Client) UploadContainerBuildContext(ctx context.Context, name string, files []Upload) error {
+	endpoint := c.resolve(path.Join("/v1/container-builds", url.PathEscape(name), "uploads"))
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+
+	go func() {
+		defer func() {
+			if err := pw.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to close pipe writer: %v\n", err)
+			}
+		}()
+		defer func() {
+			if err := mw.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to close multipart writer: %v\n", err)
+			}
+		}()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for _, f := range files {
+				if err := mw.WriteField("path", f.DestPath); err != nil {
+					_ = pw.CloseWithError(err)
+					return
+				}
+				file, err := os.Open(f.SourcePath)
+				if err != nil {
+					_ = pw.CloseWithError(err)
+					return
+				}
+				part, err := mw.CreateFormFile("file", f.DestPath)
+				if err != nil {
+					_ = file.Close()
+					_ = pw.CloseWithError(err)
+					return
+				}
+				if _, err := io.Copy(part, file); err != nil {
+					_ = file.Close()
+					_ = pw.CloseWithError(err)
+					return
+				}
+				if err := file.Close(); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to close file: %v\n", err)
+				}
+			}
+		}()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+			pw.CloseWithError(ctx.Err())
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, pr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("upload failed: %s: %s", resp.Status, string(b))
+	}
+	return nil
+}
+
+// StreamContainerBuildLogs streams logs from a container build.
+func (c *Client) StreamContainerBuildLogs(ctx context.Context, name string) (io.ReadCloser, error) {
+	endpoint := c.resolve(path.Join("/v1/container-builds", url.PathEscape(name), "logs"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("stream logs failed: %s: %s", resp.Status, string(b))
+	}
+	return resp.Body, nil
+}
+
 // Upload represents a file to upload to the build API.
 type Upload struct {
 	SourcePath string
@@ -312,6 +512,8 @@ type Upload struct {
 }
 
 // UploadFiles uploads multiple files to a specific build on the API server.
+//
+//nolint:dupl // Upload methods are intentionally similar but target different endpoints
 func (c *Client) UploadFiles(ctx context.Context, name string, files []Upload) error {
 	endpoint := c.resolve(path.Join("/v1/builds", url.PathEscape(name), "uploads"))
 	pr, pw := io.Pipe()

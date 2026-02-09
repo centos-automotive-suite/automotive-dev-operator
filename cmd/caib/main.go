@@ -99,6 +99,14 @@ var (
 
 	// TLS options
 	insecureSkipTLS bool
+
+	// Container build options
+	cbContextDir string
+	cbDockerfile string
+	cbOutput     string
+	cbBuildArgs  []string
+	cbName       string
+	cbFollowLogs bool
 )
 
 // envBool parses a boolean from environment variable
@@ -624,8 +632,42 @@ Example:
 	flashCmd.Flags().BoolVarP(&waitForBuild, "wait", "w", true, "wait for flash to complete")
 	_ = flashCmd.MarkFlagRequired("client")
 
+	// Container build command
+	containerBuildCmd := &cobra.Command{
+		Use:   "container-build",
+		Short: "Build container image from Containerfile with build context",
+		Long: `Build a container image from a Containerfile/Dockerfile with a local build context.
+
+The build context directory is uploaded to the cluster and the image is built
+using Shipwright with a buildah-based strategy.
+
+Examples:
+  # Build from current directory
+  caib container-build --push quay.io/org/my-app:v1
+
+  # Build with custom context and Dockerfile
+  caib container-build --context ./src --file Dockerfile --push quay.io/org/my-app:v1
+
+  # Build with build arguments
+  caib container-build --push quay.io/org/my-app:v1 --build-arg VERSION=1.0`,
+		Run: runContainerBuild,
+	}
+
+	containerBuildCmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	containerBuildCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	containerBuildCmd.Flags().StringVar(&cbContextDir, "context", ".", "build context directory")
+	containerBuildCmd.Flags().StringVar(&cbDockerfile, "file", "Containerfile", "path to Containerfile within context")
+	containerBuildCmd.Flags().StringVar(&cbOutput, "push", "", "registry target to push the built image (required)")
+	containerBuildCmd.Flags().StringArrayVar(&cbBuildArgs, "build-arg", []string{}, "build argument KEY=VALUE (can be repeated)")
+	containerBuildCmd.Flags().StringVarP(&cbName, "name", "n", "", "build name (auto-generated if omitted)")
+	containerBuildCmd.Flags().BoolVarP(&cbFollowLogs, "follow", "f", true, "follow build logs")
+	containerBuildCmd.Flags().IntVar(&timeout, "timeout", 30, "timeout in minutes")
+	containerBuildCmd.Flags().StringVarP(&architecture, "arch", "a", getDefaultArch(), "architecture (amd64, arm64)")
+	containerBuildCmd.Flags().StringVar(&storageClass, "storage-class", "", "Kubernetes storage class")
+	_ = containerBuildCmd.MarkFlagRequired("push")
+
 	// Add all commands
-	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, downloadCmd, flashCmd, loginCmd, catalog.NewCatalogCmd())
+	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, downloadCmd, flashCmd, loginCmd, containerBuildCmd, catalog.NewCatalogCmd())
 	// Add deprecated aliases for backwards compatibility
 	rootCmd.AddCommand(buildBootcAliasCmd, buildLegacyAliasCmd, buildTraditionalAliasCmd)
 
@@ -1342,7 +1384,7 @@ func handleFileUploads(
 		st, err := api.GetBuild(reqCtx, buildName)
 		c()
 		if err == nil {
-			if st.Phase == "Uploading" {
+			if st.Phase == "Uploading" { //nolint:goconst
 				break
 			}
 			if st.Phase == phaseFailed {
@@ -2169,4 +2211,187 @@ func tryFlashLogStreaming(ctx context.Context, logClient *http.Client, name stri
 	}
 
 	return handleLogStreamError(resp, state)
+}
+
+// runContainerBuild handles the 'container-build' command
+func runContainerBuild(_ *cobra.Command, _ []string) {
+	ctx := context.Background()
+
+	// Validate context directory
+	contextInfo, err := os.Stat(cbContextDir)
+	if err != nil {
+		handleError(fmt.Errorf("build context directory %q: %w", cbContextDir, err))
+	}
+	if !contextInfo.IsDir() {
+		handleError(fmt.Errorf("build context %q is not a directory", cbContextDir))
+	}
+
+	// Validate Containerfile exists within context
+	containerfilePath := filepath.Join(cbContextDir, cbDockerfile)
+	if _, err := os.Stat(containerfilePath); err != nil {
+		handleError(fmt.Errorf("containerfile %q not found in context: %w", cbDockerfile, err))
+	}
+
+	// Auto-generate name if not provided
+	if cbName == "" {
+		cbName = fmt.Sprintf("cb-%s", time.Now().Format("20060102-150405"))
+		fmt.Printf("Auto-generated build name: %s\n", cbName)
+	}
+
+	api, err := createBuildAPIClient(serverURL, &authToken)
+	if err != nil {
+		handleError(err)
+	}
+
+	// Build registry credentials from docker config
+	effectiveRegistryURL, registryUsername, registryPassword := extractRegistryCredentials(cbOutput, "")
+	var creds *buildapitypes.RegistryCredentials
+	if effectiveRegistryURL != "" && registryUsername != "" && registryPassword != "" {
+		creds = &buildapitypes.RegistryCredentials{
+			Enabled:     true,
+			AuthType:    "username-password",
+			RegistryURL: effectiveRegistryURL,
+			Username:    registryUsername,
+			Password:    registryPassword,
+		}
+	}
+
+	cbReq := buildapitypes.ContainerBuildRequest{
+		Name:                cbName,
+		Dockerfile:          cbDockerfile,
+		Output:              cbOutput,
+		BuildArgs:           cbBuildArgs,
+		Architecture:        architecture,
+		StorageClass:        storageClass,
+		RegistryCredentials: creds,
+	}
+
+	cbResp, err := api.CreateContainerBuild(ctx, cbReq)
+	if err != nil {
+		handleError(err)
+	}
+	fmt.Printf("Container build %s accepted: %s - %s\n", cbResp.Name, cbResp.Phase, cbResp.Message)
+
+	// Walk context directory and collect files for upload
+	fmt.Println("Collecting build context files...")
+	var uploads []buildapiclient.Upload
+	err = filepath.Walk(cbContextDir, func(fpath string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relPath, relErr := filepath.Rel(cbContextDir, fpath)
+		if relErr != nil {
+			return relErr
+		}
+		uploads = append(uploads, buildapiclient.Upload{
+			SourcePath: fpath,
+			DestPath:   relPath,
+		})
+		return nil
+	})
+	if err != nil {
+		handleError(fmt.Errorf("error collecting context files: %w", err))
+	}
+
+	if len(uploads) == 0 {
+		handleError(fmt.Errorf("no files found in build context directory %q", cbContextDir))
+	}
+
+	// Wait for Uploading phase (poll GetContainerBuild)
+	fmt.Println("Waiting for upload pod to be ready...")
+	waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer waitCancel()
+	for {
+		select {
+		case <-waitCtx.Done():
+			handleError(fmt.Errorf("timed out waiting for upload pod"))
+		default:
+		}
+		st, getErr := api.GetContainerBuild(waitCtx, cbName)
+		if getErr != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		if st.Phase == "Uploading" || st.Phase == "Building" || st.Phase == phaseCompleted { //nolint:goconst
+			break
+		}
+		if st.Phase == phaseFailed {
+			handleError(fmt.Errorf("build failed: %s", st.Message))
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	// Upload files
+	fmt.Printf("Uploading %d files...\n", len(uploads))
+	if err := api.UploadContainerBuildContext(ctx, cbName, uploads); err != nil {
+		handleError(fmt.Errorf("upload failed: %w", err))
+	}
+	fmt.Println("Upload complete, building...")
+
+	// Wait for completion
+	waitForContainerBuildCompletion(ctx, api, cbName)
+
+	fmt.Printf("Image pushed to: %s\n", cbOutput)
+}
+
+func waitForContainerBuildCompletion(ctx context.Context, api *buildapiclient.Client, name string) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var lastPhase string
+
+	// Start log streaming if requested
+	if cbFollowLogs {
+		go func() {
+			// Wait for BuildRun to be created
+			time.Sleep(10 * time.Second)
+			body, streamErr := api.StreamContainerBuildLogs(timeoutCtx, name)
+			if streamErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not stream logs: %v\n", streamErr)
+				return
+			}
+			defer func() {
+				if err := body.Close(); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to close log stream: %v\n", err)
+				}
+			}()
+			scanner := bufio.NewScanner(body)
+			for scanner.Scan() {
+				fmt.Println(scanner.Text())
+			}
+		}()
+	}
+
+	for {
+		select {
+		case <-timeoutCtx.Done():
+			handleError(fmt.Errorf("timed out waiting for build"))
+		case <-ticker.C:
+			st, err := api.GetContainerBuild(ctx, name)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "status check failed: %v\n", err)
+				continue
+			}
+
+			if st.Phase != lastPhase {
+				if !cbFollowLogs {
+					fmt.Printf("status: %s - %s\n", st.Phase, st.Message)
+				}
+				lastPhase = st.Phase
+			}
+
+			if st.Phase == phaseCompleted {
+				fmt.Println("Build completed successfully!")
+				return
+			}
+			if st.Phase == phaseFailed {
+				handleError(fmt.Errorf("build failed: %s", st.Message))
+			}
+		}
+	}
 }

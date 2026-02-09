@@ -37,11 +37,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	securityv1 "github.com/openshift/api/security/v1"
+	shipwrightv1beta1 "github.com/shipwright-io/build/pkg/apis/build/v1beta1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/catalogimage"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/containerbuild"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/image"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/imagebuild"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/operatorconfig"
@@ -65,6 +67,7 @@ func init() {
 	utilruntime.Must(automotivev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(securityv1.AddToScheme(scheme))
 	utilruntime.Must(tektonv1.AddToScheme(scheme))
+	utilruntime.Must(shipwrightv1beta1.AddToScheme(scheme))
 	utilruntime.Must(routev1.Install(scheme))
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 
@@ -221,6 +224,18 @@ func main() {
 
 		if err = catalogImageReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "CatalogImage")
+			os.Exit(1)
+		}
+
+		containerBuildReconciler := &containerbuild.ContainerBuildReconciler{
+			Client:     mgr.GetClient(),
+			Scheme:     mgr.GetScheme(),
+			Log:        ctrl.Log.WithName("controllers").WithName("ContainerBuild"),
+			RestConfig: mgr.GetConfig(),
+		}
+
+		if err = containerBuildReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "ContainerBuild")
 			os.Exit(1)
 		}
 	}

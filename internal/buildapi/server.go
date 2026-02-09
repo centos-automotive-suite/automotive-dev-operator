@@ -462,6 +462,16 @@ func (a *APIServer) createRouter() *gin.Engine {
 			flashGroup.GET("/:name/logs", a.handleFlashLogs)
 		}
 
+		containerBuildsGroup := v1.Group("/container-builds")
+		containerBuildsGroup.Use(a.authMiddleware())
+		{
+			containerBuildsGroup.POST("", a.handleCreateContainerBuild)
+			containerBuildsGroup.GET("", a.handleListContainerBuilds)
+			containerBuildsGroup.GET("/:name", a.handleGetContainerBuild)
+			containerBuildsGroup.POST("/:name/uploads", a.handleContainerBuildUpload)
+			containerBuildsGroup.GET("/:name/logs", a.handleContainerBuildLogs)
+		}
+
 		// Register catalog routes with authentication
 		catalogClient, err := a.getCatalogClient()
 		if err != nil {
@@ -1751,6 +1761,7 @@ func findRunningUploadPod(ctx context.Context, k8sClient client.Client, namespac
 	return nil, nil
 }
 
+//nolint:dupl // ImageBuild and ContainerBuild upload handlers operate on different types
 func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
@@ -2796,4 +2807,439 @@ func (a *APIServer) streamFlashLogs(c *gin.Context, name string) {
 
 	_, _ = c.Writer.Write([]byte("\n[Log streaming completed]\n"))
 	c.Writer.Flush()
+}
+
+// ─── Container Build handlers ────────────────────────────────────────────────
+
+func (a *APIServer) handleCreateContainerBuild(c *gin.Context) {
+	a.createContainerBuild(c)
+}
+
+func (a *APIServer) handleListContainerBuilds(c *gin.Context) {
+	listContainerBuilds(c)
+}
+
+func (a *APIServer) handleGetContainerBuild(c *gin.Context) {
+	getContainerBuild(c, c.Param("name"))
+}
+
+func (a *APIServer) handleContainerBuildUpload(c *gin.Context) {
+	a.uploadContainerBuildFiles(c, c.Param("name"))
+}
+
+func (a *APIServer) handleContainerBuildLogs(c *gin.Context) {
+	a.streamContainerBuildLogs(c, c.Param("name"))
+}
+
+func (a *APIServer) createContainerBuild(c *gin.Context) {
+	var req ContainerBuildRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		return
+	}
+
+	if req.Output == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "output is required"})
+		return
+	}
+
+	if req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	ctx := c.Request.Context()
+	namespace := resolveNamespace()
+	requestedBy := a.resolveRequester(c)
+
+	// Check for existing ContainerBuild
+	existing := &automotivev1alpha1.ContainerBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: namespace}, existing); err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("ContainerBuild %s already exists", req.Name)})
+		return
+	} else if !k8serrors.IsNotFound(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error checking existing build: %v", err)})
+		return
+	}
+
+	dockerfile := req.Dockerfile
+	if dockerfile == "" {
+		dockerfile = "Containerfile"
+	}
+
+	// Create push secret if credentials provided
+	var secretRef string
+	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled {
+		var err error
+		secretRef, err = createPushSecret(ctx, k8sClient, namespace, req.Name, req.RegistryCredentials)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating push secret: %v", err)})
+			return
+		}
+	}
+
+	cb := &automotivev1alpha1.ContainerBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      req.Name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "build-api",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+				"app.kubernetes.io/created-by": "automotive-dev-build-api",
+			},
+			Annotations: map[string]string{
+				"automotive.sdv.cloud.redhat.com/requested-by": requestedBy,
+			},
+		},
+		Spec: automotivev1alpha1.ContainerBuildSpec{
+			Dockerfile:   dockerfile,
+			Output:       req.Output,
+			BuildArgs:    req.BuildArgs,
+			Architecture: req.Architecture,
+			StorageClass: req.StorageClass,
+			SecretRef:    secretRef,
+		},
+	}
+
+	if err := k8sClient.Create(ctx, cb); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating ContainerBuild: %v", err)})
+		return
+	}
+
+	// Set owner reference on push secret
+	if secretRef != "" {
+		secret := &corev1.Secret{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: secretRef, Namespace: namespace}, secret); err == nil {
+			secret.OwnerReferences = []metav1.OwnerReference{
+				*metav1.NewControllerRef(cb, automotivev1alpha1.GroupVersion.WithKind("ContainerBuild")),
+			}
+			if err := k8sClient.Update(ctx, secret); err != nil {
+				log.Printf("WARNING: failed to set owner reference on push secret %s: %v", secretRef, err)
+			}
+		}
+	}
+
+	writeJSON(c, http.StatusAccepted, ContainerBuildResponse{
+		Name:        req.Name,
+		Phase:       "Uploading",
+		Message:     "Waiting for build context upload",
+		Output:      req.Output,
+		RequestedBy: requestedBy,
+	})
+}
+
+func listContainerBuilds(c *gin.Context) {
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	ctx := c.Request.Context()
+	list := &automotivev1alpha1.ContainerBuildList{}
+	if err := k8sClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error listing container builds: %v", err)})
+		return
+	}
+
+	resp := make([]ContainerBuildListItem, 0, len(list.Items))
+	for _, b := range list.Items {
+		var startStr, compStr string
+		if b.Status.StartTime != nil {
+			startStr = b.Status.StartTime.Format(time.RFC3339)
+		}
+		if b.Status.CompletionTime != nil {
+			compStr = b.Status.CompletionTime.Format(time.RFC3339)
+		}
+		resp = append(resp, ContainerBuildListItem{
+			Name:           b.Name,
+			Phase:          b.Status.Phase,
+			Message:        b.Status.Message,
+			Output:         b.Spec.Output,
+			CreatedAt:      b.CreationTimestamp.Format(time.RFC3339),
+			StartTime:      startStr,
+			CompletionTime: compStr,
+		})
+	}
+
+	sort.Slice(resp, func(i, j int) bool {
+		return resp[i].CreatedAt > resp[j].CreatedAt
+	})
+
+	writeJSON(c, http.StatusOK, resp)
+}
+
+func getContainerBuild(c *gin.Context, name string) {
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	ctx := c.Request.Context()
+	cb := &automotivev1alpha1.ContainerBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, cb); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching container build: %v", err)})
+		return
+	}
+
+	var startStr, compStr string
+	if cb.Status.StartTime != nil {
+		startStr = cb.Status.StartTime.Format(time.RFC3339)
+	}
+	if cb.Status.CompletionTime != nil {
+		compStr = cb.Status.CompletionTime.Format(time.RFC3339)
+	}
+
+	requestedBy := ""
+	if cb.Annotations != nil {
+		requestedBy = cb.Annotations["automotive.sdv.cloud.redhat.com/requested-by"]
+	}
+
+	writeJSON(c, http.StatusOK, ContainerBuildResponse{
+		Name:           cb.Name,
+		Phase:          cb.Status.Phase,
+		Message:        cb.Status.Message,
+		Output:         cb.Spec.Output,
+		RequestedBy:    requestedBy,
+		StartTime:      startStr,
+		CompletionTime: compStr,
+	})
+}
+
+//nolint:dupl // ContainerBuild upload handler is intentionally similar to ImageBuild upload handler
+func (a *APIServer) uploadContainerBuildFiles(c *gin.Context, name string) {
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	cb := &automotivev1alpha1.ContainerBuild{}
+	cbKey := types.NamespacedName{Name: name, Namespace: namespace}
+	if err := k8sClient.Get(c.Request.Context(), cbKey, cb); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching container build: %v", err)})
+		return
+	}
+
+	uploadPod, err := findRunningContainerBuildUploadPod(c.Request.Context(), k8sClient, namespace, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if uploadPod == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upload pod not ready"})
+		return
+	}
+
+	if c.Request.ContentLength > a.limits.MaxTotalUploadSize {
+		errMsg := fmt.Sprintf("upload too large (max %d bytes)", a.limits.MaxTotalUploadSize)
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errMsg})
+		return
+	}
+
+	reader, err := c.Request.MultipartReader()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid multipart: %v", err)})
+		return
+	}
+
+	restCfg, err := getRESTConfigFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("rest config: %v", err)})
+		return
+	}
+
+	uctx := &uploadContext{
+		restCfg:   restCfg,
+		namespace: namespace,
+		podName:   uploadPod.Name,
+		container: uploadPod.Spec.Containers[0].Name,
+		limits:    &a.limits,
+	}
+
+	var totalBytesUploaded int64
+	var pendingPath string
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("read part: %v", err)})
+			return
+		}
+
+		if part.FormName() == "path" {
+			pathBytes, err := io.ReadAll(io.LimitReader(part, 4096))
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("read path: %v", err)})
+				return
+			}
+			pendingPath = strings.TrimSpace(string(pathBytes))
+			continue
+		}
+
+		if part.FormName() != "file" {
+			continue
+		}
+
+		result, err := processFilePart(part, pendingPath, uctx)
+		pendingPath = ""
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		totalBytesUploaded += result.bytesWritten
+		if totalBytesUploaded > a.limits.MaxTotalUploadSize {
+			errMsg := fmt.Sprintf("total upload size exceeds maximum (%d bytes)", a.limits.MaxTotalUploadSize)
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errMsg})
+			return
+		}
+	}
+
+	original := cb
+	patched := original.DeepCopy()
+	if patched.Annotations == nil {
+		patched.Annotations = map[string]string{}
+	}
+	patched.Annotations["automotive.sdv.cloud.redhat.com/uploads-complete"] = "true"
+	if err := k8sClient.Patch(c.Request.Context(), patched, client.MergeFrom(original)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("mark complete failed: %v", err)})
+		return
+	}
+
+	writeJSON(c, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// findRunningContainerBuildUploadPod finds a running upload pod for the given container build.
+func findRunningContainerBuildUploadPod(ctx context.Context, k8sClient client.Client, namespace, buildName string) (*corev1.Pod, error) {
+	podList := &corev1.PodList{}
+	if err := k8sClient.List(ctx, podList,
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			"automotive.sdv.cloud.redhat.com/containerbuild-name": buildName,
+			"app.kubernetes.io/name":                              "upload-pod",
+		},
+	); err != nil {
+		return nil, fmt.Errorf("error listing upload pods: %w", err)
+	}
+	for i := range podList.Items {
+		p := &podList.Items[i]
+		if p.Status.Phase == corev1.PodRunning {
+			return p, nil
+		}
+	}
+	return nil, nil
+}
+
+func (a *APIServer) streamContainerBuildLogs(c *gin.Context, name string) {
+	namespace := resolveNamespace()
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	streamDuration := time.Duration(a.limits.MaxLogStreamDurationMinutes) * time.Minute
+	ctx, cancel := context.WithTimeout(c.Request.Context(), streamDuration)
+	defer cancel()
+
+	cb := &automotivev1alpha1.ContainerBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, cb); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	buildRunName := strings.TrimSpace(cb.Status.BuildRunName)
+	if buildRunName == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "logs not available yet"})
+		return
+	}
+
+	restCfg, err := getRESTConfigFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	cs, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	setupLogStreamHeaders(c)
+
+	// Find pods by BuildRun label
+	selector := "buildrun.shipwright.io/name=" + buildRunName
+	var hadStream bool
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil {
+			if _, writeErr := fmt.Fprintf(c.Writer, "\n[Error listing pods: %v]\n", err); writeErr != nil {
+				return
+			}
+			c.Writer.Flush()
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		if len(pods.Items) == 0 {
+			if !hadStream {
+				_, _ = c.Writer.Write([]byte("."))
+				c.Writer.Flush()
+			}
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		for _, pod := range pods.Items {
+			for _, container := range pod.Spec.Containers {
+				hadStream = true
+				streamContainerLogs(ctx, c, cs, namespace, pod.Name, container.Name, pod.Name, nil)
+			}
+		}
+
+		// Check if build is finished
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, cb); err == nil {
+			if cb.Status.Phase == phaseCompleted || cb.Status.Phase == phaseFailed {
+				return
+			}
+		}
+
+		time.Sleep(5 * time.Second)
+	}
 }
