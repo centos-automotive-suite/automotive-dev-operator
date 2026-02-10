@@ -536,6 +536,7 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		tasks.GeneratePushArtifactRegistryTask(config.Namespace),
 		tasks.GeneratePrepareBuilderTask(config.Namespace, buildConfig),
 		tasks.GenerateFlashTask(config.Namespace),
+		tasks.GenerateSealedTask(config.Namespace),
 	}
 
 	for _, task := range tektonTasks {
@@ -737,7 +738,7 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 	r.Log.Info("Partition configuration ConfigMap deleted")
 
 	// Delete Tekton tasks
-	taskNames := []string{"build-automotive-image", "push-artifact-registry", "prepare-builder", "flash-image"}
+	taskNames := []string{"build-automotive-image", "push-artifact-registry", "prepare-builder", "flash-image", "sealed-operation"}
 	for _, taskName := range taskNames {
 		task := &tektonv1.Task{}
 		task.Name = taskName

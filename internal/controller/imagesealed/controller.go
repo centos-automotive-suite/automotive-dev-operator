@@ -47,7 +47,7 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagesealeds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagesealeds/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagesealeds/finalizers,verbs=update
-// +kubebuilder:rbac:groups=tekton.dev,resources=taskruns,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=tekton.dev,resources=tasks;taskruns,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile handles reconciliation of ImageSealed resources.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -122,16 +122,22 @@ func (r *Reconciler) handleRunning(ctx context.Context, sealed *automotivev1alph
 	return r.updateStatus(ctx, sealed, phase, message)
 }
 
+const sealedManagedByLabel = "app.kubernetes.io/managed-by"
+
 func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotivev1alpha1.ImageSealed) (*tektonv1.TaskRun, error) {
 	taskRunName := sealed.Name
-	existing := &tektonv1.TaskRun{}
-	if err := r.Get(ctx, client.ObjectKey{Name: taskRunName, Namespace: sealed.Namespace}, existing); err == nil {
-		return existing, nil
+	existingTR := &tektonv1.TaskRun{}
+	if err := r.Get(ctx, client.ObjectKey{Name: taskRunName, Namespace: sealed.Namespace}, existingTR); err == nil {
+		return existingTR, nil
 	} else if !k8serrors.IsNotFound(err) {
 		return nil, err
 	}
 
 	sealedTask := tasks.GenerateSealedTask(sealed.Namespace)
+	if err := r.ensureSealedTask(ctx, sealedTask); err != nil {
+		return nil, err
+	}
+
 	workspaces := []tektonv1.WorkspaceBinding{
 		{Name: "shared", EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}
@@ -162,7 +168,7 @@ func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotive
 			},
 		},
 		Spec: tektonv1.TaskRunSpec{
-			TaskSpec: &sealedTask.Spec,
+			TaskRef: &tektonv1.TaskRef{Name: sealedTask.Name},
 			Params: []tektonv1.Param{
 				{Name: "operation", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.Operation}},
 				{Name: "input-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.InputRef}},
@@ -178,6 +184,27 @@ func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotive
 		return nil, fmt.Errorf("create TaskRun: %w", err)
 	}
 	return taskRun, nil
+}
+
+// ensureSealedTask creates the sealed-operation Task if missing, or updates it if we manage it.
+func (r *Reconciler) ensureSealedTask(ctx context.Context, task *tektonv1.Task) error {
+	existing := &tektonv1.Task{}
+	if err := r.Get(ctx, client.ObjectKey{Name: task.Name, Namespace: task.Namespace}, existing); err != nil {
+		if k8serrors.IsNotFound(err) {
+			return r.Create(ctx, task)
+		}
+		return err
+	}
+	expectedManagedBy := task.Labels[sealedManagedByLabel]
+	managedBy, managed := existing.Labels[sealedManagedByLabel]
+	if !managed {
+		return fmt.Errorf("task %s missing %s label; refusing to update", existing.Name, sealedManagedByLabel)
+	}
+	if managedBy != expectedManagedBy {
+		return fmt.Errorf("task %s is managed by %q; refusing to update (expected %q)", existing.Name, managedBy, expectedManagedBy)
+	}
+	existing.Spec = task.Spec
+	return r.Update(ctx, existing)
 }
 
 func (r *Reconciler) updateStatus(ctx context.Context, sealed *automotivev1alpha1.ImageSealed, phase, message string) (ctrl.Result, error) {
