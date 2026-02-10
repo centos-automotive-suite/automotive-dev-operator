@@ -22,6 +22,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	shipwrightv1beta1 "github.com/shipwright-io/build/pkg/apis/build/v1beta1"
+
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 )
@@ -92,6 +94,33 @@ func (r *OperatorConfigReconciler) detectJumpstarter(ctx context.Context) bool {
 	return false
 }
 
+// detectShipwright checks if Shipwright CRDs are installed in the cluster
+func (r *OperatorConfigReconciler) detectShipwright(ctx context.Context) bool {
+	if r.IsShipwright != nil {
+		return *r.IsShipwright
+	}
+
+	crd := &apiextensionsv1.CustomResourceDefinition{}
+	err := r.Get(ctx, client.ObjectKey{Name: "builds.shipwright.io"}, crd)
+
+	if err == nil {
+		detected := true
+		r.IsShipwright = &detected
+		r.Log.Info("Shipwright detection", "available", true)
+		return true
+	}
+
+	if errors.IsNotFound(err) {
+		detected := false
+		r.IsShipwright = &detected
+		r.Log.Info("Shipwright detection", "available", false)
+		return false
+	}
+
+	r.Log.Error(err, "Failed to check for Shipwright CRDs, will retry on next reconciliation")
+	return false
+}
+
 // OperatorConfigReconciler reconciles an OperatorConfig object
 //
 //nolint:revive // Name follows Kubebuilder convention for reconcilers
@@ -101,6 +130,7 @@ type OperatorConfigReconciler struct {
 	Log           logr.Logger
 	IsOpenShift   *bool
 	IsJumpstarter *bool
+	IsShipwright  *bool
 }
 
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=operatorconfigs,verbs=get;list;watch;create;update;patch;delete
@@ -543,6 +573,18 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		return fmt.Errorf("failed to create/update pipeline: %w", err)
 	}
 
+	// Deploy Shipwright ClusterBuildStrategy if Shipwright is available
+	if r.detectShipwright(ctx) {
+		strategy := tasks.GenerateContainerBuildStrategy()
+		if err := r.createOrUpdateClusterBuildStrategy(ctx, strategy); err != nil {
+			r.Log.Error(err, "Failed to create/update ClusterBuildStrategy")
+			return fmt.Errorf("failed to create/update ClusterBuildStrategy: %w", err)
+		}
+		r.Log.Info("ClusterBuildStrategy deployed", "name", tasks.ContainerBuildStrategyName)
+	} else {
+		r.Log.Info("Shipwright not available, skipping ClusterBuildStrategy deployment")
+	}
+
 	r.Log.Info("OSBuilds deployment completed successfully")
 	return nil
 }
@@ -710,6 +752,15 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context) error {
 	}
 	r.Log.Info("Pipeline deleted")
 
+	// Cleanup ClusterBuildStrategy
+	strategy := &shipwrightv1beta1.ClusterBuildStrategy{}
+	strategy.Name = tasks.ContainerBuildStrategyName
+	if err := r.Delete(ctx, strategy); err != nil && !errors.IsNotFound(err) {
+		r.Log.Error(err, "Failed to delete ClusterBuildStrategy (ignoring, Shipwright may not be installed)")
+	} else if err == nil {
+		r.Log.Info("ClusterBuildStrategy deleted", "name", tasks.ContainerBuildStrategyName)
+	}
+
 	// Cleanup build-api
 	if err := r.cleanupBuildAPI(ctx); err != nil {
 		return fmt.Errorf("failed to cleanup build-api: %w", err)
@@ -722,6 +773,26 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context) error {
 
 	r.Log.Info("OSBuilds cleanup completed successfully")
 	return nil
+}
+
+func (r *OperatorConfigReconciler) createOrUpdateClusterBuildStrategy(ctx context.Context, strategy *shipwrightv1beta1.ClusterBuildStrategy) error {
+	existing := &shipwrightv1beta1.ClusterBuildStrategy{}
+	err := r.Get(ctx, client.ObjectKey{Name: strategy.Name}, existing)
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to get ClusterBuildStrategy: %w", err)
+		}
+		return r.Create(ctx, strategy)
+	}
+
+	// Skip update if marked as unmanaged
+	if existing.Annotations != nil && existing.Annotations["automotive.sdv.cloud.redhat.com/unmanaged"] == "true" { //nolint:goconst
+		r.Log.Info("Skipping update for unmanaged ClusterBuildStrategy", "name", strategy.Name)
+		return nil
+	}
+
+	strategy.ResourceVersion = existing.ResourceVersion
+	return r.Update(ctx, strategy)
 }
 
 func (r *OperatorConfigReconciler) createOrUpdateTask(ctx context.Context, task *tektonv1.Task) error {

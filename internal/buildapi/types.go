@@ -245,3 +245,37 @@ type BuildTemplateResponse struct {
 	BuildRequest `json:",inline"`
 	SourceFiles  []string `json:"sourceFiles,omitempty"`
 }
+
+// ContainerBuildRequest is the payload to create a container build via the REST API
+type ContainerBuildRequest struct {
+	Name         string   `json:"name"`
+	Dockerfile   string   `json:"dockerfile,omitempty"`
+	Output       string   `json:"output"`
+	BuildArgs    []string `json:"buildArgs,omitempty"`
+	Architecture string   `json:"architecture,omitempty"`
+	StorageClass string   `json:"storageClass,omitempty"`
+	// RegistryCredentials for push authentication
+	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
+}
+
+// ContainerBuildResponse is returned by container build operations
+type ContainerBuildResponse struct {
+	Name           string `json:"name"`
+	Phase          string `json:"phase"`
+	Message        string `json:"message"`
+	Output         string `json:"output,omitempty"`
+	RequestedBy    string `json:"requestedBy,omitempty"`
+	StartTime      string `json:"startTime,omitempty"`
+	CompletionTime string `json:"completionTime,omitempty"`
+}
+
+// ContainerBuildListItem represents a container build in the list API
+type ContainerBuildListItem struct {
+	Name           string `json:"name"`
+	Phase          string `json:"phase"`
+	Message        string `json:"message"`
+	Output         string `json:"output,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	StartTime      string `json:"startTime,omitempty"`
+	CompletionTime string `json:"completionTime,omitempty"`
+}

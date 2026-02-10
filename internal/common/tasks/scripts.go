@@ -29,3 +29,8 @@ var BuildBuilderScript string
 
 // FlashImageScript contains the embedded shell script for flashing images via Jumpstarter.
 var FlashImageScript string
+
+//go:embed scripts/container_build.sh
+
+// ContainerBuildScript contains the embedded shell script for building container images.
+var ContainerBuildScript string

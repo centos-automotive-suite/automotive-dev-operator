@@ -74,6 +74,7 @@ rules:
   - automotive.sdv.cloud.redhat.com
   resources:
   - catalogimages
+  - containerbuilds
   - imagebuilds
   - images
   - operatorconfigs
@@ -89,6 +90,7 @@ rules:
   - automotive.sdv.cloud.redhat.com
   resources:
   - catalogimages/finalizers
+  - containerbuilds/finalizers
   - imagebuilds/finalizers
   - images/finalizers
   - operatorconfigs/finalizers
@@ -98,6 +100,7 @@ rules:
   - automotive.sdv.cloud.redhat.com
   resources:
   - catalogimages/status
+  - containerbuilds/status
   - imagebuilds/status
   - images/status
   - operatorconfigs/status
@@ -143,6 +146,20 @@ rules:
   - route.openshift.io
   resources:
   - routes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - shipwright.io
+  resources:
+  - buildruns
+  - builds
+  - clusterbuildstrategies
   verbs:
   - create
   - delete
