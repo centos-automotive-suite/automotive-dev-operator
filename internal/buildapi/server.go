@@ -484,6 +484,15 @@ func (a *APIServer) createRouter() *gin.Engine {
 			configGroup.GET("", a.handleGetOperatorConfig)
 		}
 
+		sealedGroup := v1.Group("/sealed")
+		sealedGroup.Use(a.authMiddleware())
+		{
+			sealedGroup.POST("", a.handleCreateSealed)
+			sealedGroup.GET("", a.handleListSealed)
+			sealedGroup.GET("/:name", a.handleGetSealed)
+			sealedGroup.GET("/:name/logs", a.handleSealedLogs)
+		}
+
 		// Register catalog routes with authentication
 		catalogClient, err := a.getCatalogClient()
 		if err != nil {
@@ -2530,6 +2539,30 @@ func (a *APIServer) handleFlashLogs(c *gin.Context) {
 	a.streamFlashLogs(c, name)
 }
 
+// Sealed API handlers
+
+func (a *APIServer) handleCreateSealed(c *gin.Context) {
+	a.log.Info("create sealed", "reqID", c.GetString("reqID"))
+	a.createSealed(c)
+}
+
+func (a *APIServer) handleListSealed(c *gin.Context) {
+	a.log.Info("list sealed jobs", "reqID", c.GetString("reqID"))
+	a.listSealed(c)
+}
+
+func (a *APIServer) handleGetSealed(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("get sealed", "sealed", name, "reqID", c.GetString("reqID"))
+	a.getSealed(c, name)
+}
+
+func (a *APIServer) handleSealedLogs(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("sealed logs requested", "sealed", name, "reqID", c.GetString("reqID"))
+	a.streamSealedLogs(c, name)
+}
+
 func (a *APIServer) createFlash(c *gin.Context) {
 	var req FlashRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -2928,6 +2961,313 @@ func (a *APIServer) streamFlashLogs(c *gin.Context, name string) {
 		c.Writer.Flush()
 	}
 
+	_, _ = c.Writer.Write([]byte("\n[Log streaming completed]\n"))
+	c.Writer.Flush()
+}
+
+func (a *APIServer) createSealed(c *gin.Context) {
+	var req SealedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		return
+	}
+
+	validOps := map[SealedOperation]bool{
+		SealedPrepareReseal: true, SealedReseal: true,
+		SealedExtractForSigning: true, SealedInjectSigned: true,
+	}
+	if !validOps[req.Operation] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "operation must be one of: prepare-reseal, reseal, extract-for-signing, inject-signed"})
+		return
+	}
+	if strings.TrimSpace(req.InputRef) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "inputRef is required"})
+		return
+	}
+	if req.Operation == SealedInjectSigned && strings.TrimSpace(req.SignedRef) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "signedRef is required for inject-signed"})
+		return
+	}
+
+	if req.Name == "" {
+		req.Name = fmt.Sprintf("sealed-%s-%s", req.Operation, time.Now().Format("20060102-150405"))
+	}
+	if err := validateBuildName(req.Name); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	restCfg, err := getRESTConfigFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	clientset, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+	namespace := resolveNamespace()
+	requestedBy := a.resolveRequester(c)
+
+	var secretRef string
+	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled &&
+		req.RegistryCredentials.RegistryURL != "" &&
+		req.RegistryCredentials.Username != "" &&
+		req.RegistryCredentials.Password != "" {
+		secretName := req.Name + "-registry-auth"
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: namespace,
+				Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"REGISTRY_URL":      []byte(req.RegistryCredentials.RegistryURL),
+				"REGISTRY_USERNAME": []byte(req.RegistryCredentials.Username),
+				"REGISTRY_PASSWORD": []byte(req.RegistryCredentials.Password),
+			},
+		}
+		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+			if k8serrors.IsAlreadyExists(err) {
+				c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("sealed job %s already exists", req.Name)})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create registry secret: %v", err)})
+			return
+		}
+		secretRef = secretName
+	}
+
+	aibImage := req.AIBImage
+	if aibImage == "" {
+		aibImage = tasks.AutomotiveImageBuilder
+	}
+
+	imageSealed := &automotivev1alpha1.ImageSealed{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      req.Name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "build-api",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+			},
+			Annotations: map[string]string{
+				"automotive.sdv.cloud.redhat.com/requested-by": requestedBy,
+			},
+		},
+		Spec: automotivev1alpha1.ImageSealedSpec{
+			Operation:    string(req.Operation),
+			InputRef:     req.InputRef,
+			OutputRef:    req.OutputRef,
+			SignedRef:    req.SignedRef,
+			AIBImage:     aibImage,
+			StorageClass: req.StorageClass,
+			SecretRef:    secretRef,
+			AIBExtraArgs: req.AIBExtraArgs,
+		},
+	}
+
+	if err := k8sClient.Create(ctx, imageSealed); err != nil {
+		if secretRef != "" {
+			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, secretRef, metav1.DeleteOptions{})
+		}
+		if k8serrors.IsAlreadyExists(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("sealed job %s already exists", req.Name)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create ImageSealed: %v", err)})
+		return
+	}
+
+	if secretRef != "" {
+		createdSecret, _ := clientset.CoreV1().Secrets(namespace).Get(ctx, secretRef, metav1.GetOptions{})
+		if createdSecret != nil {
+			createdSecret.OwnerReferences = []metav1.OwnerReference{{
+				APIVersion: automotivev1alpha1.GroupVersion.String(),
+				Kind:       "ImageSealed",
+				Name:       imageSealed.Name,
+				UID:        imageSealed.UID,
+			}}
+			_, _ = clientset.CoreV1().Secrets(namespace).Update(ctx, createdSecret, metav1.UpdateOptions{})
+		}
+	}
+
+	writeJSON(c, http.StatusAccepted, SealedResponse{
+		Name:        req.Name,
+		Phase:       phasePending,
+		Message:     "Sealed job created",
+		RequestedBy: requestedBy,
+		OutputRef:   req.OutputRef,
+	})
+}
+
+func (a *APIServer) listSealed(c *gin.Context) {
+	namespace := resolveNamespace()
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx := c.Request.Context()
+	list := &automotivev1alpha1.ImageSealedList{}
+	if err := k8sClient.List(ctx, list, client.InNamespace(namespace)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to list ImageSealed: %v", err)})
+		return
+	}
+	resp := make([]SealedListItem, 0, len(list.Items))
+	for _, s := range list.Items {
+		var compStr string
+		if s.Status.CompletionTime != nil {
+			compStr = s.Status.CompletionTime.Format(time.RFC3339)
+		}
+		resp = append(resp, SealedListItem{
+			Name:           s.Name,
+			Phase:          s.Status.Phase,
+			Message:        s.Status.Message,
+			RequestedBy:    s.Annotations["automotive.sdv.cloud.redhat.com/requested-by"],
+			CreatedAt:      s.CreationTimestamp.Format(time.RFC3339),
+			CompletionTime: compStr,
+		})
+	}
+	writeJSON(c, http.StatusOK, resp)
+}
+
+func (a *APIServer) getSealed(c *gin.Context, name string) {
+	namespace := resolveNamespace()
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx := c.Request.Context()
+	sealed := &automotivev1alpha1.ImageSealed{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, sealed); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sealed job not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var startStr, compStr string
+	if sealed.Status.StartTime != nil {
+		startStr = sealed.Status.StartTime.Format(time.RFC3339)
+	}
+	if sealed.Status.CompletionTime != nil {
+		compStr = sealed.Status.CompletionTime.Format(time.RFC3339)
+	}
+	writeJSON(c, http.StatusOK, SealedResponse{
+		Name:           sealed.Name,
+		Phase:          sealed.Status.Phase,
+		Message:        sealed.Status.Message,
+		RequestedBy:    sealed.Annotations["automotive.sdv.cloud.redhat.com/requested-by"],
+		StartTime:      startStr,
+		CompletionTime: compStr,
+		TaskRunName:    sealed.Status.TaskRunName,
+		OutputRef:      sealed.Status.OutputRef,
+	})
+}
+
+func (a *APIServer) streamSealedLogs(c *gin.Context, name string) {
+	namespace := resolveNamespace()
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	restCfg, err := getRESTConfigFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	clientset, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx := c.Request.Context()
+	sealed := &automotivev1alpha1.ImageSealed{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, sealed); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sealed job not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	taskRunName := sealed.Status.TaskRunName
+	if taskRunName == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sealed job not ready (no TaskRun yet)"})
+		return
+	}
+	taskRun := &tektonv1.TaskRun{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: taskRunName, Namespace: namespace}, taskRun); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sealed TaskRun not found yet"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	podName := taskRun.Status.PodName
+	if podName == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sealed pod not ready"})
+		return
+	}
+	sinceTime := parseSinceTime(c.Query("since"))
+	streamDuration := time.Duration(a.limits.MaxLogStreamDurationMinutes) * time.Minute
+	streamCtx, cancel := context.WithTimeout(ctx, streamDuration)
+	defer cancel()
+	setupLogStreamHeaders(c)
+	containerName := "step-sealed-op"
+	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Container: containerName,
+		Follow:    true,
+		SinceTime: sinceTime,
+	})
+	stream, err := req.Stream(streamCtx)
+	if err != nil {
+		_, _ = fmt.Fprintf(c.Writer, "\n[Error streaming logs: %v]\n", err)
+		c.Writer.Flush()
+		return
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close stream: %v\n", err)
+		}
+	}()
+	_, _ = c.Writer.Write([]byte("\n===== Sealed TaskRun Logs =====\n\n"))
+	c.Writer.Flush()
+	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		select {
+		case <-streamCtx.Done():
+			return
+		default:
+		}
+		line := scanner.Bytes()
+		if _, writeErr := c.Writer.Write(line); writeErr != nil {
+			return
+		}
+		if _, writeErr := c.Writer.Write([]byte("\n")); writeErr != nil {
+			return
+		}
+		c.Writer.Flush()
+	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		_, _ = c.Writer.Write([]byte(fmt.Sprintf("\n[Stream error: %v]\n", err)))
+		c.Writer.Flush()
+	}
 	_, _ = c.Writer.Write([]byte("\n[Log streaming completed]\n"))
 	c.Writer.Flush()
 }

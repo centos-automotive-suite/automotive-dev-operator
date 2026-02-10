@@ -277,3 +277,51 @@ type BuildTemplateResponse struct {
 	BuildRequest `json:",inline"`
 	SourceFiles  []string `json:"sourceFiles,omitempty"`
 }
+
+// SealedOperation is the AIB sealed workflow operation to run
+type SealedOperation string
+
+const (
+	SealedPrepareReseal     SealedOperation = "prepare-reseal"
+	SealedReseal            SealedOperation = "reseal"
+	SealedExtractForSigning SealedOperation = "extract-for-signing"
+	SealedInjectSigned      SealedOperation = "inject-signed"
+)
+
+// SealedRequest is the payload to create a sealed operation via the REST API
+type SealedRequest struct {
+	Name      string          `json:"name"`
+	Operation SealedOperation `json:"operation"`
+	// InputRef is the OCI reference to the input disk image (required)
+	InputRef string `json:"inputRef"`
+	// OutputRef is the OCI reference where to push the result (optional for extract-for-signing)
+	OutputRef string `json:"outputRef,omitempty"`
+	// SignedRef is the OCI reference to signed artifacts; required when operation is inject-signed
+	SignedRef           string               `json:"signedRef,omitempty"`
+	AIBImage            string               `json:"aibImage,omitempty"`
+	StorageClass        string               `json:"storageClass,omitempty"`
+	AIBExtraArgs        []string             `json:"aibExtraArgs,omitempty"`
+	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
+}
+
+// SealedResponse is returned by POST and GET sealed operations
+type SealedResponse struct {
+	Name           string `json:"name"`
+	Phase          string `json:"phase"`
+	Message        string `json:"message"`
+	RequestedBy    string `json:"requestedBy,omitempty"`
+	StartTime      string `json:"startTime,omitempty"`
+	CompletionTime string `json:"completionTime,omitempty"`
+	TaskRunName    string `json:"taskRunName,omitempty"`
+	OutputRef      string `json:"outputRef,omitempty"`
+}
+
+// SealedListItem represents a sealed job in the list API
+type SealedListItem struct {
+	Name           string `json:"name"`
+	Phase          string `json:"phase"`
+	Message        string `json:"message"`
+	RequestedBy    string `json:"requestedBy,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	CompletionTime string `json:"completionTime,omitempty"`
+}

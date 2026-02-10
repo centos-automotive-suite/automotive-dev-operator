@@ -76,6 +76,7 @@ rules:
   - catalogimages
   - imagebuilds
   - images
+  - imagesealeds
   - operatorconfigs
   verbs:
   - create
@@ -91,6 +92,7 @@ rules:
   - catalogimages/finalizers
   - imagebuilds/finalizers
   - images/finalizers
+  - imagesealeds/finalizers
   - operatorconfigs/finalizers
   verbs:
   - update
@@ -100,6 +102,7 @@ rules:
   - catalogimages/status
   - imagebuilds/status
   - images/status
+  - imagesealeds/status
   - operatorconfigs/status
   verbs:
   - get

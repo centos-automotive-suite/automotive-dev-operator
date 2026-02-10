@@ -1416,6 +1416,92 @@ func GenerateFlashTask(namespace string) *tektonv1.Task {
 	}
 }
 
+// SealedTaskRunLabel is the label value used to identify sealed TaskRuns in the API
+const SealedTaskRunLabel = "automotive.sdv.cloud.redhat.com/sealed-taskrun"
+
+// GenerateSealedTask creates a Tekton Task for AIB sealed operations (prepare-reseal, reseal, extract-for-signing, inject-signed)
+func GenerateSealedTask(namespace string) *tektonv1.Task {
+	return &tektonv1.Task{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1",
+			Kind:       "Task",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sealed-operation",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "automotive-dev-operator",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+			},
+		},
+		Spec: tektonv1.TaskSpec{
+			Params: []tektonv1.ParamSpec{
+				{
+					Name:        "operation",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Sealed operation: prepare-reseal, reseal, extract-for-signing, inject-signed",
+				},
+				{
+					Name:        "input-ref",
+					Type:        tektonv1.ParamTypeString,
+					Description: "OCI reference to the input disk image",
+				},
+				{
+					Name:        "output-ref",
+					Type:        tektonv1.ParamTypeString,
+					Description: "OCI reference where to push the result (optional for extract-for-signing)",
+					Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
+				},
+				{
+					Name:        "signed-ref",
+					Type:        tektonv1.ParamTypeString,
+					Description: "OCI reference to signed artifacts (required for inject-signed)",
+					Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
+				},
+				{
+					Name:        "aib-image",
+					Type:        tektonv1.ParamTypeString,
+					Description: "AIB container image",
+					Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: AutomotiveImageBuilder},
+				},
+			},
+			Workspaces: []tektonv1.WorkspaceDeclaration{
+				{
+					Name:        "shared",
+					Description: "Workspace for input/output disk images and artifacts",
+					MountPath:   "/workspace/shared",
+				},
+				{
+					Name:        "registry-auth",
+					Description: "Optional workspace with REGISTRY_URL, REGISTRY_USERNAME, REGISTRY_PASSWORD",
+					MountPath:   "/workspace/registry-auth",
+					Optional:    true,
+				},
+			},
+			Steps: []tektonv1.Step{
+				{
+					Name:  "sealed-op",
+					Image: "$(params.aib-image)",
+					Env: []corev1.EnvVar{
+						{Name: "OPERATION", Value: "$(params.operation)"},
+						{Name: "INPUT_REF", Value: "$(params.input-ref)"},
+						{Name: "OUTPUT_REF", Value: "$(params.output-ref)"},
+						{Name: "SIGNED_REF", Value: "$(params.signed-ref)"},
+						{Name: "WORKSPACE", Value: "/workspace/shared"},
+						{Name: "REGISTRY_AUTH_PATH", Value: "/workspace/registry-auth"},
+					},
+					Script: SealedOperationScript,
+					SecurityContext: &corev1.SecurityContext{
+						Privileged:     ptr.To(true),
+						SELinuxOptions: &corev1.SELinuxOptions{Type: "unconfined_t"},
+					},
+					Timeout: &metav1.Duration{Duration: 2 * time.Hour},
+				},
+			},
+		},
+	}
+}
+
 // GenerateBuildBuilderJob creates a Job to build the aib-build helper container
 func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string) *corev1.Pod {
 	if aibImage == "" {

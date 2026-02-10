@@ -29,3 +29,8 @@ var BuildBuilderScript string
 
 // FlashImageScript contains the embedded shell script for flashing images via Jumpstarter.
 var FlashImageScript string
+
+//go:embed scripts/sealed_operation.sh
+
+// SealedOperationScript contains the embedded script for AIB sealed operations.
+var SealedOperationScript string
