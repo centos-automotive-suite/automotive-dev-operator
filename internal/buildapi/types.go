@@ -291,7 +291,9 @@ const (
 // SealedRequest is the payload to create a sealed operation via the REST API
 type SealedRequest struct {
 	Name      string          `json:"name"`
-	Operation SealedOperation `json:"operation"`
+	Operation SealedOperation `json:"operation,omitempty"`
+	// Stages is an ordered list of operations (e.g. prepare-reseal, extract-for-signing, inject-signed, reseal). If set, Operation is ignored.
+	Stages []string `json:"stages,omitempty"`
 	// InputRef is the OCI reference to the input disk image (required)
 	InputRef string `json:"inputRef"`
 	// OutputRef is the OCI reference where to push the result (optional for extract-for-signing)
@@ -302,18 +304,23 @@ type SealedRequest struct {
 	StorageClass        string               `json:"storageClass,omitempty"`
 	AIBExtraArgs        []string             `json:"aibExtraArgs,omitempty"`
 	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
+	// KeySecretRef is the name of a secret containing the sealing key (data key "private-key"). Optional; same shape as ImageReseal.
+	KeySecretRef string `json:"keySecretRef,omitempty"`
+	// KeyPasswordSecretRef is the name of a secret containing the key password (data key "password"). Optional.
+	KeyPasswordSecretRef string `json:"keyPasswordSecretRef,omitempty"`
 }
 
 // SealedResponse is returned by POST and GET sealed operations
 type SealedResponse struct {
-	Name           string `json:"name"`
-	Phase          string `json:"phase"`
-	Message        string `json:"message"`
-	RequestedBy    string `json:"requestedBy,omitempty"`
-	StartTime      string `json:"startTime,omitempty"`
-	CompletionTime string `json:"completionTime,omitempty"`
-	TaskRunName    string `json:"taskRunName,omitempty"`
-	OutputRef      string `json:"outputRef,omitempty"`
+	Name            string `json:"name"`
+	Phase           string `json:"phase"`
+	Message         string `json:"message"`
+	RequestedBy     string `json:"requestedBy,omitempty"`
+	StartTime       string `json:"startTime,omitempty"`
+	CompletionTime  string `json:"completionTime,omitempty"`
+	TaskRunName     string `json:"taskRunName,omitempty"`
+	PipelineRunName string `json:"pipelineRunName,omitempty"`
+	OutputRef       string `json:"outputRef,omitempty"`
 }
 
 // SealedListItem represents a sealed job in the list API

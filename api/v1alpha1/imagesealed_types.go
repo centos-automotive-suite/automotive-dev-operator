@@ -22,10 +22,15 @@ import (
 
 // ImageSealedSpec defines the desired state of ImageSealed
 type ImageSealedSpec struct {
-	// Operation is the AIB sealed operation: prepare-reseal, reseal, extract-for-signing, inject-signed
-	// +kubebuilder:validation:Required
+	// Operation is the AIB sealed operation when running a single stage (ignored if Stages is set).
 	// +kubebuilder:validation:Enum=prepare-reseal;reseal;extract-for-signing;inject-signed
-	Operation string `json:"operation"`
+	Operation string `json:"operation,omitempty"`
+
+	// Stages is an ordered list of operations to run as a pipeline. If set, Operation is ignored.
+	// Example: [prepare-reseal, extract-for-signing, inject-signed, reseal]
+	// +kubebuilder:validation:MinItems=1
+	// +listType=atomic
+	Stages []string `json:"stages,omitempty"`
 
 	// InputRef is the OCI reference to the input disk image
 	// +kubebuilder:validation:Required
@@ -47,6 +52,15 @@ type ImageSealedSpec struct {
 	// (REGISTRY_URL, REGISTRY_USERNAME, REGISTRY_PASSWORD)
 	SecretRef string `json:"secretRef,omitempty"`
 
+	// KeySecretRef is the name of a secret containing the sealing key (same shape as ImageReseal).
+	// The secret must have a data key named "private-key" with the PEM-encoded key.
+	// Optional for prepare-reseal and reseal: if not set, aib may use an ephemeral key.
+	KeySecretRef string `json:"keySecretRef,omitempty"`
+
+	// KeyPasswordSecretRef is the name of a secret containing the password for an encrypted key.
+	// The secret must have a data key named "password". Optional.
+	KeyPasswordSecretRef string `json:"keyPasswordSecretRef,omitempty"`
+
 	// AIBExtraArgs are extra arguments to pass to AIB
 	AIBExtraArgs []string `json:"aibExtraArgs,omitempty"`
 }
@@ -60,8 +74,11 @@ type ImageSealedStatus struct {
 	// Message provides additional details about the current phase
 	Message string `json:"message,omitempty"`
 
-	// TaskRunName is the name of the Tekton TaskRun executing this sealed operation
+	// TaskRunName is the name of the Tekton TaskRun (single-stage runs)
 	TaskRunName string `json:"taskRunName,omitempty"`
+
+	// PipelineRunName is the name of the Tekton PipelineRun (multi-stage runs)
+	PipelineRunName string `json:"pipelineRunName,omitempty"`
 
 	// OutputRef is the OCI reference where the result was pushed (after completion)
 	OutputRef string `json:"outputRef,omitempty"`
@@ -108,4 +125,16 @@ func (s *ImageSealedSpec) GetAIBImage() string {
 		return s.AIBImage
 	}
 	return "quay.io/centos-sig-automotive/automotive-image-builder:latest"
+}
+
+// GetStages returns the ordered list of stages to run. Uses Stages if set, otherwise []string{Operation}.
+// Returns nil if neither is set (invalid spec).
+func (s *ImageSealedSpec) GetStages() []string {
+	if len(s.Stages) > 0 {
+		return s.Stages
+	}
+	if s.Operation != "" {
+		return []string{s.Operation}
+	}
+	return nil
 }

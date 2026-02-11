@@ -2972,25 +2972,41 @@ func (a *APIServer) createSealed(c *gin.Context) {
 		return
 	}
 
-	validOps := map[SealedOperation]bool{
-		SealedPrepareReseal: true, SealedReseal: true,
-		SealedExtractForSigning: true, SealedInjectSigned: true,
+	validOps := map[string]bool{
+		"prepare-reseal": true, "reseal": true, "extract-for-signing": true, "inject-signed": true,
 	}
-	if !validOps[req.Operation] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "operation must be one of: prepare-reseal, reseal, extract-for-signing, inject-signed"})
+	var stages []string
+	if len(req.Stages) > 0 {
+		stages = req.Stages
+		for _, op := range stages {
+			if !validOps[op] {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "stages must contain only: prepare-reseal, reseal, extract-for-signing, inject-signed"})
+				return
+			}
+		}
+	} else if req.Operation != "" {
+		if !validOps[string(req.Operation)] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "operation must be one of: prepare-reseal, reseal, extract-for-signing, inject-signed"})
+			return
+		}
+		stages = []string{string(req.Operation)}
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "operation or stages is required"})
 		return
 	}
 	if strings.TrimSpace(req.InputRef) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "inputRef is required"})
 		return
 	}
-	if req.Operation == SealedInjectSigned && strings.TrimSpace(req.SignedRef) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "signedRef is required for inject-signed"})
-		return
+	for _, op := range stages {
+		if op == "inject-signed" && strings.TrimSpace(req.SignedRef) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "signedRef is required when inject-signed is in stages"})
+			return
+		}
 	}
 
 	if req.Name == "" {
-		req.Name = fmt.Sprintf("sealed-%s-%s", req.Operation, time.Now().Format("20060102-150405"))
+		req.Name = fmt.Sprintf("sealed-%s-%s", stages[0], time.Now().Format("20060102-150405"))
 	}
 	if err := validateBuildName(req.Name); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -3065,14 +3081,17 @@ func (a *APIServer) createSealed(c *gin.Context) {
 			},
 		},
 		Spec: automotivev1alpha1.ImageSealedSpec{
-			Operation:    string(req.Operation),
-			InputRef:     req.InputRef,
-			OutputRef:    req.OutputRef,
-			SignedRef:    req.SignedRef,
-			AIBImage:     aibImage,
-			StorageClass: req.StorageClass,
-			SecretRef:    secretRef,
-			AIBExtraArgs: req.AIBExtraArgs,
+			Operation:            string(req.Operation),
+			Stages:               req.Stages,
+			InputRef:             req.InputRef,
+			OutputRef:            req.OutputRef,
+			SignedRef:            req.SignedRef,
+			AIBImage:             aibImage,
+			StorageClass:         req.StorageClass,
+			SecretRef:            secretRef,
+			KeySecretRef:         req.KeySecretRef,
+			KeyPasswordSecretRef: req.KeyPasswordSecretRef,
+			AIBExtraArgs:         req.AIBExtraArgs,
 		},
 	}
 
@@ -3166,14 +3185,15 @@ func (a *APIServer) getSealed(c *gin.Context, name string) {
 		compStr = sealed.Status.CompletionTime.Format(time.RFC3339)
 	}
 	writeJSON(c, http.StatusOK, SealedResponse{
-		Name:           sealed.Name,
-		Phase:          sealed.Status.Phase,
-		Message:        sealed.Status.Message,
-		RequestedBy:    sealed.Annotations["automotive.sdv.cloud.redhat.com/requested-by"],
-		StartTime:      startStr,
-		CompletionTime: compStr,
-		TaskRunName:    sealed.Status.TaskRunName,
-		OutputRef:      sealed.Status.OutputRef,
+		Name:            sealed.Name,
+		Phase:           sealed.Status.Phase,
+		Message:         sealed.Status.Message,
+		RequestedBy:     sealed.Annotations["automotive.sdv.cloud.redhat.com/requested-by"],
+		StartTime:       startStr,
+		CompletionTime:  compStr,
+		TaskRunName:     sealed.Status.TaskRunName,
+		PipelineRunName: sealed.Status.PipelineRunName,
+		OutputRef:       sealed.Status.OutputRef,
 	})
 }
 
@@ -3204,18 +3224,31 @@ func (a *APIServer) streamSealedLogs(c *gin.Context, name string) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	taskRunName := sealed.Status.TaskRunName
-	if taskRunName == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sealed job not ready (no TaskRun yet)"})
-		return
-	}
-	taskRun := &tektonv1.TaskRun{}
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: taskRunName, Namespace: namespace}, taskRun); err != nil {
-		if k8serrors.IsNotFound(err) {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sealed TaskRun not found yet"})
+	var taskRun *tektonv1.TaskRun
+	if sealed.Status.TaskRunName != "" {
+		tr := &tektonv1.TaskRun{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: sealed.Status.TaskRunName, Namespace: namespace}, tr); err != nil {
+			if k8serrors.IsNotFound(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sealed TaskRun not found yet"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		taskRun = tr
+	} else if sealed.Status.PipelineRunName != "" {
+		trList := &tektonv1.TaskRunList{}
+		if err := k8sClient.List(ctx, trList, client.InNamespace(namespace), client.MatchingLabels{"tekton.dev/pipelineRun": sealed.Status.PipelineRunName}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if len(trList.Items) == 0 {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sealed pipeline not ready (no TaskRuns yet)"})
+			return
+		}
+		taskRun = &trList.Items[0]
+	} else {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sealed job not ready (no TaskRun or PipelineRun yet)"})
 		return
 	}
 	podName := taskRun.Status.PodName

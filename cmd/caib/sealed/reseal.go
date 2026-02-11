@@ -38,7 +38,7 @@ func newResealCmd() *cobra.Command {
 	}
 	addSealedCommonFlags(cmd)
 	addSealedServerFlags(cmd)
-	cmd.Flags().StringVarP(&resealWorkspace, "workspace", "w", ".", "Workspace directory (input/output paths relative to this)")
+	cmd.Flags().StringVar(&resealWorkspace, "workspace", ".", "Workspace directory (input/output paths relative to this)")
 	return cmd
 }
 

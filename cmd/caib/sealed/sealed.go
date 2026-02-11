@@ -37,13 +37,15 @@ import (
 const defaultAIBImage = "quay.io/centos-sig-automotive/automotive-image-builder:latest"
 
 var (
-	sealedAIBImage   string
-	sealedVerbose    bool
-	sealedExtraArgs  []string
-	sealedServerURL  string
-	sealedAuthToken  string
-	sealedWait       bool
-	sealedFollowLogs bool
+	sealedAIBImage          string
+	sealedVerbose           bool
+	sealedExtraArgs         []string
+	sealedServerURL         string
+	sealedAuthToken         string
+	sealedWait              bool
+	sealedFollowLogs        bool
+	sealedKeySecret         string
+	sealedKeyPasswordSecret string
 )
 
 func containerTool() string {
@@ -66,6 +68,8 @@ func addSealedServerFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&sealedAuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for API authentication")
 	cmd.Flags().BoolVarP(&sealedWait, "wait", "w", false, "Wait for sealed job to complete (when using --server)")
 	cmd.Flags().BoolVarP(&sealedFollowLogs, "follow", "f", false, "Stream logs (when using --server)")
+	cmd.Flags().StringVar(&sealedKeySecret, "key-secret", "", "Name of secret containing sealing key (data key 'private-key'); optional, same as ImageReseal")
+	cmd.Flags().StringVar(&sealedKeyPasswordSecret, "key-password-secret", "", "Name of secret containing key password (data key 'password'); optional")
 }
 
 // runAIB runs the AIB container with the given subcommand and args. workDir is a host path
@@ -131,6 +135,38 @@ func ensurePathInWorkspace(workDir, path string) (string, error) {
 	return absPath, nil
 }
 
+// registryFromRef extracts the registry host from an OCI reference (e.g. quay.io/org/img:tag -> quay.io).
+func registryFromRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	parts := strings.SplitN(ref, "/", 2)
+	if len(parts) < 2 {
+		return "docker.io"
+	}
+	first := parts[0]
+	if strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" {
+		return first
+	}
+	return "docker.io"
+}
+
+// sealedRegistryCredentials returns registry URL, username, password from env and refs for the API.
+func sealedRegistryCredentials(inputRef, outputRef, signedRef string) (registryURL, username, password string) {
+	username = strings.TrimSpace(os.Getenv("REGISTRY_USERNAME"))
+	password = strings.TrimSpace(os.Getenv("REGISTRY_PASSWORD"))
+	if username == "" || password == "" {
+		return "", "", ""
+	}
+	for _, ref := range []string{inputRef, outputRef, signedRef} {
+		if r := registryFromRef(ref); r != "" {
+			return r, username, password
+		}
+	}
+	return "", "", ""
+}
+
 // runSealedViaAPI creates a sealed job via the Build API and optionally waits and streams logs
 func runSealedViaAPI(op buildapitypes.SealedOperation, inputRef, outputRef, signedRef string) error {
 	if strings.TrimSpace(sealedServerURL) == "" {
@@ -148,6 +184,21 @@ func runSealedViaAPI(op buildapitypes.SealedOperation, inputRef, outputRef, sign
 		SignedRef:    signedRef,
 		AIBImage:     sealedAIBImage,
 		AIBExtraArgs: sealedExtraArgs,
+	}
+	if regURL, user, pass := sealedRegistryCredentials(inputRef, outputRef, signedRef); regURL != "" && user != "" && pass != "" {
+		req.RegistryCredentials = &buildapitypes.RegistryCredentials{
+			Enabled:     true,
+			AuthType:    "username-password",
+			RegistryURL: regURL,
+			Username:    user,
+			Password:    pass,
+		}
+	}
+	if strings.TrimSpace(sealedKeySecret) != "" {
+		req.KeySecretRef = strings.TrimSpace(sealedKeySecret)
+	}
+	if strings.TrimSpace(sealedKeyPasswordSecret) != "" {
+		req.KeyPasswordSecretRef = strings.TrimSpace(sealedKeyPasswordSecret)
 	}
 	resp, err := api.CreateSealed(ctx, req)
 	if err != nil {

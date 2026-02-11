@@ -63,9 +63,20 @@ spec:
               inputRef:
                 description: InputRef is the OCI reference to the input disk image
                 type: string
+              keyPasswordSecretRef:
+                description: |-
+                  KeyPasswordSecretRef is the name of a secret containing the password for an encrypted key.
+                  The secret must have a data key named "password". Optional.
+                type: string
+              keySecretRef:
+                description: |-
+                  KeySecretRef is the name of a secret containing the sealing key (same shape as ImageReseal).
+                  The secret must have a data key named "private-key" with the PEM-encoded key.
+                  Optional for prepare-reseal and reseal: if not set, aib may use an ephemeral key.
+                type: string
               operation:
-                description: 'Operation is the AIB sealed operation: prepare-reseal,
-                  reseal, extract-for-signing, inject-signed'
+                description: Operation is the AIB sealed operation when running a
+                  single stage (ignored if Stages is set).
                 enum:
                 - prepare-reseal
                 - reseal
@@ -85,12 +96,20 @@ spec:
                 description: SignedRef is the OCI reference to signed artifacts; required
                   when operation is inject-signed
                 type: string
+              stages:
+                description: |-
+                  Stages is an ordered list of operations to run as a pipeline. If set, Operation is ignored.
+                  Example: [prepare-reseal, extract-for-signing, inject-signed, reseal]
+                items:
+                  type: string
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: atomic
               storageClass:
                 description: StorageClass for the workspace (optional)
                 type: string
             required:
             - inputRef
-            - operation
             type: object
           status:
             description: ImageSealedStatus defines the observed state of ImageSealed
@@ -115,13 +134,17 @@ spec:
                 - Completed
                 - Failed
                 type: string
+              pipelineRunName:
+                description: PipelineRunName is the name of the Tekton PipelineRun
+                  (multi-stage runs)
+                type: string
               startTime:
                 description: StartTime is when the sealed operation started
                 format: date-time
                 type: string
               taskRunName:
-                description: TaskRunName is the name of the Tekton TaskRun executing
-                  this sealed operation
+                description: TaskRunName is the name of the Tekton TaskRun (single-stage
+                  runs)
                 type: string
             type: object
         type: object

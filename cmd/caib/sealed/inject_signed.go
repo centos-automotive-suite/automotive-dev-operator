@@ -38,7 +38,7 @@ func newInjectSignedCmd() *cobra.Command {
 	}
 	addSealedCommonFlags(cmd)
 	addSealedServerFlags(cmd)
-	cmd.Flags().StringVarP(&injectSignedWorkspace, "workspace", "w", ".", "Workspace directory (input/output paths relative to this)")
+	cmd.Flags().StringVar(&injectSignedWorkspace, "workspace", ".", "Workspace directory (input/output paths relative to this)")
 	return cmd
 }
 

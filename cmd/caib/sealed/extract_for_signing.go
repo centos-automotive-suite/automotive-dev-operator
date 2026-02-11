@@ -38,7 +38,7 @@ func newExtractForSigningCmd() *cobra.Command {
 	}
 	addSealedCommonFlags(cmd)
 	addSealedServerFlags(cmd)
-	cmd.Flags().StringVarP(&extractWorkspace, "workspace", "w", ".", "Workspace directory (input/output paths relative to this)")
+	cmd.Flags().StringVar(&extractWorkspace, "workspace", ".", "Workspace directory (input/output paths relative to this)")
 	return cmd
 }
 
