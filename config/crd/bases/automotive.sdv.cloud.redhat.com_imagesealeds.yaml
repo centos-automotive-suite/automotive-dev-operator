@@ -60,9 +60,15 @@ spec:
                 description: AIBImage is the automotive-image-builder container image
                   to use
                 type: string
+              architecture:
+                description: |-
+                  Architecture overrides the target architecture for the builder image (e.g., "amd64", "arm64").
+                  If empty, auto-detected from the node running the task.
+                type: string
               builderImage:
-                description: BuilderImage is the osbuild builder container image to
-                  use (needed for prepare-reseal and reseal)
+                description: |-
+                  BuilderImage is the osbuild builder container image to use (needed for prepare-reseal and reseal).
+                  If empty, a default is computed from architecture and the internal registry.
                 type: string
               inputRef:
                 description: InputRef is the OCI reference to the input disk image

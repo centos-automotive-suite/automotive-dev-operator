@@ -3063,6 +3063,56 @@ func (a *APIServer) createSealed(c *gin.Context) {
 		secretRef = secretName
 	}
 
+	// Create transient seal-key secret from key content (alternative to referencing an existing secret)
+	keySecretRef := req.KeySecretRef
+	keyPasswordSecretRef := req.KeyPasswordSecretRef
+	if strings.TrimSpace(req.KeyContent) != "" && keySecretRef == "" {
+		keySecretName := req.Name + "-seal-key"
+		keySecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      keySecretName,
+				Namespace: namespace,
+				Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"private-key": []byte(req.KeyContent),
+			},
+		}
+		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keySecret, metav1.CreateOptions{}); err != nil {
+			if k8serrors.IsAlreadyExists(err) {
+				c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("sealed job %s already exists", req.Name)})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create seal-key secret: %v", err)})
+			return
+		}
+		keySecretRef = keySecretName
+
+		// Create password secret if provided
+		if strings.TrimSpace(req.KeyPassword) != "" {
+			keyPwSecretName := req.Name + "-seal-key-password"
+			keyPwSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      keyPwSecretName,
+					Namespace: namespace,
+					Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{
+					"password": []byte(req.KeyPassword),
+				},
+			}
+			if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keyPwSecret, metav1.CreateOptions{}); err != nil {
+				// Clean up the key secret we just created
+				_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, keySecretName, metav1.DeleteOptions{})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create seal-key-password secret: %v", err)})
+				return
+			}
+			keyPasswordSecretRef = keyPwSecretName
+		}
+	}
+
 	aibImage := req.AIBImage
 	if aibImage == "" {
 		aibImage = tasks.AutomotiveImageBuilder
@@ -3088,10 +3138,11 @@ func (a *APIServer) createSealed(c *gin.Context) {
 			SignedRef:            req.SignedRef,
 			AIBImage:             aibImage,
 			BuilderImage:         req.BuilderImage,
+			Architecture:         req.Architecture,
 			StorageClass:         req.StorageClass,
 			SecretRef:            secretRef,
-			KeySecretRef:         req.KeySecretRef,
-			KeyPasswordSecretRef: req.KeyPasswordSecretRef,
+			KeySecretRef:         keySecretRef,
+			KeyPasswordSecretRef: keyPasswordSecretRef,
 			AIBExtraArgs:         req.AIBExtraArgs,
 		},
 	}
@@ -3099,6 +3150,12 @@ func (a *APIServer) createSealed(c *gin.Context) {
 	if err := k8sClient.Create(ctx, imageSealed); err != nil {
 		if secretRef != "" {
 			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, secretRef, metav1.DeleteOptions{})
+		}
+		if keySecretRef != "" && keySecretRef != req.KeySecretRef {
+			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, keySecretRef, metav1.DeleteOptions{})
+		}
+		if keyPasswordSecretRef != "" && keyPasswordSecretRef != req.KeyPasswordSecretRef {
+			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, keyPasswordSecretRef, metav1.DeleteOptions{})
 		}
 		if k8serrors.IsAlreadyExists(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("sealed job %s already exists", req.Name)})
@@ -3263,15 +3320,36 @@ func (a *APIServer) streamSealedLogs(c *gin.Context, name string) {
 	defer cancel()
 	setupLogStreamHeaders(c)
 	containerName := "step-sealed-op"
-	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
-		Container: containerName,
-		Follow:    true,
-		SinceTime: sinceTime,
-	})
-	stream, err := req.Stream(streamCtx)
-	if err != nil {
+
+	// Retry getting the log stream if the container is still initializing
+	var stream io.ReadCloser
+	for retries := 0; retries < 30; retries++ {
+		req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+			Container: containerName,
+			Follow:    true,
+			SinceTime: sinceTime,
+		})
+		s, err := req.Stream(streamCtx)
+		if err == nil {
+			stream = s
+			break
+		}
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "PodInitializing") || strings.Contains(errMsg, "is waiting to start") || strings.Contains(errMsg, "ContainerCreating") {
+			select {
+			case <-streamCtx.Done():
+				c.JSON(http.StatusGatewayTimeout, gin.H{"error": "timed out waiting for container to start"})
+				return
+			case <-time.After(2 * time.Second):
+				continue
+			}
+		}
 		_, _ = fmt.Fprintf(c.Writer, "\n[Error streaming logs: %v]\n", err)
 		c.Writer.Flush()
+		return
+	}
+	if stream == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "container did not start in time"})
 		return
 	}
 	defer func() {

@@ -45,8 +45,13 @@ type ImageSealedSpec struct {
 	// AIBImage is the automotive-image-builder container image to use
 	AIBImage string `json:"aibImage,omitempty"`
 
-	// BuilderImage is the osbuild builder container image to use (needed for prepare-reseal and reseal)
+	// BuilderImage is the osbuild builder container image to use (needed for prepare-reseal and reseal).
+	// If empty, a default is computed from architecture and the internal registry.
 	BuilderImage string `json:"builderImage,omitempty"`
+
+	// Architecture overrides the target architecture for the builder image (e.g., "amd64", "arm64").
+	// If empty, auto-detected from the node running the task.
+	Architecture string `json:"architecture,omitempty"`
 
 	// StorageClass for the workspace (optional)
 	StorageClass string `json:"storageClass,omitempty"`

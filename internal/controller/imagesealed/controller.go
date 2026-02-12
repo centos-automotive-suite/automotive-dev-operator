@@ -243,6 +243,7 @@ func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotive
 		{Name: "signed-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: signedRef}},
 		{Name: "aib-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.GetAIBImage()}},
 		{Name: "builder-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.BuilderImage}},
+		{Name: "architecture", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.Architecture}},
 	}
 
 	tr := &tektonv1.TaskRun{
@@ -341,6 +342,7 @@ func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automo
 			{Name: "signed-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: signedRef}},
 			{Name: "aib-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.GetAIBImage()}},
 			{Name: "builder-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.BuilderImage}},
+			{Name: "architecture", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.Architecture}},
 		}
 		pt.Workspaces = pipelineWorkspaceRefs
 		pipelineTasks = append(pipelineTasks, pt)
@@ -405,6 +407,9 @@ func (r *Reconciler) cleanupTransientSecrets(ctx context.Context, sealed *automo
 	}
 	if sealed.Spec.KeySecretRef != "" {
 		r.deleteSecretWithRetry(ctx, sealed.Namespace, sealed.Spec.KeySecretRef, "seal key", log)
+	}
+	if sealed.Spec.KeyPasswordSecretRef != "" {
+		r.deleteSecretWithRetry(ctx, sealed.Namespace, sealed.Spec.KeyPasswordSecretRef, "seal key password", log)
 	}
 }
 

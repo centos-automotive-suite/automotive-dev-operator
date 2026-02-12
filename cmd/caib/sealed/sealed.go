@@ -39,6 +39,7 @@ const defaultAIBImage = "quay.io/centos-sig-automotive/automotive-image-builder:
 var (
 	sealedAIBImage          string
 	sealedBuilderImage      string
+	sealedArchitecture      string
 	sealedVerbose           bool
 	sealedExtraArgs         []string
 	sealedServerURL         string
@@ -47,6 +48,8 @@ var (
 	sealedFollowLogs        bool
 	sealedKeySecret         string
 	sealedKeyPasswordSecret string
+	sealedKeyFile           string
+	sealedKeyPassword       string
 )
 
 func containerTool() string {
@@ -59,7 +62,8 @@ func containerTool() string {
 // addSealedCommonFlags adds flags common to all sealed subcommands
 func addSealedCommonFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&sealedAIBImage, "aib-image", defaultAIBImage, "AIB container image")
-	cmd.Flags().StringVar(&sealedBuilderImage, "builder-image", "", "Builder container image for reseal operations (required for prepare-reseal/reseal)")
+	cmd.Flags().StringVar(&sealedBuilderImage, "builder-image", "", "Builder container image for reseal operations (overrides --arch default)")
+	cmd.Flags().StringVar(&sealedArchitecture, "arch", "", "Target architecture for default builder image (e.g., amd64, arm64); auto-detected if not set")
 	cmd.Flags().BoolVar(&sealedVerbose, "verbose", false, "Verbose AIB output")
 	cmd.Flags().StringArrayVar(&sealedExtraArgs, "extra-args", nil, "Extra arguments to pass to AIB (repeatable)")
 }
@@ -70,8 +74,10 @@ func addSealedServerFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&sealedAuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for API authentication")
 	cmd.Flags().BoolVarP(&sealedWait, "wait", "w", false, "Wait for sealed job to complete (when using --server)")
 	cmd.Flags().BoolVarP(&sealedFollowLogs, "follow", "f", false, "Stream logs (when using --server)")
-	cmd.Flags().StringVar(&sealedKeySecret, "key-secret", "", "Name of secret containing sealing key (data key 'private-key'); optional, same as ImageReseal")
-	cmd.Flags().StringVar(&sealedKeyPasswordSecret, "key-password-secret", "", "Name of secret containing key password (data key 'password'); optional")
+	cmd.Flags().StringVar(&sealedKeySecret, "key-secret", "", "Name of existing secret containing sealing key (data key 'private-key')")
+	cmd.Flags().StringVar(&sealedKeyPasswordSecret, "key-password-secret", "", "Name of existing secret containing key password (data key 'password')")
+	cmd.Flags().StringVar(&sealedKeyFile, "key-file", "", "Path to local PEM key file (uploaded to cluster automatically)")
+	cmd.Flags().StringVar(&sealedKeyPassword, "key-password", "", "Password for encrypted key file (used with --key-file)")
 }
 
 // runAIB runs the AIB container with the given subcommand and args. workDir is a host path
@@ -186,6 +192,7 @@ func runSealedViaAPI(op buildapitypes.SealedOperation, inputRef, outputRef, sign
 		SignedRef:    signedRef,
 		AIBImage:     sealedAIBImage,
 		BuilderImage: sealedBuilderImage,
+		Architecture: sealedArchitecture,
 		AIBExtraArgs: sealedExtraArgs,
 	}
 	if regURL, user, pass := sealedRegistryCredentials(inputRef, outputRef, signedRef); regURL != "" && user != "" && pass != "" {
@@ -197,11 +204,22 @@ func runSealedViaAPI(op buildapitypes.SealedOperation, inputRef, outputRef, sign
 			Password:    pass,
 		}
 	}
-	if strings.TrimSpace(sealedKeySecret) != "" {
+	// --key-file: read local PEM file and send content via API (server creates the secret)
+	if strings.TrimSpace(sealedKeyFile) != "" {
+		keyData, err := os.ReadFile(strings.TrimSpace(sealedKeyFile))
+		if err != nil {
+			return fmt.Errorf("failed to read key file %s: %w", sealedKeyFile, err)
+		}
+		req.KeyContent = string(keyData)
+		if strings.TrimSpace(sealedKeyPassword) != "" {
+			req.KeyPassword = strings.TrimSpace(sealedKeyPassword)
+		}
+	} else if strings.TrimSpace(sealedKeySecret) != "" {
+		// --key-secret: reference an existing secret on the cluster
 		req.KeySecretRef = strings.TrimSpace(sealedKeySecret)
-	}
-	if strings.TrimSpace(sealedKeyPasswordSecret) != "" {
-		req.KeyPasswordSecretRef = strings.TrimSpace(sealedKeyPasswordSecret)
+		if strings.TrimSpace(sealedKeyPasswordSecret) != "" {
+			req.KeyPasswordSecretRef = strings.TrimSpace(sealedKeyPasswordSecret)
+		}
 	}
 	resp, err := api.CreateSealed(ctx, req)
 	if err != nil {
@@ -214,6 +232,8 @@ func runSealedViaAPI(op buildapitypes.SealedOperation, inputRef, outputRef, sign
 	return nil
 }
 
+const maxSealedLogRetries = 24 // ~2 minutes at 5s intervals
+
 func waitForSealedCompletion(ctx context.Context, api *buildapiclient.Client, name string) {
 	fmt.Println("Waiting for sealed job to complete...")
 	ticker := time.NewTicker(5 * time.Second)
@@ -221,6 +241,9 @@ func waitForSealedCompletion(ctx context.Context, api *buildapiclient.Client, na
 	timeout := 2 * time.Hour
 	deadline := time.Now().Add(timeout)
 	var lastPhase string
+	logRetries := 0
+	logStreaming := false
+	logRetryWarningShown := false
 	for time.Now().Before(deadline) {
 		st, err := api.GetSealed(ctx, name)
 		if err != nil {
@@ -243,9 +266,24 @@ func waitForSealedCompletion(ctx context.Context, api *buildapiclient.Client, na
 			fmt.Printf("Error: sealed job failed: %s\n", st.Message)
 			os.Exit(1)
 		}
-		if sealedFollowLogs && (st.Phase == "Running" || st.Phase == "Pending") {
-			streamSealedLogs(sealedServerURL, sealedAuthToken, name)
-			sealedFollowLogs = false
+		if sealedFollowLogs && !logStreaming && (st.Phase == "Running" || st.Phase == "Pending") {
+			if logRetries < maxSealedLogRetries {
+				err := streamSealedLogs(sealedServerURL, sealedAuthToken, name)
+				if err != nil {
+					logRetries++
+					if !logRetryWarningShown {
+						fmt.Printf("Waiting for logs... (attempt %d/%d)\n", logRetries, maxSealedLogRetries)
+						logRetryWarningShown = true
+					}
+				} else {
+					// Stream completed normally, don't retry
+					logStreaming = true
+				}
+			} else if !logRetryWarningShown {
+				fmt.Printf("Log streaming failed after %d attempts. Falling back to status updates.\n", maxSealedLogRetries)
+				logRetryWarningShown = true
+				sealedFollowLogs = false
+			}
 		}
 		<-ticker.C
 	}
@@ -253,7 +291,8 @@ func waitForSealedCompletion(ctx context.Context, api *buildapiclient.Client, na
 	os.Exit(1)
 }
 
-func streamSealedLogs(serverURL, token, name string) {
+// streamSealedLogs attempts to stream logs; returns nil on success, error if not ready yet
+func streamSealedLogs(serverURL, token, name string) error {
 	logURL := strings.TrimRight(serverURL, "/") + "/v1/sealed/" + url.PathEscape(name) + "/logs?follow=1"
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, logURL, nil)
 	if strings.TrimSpace(token) != "" {
@@ -262,13 +301,14 @@ func streamSealedLogs(serverURL, token, name string) {
 	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Printf("log stream failed: %v\n", err)
-		return
+		return fmt.Errorf("log stream failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
+		return fmt.Errorf("log endpoint not ready (HTTP %d)", resp.StatusCode)
+	}
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("log stream error: HTTP %d\n", resp.StatusCode)
-		return
+		return fmt.Errorf("log stream error: HTTP %d", resp.StatusCode)
 	}
 	fmt.Println("Streaming logs...")
 	scanner := bufio.NewScanner(resp.Body)
@@ -277,6 +317,7 @@ func streamSealedLogs(serverURL, token, name string) {
 		fmt.Println(scanner.Text())
 	}
 	_ = scanner.Err()
+	return nil
 }
 
 func handleSealedError(err error) {

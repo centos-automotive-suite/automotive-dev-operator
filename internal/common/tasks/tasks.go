@@ -1460,6 +1460,12 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 				Description: "Builder container image for reseal operations",
 				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
 			},
+			{
+				Name:        "architecture",
+				Type:        tektonv1.ParamTypeString,
+				Description: "Target architecture (e.g., amd64, arm64); auto-detected if empty",
+				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
+			},
 		},
 		Results: []tektonv1.TaskResult{
 			{
@@ -1493,6 +1499,7 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 					{Name: "WORKSPACE", Value: "/workspace/shared"},
 					{Name: "REGISTRY_AUTH_PATH", Value: "/workspace/registry-auth"},
 					{Name: "BUILDER_IMAGE", Value: "$(params.builder-image)"},
+					{Name: "ARCHITECTURE", Value: "$(params.architecture)"},
 				},
 				Script:  SealedOperationScript,
 				Timeout: &metav1.Duration{Duration: 2 * time.Hour},

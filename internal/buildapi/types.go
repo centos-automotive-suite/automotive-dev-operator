@@ -299,16 +299,22 @@ type SealedRequest struct {
 	// OutputRef is the OCI reference where to push the result (optional for extract-for-signing)
 	OutputRef string `json:"outputRef,omitempty"`
 	// SignedRef is the OCI reference to signed artifacts; required when operation is inject-signed
-	SignedRef           string               `json:"signedRef,omitempty"`
-	AIBImage            string               `json:"aibImage,omitempty"`
-	BuilderImage        string               `json:"builderImage,omitempty"`
+	SignedRef    string `json:"signedRef,omitempty"`
+	AIBImage     string `json:"aibImage,omitempty"`
+	BuilderImage string `json:"builderImage,omitempty"`
+	// Architecture overrides the target architecture for the builder image (e.g., "amd64", "arm64").
+	Architecture        string               `json:"architecture,omitempty"`
 	StorageClass        string               `json:"storageClass,omitempty"`
 	AIBExtraArgs        []string             `json:"aibExtraArgs,omitempty"`
 	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
-	// KeySecretRef is the name of a secret containing the sealing key (data key "private-key"). Optional; same shape as ImageReseal.
+	// KeySecretRef is the name of an existing secret containing the sealing key (data key "private-key").
 	KeySecretRef string `json:"keySecretRef,omitempty"`
-	// KeyPasswordSecretRef is the name of a secret containing the key password (data key "password"). Optional.
+	// KeyPasswordSecretRef is the name of an existing secret containing the key password (data key "password").
 	KeyPasswordSecretRef string `json:"keyPasswordSecretRef,omitempty"`
+	// KeyContent is the PEM-encoded private key content (alternative to KeySecretRef; server creates a transient secret).
+	KeyContent string `json:"keyContent,omitempty"`
+	// KeyPassword is the password for an encrypted key (used with KeyContent).
+	KeyPassword string `json:"keyPassword,omitempty"`
 }
 
 // SealedResponse is returned by POST and GET sealed operations

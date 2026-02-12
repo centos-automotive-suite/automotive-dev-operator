@@ -155,6 +155,27 @@ if [ -f "/workspace/sealing-key-password/password" ]; then
   echo "Using seal key password from workspace"
 fi
 
+# ── Resolve architecture ──
+# Use ARCHITECTURE env var if set (from --arch flag), otherwise detect from node
+if [ -n "${ARCHITECTURE:-}" ]; then
+  RESOLVED_ARCH="$ARCHITECTURE"
+else
+  case "$(uname -m)" in
+    x86_64)  RESOLVED_ARCH="amd64" ;;
+    aarch64) RESOLVED_ARCH="arm64" ;;
+    *)       RESOLVED_ARCH="$(uname -m)" ;;
+  esac
+fi
+echo "Architecture: $RESOLVED_ARCH"
+
+# ── Default builder image based on architecture ──
+# If no explicit BUILDER_IMAGE was provided, compute a default from the internal registry
+if [ -z "${BUILDER_IMAGE:-}" ]; then
+  NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || echo "automotive-dev-operator-system")
+  BUILDER_IMAGE="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/aib-build:autosd-${RESOLVED_ARCH}"
+  echo "Using default builder image: $BUILDER_IMAGE"
+fi
+
 validate_arg "${INPUT_REF}" "input-ref"
 validate_arg "${OUTPUT_REF:-}" "output-ref"
 validate_arg "${SIGNED_REF:-}" "signed-ref"
