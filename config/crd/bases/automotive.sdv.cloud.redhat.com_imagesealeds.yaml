@@ -60,6 +60,10 @@ spec:
                 description: AIBImage is the automotive-image-builder container image
                   to use
                 type: string
+              builderImage:
+                description: BuilderImage is the osbuild builder container image to
+                  use (needed for prepare-reseal and reseal)
+                type: string
               inputRef:
                 description: InputRef is the OCI reference to the input disk image
                 type: string

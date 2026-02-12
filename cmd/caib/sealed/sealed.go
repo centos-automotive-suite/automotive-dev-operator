@@ -38,6 +38,7 @@ const defaultAIBImage = "quay.io/centos-sig-automotive/automotive-image-builder:
 
 var (
 	sealedAIBImage          string
+	sealedBuilderImage      string
 	sealedVerbose           bool
 	sealedExtraArgs         []string
 	sealedServerURL         string
@@ -58,6 +59,7 @@ func containerTool() string {
 // addSealedCommonFlags adds flags common to all sealed subcommands
 func addSealedCommonFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&sealedAIBImage, "aib-image", defaultAIBImage, "AIB container image")
+	cmd.Flags().StringVar(&sealedBuilderImage, "builder-image", "", "Builder container image for reseal operations (required for prepare-reseal/reseal)")
 	cmd.Flags().BoolVar(&sealedVerbose, "verbose", false, "Verbose AIB output")
 	cmd.Flags().StringArrayVar(&sealedExtraArgs, "extra-args", nil, "Extra arguments to pass to AIB (repeatable)")
 }
@@ -183,6 +185,7 @@ func runSealedViaAPI(op buildapitypes.SealedOperation, inputRef, outputRef, sign
 		OutputRef:    outputRef,
 		SignedRef:    signedRef,
 		AIBImage:     sealedAIBImage,
+		BuilderImage: sealedBuilderImage,
 		AIBExtraArgs: sealedExtraArgs,
 	}
 	if regURL, user, pass := sealedRegistryCredentials(inputRef, outputRef, signedRef); regURL != "" && user != "" && pass != "" {

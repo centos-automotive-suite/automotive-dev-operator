@@ -120,9 +120,11 @@ func (r *Reconciler) handleRunning(ctx context.Context, sealed *automotivev1alph
 }
 
 func (r *Reconciler) handleRunningTaskRun(ctx context.Context, sealed *automotivev1alpha1.ImageSealed) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	tr := &tektonv1.TaskRun{}
 	if err := r.Get(ctx, client.ObjectKey{Name: sealed.Status.TaskRunName, Namespace: sealed.Namespace}, tr); err != nil {
 		if k8serrors.IsNotFound(err) {
+			r.cleanupTransientSecrets(ctx, sealed, logger)
 			return r.updateStatus(ctx, sealed, "Failed", "TaskRun not found")
 		}
 		return ctrl.Result{}, err
@@ -137,14 +139,17 @@ func (r *Reconciler) handleRunningTaskRun(ctx context.Context, sealed *automotiv
 		message = "Sealed operation completed successfully"
 		sealed.Status.OutputRef = sealed.Spec.OutputRef
 	}
+	r.cleanupTransientSecrets(ctx, sealed, logger)
 	sealed.Status.CompletionTime = &metav1.Time{Time: time.Now()}
 	return r.updateStatus(ctx, sealed, phase, message)
 }
 
 func (r *Reconciler) handleRunningPipelineRun(ctx context.Context, sealed *automotivev1alpha1.ImageSealed) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	pr := &tektonv1.PipelineRun{}
 	if err := r.Get(ctx, client.ObjectKey{Name: sealed.Status.PipelineRunName, Namespace: sealed.Namespace}, pr); err != nil {
 		if k8serrors.IsNotFound(err) {
+			r.cleanupTransientSecrets(ctx, sealed, logger)
 			return r.updateStatus(ctx, sealed, "Failed", "PipelineRun not found")
 		}
 		return ctrl.Result{}, err
@@ -159,6 +164,7 @@ func (r *Reconciler) handleRunningPipelineRun(ctx context.Context, sealed *autom
 		message = "Sealed pipeline completed successfully"
 		sealed.Status.OutputRef = sealed.Spec.OutputRef
 	}
+	r.cleanupTransientSecrets(ctx, sealed, logger)
 	sealed.Status.CompletionTime = &metav1.Time{Time: time.Now()}
 	return r.updateStatus(ctx, sealed, phase, message)
 }
@@ -230,17 +236,13 @@ func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotive
 	if operation == "inject-signed" {
 		signedRef = sealed.Spec.SignedRef
 	}
-	keyPath := ""
-	if sealed.Spec.KeySecretRef != "" {
-		keyPath = "/workspace/sealing-key/private-key"
-	}
 
 	params := []tektonv1.Param{
 		{Name: "input-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.InputRef}},
 		{Name: "output-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.OutputRef}},
 		{Name: "signed-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: signedRef}},
 		{Name: "aib-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.GetAIBImage()}},
-		{Name: "key-path", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: keyPath}},
+		{Name: "builder-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.BuilderImage}},
 	}
 
 	tr := &tektonv1.TaskRun{
@@ -299,11 +301,6 @@ func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automo
 			Secret: &corev1.SecretVolumeSource{SecretName: sealed.Spec.KeyPasswordSecretRef},
 		})
 	}
-	keyPath := ""
-	if sealed.Spec.KeySecretRef != "" {
-		keyPath = "/workspace/sealing-key/private-key"
-	}
-
 	pipelineWorkspaceRefs := []tektonv1.WorkspacePipelineTaskBinding{
 		{Name: "shared", Workspace: "shared"},
 		{Name: "registry-auth", Workspace: "registry-auth"},
@@ -343,7 +340,7 @@ func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automo
 			{Name: "output-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: outputRef}},
 			{Name: "signed-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: signedRef}},
 			{Name: "aib-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.GetAIBImage()}},
-			{Name: "key-path", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: keyPath}},
+			{Name: "builder-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.BuilderImage}},
 		}
 		pt.Workspaces = pipelineWorkspaceRefs
 		pipelineTasks = append(pipelineTasks, pt)
@@ -399,6 +396,47 @@ func (r *Reconciler) updateStatus(ctx context.Context, sealed *automotivev1alpha
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// cleanupTransientSecrets deletes any transient secrets created for this sealed operation
+func (r *Reconciler) cleanupTransientSecrets(ctx context.Context, sealed *automotivev1alpha1.ImageSealed, log logr.Logger) {
+	if sealed.Spec.SecretRef != "" {
+		r.deleteSecretWithRetry(ctx, sealed.Namespace, sealed.Spec.SecretRef, "registry auth", log)
+	}
+	if sealed.Spec.KeySecretRef != "" {
+		r.deleteSecretWithRetry(ctx, sealed.Namespace, sealed.Spec.KeySecretRef, "seal key", log)
+	}
+}
+
+// deleteSecretWithRetry attempts to delete a secret with exponential backoff retry
+func (r *Reconciler) deleteSecretWithRetry(ctx context.Context, namespace, secretName, secretType string, log logr.Logger) {
+	maxRetries := 3
+	backoff := 100 * time.Millisecond
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: namespace,
+			},
+		}
+		err := r.Delete(ctx, secret)
+		if err == nil {
+			log.Info("Deleted "+secretType+" secret", "secret", secretName)
+			return
+		}
+		if k8serrors.IsNotFound(err) {
+			return
+		}
+
+		if attempt < maxRetries {
+			log.V(1).Info("Retrying secret deletion", "secret", secretName, "attempt", attempt, "error", err.Error())
+			time.Sleep(backoff)
+			backoff *= 2
+		} else {
+			log.Error(err, "Failed to delete "+secretType+" secret after retries", "secret", secretName, "attempts", maxRetries)
+		}
+	}
 }
 
 func ptr(b bool) *bool {

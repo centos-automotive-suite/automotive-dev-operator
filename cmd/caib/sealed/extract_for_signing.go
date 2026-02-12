@@ -30,9 +30,9 @@ var extractWorkspace string
 
 func newExtractForSigningCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "extract-for-signing <input-disk> <output-dir>",
-		Short: "Extract components from a disk image for external signing",
-		Long:  `Runs 'aib extract-for-signing': extracts components that need to be signed (e.g. for secure boot). Sign the contents of output-dir externally, then use inject-signed. Paths are relative to --workspace.`,
+		Use:   "extract-for-signing <input-ref> <output-ref>",
+		Short: "Extract components from a container image for external signing",
+		Long:  `Runs 'aib extract-for-signing': extracts components that need to be signed (e.g. for secure boot). With --server, input is a container registry reference and output is an OCI artifact reference. Sign the extracted contents externally, then use inject-signed. Locally, paths are relative to --workspace.`,
 		Args:  cobra.ExactArgs(2),
 		RunE:  runExtractForSigning,
 	}

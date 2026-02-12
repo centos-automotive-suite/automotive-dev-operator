@@ -301,6 +301,7 @@ type SealedRequest struct {
 	// SignedRef is the OCI reference to signed artifacts; required when operation is inject-signed
 	SignedRef           string               `json:"signedRef,omitempty"`
 	AIBImage            string               `json:"aibImage,omitempty"`
+	BuilderImage        string               `json:"builderImage,omitempty"`
 	StorageClass        string               `json:"storageClass,omitempty"`
 	AIBExtraArgs        []string             `json:"aibExtraArgs,omitempty"`
 	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`

@@ -30,9 +30,9 @@ var resealWorkspace string
 
 func newResealCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "reseal <input-disk> <output-disk>",
-		Short: "Reseal a prepared disk image",
-		Long:  `Runs 'aib reseal': reseals a disk image that was prepared with prepare-reseal. Input and output paths are relative to --workspace.`,
+		Use:   "reseal <input-ref> <output-ref>",
+		Short: "Reseal a prepared container image",
+		Long:  `Runs 'aib reseal': reseals a bootc container image that was prepared with prepare-reseal. With --server, input/output are container registry references. Locally, paths are relative to --workspace.`,
 		Args:  cobra.ExactArgs(2),
 		RunE:  runReseal,
 	}

@@ -30,9 +30,9 @@ var injectSignedWorkspace string
 
 func newInjectSignedCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "inject-signed <input-disk> <signed-dir> <output-disk>",
-		Short: "Inject signed components back into a disk image",
-		Long:  `Runs 'aib inject-signed': injects externally signed components (from extract-for-signing) into the disk image. Paths are relative to --workspace.`,
+		Use:   "inject-signed <input-ref> <signed-ref> <output-ref>",
+		Short: "Inject signed components back into a container image",
+		Long:  `Runs 'aib inject-signed': injects externally signed components (from extract-for-signing) into the container image. With --server, input/output are container registry references and signed-ref is an OCI artifact reference. Locally, paths are relative to --workspace.`,
 		Args:  cobra.ExactArgs(3),
 		RunE:  runInjectSigned,
 	}

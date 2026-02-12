@@ -3087,6 +3087,7 @@ func (a *APIServer) createSealed(c *gin.Context) {
 			OutputRef:            req.OutputRef,
 			SignedRef:            req.SignedRef,
 			AIBImage:             aibImage,
+			BuilderImage:         req.BuilderImage,
 			StorageClass:         req.StorageClass,
 			SecretRef:            secretRef,
 			KeySecretRef:         req.KeySecretRef,

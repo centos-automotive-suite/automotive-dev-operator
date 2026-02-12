@@ -1434,12 +1434,12 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 			{
 				Name:        "input-ref",
 				Type:        tektonv1.ParamTypeString,
-				Description: "OCI reference to the input disk image (empty when input comes from workspace)",
+				Description: "OCI/container reference to the input image",
 			},
 			{
 				Name:        "output-ref",
 				Type:        tektonv1.ParamTypeString,
-				Description: "OCI reference where to push the result (optional for extract-for-signing)",
+				Description: "OCI/container reference where to push the result",
 				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
 			},
 			{
@@ -1455,17 +1455,31 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: AutomotiveImageBuilder},
 			},
 			{
-				Name:        "key-path",
+				Name:        "builder-image",
 				Type:        tektonv1.ParamTypeString,
-				Description: "Path to sealing key file (optional; secret key 'private-key', same as ImageReseal)",
+				Description: "Builder container image for reseal operations",
 				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
 			},
 		},
+		Results: []tektonv1.TaskResult{
+			{
+				Name:        "sealed-container",
+				Description: "Reference to the sealed container image (for prepare-reseal/reseal)",
+			},
+		},
 		Workspaces: []tektonv1.WorkspaceDeclaration{
-			{Name: "shared", Description: "Workspace for input/output disk images", MountPath: "/workspace/shared"},
+			{Name: "shared", Description: "Workspace for input/output artifacts", MountPath: "/workspace/shared"},
 			{Name: "registry-auth", Description: "Optional registry credentials", MountPath: "/workspace/registry-auth", Optional: true},
 			{Name: "sealing-key", Description: "Optional secret containing sealing key (data key 'private-key')", MountPath: "/workspace/sealing-key", Optional: true},
 			{Name: "sealing-key-password", Description: "Optional secret containing key password (data key 'password')", MountPath: "/workspace/sealing-key-password", Optional: true},
+		},
+		StepTemplate: &tektonv1.StepTemplate{
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: ptr.To(true),
+				SELinuxOptions: &corev1.SELinuxOptions{
+					Type: "unconfined_t",
+				},
+			},
 		},
 		Steps: []tektonv1.Step{
 			{
@@ -1478,15 +1492,50 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 					{Name: "SIGNED_REF", Value: "$(params.signed-ref)"},
 					{Name: "WORKSPACE", Value: "/workspace/shared"},
 					{Name: "REGISTRY_AUTH_PATH", Value: "/workspace/registry-auth"},
-					{Name: "KEY_PATH", Value: "$(params.key-path)"},
-					{Name: "KEY_PASSWORD_PATH", Value: "/workspace/sealing-key-password/password"},
+					{Name: "BUILDER_IMAGE", Value: "$(params.builder-image)"},
 				},
-				Script: SealedOperationScript,
-				SecurityContext: &corev1.SecurityContext{
-					Privileged:     ptr.To(true),
-					SELinuxOptions: &corev1.SELinuxOptions{Type: "unconfined_t"},
-				},
+				Script:  SealedOperationScript,
 				Timeout: &metav1.Duration{Duration: 2 * time.Hour},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      "dev",
+						MountPath: "/dev",
+					},
+					{
+						Name:      "container-storage",
+						MountPath: "/var/lib/containers/storage",
+					},
+					{
+						Name:      "run-osbuild",
+						MountPath: "/run/osbuild",
+					},
+				},
+			},
+		},
+		Volumes: []corev1.Volume{
+			{
+				Name: "dev",
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: "/dev",
+					},
+				},
+			},
+			{
+				Name: "container-storage",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{
+						Medium: corev1.StorageMediumMemory,
+					},
+				},
+			},
+			{
+				Name: "run-osbuild",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{
+						Medium: corev1.StorageMediumMemory,
+					},
+				},
 			},
 		},
 	}
