@@ -37,6 +37,13 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 )
 
+const (
+	phasePending   = "Pending"
+	phaseRunning   = "Running"
+	phaseCompleted = "Completed"
+	phaseFailed    = "Failed"
+)
+
 // Reconciler reconciles an ImageSealed object
 type Reconciler struct {
 	client.Client
@@ -62,11 +69,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	switch sealed.Status.Phase {
-	case "", "Pending":
+	case "", phasePending:
 		return r.handlePending(ctx, sealed)
-	case "Running":
+	case phaseRunning:
 		return r.handleRunning(ctx, sealed)
-	case "Completed", "Failed":
+	case phaseCompleted, phaseFailed:
 		return ctrl.Result{}, nil
 	default:
 		logger.Info("Unknown phase", "phase", sealed.Status.Phase)
@@ -78,30 +85,30 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 	logger := log.FromContext(ctx)
 	stages := sealed.Spec.GetStages()
 	if len(stages) == 0 {
-		return r.updateStatus(ctx, sealed, "Failed", "spec.operation or spec.stages must be set")
+		return r.updateStatus(ctx, sealed, phaseFailed, "spec.operation or spec.stages must be set")
 	}
 	logger.Info("Starting sealed operation", "name", sealed.Name, "stages", stages)
 
 	if err := r.ensureSealedTasks(ctx, sealed.Namespace); err != nil {
-		return r.updateStatus(ctx, sealed, "Failed", fmt.Sprintf("Failed to ensure sealed tasks: %v", err))
+		return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to ensure sealed tasks: %v", err))
 	}
 
 	if len(stages) == 1 {
 		tr, err := r.createSealedTaskRun(ctx, sealed, stages[0])
 		if err != nil {
-			return r.updateStatus(ctx, sealed, "Failed", fmt.Sprintf("Failed to create TaskRun: %v", err))
+			return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to create TaskRun: %v", err))
 		}
 		sealed.Status.TaskRunName = tr.Name
 	} else {
 		pr, err := r.createSealedPipelineRun(ctx, sealed, stages)
 		if err != nil {
-			return r.updateStatus(ctx, sealed, "Failed", fmt.Sprintf("Failed to create PipelineRun: %v", err))
+			return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to create PipelineRun: %v", err))
 		}
 		sealed.Status.PipelineRunName = pr.Name
 	}
 
 	sealed.Status.StartTime = &metav1.Time{Time: time.Now()}
-	sealed.Status.Phase = "Running"
+	sealed.Status.Phase = phaseRunning
 	sealed.Status.Message = "Sealed operation started"
 	if err := r.Status().Update(ctx, sealed); err != nil {
 		return ctrl.Result{}, err
@@ -116,7 +123,7 @@ func (r *Reconciler) handleRunning(ctx context.Context, sealed *automotivev1alph
 	if sealed.Status.PipelineRunName != "" {
 		return r.handleRunningPipelineRun(ctx, sealed)
 	}
-	return r.updateStatus(ctx, sealed, "Failed", "neither TaskRunName nor PipelineRunName is set")
+	return r.updateStatus(ctx, sealed, phaseFailed, "neither TaskRunName nor PipelineRunName is set")
 }
 
 func (r *Reconciler) handleRunningTaskRun(ctx context.Context, sealed *automotivev1alpha1.ImageSealed) (ctrl.Result, error) {
@@ -125,17 +132,17 @@ func (r *Reconciler) handleRunningTaskRun(ctx context.Context, sealed *automotiv
 	if err := r.Get(ctx, client.ObjectKey{Name: sealed.Status.TaskRunName, Namespace: sealed.Namespace}, tr); err != nil {
 		if k8serrors.IsNotFound(err) {
 			r.cleanupTransientSecrets(ctx, sealed, logger)
-			return r.updateStatus(ctx, sealed, "Failed", "TaskRun not found")
+			return r.updateStatus(ctx, sealed, phaseFailed, "TaskRun not found")
 		}
 		return ctrl.Result{}, err
 	}
 	if !tr.IsDone() {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	phase := "Failed"
+	phase := phaseFailed
 	message := "Sealed operation failed"
 	if tr.IsSuccessful() {
-		phase = "Completed"
+		phase = phaseCompleted
 		message = "Sealed operation completed successfully"
 		sealed.Status.OutputRef = sealed.Spec.OutputRef
 	}
@@ -150,17 +157,17 @@ func (r *Reconciler) handleRunningPipelineRun(ctx context.Context, sealed *autom
 	if err := r.Get(ctx, client.ObjectKey{Name: sealed.Status.PipelineRunName, Namespace: sealed.Namespace}, pr); err != nil {
 		if k8serrors.IsNotFound(err) {
 			r.cleanupTransientSecrets(ctx, sealed, logger)
-			return r.updateStatus(ctx, sealed, "Failed", "PipelineRun not found")
+			return r.updateStatus(ctx, sealed, phaseFailed, "PipelineRun not found")
 		}
 		return ctrl.Result{}, err
 	}
 	if pr.Status.CompletionTime == nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	phase := "Failed"
+	phase := phaseFailed
 	message := "Sealed pipeline failed"
 	if isPipelineRunSuccessful(pr) {
-		phase = "Completed"
+		phase = phaseCompleted
 		message = "Sealed pipeline completed successfully"
 		sealed.Status.OutputRef = sealed.Spec.OutputRef
 	}

@@ -2965,13 +2965,8 @@ func (a *APIServer) streamFlashLogs(c *gin.Context, name string) {
 	c.Writer.Flush()
 }
 
-func (a *APIServer) createSealed(c *gin.Context) {
-	var req SealedRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
-		return
-	}
-
+// validateSealedRequest validates and normalizes a SealedRequest, returning the resolved stages or an error message.
+func validateSealedRequest(req *SealedRequest) ([]string, string) {
 	validOps := map[string]bool{
 		"prepare-reseal": true, "reseal": true, "extract-for-signing": true, "inject-signed": true,
 	}
@@ -2980,36 +2975,137 @@ func (a *APIServer) createSealed(c *gin.Context) {
 		stages = req.Stages
 		for _, op := range stages {
 			if !validOps[op] {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "stages must contain only: prepare-reseal, reseal, extract-for-signing, inject-signed"})
-				return
+				return nil, "stages must contain only: prepare-reseal, reseal, extract-for-signing, inject-signed"
 			}
 		}
 	} else if req.Operation != "" {
 		if !validOps[string(req.Operation)] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "operation must be one of: prepare-reseal, reseal, extract-for-signing, inject-signed"})
-			return
+			return nil, "operation must be one of: prepare-reseal, reseal, extract-for-signing, inject-signed"
 		}
 		stages = []string{string(req.Operation)}
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "operation or stages is required"})
-		return
+		return nil, "operation or stages is required"
 	}
 	if strings.TrimSpace(req.InputRef) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "inputRef is required"})
-		return
+		return nil, "inputRef is required"
 	}
 	for _, op := range stages {
 		if op == "inject-signed" && strings.TrimSpace(req.SignedRef) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "signedRef is required when inject-signed is in stages"})
-			return
+			return nil, "signedRef is required when inject-signed is in stages"
 		}
 	}
-
 	if req.Name == "" {
 		req.Name = fmt.Sprintf("sealed-%s-%s", stages[0], time.Now().Format("20060102-150405"))
 	}
 	if err := validateBuildName(req.Name); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return nil, err.Error()
+	}
+	return stages, ""
+}
+
+// sealedSecretRefs holds the resolved secret references for a sealed operation.
+type sealedSecretRefs struct {
+	secretRef            string
+	keySecretRef         string
+	keyPasswordSecretRef string
+}
+
+// createSealedSecrets creates any transient secrets needed for a sealed operation (registry auth, seal key, key password).
+func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, req *SealedRequest) (*sealedSecretRefs, error) {
+	refs := &sealedSecretRefs{
+		keySecretRef:         req.KeySecretRef,
+		keyPasswordSecretRef: req.KeyPasswordSecretRef,
+	}
+
+	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled &&
+		req.RegistryCredentials.RegistryURL != "" &&
+		req.RegistryCredentials.Username != "" &&
+		req.RegistryCredentials.Password != "" {
+		secretName := req.Name + "-registry-auth"
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: namespace,
+				Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"REGISTRY_URL":      []byte(req.RegistryCredentials.RegistryURL),
+				"REGISTRY_USERNAME": []byte(req.RegistryCredentials.Username),
+				"REGISTRY_PASSWORD": []byte(req.RegistryCredentials.Password),
+			},
+		}
+		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+			return nil, fmt.Errorf("failed to create registry secret: %w", err)
+		}
+		refs.secretRef = secretName
+	}
+
+	if strings.TrimSpace(req.KeyContent) != "" && refs.keySecretRef == "" {
+		keySecretName := req.Name + "-seal-key"
+		keySecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      keySecretName,
+				Namespace: namespace,
+				Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"private-key": []byte(req.KeyContent),
+			},
+		}
+		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keySecret, metav1.CreateOptions{}); err != nil {
+			return nil, fmt.Errorf("failed to create seal-key secret: %w", err)
+		}
+		refs.keySecretRef = keySecretName
+
+		if strings.TrimSpace(req.KeyPassword) != "" {
+			keyPwSecretName := req.Name + "-seal-key-password"
+			keyPwSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      keyPwSecretName,
+					Namespace: namespace,
+					Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{
+					"password": []byte(req.KeyPassword),
+				},
+			}
+			if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keyPwSecret, metav1.CreateOptions{}); err != nil {
+				_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, keySecretName, metav1.DeleteOptions{})
+				return nil, fmt.Errorf("failed to create seal-key-password secret: %w", err)
+			}
+			refs.keyPasswordSecretRef = keyPwSecretName
+		}
+	}
+
+	return refs, nil
+}
+
+// cleanupSealedSecrets removes transient secrets that were created for a sealed operation.
+func cleanupSealedSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, req *SealedRequest, refs *sealedSecretRefs) {
+	if refs.secretRef != "" {
+		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, refs.secretRef, metav1.DeleteOptions{})
+	}
+	if refs.keySecretRef != "" && refs.keySecretRef != req.KeySecretRef {
+		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, refs.keySecretRef, metav1.DeleteOptions{})
+	}
+	if refs.keyPasswordSecretRef != "" && refs.keyPasswordSecretRef != req.KeyPasswordSecretRef {
+		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, refs.keyPasswordSecretRef, metav1.DeleteOptions{})
+	}
+}
+
+func (a *APIServer) createSealed(c *gin.Context) {
+	var req SealedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		return
+	}
+
+	stages, errMsg := validateSealedRequest(&req)
+	if errMsg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
 		return
 	}
 
@@ -3033,84 +3129,14 @@ func (a *APIServer) createSealed(c *gin.Context) {
 	namespace := resolveNamespace()
 	requestedBy := a.resolveRequester(c)
 
-	var secretRef string
-	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled &&
-		req.RegistryCredentials.RegistryURL != "" &&
-		req.RegistryCredentials.Username != "" &&
-		req.RegistryCredentials.Password != "" {
-		secretName := req.Name + "-registry-auth"
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: namespace,
-				Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
-			},
-			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{
-				"REGISTRY_URL":      []byte(req.RegistryCredentials.RegistryURL),
-				"REGISTRY_USERNAME": []byte(req.RegistryCredentials.Username),
-				"REGISTRY_PASSWORD": []byte(req.RegistryCredentials.Password),
-			},
-		}
-		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-			if k8serrors.IsAlreadyExists(err) {
-				c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("sealed job %s already exists", req.Name)})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create registry secret: %v", err)})
+	refs, err := createSealedSecrets(ctx, clientset, namespace, &req)
+	if err != nil {
+		if k8serrors.IsAlreadyExists(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("sealed job %s already exists", req.Name)})
 			return
 		}
-		secretRef = secretName
-	}
-
-	// Create transient seal-key secret from key content (alternative to referencing an existing secret)
-	keySecretRef := req.KeySecretRef
-	keyPasswordSecretRef := req.KeyPasswordSecretRef
-	if strings.TrimSpace(req.KeyContent) != "" && keySecretRef == "" {
-		keySecretName := req.Name + "-seal-key"
-		keySecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      keySecretName,
-				Namespace: namespace,
-				Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
-			},
-			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{
-				"private-key": []byte(req.KeyContent),
-			},
-		}
-		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keySecret, metav1.CreateOptions{}); err != nil {
-			if k8serrors.IsAlreadyExists(err) {
-				c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("sealed job %s already exists", req.Name)})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create seal-key secret: %v", err)})
-			return
-		}
-		keySecretRef = keySecretName
-
-		// Create password secret if provided
-		if strings.TrimSpace(req.KeyPassword) != "" {
-			keyPwSecretName := req.Name + "-seal-key-password"
-			keyPwSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      keyPwSecretName,
-					Namespace: namespace,
-					Labels:    map[string]string{"automotive.sdv.cloud.redhat.com/imagesealed": req.Name},
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: map[string][]byte{
-					"password": []byte(req.KeyPassword),
-				},
-			}
-			if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keyPwSecret, metav1.CreateOptions{}); err != nil {
-				// Clean up the key secret we just created
-				_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, keySecretName, metav1.DeleteOptions{})
-				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create seal-key-password secret: %v", err)})
-				return
-			}
-			keyPasswordSecretRef = keyPwSecretName
-		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
 	aibImage := req.AIBImage
@@ -3132,7 +3158,7 @@ func (a *APIServer) createSealed(c *gin.Context) {
 		},
 		Spec: automotivev1alpha1.ImageSealedSpec{
 			Operation:            string(req.Operation),
-			Stages:               req.Stages,
+			Stages:               stages,
 			InputRef:             req.InputRef,
 			OutputRef:            req.OutputRef,
 			SignedRef:            req.SignedRef,
@@ -3140,23 +3166,15 @@ func (a *APIServer) createSealed(c *gin.Context) {
 			BuilderImage:         req.BuilderImage,
 			Architecture:         req.Architecture,
 			StorageClass:         req.StorageClass,
-			SecretRef:            secretRef,
-			KeySecretRef:         keySecretRef,
-			KeyPasswordSecretRef: keyPasswordSecretRef,
+			SecretRef:            refs.secretRef,
+			KeySecretRef:         refs.keySecretRef,
+			KeyPasswordSecretRef: refs.keyPasswordSecretRef,
 			AIBExtraArgs:         req.AIBExtraArgs,
 		},
 	}
 
 	if err := k8sClient.Create(ctx, imageSealed); err != nil {
-		if secretRef != "" {
-			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, secretRef, metav1.DeleteOptions{})
-		}
-		if keySecretRef != "" && keySecretRef != req.KeySecretRef {
-			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, keySecretRef, metav1.DeleteOptions{})
-		}
-		if keyPasswordSecretRef != "" && keyPasswordSecretRef != req.KeyPasswordSecretRef {
-			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, keyPasswordSecretRef, metav1.DeleteOptions{})
-		}
+		cleanupSealedSecrets(ctx, clientset, namespace, &req, refs)
 		if k8serrors.IsAlreadyExists(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("sealed job %s already exists", req.Name)})
 			return
@@ -3165,8 +3183,8 @@ func (a *APIServer) createSealed(c *gin.Context) {
 		return
 	}
 
-	if secretRef != "" {
-		createdSecret, _ := clientset.CoreV1().Secrets(namespace).Get(ctx, secretRef, metav1.GetOptions{})
+	if refs.secretRef != "" {
+		createdSecret, _ := clientset.CoreV1().Secrets(namespace).Get(ctx, refs.secretRef, metav1.GetOptions{})
 		if createdSecret != nil {
 			createdSecret.OwnerReferences = []metav1.OwnerReference{{
 				APIVersion: automotivev1alpha1.GroupVersion.String(),
@@ -3377,7 +3395,7 @@ func (a *APIServer) streamSealedLogs(c *gin.Context, name string) {
 		c.Writer.Flush()
 	}
 	if err := scanner.Err(); err != nil && err != io.EOF {
-		_, _ = c.Writer.Write([]byte(fmt.Sprintf("\n[Stream error: %v]\n", err)))
+		fmt.Fprintf(c.Writer, "\n[Stream error: %v]\n", err) //nolint:errcheck
 		c.Writer.Flush()
 	}
 	_, _ = c.Writer.Write([]byte("\n[Log streaming completed]\n"))

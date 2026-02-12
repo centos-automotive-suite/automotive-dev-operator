@@ -17,9 +17,6 @@ limitations under the License.
 package sealed
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
@@ -49,34 +46,5 @@ func runPrepareReseal(_ *cobra.Command, args []string) error {
 		}
 		return nil
 	}
-	workDir := prepareResealWorkspace
-	if workDir == "" {
-		workDir = "."
-	}
-	absWork, err := filepath.Abs(workDir)
-	if err != nil {
-		return fmt.Errorf("workspace: %w", err)
-	}
-	input := args[0]
-	output := args[1]
-
-	inPath, err := ensurePathInWorkspace(absWork, input)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(inPath); err != nil {
-		return fmt.Errorf("input disk: %w", err)
-	}
-
-	outPath, err := ensurePathInWorkspace(absWork, output)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
-		return fmt.Errorf("create output dir: %w", err)
-	}
-
-	relIn, _ := filepath.Rel(absWork, inPath)
-	relOut, _ := filepath.Rel(absWork, outPath)
-	return runAIB("prepare-reseal", absWork, toContainerPath(relIn), toContainerPath(relOut))
+	return runLocalTwoArgOp("prepare-reseal", prepareResealWorkspace, args[0], args[1])
 }

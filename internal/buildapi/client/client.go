@@ -322,6 +322,8 @@ func (c *Client) listJSON(ctx context.Context, endpoint, operation string, out a
 }
 
 // CreateSealed submits a new sealed operation to the API server.
+//
+//nolint:dupl // Sealed and Build methods are intentionally similar but work with different types
 func (c *Client) CreateSealed(ctx context.Context, req buildapi.SealedRequest) (*buildapi.SealedResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {

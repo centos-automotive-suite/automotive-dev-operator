@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package sealed implements CLI commands for sealed image operations.
 package sealed
 
 import (
@@ -141,6 +142,35 @@ func ensurePathInWorkspace(workDir, path string) (string, error) {
 		absPath = filepath.Join(absWork, path)
 	}
 	return absPath, nil
+}
+
+// runLocalTwoArgOp is a shared helper for local sealed operations that take an input and output path
+// (e.g. prepare-reseal, reseal, extract-for-signing).
+func runLocalTwoArgOp(subcommand, workDir, input, output string) error {
+	if workDir == "" {
+		workDir = "."
+	}
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+	inPath, err := ensurePathInWorkspace(absWork, input)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(inPath); err != nil {
+		return fmt.Errorf("input disk: %w", err)
+	}
+	outPath, err := ensurePathInWorkspace(absWork, output)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		return fmt.Errorf("create output dir: %w", err)
+	}
+	relIn, _ := filepath.Rel(absWork, inPath)
+	relOut, _ := filepath.Rel(absWork, outPath)
+	return runAIB(subcommand, absWork, toContainerPath(relIn), toContainerPath(relOut))
 }
 
 // registryFromRef extracts the registry host from an OCI reference (e.g. quay.io/org/img:tag -> quay.io).
@@ -303,7 +333,11 @@ func streamSealedLogs(serverURL, token, name string) error {
 	if err != nil {
 		return fmt.Errorf("log stream failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
 		return fmt.Errorf("log endpoint not ready (HTTP %d)", resp.StatusCode)
 	}

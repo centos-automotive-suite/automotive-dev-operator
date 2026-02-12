@@ -281,6 +281,7 @@ type BuildTemplateResponse struct {
 // SealedOperation is the AIB sealed workflow operation to run
 type SealedOperation string
 
+// Sealed operation constants for each step in the AIB sealed workflow.
 const (
 	SealedPrepareReseal     SealedOperation = "prepare-reseal"
 	SealedReseal            SealedOperation = "reseal"
