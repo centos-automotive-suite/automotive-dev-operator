@@ -25,6 +25,11 @@ fi
 echo ""
 echo "[1/5] Creating Kind cluster..."
 kind create cluster --name "$CLUSTER_NAME" --wait 5m
+echo "Verifying cluster is up..."
+kubectl cluster-info --context "kind-$CLUSTER_NAME"
+# Label node for OperatorConfig nodeSelector
+kubectl label nodes --all aib=true
+kubectl get nodes --show-labels
 
 echo ""
 echo "[2/5] Installing Tekton Pipelines..."

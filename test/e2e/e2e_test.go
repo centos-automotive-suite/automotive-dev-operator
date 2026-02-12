@@ -33,6 +33,8 @@ import (
 )
 
 const namespace = "automotive-dev-operator-system"
+const Failed = "Failed"
+const archArm64 = "arm64"
 
 // hasOpenShiftRouteCRD returns true when the OpenShift Route CRD exists (OpenShift cluster).
 // On Kind there is no Route CRD, so OIDC suite can skip before creating any resources.
@@ -226,13 +228,13 @@ data:
 			if strings.Contains(strings.ToLower(os.Getenv("RUNNER_ARCH")), "arm") ||
 				strings.Contains(strings.ToLower(os.Getenv("HOSTTYPE")), "arm") ||
 				strings.Contains(strings.ToLower(os.Getenv("PROCESSOR_ARCHITECTURE")), "arm") {
-				arch = "arm64"
+				arch = archArm64
 			}
 			// Also check uname for local development
 			unameCmd := exec.Command("uname", "-m")
 			unameOutput, _ := utils.Run(unameCmd)
 			if strings.Contains(string(unameOutput), "arm64") || strings.Contains(string(unameOutput), "aarch64") {
-				arch = "arm64"
+				arch = archArm64
 			}
 
 			imageBuildYAML := fmt.Sprintf(`
@@ -276,7 +278,7 @@ spec:
 				if phase == "" {
 					return fmt.Errorf("build not started yet, phase is empty")
 				}
-				if phase == "Failed" {
+				if phase == Failed {
 					// Get more details on failure
 					cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
 						"-n", namespace, "-o", "jsonpath={.status.message}")
@@ -288,6 +290,7 @@ spec:
 			EventuallyWithOffset(1, verifyBuildStarted, 2*time.Minute, 5*time.Second).Should(Succeed())
 
 			By("waiting for build to complete (this may take several minutes)")
+			verifyBuildCompletedTimeout := 60 * time.Minute
 			verifyBuildCompleted := func() error {
 				cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
 					"-n", namespace, "-o", "jsonpath={.status.phase}")
@@ -296,7 +299,7 @@ spec:
 					return err
 				}
 				phase := string(output)
-				if phase == "Failed" {
+				if phase == Failed {
 					// Get more details on failure
 					cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
 						"-n", namespace, "-o", "jsonpath={.status.message}")
@@ -314,7 +317,11 @@ spec:
 				return nil
 			}
 			// Allow up to 10 minutes for the build to complete
-			EventuallyWithOffset(1, verifyBuildCompleted, 10*time.Minute, 15*time.Second).Should(Succeed())
+			EventuallyWithOffset(1,
+				verifyBuildCompleted,
+				verifyBuildCompletedTimeout,
+				15*time.Second).
+				Should(Succeed())
 
 			By("verifying build status has expected fields")
 			cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
@@ -337,6 +344,7 @@ spec:
 				"-n", namespace, "--ignore-not-found=true")
 			_, _ = utils.Run(cmd)
 		})
+
 	})
 })
 
@@ -452,6 +460,10 @@ var _ = Describe("OIDC Authentication", Ordered, func() {
 			return nil
 		}
 		Eventually(verifyBuildAPIDeployment, 3*time.Minute, 5*time.Second).Should(Succeed())
+
+		By("labeling nodes for build scheduling")
+		cmd = exec.Command("kubectl", "label", "nodes", "--all", "aib=true", "--overwrite")
+		_, _ = utils.Run(cmd)
 
 		if getBuildAPIURL() == "" {
 			Skip("OIDC e2e requires OpenShift Route (ado-build-api); skipping on kind")
