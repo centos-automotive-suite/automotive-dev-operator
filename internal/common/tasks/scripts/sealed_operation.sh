@@ -263,14 +263,13 @@ run_container_seal_op() {
 }
 
 # ── Operation: extract-for-signing (container-based input, OCI artifact output) ──
+# AIB extract-for-signing takes only: src_container out (no --build-container, no --key)
 run_extract_for_signing() {
   local source_container="${INPUT_REF}"
-  local builder_image="${BUILDER_IMAGE:-}"
 
   echo "=== extract-for-signing Configuration ==="
   echo "SOURCE: $source_container"
   echo "OUTPUT: ${OUTPUT_REF:-<local only>}"
-  echo "BUILDER: ${builder_image:-<not specified>}"
   echo "=========================================="
 
   if [ -z "$source_container" ]; then
@@ -289,25 +288,9 @@ run_extract_for_signing() {
     "${pull_auth_cmd[@]}"
   fi
 
-  # Build --build-container argument if provided
-  declare -a BUILD_CONTAINER_ARGS=()
-  if [ -n "$builder_image" ]; then
-    LOCAL_BUILDER="localhost/aib-builder:local"
-    echo "Pulling builder image: $builder_image -> $LOCAL_BUILDER"
-    pull_builder_cmd=(skopeo copy --authfile="$REGISTRY_AUTH_FILE" "docker://$builder_image" "containers-storage:$LOCAL_BUILDER")
-    log_command "${pull_builder_cmd[@]}"
-    if ! "${pull_builder_cmd[@]}" 2>/dev/null; then
-      echo "Auth pull failed for builder, trying public pull..."
-      pull_builder_public=(skopeo copy "docker://$builder_image" "containers-storage:$LOCAL_BUILDER")
-      log_command "${pull_builder_public[@]}"
-      "${pull_builder_public[@]}"
-    fi
-    BUILD_CONTAINER_ARGS=("--build-container" "$LOCAL_BUILDER")
-  fi
-
   # Run extract-for-signing: input is a container, output is a directory
   mkdir -p output_dir
-  extract_cmd=(aib --verbose extract-for-signing "${BUILD_CONTAINER_ARGS[@]}" "$source_container" output_dir)
+  extract_cmd=(aib --verbose extract-for-signing "$source_container" output_dir)
   log_command "${extract_cmd[@]}"
   "${extract_cmd[@]}"
 
@@ -326,6 +309,7 @@ run_extract_for_signing() {
 }
 
 # ── Operation: inject-signed (container-based input/output, OCI artifact for signed files) ──
+# AIB inject-signed accepts SHARED_RESEAL_ARGS (--build-container, --passwd) plus --reseal-with-key
 run_inject_signed() {
   local source_container="${INPUT_REF}"
   local output_container="${OUTPUT_REF:-localhost/injected-signed:latest}"
@@ -336,6 +320,7 @@ run_inject_signed() {
   echo "OUTPUT: $output_container"
   echo "SIGNED: ${SIGNED_REF:-<not set>}"
   echo "BUILDER: ${builder_image:-<not specified>}"
+  echo "RESEAL-WITH-KEY: ${SEAL_KEY_FILE:-<not set>}"
   echo "====================================="
 
   if [ -z "$source_container" ]; then
@@ -358,6 +343,36 @@ run_inject_signed() {
     "${pull_auth_cmd[@]}"
   fi
 
+  # Build --build-container argument (from SHARED_RESEAL_ARGS in AIB)
+  declare -a BUILD_CONTAINER_ARGS=()
+  if [ -n "$builder_image" ]; then
+    LOCAL_BUILDER="localhost/aib-builder:local"
+    echo "Pulling builder image: $builder_image -> $LOCAL_BUILDER"
+    pull_builder_cmd=(skopeo copy --authfile="$REGISTRY_AUTH_FILE" "docker://$builder_image" "containers-storage:$LOCAL_BUILDER")
+    log_command "${pull_builder_cmd[@]}"
+    if ! "${pull_builder_cmd[@]}" 2>/dev/null; then
+      echo "Auth pull failed for builder, trying public pull..."
+      pull_builder_public=(skopeo copy "docker://$builder_image" "containers-storage:$LOCAL_BUILDER")
+      log_command "${pull_builder_public[@]}"
+      "${pull_builder_public[@]}"
+    fi
+    BUILD_CONTAINER_ARGS=("--build-container" "$LOCAL_BUILDER")
+  fi
+
+  # Build --reseal-with-key argument (specific to inject-signed in AIB)
+  # When a seal key is provided for inject-signed, AIB uses --reseal-with-key (not --key)
+  # This combines inject-signed + reseal into a single operation
+  declare -a RESEAL_KEY_ARGS=()
+  if [ -n "$SEAL_KEY_FILE" ] && [ -f "$SEAL_KEY_FILE" ]; then
+    RESEAL_KEY_ARGS=("--reseal-with-key" "$SEAL_KEY_FILE")
+    echo "Will reseal after injecting signed files"
+    # --passwd from SHARED_RESEAL_ARGS
+    if [ -f "/workspace/sealing-key-password/password" ]; then
+      SEAL_KEY_PASSWORD=$(cat /workspace/sealing-key-password/password)
+      RESEAL_KEY_ARGS+=("--passwd" "pass:$SEAL_KEY_PASSWORD")
+    fi
+  fi
+
   # Pull signed artifacts via oras (these are files, not container images)
   install_oras
   echo "Pulling signed artifacts from ${SIGNED_REF}..."
@@ -376,24 +391,8 @@ run_inject_signed() {
   echo "Signed artifacts ready:"
   ls -la signed_dir/
 
-  # Build --build-container argument if provided
-  declare -a BUILD_CONTAINER_ARGS=()
-  if [ -n "$builder_image" ]; then
-    LOCAL_BUILDER="localhost/aib-builder:local"
-    echo "Pulling builder image: $builder_image -> $LOCAL_BUILDER"
-    pull_builder_cmd=(skopeo copy --authfile="$REGISTRY_AUTH_FILE" "docker://$builder_image" "containers-storage:$LOCAL_BUILDER")
-    log_command "${pull_builder_cmd[@]}"
-    if ! "${pull_builder_cmd[@]}" 2>/dev/null; then
-      echo "Auth pull failed for builder, trying public pull..."
-      pull_builder_public=(skopeo copy "docker://$builder_image" "containers-storage:$LOCAL_BUILDER")
-      log_command "${pull_builder_public[@]}"
-      "${pull_builder_public[@]}"
-    fi
-    BUILD_CONTAINER_ARGS=("--build-container" "$LOCAL_BUILDER")
-  fi
-
-  # Run inject-signed: input is a container + signed dir, output is a new container
-  inject_cmd=(aib --verbose inject-signed "${BUILD_CONTAINER_ARGS[@]}" "$source_container" signed_dir "$output_container")
+  # Run inject-signed: aib inject-signed [--build-container BC] [--reseal-with-key KEY] [--passwd PW] src_container srcdir new_container
+  inject_cmd=(aib --verbose inject-signed "${BUILD_CONTAINER_ARGS[@]}" "${RESEAL_KEY_ARGS[@]}" "$source_container" signed_dir "$output_container")
   log_command "${inject_cmd[@]}"
   "${inject_cmd[@]}"
 
