@@ -59,16 +59,6 @@ type JumpstarterTargetMapping struct {
 	// Example: "j storage flash ${IMAGE}"
 	// +optional
 	FlashCmd string `json:"flashCmd,omitempty"`
-
-	// Architecture is the default CPU architecture for builds targeting this device
-	// Example: "arm64"
-	// +optional
-	Architecture string `json:"architecture,omitempty"`
-
-	// ExtraArgs are default extra arguments passed to AIB for builds targeting this device
-	// Example: ["--separate-partitions"]
-	// +optional
-	ExtraArgs []string `json:"extraArgs,omitempty"`
 }
 
 // DefaultJumpstarterImage is the default container image for Jumpstarter CLI operations

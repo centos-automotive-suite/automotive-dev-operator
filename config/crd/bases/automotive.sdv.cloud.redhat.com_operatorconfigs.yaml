@@ -442,18 +442,6 @@ spec:
                       description: JumpstarterTargetMapping defines the Jumpstarter
                         configuration for a specific build target
                       properties:
-                        architecture:
-                          description: |-
-                            Architecture is the default CPU architecture for builds targeting this device
-                            Example: "arm64"
-                          type: string
-                        extraArgs:
-                          description: |-
-                            ExtraArgs are default extra arguments passed to AIB for builds targeting this device
-                            Example: ["--separate-partitions"]
-                          items:
-                            type: string
-                          type: array
                         flashCmd:
                           description: |-
                             FlashCmd is the command template for flashing the device

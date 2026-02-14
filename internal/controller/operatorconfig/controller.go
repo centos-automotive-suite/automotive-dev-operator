@@ -37,6 +37,51 @@ const (
 	unmanagedAnnotationTrue = "true"
 )
 
+// targetDefaultsYAML is the default content for the aib-target-defaults ConfigMap.
+// It defines per-target build defaults (architecture, extra args, partition rules).
+var targetDefaultsYAML = `targets:
+  ridesx4:
+    architecture: arm64
+    extraArgs: ["--separate-partitions"]
+    include: ["system_a", "system_b", "boot_a", "boot_b"]
+  ridesx4_r3:
+    architecture: arm64
+    extraArgs: ["--separate-partitions"]
+    include: ["system_a", "system_b", "boot_a", "boot_b"]
+  ridesx4_scmi:
+    architecture: arm64
+    extraArgs: ["--separate-partitions"]
+    include: ["system_a", "system_b", "boot_a", "boot_b"]
+  ride4_sa8775p_sx_r3:
+    architecture: arm64
+    extraArgs: ["--separate-partitions"]
+    include: ["system_a", "system_b", "boot_a", "boot_b"]
+  ride4_sa8775p_sx:
+    architecture: arm64
+    extraArgs: ["--separate-partitions"]
+    include: ["system_a", "system_b", "boot_a", "boot_b"]
+  ride4_sa8775p_sx_legacy:
+    architecture: arm64
+    extraArgs: ["--separate-partitions"]
+    include: ["system_a", "system_b", "boot_a", "boot_b"]
+  ride4_sa8775p_sx_legacy_r3:
+    architecture: arm64
+    extraArgs: ["--separate-partitions"]
+    include: ["system_a", "system_b", "boot_a", "boot_b"]
+  ride4_sa8650p_sx_r3:
+    architecture: arm64
+    extraArgs: ["--separate-partitions"]
+    include: ["system_a", "system_b", "boot_a", "boot_b"]
+  ebbr:
+    architecture: arm64
+  rcar_s4:
+    architecture: arm64
+  j784s4evm:
+    architecture: arm64
+  s32g_vnp_rdb3:
+    architecture: arm64
+`
+
 // isNoMatchError checks if error is "no matches for kind" error (CRD doesn't exist)
 func isNoMatchError(err error) bool {
 	if err == nil {
@@ -524,10 +569,10 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		}
 	}
 
-	// Create partition configuration ConfigMap
-	if err := r.createOrUpdatePartitionConfig(ctx, config); err != nil {
-		r.Log.Error(err, "Failed to create partition configuration")
-		return fmt.Errorf("failed to create partition configuration: %w", err)
+	// Create target defaults ConfigMap (architecture, partition rules, etc.)
+	if err := r.createOrUpdateTargetDefaults(ctx, config); err != nil {
+		r.Log.Error(err, "Failed to create target defaults ConfigMap")
+		return fmt.Errorf("failed to create target defaults ConfigMap: %w", err)
 	}
 
 	// Generate and deploy Tekton tasks
@@ -570,31 +615,14 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 	return nil
 }
 
-func (r *OperatorConfigReconciler) createOrUpdatePartitionConfig(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
+func (r *OperatorConfigReconciler) createOrUpdateTargetDefaults(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
 	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "aib-partition-config",
+			Name:      "aib-target-defaults",
 			Namespace: owner.Namespace,
 		},
 		Data: map[string]string{
-			"partition-rules.yaml": `targets:
-  ridesx4:
-    include: ["system_a", "system_b", "boot_a", "boot_b"]
-  ridesx4_r3:
-    include: ["system_a", "system_b", "boot_a", "boot_b"]
-  ridesx4_scmi:
-    include: ["system_a", "system_b", "boot_a", "boot_b"]
-  ride4_sa8775p_sx_r3:
-    include: ["system_a", "system_b", "boot_a", "boot_b"]
-  ride4_sa8775p_sx:
-    include: ["system_a", "system_b", "boot_a", "boot_b"]
-  ride4_sa8775p_sx_legacy:
-    include: ["system_a", "system_b", "boot_a", "boot_b"]
-  ride4_sa8775p_sx_legacy_r3:
-    include: ["system_a", "system_b", "boot_a", "boot_b"]
-  ride4_sa8650p_sx_r3:
-    include: ["system_a", "system_b", "boot_a", "boot_b"]
-`,
+			"target-defaults.yaml": targetDefaultsYAML,
 		},
 	}
 
@@ -727,14 +755,14 @@ func (r *OperatorConfigReconciler) cleanupBuildController(ctx context.Context, c
 func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
 	r.Log.Info("Cleaning up OSBuilds resources")
 
-	// Delete partition configuration ConfigMap
+	// Delete target defaults ConfigMap
 	configMap := &corev1.ConfigMap{}
-	configMap.Name = "aib-partition-config"
+	configMap.Name = "aib-target-defaults"
 	configMap.Namespace = config.Namespace
 	if err := r.Delete(ctx, configMap); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete partition configuration ConfigMap: %w", err)
+		return fmt.Errorf("failed to delete target defaults ConfigMap: %w", err)
 	}
-	r.Log.Info("Partition configuration ConfigMap deleted")
+	r.Log.Info("Target defaults ConfigMap deleted")
 
 	// Delete Tekton tasks
 	taskNames := []string{"build-automotive-image", "push-artifact-registry", "prepare-builder", "flash-image"}

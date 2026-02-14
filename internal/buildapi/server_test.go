@@ -105,6 +105,7 @@ var _ = Describe("APIServer", func() {
 		var (
 			originalGetClientFromRequestFn func(*gin.Context) (ctrlclient.Client, error)
 			originalLoadOperatorConfigFn   func(context.Context, ctrlclient.Client, string) (*automotivev1alpha1.OperatorConfig, error)
+			originalLoadTargetDefaultsFn   func(context.Context, ctrlclient.Client, string) (map[string]TargetDefaults, error)
 			originalNamespace              string
 			hasOriginalNamespace           bool
 		)
@@ -112,6 +113,7 @@ var _ = Describe("APIServer", func() {
 		BeforeEach(func() {
 			originalGetClientFromRequestFn = getClientFromRequestFn
 			originalLoadOperatorConfigFn = loadOperatorConfigFn
+			originalLoadTargetDefaultsFn = loadTargetDefaultsFn
 			originalNamespace, hasOriginalNamespace = os.LookupEnv("BUILD_API_NAMESPACE")
 			Expect(os.Setenv("BUILD_API_NAMESPACE", "default")).To(Succeed())
 		})
@@ -119,6 +121,7 @@ var _ = Describe("APIServer", func() {
 		AfterEach(func() {
 			getClientFromRequestFn = originalGetClientFromRequestFn
 			loadOperatorConfigFn = originalLoadOperatorConfigFn
+			loadTargetDefaultsFn = originalLoadTargetDefaultsFn
 			if hasOriginalNamespace {
 				Expect(os.Setenv("BUILD_API_NAMESPACE", originalNamespace)).To(Succeed())
 			} else {
@@ -153,9 +156,10 @@ var _ = Describe("APIServer", func() {
 			var response OperatorConfigResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.JumpstarterTargets).To(BeNil())
+			Expect(response.TargetDefaults).To(BeNil())
 		})
 
-		It("should return jumpstarter target mappings when config exists", func() {
+		It("should return jumpstarter targets and target defaults when config exists", func() {
 			config := &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{
 					Jumpstarter: &automotivev1alpha1.JumpstarterConfig{
@@ -164,9 +168,8 @@ var _ = Describe("APIServer", func() {
 								Selector: "board-type=qemu",
 							},
 							"ebbr": {
-								Selector:     "board-type=ebbr",
-								Architecture: "arm64",
-								ExtraArgs:    []string{"--separate-partitions"},
+								Selector: "board-type=ebbr",
+								FlashCmd: "j storage flash ${IMAGE}",
 							},
 						},
 					},
@@ -178,6 +181,11 @@ var _ = Describe("APIServer", func() {
 			}
 			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return config, nil
+			}
+			loadTargetDefaultsFn = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]TargetDefaults, error) {
+				return map[string]TargetDefaults{
+					"ebbr": {Architecture: "arm64", ExtraArgs: []string{"--separate-partitions"}},
+				}, nil
 			}
 
 			req, err := http.NewRequest(http.MethodGet, "/v1/config", nil)
@@ -193,9 +201,13 @@ var _ = Describe("APIServer", func() {
 			var response OperatorConfigResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.JumpstarterTargets).To(HaveLen(2))
-			Expect(response.JumpstarterTargets["qemu"]).To(Equal(TargetDefaults{Selector: "board-type=qemu"}))
-			Expect(response.JumpstarterTargets["ebbr"]).To(Equal(TargetDefaults{
-				Selector:     "board-type=ebbr",
+			Expect(response.JumpstarterTargets["qemu"]).To(Equal(JumpstarterTarget{Selector: "board-type=qemu"}))
+			Expect(response.JumpstarterTargets["ebbr"]).To(Equal(JumpstarterTarget{
+				Selector: "board-type=ebbr",
+				FlashCmd: "j storage flash ${IMAGE}",
+			}))
+			Expect(response.TargetDefaults).To(HaveLen(1))
+			Expect(response.TargetDefaults["ebbr"]).To(Equal(TargetDefaults{
 				Architecture: "arm64",
 				ExtraArgs:    []string{"--separate-partitions"},
 			}))

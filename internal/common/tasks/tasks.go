@@ -107,8 +107,8 @@ func GeneratePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 							SubPath:   ".dockerconfigjson",
 						},
 						{
-							Name:      "partition-config",
-							MountPath: "/etc/partition-config",
+							Name:      "target-defaults",
+							MountPath: "/etc/target-defaults",
 							ReadOnly:  true,
 						},
 					},
@@ -124,11 +124,11 @@ func GeneratePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 					},
 				},
 				{
-					Name: "partition-config",
+					Name: "target-defaults",
 					VolumeSource: corev1.VolumeSource{
 						ConfigMap: &corev1.ConfigMapVolumeSource{
 							LocalObjectReference: corev1.LocalObjectReference{
-								Name: "aib-partition-config",
+								Name: "aib-target-defaults",
 							},
 							Optional: ptr.To(true),
 						},

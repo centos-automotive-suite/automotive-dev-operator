@@ -36,7 +36,7 @@ func TestApplyTargetDefaults_NilConfig(t *testing.T) {
 func TestApplyTargetDefaults_EmptyTargets(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{},
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{},
 	}
 	req := &buildapitypes.BuildRequest{
 		Target:       "ebbr",
@@ -53,8 +53,8 @@ func TestApplyTargetDefaults_EmptyTargets(t *testing.T) {
 func TestApplyTargetDefaults_NoMatchingTarget(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{
-			"qemu": {Selector: "board-type=qemu"},
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+			"qemu": {},
 		},
 	}
 	req := &buildapitypes.BuildRequest{
@@ -72,9 +72,8 @@ func TestApplyTargetDefaults_NoMatchingTarget(t *testing.T) {
 func TestApplyTargetDefaults_AppliesArchFromMapping(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{
 			"ebbr": {
-				Selector:     "board-type=ebbr",
 				Architecture: archARM64,
 			},
 		},
@@ -94,9 +93,8 @@ func TestApplyTargetDefaults_AppliesArchFromMapping(t *testing.T) {
 func TestApplyTargetDefaults_ExplicitArchOverridesMapping(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, true) // user explicitly set --arch amd64
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{
 			"ebbr": {
-				Selector:     "board-type=ebbr",
 				Architecture: archARM64,
 			},
 		},
@@ -116,9 +114,8 @@ func TestApplyTargetDefaults_ExplicitArchOverridesMapping(t *testing.T) {
 func TestApplyTargetDefaults_ExplicitArchArm64OverridesMapping(t *testing.T) {
 	cmd := newCmdWithArchFlag(archARM64, true) // user explicitly set --arch arm64
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{
 			"ebbr": {
-				Selector:     "board-type=ebbr",
 				Architecture: archAMD64, // mapping says amd64
 			},
 		},
@@ -138,9 +135,8 @@ func TestApplyTargetDefaults_ExplicitArchArm64OverridesMapping(t *testing.T) {
 func TestApplyTargetDefaults_PrependsExtraArgs(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{
 			"ride": {
-				Selector:  "board-type=ride",
 				ExtraArgs: []string{"--separate-partitions"},
 			},
 		},
@@ -167,9 +163,8 @@ func TestApplyTargetDefaults_PrependsExtraArgs(t *testing.T) {
 func TestApplyTargetDefaults_ExtraArgsWithNoUserArgs(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{
 			"ride": {
-				Selector:  "board-type=ride",
 				ExtraArgs: []string{"--separate-partitions", "--verbose"},
 			},
 		},
@@ -195,9 +190,8 @@ func TestApplyTargetDefaults_ExtraArgsWithNoUserArgs(t *testing.T) {
 func TestApplyTargetDefaults_BothArchAndExtraArgs(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{
 			"ride": {
-				Selector:     "board-type=ride",
 				Architecture: archARM64,
 				ExtraArgs:    []string{"--separate-partitions"},
 			},
@@ -228,9 +222,8 @@ func TestApplyTargetDefaults_BothArchAndExtraArgs(t *testing.T) {
 func TestApplyTargetDefaults_MappingWithEmptyArchDoesNotOverride(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{
-		JumpstarterTargets: map[string]buildapitypes.TargetDefaults{
+		TargetDefaults: map[string]buildapitypes.TargetDefaults{
 			"qemu": {
-				Selector: "board-type=qemu",
 				// Architecture intentionally empty
 			},
 		},

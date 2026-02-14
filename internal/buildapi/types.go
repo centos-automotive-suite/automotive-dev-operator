@@ -252,17 +252,24 @@ type BuildListItem struct {
 	DiskImage      string `json:"diskImage,omitempty"`
 }
 
-// TargetDefaults contains build defaults and Jumpstarter configuration for a target
+// JumpstarterTarget contains flash-specific config for a target (from CRD)
+type JumpstarterTarget struct {
+	Selector string `json:"selector"`
+	FlashCmd string `json:"flashCmd,omitempty"`
+}
+
+// TargetDefaults contains build defaults for a target (from ConfigMap)
 type TargetDefaults struct {
-	Selector     string   `json:"selector"`
 	Architecture string   `json:"architecture,omitempty"`
 	ExtraArgs    []string `json:"extraArgs,omitempty"`
 }
 
 // OperatorConfigResponse returns relevant operator configuration for CLI validation
 type OperatorConfigResponse struct {
-	// JumpstarterTargets contains the target mappings with build defaults
-	JumpstarterTargets map[string]TargetDefaults `json:"jumpstarterTargets,omitempty"`
+	// JumpstarterTargets contains flash-specific config per target (from CRD)
+	JumpstarterTargets map[string]JumpstarterTarget `json:"jumpstarterTargets,omitempty"`
+	// TargetDefaults contains build defaults per target (from ConfigMap)
+	TargetDefaults map[string]TargetDefaults `json:"targetDefaults,omitempty"`
 }
 
 type (

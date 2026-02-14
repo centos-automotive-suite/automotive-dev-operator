@@ -813,26 +813,26 @@ func fetchTargetDefaults(ctx context.Context, api *buildapiclient.Client, target
 }
 
 // applyTargetDefaults applies architecture and extra-args defaults from the operator config
-// target mapping. CLI flags override mapping defaults when explicitly set.
+// target defaults (ConfigMap). CLI flags override defaults when explicitly set.
 func applyTargetDefaults(cmd *cobra.Command, config *buildapitypes.OperatorConfigResponse, req *buildapitypes.BuildRequest) {
-	if config == nil || len(config.JumpstarterTargets) == 0 {
+	if config == nil || len(config.TargetDefaults) == 0 {
 		return
 	}
 
-	defaults, exists := config.JumpstarterTargets[string(req.Target)]
+	defaults, exists := config.TargetDefaults[string(req.Target)]
 	if !exists {
 		return
 	}
 
 	if defaults.Architecture != "" && !cmd.Flags().Changed("arch") {
 		req.Architecture = buildapitypes.Architecture(defaults.Architecture)
-		fmt.Printf("Using architecture %q from target mapping for %q\n", defaults.Architecture, req.Target)
+		fmt.Printf("Using architecture %q from target defaults for %q\n", defaults.Architecture, req.Target)
 	}
 
 	if len(defaults.ExtraArgs) > 0 {
-		// Mapping args come first, user args appended
+		// Default args come first, user args appended
 		req.AIBExtraArgs = append(defaults.ExtraArgs, req.AIBExtraArgs...)
-		fmt.Printf("Prepending extra args %v from target mapping for %q\n", defaults.ExtraArgs, req.Target)
+		fmt.Printf("Prepending extra args %v from target defaults for %q\n", defaults.ExtraArgs, req.Target)
 	}
 }
 

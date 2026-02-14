@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -110,6 +111,43 @@ var _ = Describe("OperatorConfig Resources", func() {
 			Expect(buildAPIContainer.StartupProbe.HTTPGet.Path).To(Equal("/v1/healthz"))
 			Expect(buildAPIContainer.StartupProbe.HTTPGet.Port.IntVal).To(Equal(int32(8080)))
 			Expect(buildAPIContainer.StartupProbe.FailureThreshold).To(Equal(int32(30))) // 150s startup window
+		})
+	})
+
+	Describe("targetDefaultsYAML", func() {
+		It("should be valid YAML", func() {
+			var parsed map[string]interface{}
+			err := yaml.Unmarshal([]byte(targetDefaultsYAML), &parsed)
+			Expect(err).NotTo(HaveOccurred(), "targetDefaultsYAML should be valid YAML")
+		})
+
+		It("should have a targets key with entries", func() {
+			var parsed struct {
+				Targets map[string]struct {
+					Architecture string   `yaml:"architecture"`
+					ExtraArgs    []string `yaml:"extraArgs"`
+					Include      []string `yaml:"include"`
+				} `yaml:"targets"`
+			}
+			err := yaml.Unmarshal([]byte(targetDefaultsYAML), &parsed)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(parsed.Targets).NotTo(BeEmpty(), "should have at least one target")
+		})
+
+		It("should have a valid architecture for every target", func() {
+			var parsed struct {
+				Targets map[string]struct {
+					Architecture string `yaml:"architecture"`
+				} `yaml:"targets"`
+			}
+			Expect(yaml.Unmarshal([]byte(targetDefaultsYAML), &parsed)).To(Succeed())
+
+			validArchitectures := map[string]bool{"arm64": true, "amd64": true}
+			for name, t := range parsed.Targets {
+				Expect(t.Architecture).NotTo(BeEmpty(), "target %q should have an architecture", name)
+				Expect(validArchitectures).To(HaveKey(t.Architecture),
+					"target %q has unexpected architecture %q", name, t.Architecture)
+			}
 		})
 	})
 

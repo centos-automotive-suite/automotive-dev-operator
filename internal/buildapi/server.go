@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -80,6 +81,44 @@ var loadOperatorConfigFn = func(
 		return nil, err
 	}
 	return operatorConfig, nil
+}
+
+var loadTargetDefaultsFn = func(
+	ctx context.Context,
+	k8sClient client.Client,
+	namespace string,
+) (map[string]TargetDefaults, error) {
+	cm := &corev1.ConfigMap{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      "aib-target-defaults",
+	}, cm); err != nil {
+		return nil, err
+	}
+
+	data, ok := cm.Data["target-defaults.yaml"]
+	if !ok {
+		return nil, nil
+	}
+
+	var parsed struct {
+		Targets map[string]struct {
+			Architecture string   `yaml:"architecture"`
+			ExtraArgs    []string `yaml:"extraArgs"`
+		} `yaml:"targets"`
+	}
+	if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse target-defaults.yaml: %w", err)
+	}
+
+	result := make(map[string]TargetDefaults, len(parsed.Targets))
+	for name, t := range parsed.Targets {
+		result[name] = TargetDefaults{
+			Architecture: t.Architecture,
+			ExtraArgs:    t.ExtraArgs,
+		}
+	}
+	return result, nil
 }
 
 // defaultInternalRegistryURL is an alias for the shared constant.
@@ -2489,18 +2528,28 @@ func (a *APIServer) handleGetOperatorConfig(c *gin.Context) {
 		return
 	}
 
-	// Build the response with Jumpstarter target mappings
+	// Build the response with Jumpstarter target mappings (flash-specific, from CRD)
 	response := OperatorConfigResponse{}
 
 	if operatorConfig.Spec.Jumpstarter != nil && len(operatorConfig.Spec.Jumpstarter.TargetMappings) > 0 {
-		response.JumpstarterTargets = make(map[string]TargetDefaults)
+		response.JumpstarterTargets = make(map[string]JumpstarterTarget)
 		for target, mapping := range operatorConfig.Spec.Jumpstarter.TargetMappings {
-			response.JumpstarterTargets[target] = TargetDefaults{
-				Selector:     mapping.Selector,
-				Architecture: mapping.Architecture,
-				ExtraArgs:    mapping.ExtraArgs,
+			response.JumpstarterTargets[target] = JumpstarterTarget{
+				Selector: mapping.Selector,
+				FlashCmd: mapping.FlashCmd,
 			}
 		}
+	}
+
+	// Load build defaults from target-defaults ConfigMap
+	targetDefaults, err := loadTargetDefaultsFn(ctx, k8sClient, namespace)
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			a.log.Error(err, "failed to load target defaults ConfigMap", "reqID", reqID, "namespace", namespace)
+		}
+		// Non-fatal: continue without target defaults
+	} else if len(targetDefaults) > 0 {
+		response.TargetDefaults = targetDefaults
 	}
 
 	c.JSON(http.StatusOK, response)
