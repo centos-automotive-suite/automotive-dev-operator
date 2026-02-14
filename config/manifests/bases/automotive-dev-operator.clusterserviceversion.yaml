@@ -99,6 +99,12 @@ spec:
       kind: CatalogImage
       name: catalogimages.automotive.sdv.cloud.redhat.com
       version: v1alpha1
+    - description: ImageSealed represents a sealed disk image operation (prepare-reseal,
+        reseal, etc.)
+      displayName: Image Sealed
+      kind: ImageSealed
+      name: imagesealeds.automotive.sdv.cloud.redhat.com
+      version: v1alpha1
     - description: ImageBuild is the Schema for the imagebuilds API
       displayName: Image Build
       kind: ImageBuild

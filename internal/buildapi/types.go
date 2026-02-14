@@ -277,3 +277,66 @@ type BuildTemplateResponse struct {
 	BuildRequest `json:",inline"`
 	SourceFiles  []string `json:"sourceFiles,omitempty"`
 }
+
+// SealedOperation is the AIB sealed workflow operation to run
+type SealedOperation string
+
+// Sealed operation constants for each step in the AIB sealed workflow.
+const (
+	SealedPrepareReseal     SealedOperation = "prepare-reseal"
+	SealedReseal            SealedOperation = "reseal"
+	SealedExtractForSigning SealedOperation = "extract-for-signing"
+	SealedInjectSigned      SealedOperation = "inject-signed"
+)
+
+// SealedRequest is the payload to create a sealed operation via the REST API
+type SealedRequest struct {
+	Name      string          `json:"name"`
+	Operation SealedOperation `json:"operation,omitempty"`
+	// Stages is an ordered list of operations (e.g. prepare-reseal, extract-for-signing, inject-signed, reseal). If set, Operation is ignored.
+	Stages []string `json:"stages,omitempty"`
+	// InputRef is the OCI reference to the input disk image (required)
+	InputRef string `json:"inputRef"`
+	// OutputRef is the OCI reference where to push the result (optional for extract-for-signing)
+	OutputRef string `json:"outputRef,omitempty"`
+	// SignedRef is the OCI reference to signed artifacts; required when operation is inject-signed
+	SignedRef    string `json:"signedRef,omitempty"`
+	AIBImage     string `json:"aibImage,omitempty"`
+	BuilderImage string `json:"builderImage,omitempty"`
+	// Architecture overrides the target architecture for the builder image (e.g., "amd64", "arm64").
+	Architecture        string               `json:"architecture,omitempty"`
+	StorageClass        string               `json:"storageClass,omitempty"`
+	AIBExtraArgs        []string             `json:"aibExtraArgs,omitempty"`
+	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
+	// KeySecretRef is the name of an existing secret containing the sealing key (data key "private-key").
+	KeySecretRef string `json:"keySecretRef,omitempty"`
+	// KeyPasswordSecretRef is the name of an existing secret containing the key password (data key "password").
+	KeyPasswordSecretRef string `json:"keyPasswordSecretRef,omitempty"`
+	// KeyContent is the PEM-encoded private key content (alternative to KeySecretRef; server creates a transient secret).
+	KeyContent string `json:"keyContent,omitempty"`
+	// KeyPassword is the password for an encrypted key (used with KeyContent).
+	KeyPassword string `json:"keyPassword,omitempty"`
+}
+
+// SealedResponse is returned by POST and GET sealed operations
+type SealedResponse struct {
+	Name            string `json:"name"`
+	Phase           string `json:"phase"`
+	Message         string `json:"message"`
+	RequestedBy     string `json:"requestedBy,omitempty"`
+	StartTime       string `json:"startTime,omitempty"`
+	CompletionTime  string `json:"completionTime,omitempty"`
+	TaskRunName     string `json:"taskRunName,omitempty"`
+	PipelineRunName string `json:"pipelineRunName,omitempty"`
+	OutputRef       string `json:"outputRef,omitempty"`
+}
+
+// SealedListItem represents a sealed job in the list API
+type SealedListItem struct {
+	Name           string `json:"name"`
+	Phase          string `json:"phase"`
+	Message        string `json:"message"`
+	RequestedBy    string `json:"requestedBy,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	CompletionTime string `json:"completionTime,omitempty"`
+}
