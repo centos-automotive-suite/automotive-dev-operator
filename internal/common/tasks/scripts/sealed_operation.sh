@@ -189,10 +189,50 @@ install_oras() {
     aarch64|arm64) ORAS_ARCH="arm64" ;;
     *) echo "ERROR: Unsupported architecture $(uname -m)" >&2; exit 1 ;;
   esac
-  echo "Installing oras ${ORAS_VERSION}..."
-  curl -sSLf "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_${ORAS_ARCH}.tar.gz" | tar -xz -C /tmp oras
+  local ORAS_TARBALL="oras_${ORAS_VERSION}_linux_${ORAS_ARCH}.tar.gz"
+  local ORAS_BASE_URL="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}"
+  local ORAS_CHECKSUMS="oras_${ORAS_VERSION}_checksums.txt"
+
+  echo "Installing oras ${ORAS_VERSION} with integrity verification..."
+
+  curl -sSLf -o "/tmp/${ORAS_TARBALL}" "${ORAS_BASE_URL}/${ORAS_TARBALL}" || {
+    echo "ERROR: Failed to download ORAS tarball" >&2; exit 1
+  }
+  curl -sSLf -o "/tmp/${ORAS_CHECKSUMS}" "${ORAS_BASE_URL}/${ORAS_CHECKSUMS}" || {
+    echo "ERROR: Failed to download ORAS checksums" >&2; exit 1
+  }
+
+  local expected_checksum
+  expected_checksum=$(grep "${ORAS_TARBALL}" "/tmp/${ORAS_CHECKSUMS}" | cut -d' ' -f1)
+  if [ -z "$expected_checksum" ]; then
+    echo "ERROR: Could not find checksum for ${ORAS_TARBALL} in checksums file" >&2
+    exit 1
+  fi
+
+  local actual_checksum
+  if command -v sha256sum >/dev/null; then
+    actual_checksum=$(sha256sum "/tmp/${ORAS_TARBALL}" | cut -d' ' -f1)
+  elif command -v shasum >/dev/null; then
+    actual_checksum=$(shasum -a 256 "/tmp/${ORAS_TARBALL}" | cut -d' ' -f1)
+  else
+    echo "ERROR: Neither sha256sum nor shasum available for checksum verification" >&2
+    exit 1
+  fi
+
+  if [ "$expected_checksum" != "$actual_checksum" ]; then
+    echo "ERROR: Checksum verification failed for ${ORAS_TARBALL}" >&2
+    echo "  Expected: $expected_checksum" >&2
+    echo "  Actual:   $actual_checksum" >&2
+    exit 1
+  fi
+  echo "Checksum verification passed: $expected_checksum"
+
+  tar -xzf "/tmp/${ORAS_TARBALL}" -C /tmp oras || {
+    echo "ERROR: Failed to extract ORAS from tarball" >&2; exit 1
+  }
   mv /tmp/oras /usr/local/bin/oras
   chmod +x /usr/local/bin/oras
+  rm -f "/tmp/${ORAS_TARBALL}" "/tmp/${ORAS_CHECKSUMS}"
 }
 
 oras_pull() {

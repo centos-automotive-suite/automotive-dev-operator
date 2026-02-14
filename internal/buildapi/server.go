@@ -2989,6 +2989,19 @@ func validateSealedRequest(req *SealedRequest) ([]string, string) {
 	if strings.TrimSpace(req.InputRef) == "" {
 		return nil, "inputRef is required"
 	}
+	if err := validateContainerRef(req.InputRef); err != nil {
+		return nil, fmt.Sprintf("invalid inputRef: %v", err)
+	}
+	if strings.TrimSpace(req.OutputRef) != "" {
+		if err := validateContainerRef(req.OutputRef); err != nil {
+			return nil, fmt.Sprintf("invalid outputRef: %v", err)
+		}
+	}
+	if strings.TrimSpace(req.SignedRef) != "" {
+		if err := validateContainerRef(req.SignedRef); err != nil {
+			return nil, fmt.Sprintf("invalid signedRef: %v", err)
+		}
+	}
 	for _, op := range stages {
 		if op == "inject-signed" && strings.TrimSpace(req.SignedRef) == "" {
 			return nil, "signedRef is required when inject-signed is in stages"
@@ -3061,6 +3074,7 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 			},
 		}
 		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keySecret, metav1.CreateOptions{}); err != nil {
+			cleanupSealedSecrets(ctx, clientset, namespace, req, refs)
 			return nil, fmt.Errorf("failed to create seal-key secret: %w", err)
 		}
 		refs.keySecretRef = keySecretName
@@ -3082,7 +3096,7 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 				},
 			}
 			if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keyPwSecret, metav1.CreateOptions{}); err != nil {
-				_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, keySecretName, metav1.DeleteOptions{})
+				cleanupSealedSecrets(ctx, clientset, namespace, req, refs)
 				return nil, fmt.Errorf("failed to create seal-key-password secret: %w", err)
 			}
 			refs.keyPasswordSecretRef = keyPwSecretName
@@ -3227,6 +3241,11 @@ func (a *APIServer) listSealed(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to list ImageSealed: %v", err)})
 		return
 	}
+	// Sort by creation time, newest first
+	sort.Slice(list.Items, func(i, j int) bool {
+		return list.Items[j].CreationTimestamp.Before(&list.Items[i].CreationTimestamp)
+	})
+
 	resp := make([]SealedListItem, 0, len(list.Items))
 	for _, s := range list.Items {
 		var compStr string
