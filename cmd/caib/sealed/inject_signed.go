@@ -85,8 +85,17 @@ func runInjectSigned(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	relIn, _ := filepath.Rel(absWork, inPath)
-	relSigned, _ := filepath.Rel(absWork, signedPath)
-	relOut, _ := filepath.Rel(absWork, outPath)
+	relIn, err := filepath.Rel(absWork, inPath)
+	if err != nil {
+		return fmt.Errorf("resolve relative input path: %w", err)
+	}
+	relSigned, err := filepath.Rel(absWork, signedPath)
+	if err != nil {
+		return fmt.Errorf("resolve relative signed path: %w", err)
+	}
+	relOut, err := filepath.Rel(absWork, outPath)
+	if err != nil {
+		return fmt.Errorf("resolve relative output path: %w", err)
+	}
 	return runAIB("inject-signed", absWork, toContainerPath(relIn), toContainerPath(relSigned), toContainerPath(relOut))
 }

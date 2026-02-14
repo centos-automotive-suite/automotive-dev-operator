@@ -402,7 +402,7 @@ run_inject_signed() {
 
   # Handle tarball extraction: if the artifact is a tarball, extract it
   mkdir -p signed_dir
-  TARBALL=$(find signed_extract -type f -name '*.tar.gz' -o -name '*.tgz' 2>/dev/null | head -1)
+  TARBALL=$(find signed_extract -type f \( -name '*.tar.gz' -o -name '*.tgz' \) 2>/dev/null | head -1)
   if [ -n "$TARBALL" ]; then
     echo "Extracting signed artifacts tarball: $TARBALL"
     tar -xzf "$TARBALL" -C signed_dir

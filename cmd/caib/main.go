@@ -676,7 +676,7 @@ Example:
 	_ = flashCmd.MarkFlagRequired("client")
 
 	// Add all commands
-	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, showCmd, downloadCmd, flashCmd, loginCmd, loginCmd, catalog.NewCatalogCmd(), sealed.NewSealedCmd())
+	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, showCmd, downloadCmd, flashCmd, logsCmd, loginCmd, catalog.NewCatalogCmd(), sealed.NewSealedCmd())
 	// Add deprecated aliases for backwards compatibility
 	rootCmd.AddCommand(buildBootcAliasCmd, buildLegacyAliasCmd, buildTraditionalAliasCmd)
 

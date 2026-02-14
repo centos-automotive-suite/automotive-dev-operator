@@ -168,8 +168,14 @@ func runLocalTwoArgOp(subcommand, workDir, input, output string) error {
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
-	relIn, _ := filepath.Rel(absWork, inPath)
-	relOut, _ := filepath.Rel(absWork, outPath)
+	relIn, err := filepath.Rel(absWork, inPath)
+	if err != nil {
+		return fmt.Errorf("resolve relative input path: %w", err)
+	}
+	relOut, err := filepath.Rel(absWork, outPath)
+	if err != nil {
+		return fmt.Errorf("resolve relative output path: %w", err)
+	}
 	return runAIB(subcommand, absWork, toContainerPath(relIn), toContainerPath(relOut))
 }
 

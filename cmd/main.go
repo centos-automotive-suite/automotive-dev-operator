@@ -245,16 +245,15 @@ func main() {
 			setupLog.Error(err, "unable to create controller", "controller", "CatalogImage")
 			os.Exit(1)
 		}
-	}
-
-	imageSealedReconciler := &imagesealed.Reconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Log:    ctrl.Log.WithName("controllers").WithName("ImageSealed"),
-	}
-	if err = imageSealedReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ImageSealed")
-		os.Exit(1)
+		imageSealedReconciler := &imagesealed.Reconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+			Log:    ctrl.Log.WithName("controllers").WithName("ImageSealed"),
+		}
+		if err = imageSealedReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "ImageSealed")
+			os.Exit(1)
+		}
 	}
 
 	// Health checks

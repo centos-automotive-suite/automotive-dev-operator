@@ -87,6 +87,9 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 	if len(stages) == 0 {
 		return r.updateStatus(ctx, sealed, phaseFailed, "spec.operation or spec.stages must be set")
 	}
+	if err := validateStages(stages); err != nil {
+		return r.updateStatus(ctx, sealed, phaseFailed, err.Error())
+	}
 	logger.Info("Starting sealed operation", "name", sealed.Name, "stages", stages)
 
 	if err := r.ensureSealedTasks(ctx, sealed.Namespace); err != nil {
@@ -389,6 +392,20 @@ func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automo
 	return pr, nil
 }
 
+// validateStages checks that every entry in stages is a known sealed operation.
+func validateStages(stages []string) error {
+	valid := make(map[string]bool, len(tasks.SealedOperationNames))
+	for _, op := range tasks.SealedOperationNames {
+		valid[op] = true
+	}
+	for _, s := range stages {
+		if !valid[s] {
+			return fmt.Errorf("invalid sealed operation %q; must be one of %v", s, tasks.SealedOperationNames)
+		}
+	}
+	return nil
+}
+
 func isPipelineRunSuccessful(pr *tektonv1.PipelineRun) bool {
 	for _, c := range pr.Status.Conditions {
 		if c.Type == "Succeeded" {
@@ -407,17 +424,36 @@ func (r *Reconciler) updateStatus(ctx context.Context, sealed *automotivev1alpha
 	return ctrl.Result{}, nil
 }
 
-// cleanupTransientSecrets deletes any transient secrets created for this sealed operation
+// transientLabel is the label used to mark secrets that were created by the API server
+// and should be cleaned up after the sealed operation completes.
+const transientLabel = "automotive.sdv.cloud.redhat.com/transient"
+
 func (r *Reconciler) cleanupTransientSecrets(ctx context.Context, sealed *automotivev1alpha1.ImageSealed, log logr.Logger) {
-	if sealed.Spec.SecretRef != "" {
-		r.deleteSecretWithRetry(ctx, sealed.Namespace, sealed.Spec.SecretRef, "registry auth", log)
+	for _, ref := range []struct {
+		name       string
+		secretType string
+	}{
+		{sealed.Spec.SecretRef, "registry auth"},
+		{sealed.Spec.KeySecretRef, "seal key"},
+		{sealed.Spec.KeyPasswordSecretRef, "seal key password"},
+	} {
+		if ref.name == "" {
+			continue
+		}
+		if r.isTransientSecret(ctx, sealed.Namespace, ref.name) {
+			r.deleteSecretWithRetry(ctx, sealed.Namespace, ref.name, ref.secretType, log)
+		} else {
+			log.V(1).Info("Skipping deletion of user-provided secret", "secret", ref.name, "type", ref.secretType)
+		}
 	}
-	if sealed.Spec.KeySecretRef != "" {
-		r.deleteSecretWithRetry(ctx, sealed.Namespace, sealed.Spec.KeySecretRef, "seal key", log)
+}
+
+func (r *Reconciler) isTransientSecret(ctx context.Context, namespace, name string) bool {
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, secret); err != nil {
+		return false
 	}
-	if sealed.Spec.KeyPasswordSecretRef != "" {
-		r.deleteSecretWithRetry(ctx, sealed.Namespace, sealed.Spec.KeyPasswordSecretRef, "seal key password", log)
-	}
+	return secret.Labels[transientLabel] == "true"
 }
 
 // deleteSecretWithRetry attempts to delete a secret with exponential backoff retry

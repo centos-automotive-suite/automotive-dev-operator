@@ -70,25 +70,29 @@ var _ = Describe("ImageSealed Controller", func() {
 			}
 		})
 
-		It("should reconcile successfully and set Running status", func() {
+		It("should reconcile and update status appropriately", func() {
 			By("Reconciling the ImageSealed resource")
 			r := &imagesealed.Reconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
-			// First reconcile moves to Running (or Failed due to missing Tekton CRDs in envtest)
+			// First reconcile: without Tekton CRDs in envtest, ensureSealedTasks will fail
+			// and the controller should set status to Failed with a descriptive message.
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
-			// Since envtest doesn't have Tekton CRDs installed, the reconciler will fail
-			// trying to create the TaskRun. This is expected - we verify it handled the CR correctly.
-			if err != nil {
-				// Expected: Tekton CRDs not installed in envtest
-				return
-			}
 
-			// If Tekton CRDs were available, verify status was updated
 			sealed := &automotivev1alpha1.ImageSealed{}
-			err = k8sClient.Get(ctx, typeNamespacedName, sealed)
-			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, sealed)).To(Succeed())
+
+			if err != nil {
+				// Reconciler returned an error (e.g., status update itself failed) — still a valid path
+				Expect(sealed.Status.Phase).To(BeElementOf("", "Pending", "Failed"))
+			} else {
+				// Reconciler handled the error gracefully: expect Failed (Tekton CRDs absent) or Running (CRDs present)
+				Expect(sealed.Status.Phase).To(BeElementOf("Failed", "Running"))
+				if sealed.Status.Phase == "Failed" {
+					Expect(sealed.Status.Message).To(ContainSubstring("sealed tasks"))
+				}
+			}
 		})
 	})
 
@@ -136,6 +140,54 @@ var _ = Describe("ImageSealed Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(sealed.Status.Phase).To(Equal("Failed"))
 			Expect(sealed.Status.Message).To(ContainSubstring("operation or spec.stages must be set"))
+		})
+	})
+
+	Context("When reconciling with invalid stage name", func() {
+		const resourceName = "test-sealed-invalid-stage"
+
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: namespace}
+
+		BeforeEach(func() {
+			sealed := &automotivev1alpha1.ImageSealed{}
+			err := k8sClient.Get(ctx, typeNamespacedName, sealed)
+			if err != nil && errors.IsNotFound(err) {
+				resource := &automotivev1alpha1.ImageSealed{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      resourceName,
+						Namespace: namespace,
+					},
+					Spec: automotivev1alpha1.ImageSealedSpec{
+						Stages:   []string{"prepare-reseal", "bogus-op"},
+						InputRef: "quay.io/test/bootc:seal",
+					},
+				}
+				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			}
+		})
+
+		AfterEach(func() {
+			resource := &automotivev1alpha1.ImageSealed{}
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err == nil {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
+		})
+
+		It("should fail with invalid operation error", func() {
+			r := &imagesealed.Reconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			sealed := &automotivev1alpha1.ImageSealed{}
+			err = k8sClient.Get(ctx, typeNamespacedName, sealed)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sealed.Status.Phase).To(Equal("Failed"))
+			Expect(sealed.Status.Message).To(ContainSubstring(`invalid sealed operation "bogus-op"`))
 		})
 	})
 

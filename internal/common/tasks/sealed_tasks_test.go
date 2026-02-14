@@ -214,6 +214,17 @@ var _ = Describe("Sealed Tasks", func() {
 				}
 				Expect(volNames).To(ContainElements("dev", "container-storage", "run-osbuild"))
 			})
+
+			It("should set SizeLimit on memory-backed volumes", func() {
+				task := GenerateSealedTaskForOperation("test-ns", "reseal")
+				for _, v := range task.Spec.Volumes {
+					if v.Name == "container-storage" || v.Name == "run-osbuild" {
+						Expect(v.EmptyDir).NotTo(BeNil(), "volume %s should be emptyDir", v.Name)
+						Expect(v.EmptyDir.SizeLimit).NotTo(BeNil(), "volume %s should have a SizeLimit", v.Name)
+						Expect(v.EmptyDir.SizeLimit.String()).To(Equal("4Gi"), "volume %s SizeLimit", v.Name)
+					}
+				}
+			})
 		})
 
 		Describe("step", func() {

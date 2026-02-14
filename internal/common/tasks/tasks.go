@@ -25,6 +25,9 @@ type BuildConfig struct {
 // DefaultInternalRegistryURL is the standard in-cluster URL for the OpenShift internal image registry.
 const DefaultInternalRegistryURL = "image-registry.openshift-image-registry.svc:5000"
 
+// volumeNameContainerStorage is the common volume name for container storage across tasks.
+const volumeNameContainerStorage = "container-storage"
+
 // AutomotiveImageBuilder is the default container image for the automotive image builder.
 const AutomotiveImageBuilder = "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0"
 
@@ -340,7 +343,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 							MountPath: "/manifest-work",
 						},
 						{
-							Name:      "container-storage",
+							Name:      volumeNameContainerStorage,
 							MountPath: "/var/lib/containers/storage",
 						},
 						{
@@ -377,7 +380,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					},
 				},
 				{
-					Name: "container-storage",
+					Name: volumeNameContainerStorage,
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
 					},
@@ -432,7 +435,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 		for i := range task.Spec.Volumes {
 			vol := &task.Spec.Volumes[i]
 
-			if vol.Name == "container-storage" || vol.Name == "run-dir" {
+			if vol.Name == volumeNameContainerStorage || vol.Name == "run-dir" {
 				vol.EmptyDir = &corev1.EmptyDirVolumeSource{
 					Medium: corev1.StorageMediumMemory, // tmpfs supports xattrs for SELinux
 				}
@@ -1212,7 +1215,7 @@ func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tek
 							MountPath: "/dev",
 						},
 						{
-							Name:      "container-storage",
+							Name:      volumeNameContainerStorage,
 							MountPath: "/var/lib/containers/storage",
 						},
 						{
@@ -1241,7 +1244,7 @@ func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tek
 					},
 				},
 				{
-					Name: "container-storage",
+					Name: volumeNameContainerStorage,
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
 					},
@@ -1283,7 +1286,7 @@ func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tek
 		for i := range task.Spec.Volumes {
 			vol := &task.Spec.Volumes[i]
 
-			if vol.Name == "container-storage" || vol.Name == "run-osbuild" || vol.Name == "var-tmp" {
+			if vol.Name == volumeNameContainerStorage || vol.Name == "run-osbuild" || vol.Name == "var-tmp" {
 				vol.EmptyDir = &corev1.EmptyDirVolumeSource{
 					Medium: corev1.StorageMediumMemory, // tmpfs supports xattrs for SELinux
 				}
@@ -1419,6 +1422,9 @@ func GenerateFlashTask(namespace string) *tektonv1.Task {
 // SealedTaskRunLabel is the label value used to identify sealed TaskRuns in the API
 const SealedTaskRunLabel = "automotive.sdv.cloud.redhat.com/sealed-taskrun"
 
+// defaultSealedMemoryVolumeSize is the default size limit for memory-backed volumes in sealed tasks.
+var defaultSealedMemoryVolumeSize = resource.MustParse("4Gi")
+
 // SealedOperationNames is the list of sealed operation names (used for task names and validation).
 var SealedOperationNames = []string{"prepare-reseal", "reseal", "extract-for-signing", "inject-signed"}
 
@@ -1509,7 +1515,7 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 						MountPath: "/dev",
 					},
 					{
-						Name:      "container-storage",
+						Name:      volumeNameContainerStorage,
 						MountPath: "/var/lib/containers/storage",
 					},
 					{
@@ -1529,10 +1535,11 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 				},
 			},
 			{
-				Name: "container-storage",
+				Name: volumeNameContainerStorage,
 				VolumeSource: corev1.VolumeSource{
 					EmptyDir: &corev1.EmptyDirVolumeSource{
-						Medium: corev1.StorageMediumMemory,
+						Medium:    corev1.StorageMediumMemory,
+						SizeLimit: &defaultSealedMemoryVolumeSize,
 					},
 				},
 			},
@@ -1540,7 +1547,8 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 				Name: "run-osbuild",
 				VolumeSource: corev1.VolumeSource{
 					EmptyDir: &corev1.EmptyDirVolumeSource{
-						Medium: corev1.StorageMediumMemory,
+						Medium:    corev1.StorageMediumMemory,
+						SizeLimit: &defaultSealedMemoryVolumeSize,
 					},
 				},
 			},
@@ -1624,7 +1632,7 @@ func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string)
 							MountPath: "/dev",
 						},
 						{
-							Name:      "container-storage",
+							Name:      volumeNameContainerStorage,
 							MountPath: "/var/lib/containers/storage",
 						},
 						{
@@ -1648,7 +1656,7 @@ func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string)
 					},
 				},
 				{
-					Name: "container-storage",
+					Name: volumeNameContainerStorage,
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{
 							Medium: corev1.StorageMediumMemory,

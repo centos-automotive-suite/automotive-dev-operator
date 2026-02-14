@@ -76,7 +76,13 @@ func runExtractForSigning(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	relIn, _ := filepath.Rel(absWork, inPath)
-	relOut, _ := filepath.Rel(absWork, outPath)
+	relIn, err := filepath.Rel(absWork, inPath)
+	if err != nil {
+		return fmt.Errorf("resolve relative input path: %w", err)
+	}
+	relOut, err := filepath.Rel(absWork, outPath)
+	if err != nil {
+		return fmt.Errorf("resolve relative output path: %w", err)
+	}
 	return runAIB("extract-for-signing", absWork, toContainerPath(relIn), toContainerPath(relOut))
 }
