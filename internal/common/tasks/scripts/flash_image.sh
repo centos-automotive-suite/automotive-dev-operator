@@ -14,6 +14,9 @@ fi
 
 echo "Using client config: ${JMP_CLIENT_CONFIG}"
 
+echo "refreshing jumpstarter token"
+jmp login --client-config "${JMP_CLIENT_CONFIG}"
+
 FLASH_CMD="${FLASH_CMD:-j storage flash \{image_uri\}}"
 FLASH_CMD=$(echo "${FLASH_CMD}" | sed "s|{image_uri}|${IMAGE_REF}|g")
 
