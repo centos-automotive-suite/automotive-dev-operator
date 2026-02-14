@@ -537,12 +537,22 @@ func (a *APIServer) getCatalogClient() (client.Client, error) {
 	return k8sClient, nil
 }
 
+// authError represents an authentication failure with a reason
+type authError struct {
+	Reason  string `json:"reason"`
+	Details string `json:"details,omitempty"`
+}
+
 // authMiddleware provides authentication middleware for Gin
 func (a *APIServer) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		username, authType, ok := a.authenticateRequest(c)
-		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		username, authType, authErr := a.authenticateRequest(c)
+		if authErr != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error":   "unauthorized",
+				"reason":  authErr.Reason,
+				"details": authErr.Details,
+			})
 			c.Abort()
 			return
 		}
@@ -2259,14 +2269,21 @@ func (a *APIServer) refreshAuthConfigIfNeeded() {
 	}
 }
 
-func (a *APIServer) authenticateRequest(c *gin.Context) (string, string, bool) {
+func (a *APIServer) authenticateRequest(c *gin.Context) (string, string, *authError) {
 	// Refresh auth config if needed (checks OperatorConfig periodically)
 	a.refreshAuthConfigIfNeeded()
 
 	token := extractBearerToken(c)
 	if token == "" {
-		return "", "", false
+		return "", "", &authError{
+			Reason:  "missing_token",
+			Details: "No bearer token provided. Set Authorization header with 'Bearer <token>' or use CAIB_TOKEN environment variable.",
+		}
 	}
+
+	// Track which auth methods were tried for error reporting
+	var authAttempts []string
+	var oidcError error
 
 	// Try internal JWT first
 	a.authConfigMu.RLock()
@@ -2275,12 +2292,13 @@ func (a *APIServer) authenticateRequest(c *gin.Context) (string, string, bool) {
 	a.authConfigMu.RUnlock()
 
 	if internalJWT != nil {
+		authAttempts = append(authAttempts, "internal_jwt")
 		if subject, ok := validateInternalJWT(token, internalJWT); ok {
 			username := subject
 			if internalPrefix != "" {
 				username = internalPrefix + username
 			}
-			return username, "internal", true
+			return username, "internal", nil
 		}
 	}
 
@@ -2290,48 +2308,115 @@ func (a *APIServer) authenticateRequest(c *gin.Context) (string, string, bool) {
 	a.authConfigMu.RUnlock()
 
 	if externalJWT != nil {
-		if username, ok := a.authenticateExternalJWT(c, token, externalJWT); ok {
+		authAttempts = append(authAttempts, "oidc")
+		result := a.authenticateExternalJWT(c, token, externalJWT)
+		if result.ok {
 			// Store OIDC token in secret after successful authentication
 			if a.internalJWT != nil {
-				if err := a.ensureClientTokenSecret(c, username, token); err != nil {
-					a.log.Error(err, "failed to ensure client token secret", "username", username)
+				if err := a.ensureClientTokenSecret(c, result.username, token); err != nil {
+					a.log.Error(err, "failed to ensure client token secret", "username", result.username)
 				}
 			}
-			return username, "external", true
+			return result.username, "external", nil
 		}
+		oidcError = result.err
 	}
 
 	// Fallback to kubeconfig TokenReview authentication
+	authAttempts = append(authAttempts, "k8s_token_review")
+
 	cfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
 		a.log.Error(err, "Failed to get REST config for TokenReview fallback")
-		return "", "", false
+		return "", "", &authError{
+			Reason:  "server_error",
+			Details: "Failed to initialize Kubernetes client for token validation. Check build-api logs.",
+		}
 	}
 
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		a.log.Error(err, "Failed to create Kubernetes client for TokenReview")
-		return "", "", false
+		return "", "", &authError{
+			Reason:  "server_error",
+			Details: "Failed to create Kubernetes client for token validation. Check build-api logs.",
+		}
 	}
 
 	tr := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}
 	res, err := clientset.AuthenticationV1().TokenReviews().Create(c.Request.Context(), tr, metav1.CreateOptions{})
 	if err != nil {
 		a.log.Error(err, "TokenReview API call failed")
-		return "", "", false
+		return "", "", &authError{
+			Reason:  "token_review_failed",
+			Details: "Failed to validate token with Kubernetes API. The token may be malformed or the server may have connectivity issues.",
+		}
 	}
 	if res.Status.Authenticated {
 		username := res.Status.User.Username
 		if username == "" {
-			return "", "", false
+			return "", "", &authError{
+				Reason:  "invalid_token",
+				Details: "Token was authenticated but no username was returned.",
+			}
 		}
-		return username, "k8s", true
+		return username, "k8s", nil
 	}
-	// Log detailed error information
-	if res.Status.Error != "" {
-		a.log.Info("TokenReview authentication failed", "error", res.Status.Error)
+
+	// Build detailed error message for token validation failure
+	return "", "", a.buildAuthFailureError(authAttempts, oidcError, res.Status.Error)
+}
+
+// buildAuthFailureError constructs a sanitized error message explaining authentication failure.
+// Raw error details are logged server-side and not exposed to the client.
+func (a *APIServer) buildAuthFailureError(authAttempts []string, oidcError error, tokenReviewError string) *authError {
+	// Check if OIDC was attempted
+	oidcAttempted := false
+	for _, method := range authAttempts {
+		if method == "oidc" {
+			oidcAttempted = true
+			break
+		}
 	}
-	return "", "", false
+
+	// Log full error details server-side for debugging
+	if tokenReviewError != "" {
+		a.log.Info("TokenReview authentication failed", "error", tokenReviewError)
+	}
+	if oidcError != nil {
+		a.log.Info("OIDC authentication failed", "error", oidcError.Error())
+	}
+
+	// only TokenReview was tried (no OIDC configured)
+	if !oidcAttempted {
+		return &authError{
+			Reason:  "invalid_token",
+			Details: "Token validation failed. The token may be expired or invalid. Try 'oc login' to refresh your session, then use 'oc whoami -t' for a fresh token.",
+		}
+	}
+
+	// OIDC was configured and attempted
+	var details strings.Builder
+	details.WriteString("Authentication failed. OIDC is configured on this cluster. ")
+
+	if oidcError != nil {
+		details.WriteString("OIDC: token validation failed. ")
+	} else {
+		details.WriteString("OIDC: token not valid for configured issuer. ")
+	}
+
+	if tokenReviewError != "" {
+		details.WriteString("Kubernetes fallback: token rejected. ")
+	} else {
+		details.WriteString("Kubernetes fallback: token rejected (may be expired or invalid). ")
+	}
+
+	details.WriteString("If using OIDC, ensure you have a valid OIDC token. Otherwise, try 'oc login' to refresh your session.")
+
+	return &authError{
+		Reason:  "invalid_token",
+		Details: details.String(),
+	}
 }
 
 // extractBearerToken extracts the bearer token from the request.
