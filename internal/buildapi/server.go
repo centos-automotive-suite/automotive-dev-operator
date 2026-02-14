@@ -3030,11 +3030,48 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 		keyPasswordSecretRef: req.KeyPasswordSecretRef,
 	}
 
-	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled &&
-		req.RegistryCredentials.RegistryURL != "" &&
-		req.RegistryCredentials.Username != "" &&
-		req.RegistryCredentials.Password != "" {
+	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled {
+		creds := req.RegistryCredentials
 		secretName := req.Name + "-registry-auth"
+		secretData := make(map[string][]byte)
+
+		switch creds.AuthType {
+		case "username-password":
+			if creds.RegistryURL == "" || creds.Username == "" || creds.Password == "" {
+				return nil, fmt.Errorf("registry URL, username, and password are required for username-password authentication")
+			}
+			secretData["REGISTRY_URL"] = []byte(creds.RegistryURL)
+			secretData["REGISTRY_USERNAME"] = []byte(creds.Username)
+			secretData["REGISTRY_PASSWORD"] = []byte(creds.Password)
+
+			auth := base64.StdEncoding.EncodeToString([]byte(creds.Username + ":" + creds.Password))
+			dockerConfig, err := json.Marshal(map[string]interface{}{
+				"auths": map[string]interface{}{
+					creds.RegistryURL: map[string]string{
+						"auth": auth,
+					},
+				},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to create docker config: %w", err)
+			}
+			secretData[".dockerconfigjson"] = dockerConfig
+		case "token":
+			if creds.RegistryURL == "" || creds.Token == "" {
+				return nil, fmt.Errorf("registry URL and token are required for token authentication")
+			}
+			secretData["REGISTRY_URL"] = []byte(creds.RegistryURL)
+			secretData["REGISTRY_TOKEN"] = []byte(creds.Token)
+		case "docker-config":
+			if creds.DockerConfig == "" {
+				return nil, fmt.Errorf("docker config is required for docker-config authentication")
+			}
+			secretData["REGISTRY_AUTH_FILE_CONTENT"] = []byte(creds.DockerConfig)
+			secretData[".dockerconfigjson"] = []byte(creds.DockerConfig)
+		default:
+			return nil, fmt.Errorf("unsupported authentication type: %s", creds.AuthType)
+		}
+
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      secretName,
@@ -3045,11 +3082,7 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 				},
 			},
 			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{
-				"REGISTRY_URL":      []byte(req.RegistryCredentials.RegistryURL),
-				"REGISTRY_USERNAME": []byte(req.RegistryCredentials.Username),
-				"REGISTRY_PASSWORD": []byte(req.RegistryCredentials.Password),
-			},
+			Data: secretData,
 		}
 		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
 			return nil, fmt.Errorf("failed to create registry secret: %w", err)

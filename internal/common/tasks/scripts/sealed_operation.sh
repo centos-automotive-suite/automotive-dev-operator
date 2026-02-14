@@ -487,4 +487,10 @@ case "${OPERATION}" in
     ;;
 esac
 
+# Write the output reference to the Tekton result for downstream consumption
+if [ -n "${RESULT_PATH:-}" ] && [ -n "${OUTPUT_REF:-}" ]; then
+  printf '%s' "${OUTPUT_REF}" > "${RESULT_PATH}"
+  echo "Result written to ${RESULT_PATH}: ${OUTPUT_REF}"
+fi
+
 echo "=== Sealed operation completed ==="
