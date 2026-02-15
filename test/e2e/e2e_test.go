@@ -207,16 +207,16 @@ var _ = Describe("controller", Ordered, func() {
 			var err error
 
 			By("creating a manifest ConfigMap")
-			manifestYAML := `
+			manifestYAML := fmt.Sprintf(`
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: e2e-real-build-manifest
-  namespace: automotive-dev-operator-system
+  namespace: %s
 data:
   manifest.aib.yml: |
     name: e2e-test-image
-`
+`, namespace)
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(manifestYAML)
 			_, err = utils.Run(cmd)
@@ -242,7 +242,7 @@ apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
 kind: ImageBuild
 metadata:
   name: e2e-real-build
-  namespace: automotive-dev-operator-system
+  namespace: %s
 spec:
   # Common fields
   architecture: %s
@@ -260,7 +260,7 @@ spec:
     format: qcow2
     compression: gzip
     buildDiskImage: false
-`, arch)
+`, namespace, arch)
 			cmd = exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(imageBuildYAML)
 			_, err = utils.Run(cmd)
@@ -290,7 +290,6 @@ spec:
 			EventuallyWithOffset(1, verifyBuildStarted, 2*time.Minute, 5*time.Second).Should(Succeed())
 
 			By("waiting for build to complete (this may take several minutes)")
-			verifyBuildCompletedTimeout := 60 * time.Minute
 			verifyBuildCompleted := func() error {
 				cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
 					"-n", namespace, "-o", "jsonpath={.status.phase}")
@@ -317,11 +316,7 @@ spec:
 				return nil
 			}
 			// Allow up to 10 minutes for the build to complete
-			EventuallyWithOffset(1,
-				verifyBuildCompleted,
-				verifyBuildCompletedTimeout,
-				15*time.Second).
-				Should(Succeed())
+			EventuallyWithOffset(1, verifyBuildCompleted, 10*time.Minute, 15*time.Second).Should(Succeed())
 
 			By("verifying build status has expected fields")
 			cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
@@ -461,10 +456,6 @@ var _ = Describe("OIDC Authentication", Ordered, func() {
 		}
 		Eventually(verifyBuildAPIDeployment, 3*time.Minute, 5*time.Second).Should(Succeed())
 
-		By("labeling nodes for build scheduling")
-		cmd = exec.Command("kubectl", "label", "nodes", "--all", "aib=true", "--overwrite")
-		_, _ = utils.Run(cmd)
-
 		if getBuildAPIURL() == "" {
 			Skip("OIDC e2e requires OpenShift Route (ado-build-api); skipping on kind")
 		}
@@ -530,12 +521,12 @@ var _ = Describe("OIDC Authentication", Ordered, func() {
 
 		It("should handle OIDC configuration when provided", func() {
 			By("creating OperatorConfig with OIDC authentication")
-			operatorConfigYAML := `
+			operatorConfigYAML := fmt.Sprintf(`
 apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
 kind: OperatorConfig
 metadata:
   name: config
-  namespace: automotive-dev-operator-system
+  namespace: %s
 spec:
   buildAPI:
     authentication:
@@ -549,7 +540,7 @@ spec:
             username:
               claim: preferred_username
               prefix: ""
-`
+`, namespace)
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(operatorConfigYAML)
 			_, err := utils.Run(cmd)
