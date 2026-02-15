@@ -1,6 +1,34 @@
 #!/bin/bash
 set -e
 
+# Global variable to track saved config location
+SAVED_CONFIG=""
+
+# Cleanup function for error handling
+cleanup() {
+    local exit_code=$?
+    if [ "$exit_code" != "0" ] && [ "$KEEP_CONFIG" = true ] && [ -n "$SAVED_CONFIG" ] && [ -f "$SAVED_CONFIG" ]; then
+        echo ""
+        echo "==================== ERROR CLEANUP ===================="
+        echo "⚠ Script failed, but OperatorConfig was saved to:"
+        echo "  $SAVED_CONFIG"
+        echo ""
+        echo "To manually restore your configuration later:"
+        echo "  # Option 1: Direct apply (may have metadata conflicts)"
+        echo "  oc apply -f \"$SAVED_CONFIG\""
+        echo ""
+        echo "  # Option 2: Clean apply with yq (recommended)"
+        echo "  yq eval 'del(.items[].metadata.resourceVersion, .items[].metadata.uid, .items[].metadata.creationTimestamp, .items[].metadata.generation, .items[].metadata.managedFields, .items[].status)' \"$SAVED_CONFIG\" | oc apply -f -"
+        echo ""
+        echo "Or copy to a safe location before next deployment attempt:"
+        echo "  cp \"$SAVED_CONFIG\" ./my-operatorconfig.yaml"
+        echo "========================================================"
+    fi
+}
+
+# Set up error handler
+trap cleanup EXIT
+
 # Usage help
 show_help() {
     cat << EOF
@@ -15,6 +43,7 @@ Commands:
 Flags:
   -y, --yes        Skip confirmation prompt
   --keep-config    Save and restore OperatorConfig during redeploy
+                   (backup saved to ./operatorconfig-backup-YYYYMMDD-HHMMSS.yaml)
 
 Examples:
   $0              # Full redeploy (most common)
@@ -118,9 +147,22 @@ uninstall_operator() {
     # Save OperatorConfig if --keep-config was specified
     if [ "$KEEP_CONFIG" = true ]; then
         echo "Saving OperatorConfig CRs..."
-        SAVED_CONFIG=$(mktemp /tmp/operatorconfig-XXXXXX.yaml)
-        oc get operatorconfig -n ${NAMESPACE} -o yaml > "$SAVED_CONFIG" 2>/dev/null || true
-        echo "  Saved to $SAVED_CONFIG"
+
+        # Check if any OperatorConfig exists first
+        if oc get operatorconfig -n ${NAMESPACE} --no-headers 2>/dev/null | grep -q .; then
+            # Use current directory for easier access and recovery
+            SAVED_CONFIG="./operatorconfig-backup-$(date +%Y%m%d-%H%M%S).yaml"
+            if oc get operatorconfig -n ${NAMESPACE} -o yaml > "$SAVED_CONFIG" 2>/dev/null; then
+                echo "  ✓ Saved to $SAVED_CONFIG"
+            else
+                echo "  ✗ Failed to save OperatorConfig"
+                rm -f "$SAVED_CONFIG"
+                SAVED_CONFIG=""
+            fi
+        else
+            echo "  ℹ No OperatorConfig found to save"
+            SAVED_CONFIG=""
+        fi
     fi
 
     echo "Removing finalizers from OperatorConfig CRs..."
@@ -422,12 +464,42 @@ if [ "$COMMAND" = "redeploy" ]; then
 
     echo ""
     if [ "$KEEP_CONFIG" = true ] && [ -n "${SAVED_CONFIG:-}" ] && [ -s "$SAVED_CONFIG" ]; then
-        echo "Restoring saved OperatorConfig..."
-        # Strip resourceVersion/uid/creationTimestamp so apply works cleanly
-        yq eval 'del(.items[].metadata.resourceVersion, .items[].metadata.uid, .items[].metadata.creationTimestamp, .items[].metadata.generation, .items[].metadata.managedFields, .items[].status)' "$SAVED_CONFIG" | oc apply -f -
-        rm -f "$SAVED_CONFIG"
+        echo "Restoring saved OperatorConfig from: $SAVED_CONFIG"
+
+        # Check if yq is available for clean restoration
+        if command -v yq &> /dev/null; then
+            # Strip resourceVersion/uid/creationTimestamp so apply works cleanly
+            if yq eval 'del(.items[].metadata.resourceVersion, .items[].metadata.uid, .items[].metadata.creationTimestamp, .items[].metadata.generation, .items[].metadata.managedFields, .items[].status)' "$SAVED_CONFIG" | oc apply -f -; then
+                echo "  ✓ OperatorConfig restored successfully"
+                rm -f "$SAVED_CONFIG"
+            else
+                echo "  ✗ Failed to restore OperatorConfig with yq, trying direct apply..."
+                if oc apply -f "$SAVED_CONFIG"; then
+                    echo "  ✓ OperatorConfig restored via direct apply"
+                    rm -f "$SAVED_CONFIG"
+                else
+                    echo "  ✗ Failed to restore OperatorConfig"
+                    echo "  ℹ Config preserved at: $SAVED_CONFIG"
+                    echo "  ℹ You may need to manually edit and apply it"
+                fi
+            fi
+        else
+            echo "  ⚠ yq not found, attempting direct apply (may have metadata conflicts)..."
+            if oc apply -f "$SAVED_CONFIG"; then
+                echo "  ✓ OperatorConfig restored"
+                rm -f "$SAVED_CONFIG"
+            else
+                echo "  ✗ Failed to restore OperatorConfig"
+                echo "  ℹ Config preserved at: $SAVED_CONFIG"
+                echo "  ℹ Install yq or manually edit the file to remove metadata fields"
+            fi
+        fi
     else
-        echo "Creating sample OperatorConfig..."
+        if [ "$KEEP_CONFIG" = true ]; then
+            echo "No saved OperatorConfig to restore, creating default..."
+        else
+            echo "Creating sample OperatorConfig..."
+        fi
         oc apply -f config/samples/automotive_v1_operatorconfig.yaml
     fi
 
