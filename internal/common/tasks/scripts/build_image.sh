@@ -245,18 +245,17 @@ if [ -n "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" =
   emit_progress "Pulling builder image" $((STEP_BUILD - 1)) "$PROGRESS_TOTAL"
   echo "Pulling builder image to local storage: $BUILDER_IMAGE"
 
-  TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || echo "")
-  if [ -n "$TOKEN" ]; then
+  skopeo copy --authfile="$REGISTRY_AUTH_FILE" \
+    "docker://$BUILDER_IMAGE" \
+    "containers-storage:$LOCAL_BUILDER_IMAGE" \
+  || {
+    echo "Falling back to service account auth..."
     REGISTRY_HOST=$(echo "$BUILDER_IMAGE" | cut -d'/' -f1)
     create_service_account_auth "$REGISTRY_HOST" /tmp/builder-auth.json
     skopeo copy --authfile=/tmp/builder-auth.json \
       "docker://$BUILDER_IMAGE" \
       "containers-storage:$LOCAL_BUILDER_IMAGE"
-  else
-    skopeo copy \
-      "docker://$BUILDER_IMAGE" \
-      "containers-storage:$LOCAL_BUILDER_IMAGE"
-  fi
+  }
 
   echo "Builder image ready in local storage: $LOCAL_BUILDER_IMAGE"
   BUILD_CONTAINER_ARGS=("--build-container" "$LOCAL_BUILDER_IMAGE")
