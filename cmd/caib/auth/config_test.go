@@ -48,7 +48,7 @@ var _ = Describe("GetOIDCConfigFromAPI", func() {
 		Expect(config).NotTo(BeNil())
 		Expect(config.IssuerURL).To(Equal("https://issuer.example.com"))
 		Expect(config.ClientID).To(Equal("test-client"))
-		Expect(config.Scopes).To(Equal([]string{"openid", "profile", "email"}))
+		Expect(config.Scopes).To(Equal([]string{"openid", "profile", "email", "offline_access"}))
 	})
 
 	It("should return nil config without error when API returns 404", func() {

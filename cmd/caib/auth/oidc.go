@@ -30,9 +30,10 @@ const (
 
 // TokenCache stores cached OIDC token information.
 type TokenCache struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Issuer    string    `json:"issuer"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	Issuer       string    `json:"issuer"`
 }
 
 // OIDCConfig holds OIDC provider configuration.
@@ -57,7 +58,7 @@ func NewOIDCAuth(issuerURL, clientID string, scopes []string, insecureSkipTLS bo
 	}
 
 	if len(scopes) == 0 {
-		scopes = []string{"openid", "profile", "email"}
+		scopes = []string{"openid", "profile", "email", "offline_access"}
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -85,25 +86,59 @@ func (a *OIDCAuth) GetToken(ctx context.Context) (string, error) {
 
 // GetTokenWithStatus returns the token and whether it came from cache.
 func (a *OIDCAuth) GetTokenWithStatus(ctx context.Context) (string, bool, error) {
-	// Try to load from cache first
 	if err := a.loadTokenCache(); err == nil {
 		if a.tokenCache != nil && a.tokenCache.Token != "" {
-			// Check if token expires more than 5 minutes from now
-			if time.Now().Before(a.tokenCache.ExpiresAt.Add(-5 * time.Minute)) {
-				// Verify token is not expired by parsing it
-				if a.IsTokenValid(a.tokenCache.Token) {
-					return a.tokenCache.Token, true, nil
+			if time.Now().Before(a.tokenCache.ExpiresAt.Add(-5*time.Minute)) && a.IsTokenValid(a.tokenCache.Token) {
+				return a.tokenCache.Token, true, nil
+			}
+
+			// Access token expired — try silent refresh if we have a refresh token
+			if a.tokenCache.RefreshToken != "" {
+				token, err := a.tryRefreshToken(ctx)
+				if err == nil {
+					return token, true, nil
 				}
 			}
 		}
 	}
 
-	// Token expired or not found, trigger re-authentication
+	// No cache, no refresh token, or refresh failed — full browser login
 	token, err := a.authenticate(ctx)
 	if err != nil {
 		return "", false, err
 	}
 	return token, false, nil
+}
+
+// tryRefreshToken attempts to silently get a new access token using the cached refresh token.
+func (a *OIDCAuth) tryRefreshToken(ctx context.Context) (string, error) {
+	discoveryURL := strings.TrimSuffix(a.config.IssuerURL, "/") + "/.well-known/openid-configuration"
+	discovery, err := a.getDiscovery(discoveryURL)
+	if err != nil {
+		return "", err
+	}
+
+	tokenResp, err := a.refreshAccessToken(ctx, discovery.TokenEndpoint, a.tokenCache.RefreshToken)
+	if err != nil {
+		return "", err
+	}
+
+	token := tokenResp.AccessToken
+	if token == "" {
+		token = tokenResp.IDToken
+	}
+
+	// Use the new refresh token if provided, otherwise keep the old one
+	refreshToken := tokenResp.RefreshToken
+	if refreshToken == "" {
+		refreshToken = a.tokenCache.RefreshToken
+	}
+
+	if err := a.saveTokenCache(token, refreshToken, tokenResp.ExpiresIn); err != nil {
+		fmt.Printf("Warning: Failed to save token cache: %v\n", err)
+	}
+
+	return token, nil
 }
 
 // IsTokenValid checks if a token is valid and not expired.
@@ -220,60 +255,78 @@ func (a *OIDCAuth) authenticate(ctx context.Context) (string, error) {
 		}
 	}()
 
-	fmt.Println("Token is expired, triggering re-authentication")
-	fmt.Printf("\nPlease open the URL in browser: %s\n\n", authURL.String())
+	browserFailed := false
 	if err := openBrowser(authURL.String()); err != nil {
-		fmt.Printf("Warning: Could not open browser automatically: %v\n", err)
-		fmt.Println("Please open the URL manually")
+		browserFailed = true
 	}
 
-	// Wait for callback
+	// If the browser opened, give the SSO session a moment to auto-complete.
+	// Only show the URL if it doesn't come back quickly (user needs to interact).
+	if !browserFailed {
+		select {
+		case code := <-codeChan:
+			return a.handleAuthCode(ctx, server, discovery.TokenEndpoint, code, redirectURI, codeVerifier)
+		case err := <-errChan:
+			return a.shutdownAndReturn(server, err)
+		case <-time.After(3 * time.Second):
+			fmt.Printf("\nPlease complete login in your browser or open the URL manually:\n%s\n\n", authURL.String())
+		}
+	} else {
+		fmt.Printf("\nCould not open browser automatically. Please open this URL:\n%s\n\n", authURL.String())
+	}
+
 	select {
 	case code := <-codeChan:
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = server.Shutdown(shutdownCtx)
-		cancel()
-		// Exchange code for token
-		token, err := a.exchangeCodeForToken(ctx, discovery.TokenEndpoint, code, redirectURI, codeVerifier)
-		if err != nil {
-			return "", fmt.Errorf("failed to exchange code for token: %w", err)
-		}
-
-		// Save token to cache
-		if err := a.saveTokenCache(token); err != nil {
-			fmt.Printf("Warning: Failed to save token cache: %v\n", err)
-		}
-
-		return token, nil
+		return a.handleAuthCode(ctx, server, discovery.TokenEndpoint, code, redirectURI, codeVerifier)
 	case err := <-errChan:
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = server.Shutdown(shutdownCtx)
-		cancel()
-		return "", err
+		return a.shutdownAndReturn(server, err)
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = server.Shutdown(shutdownCtx)
-		cancel()
-		return "", ctx.Err()
+		return a.shutdownAndReturn(server, ctx.Err())
 	case <-time.After(5 * time.Minute):
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = server.Shutdown(shutdownCtx)
-		cancel()
-		return "", fmt.Errorf("authentication timeout")
+		return a.shutdownAndReturn(server, fmt.Errorf("authentication timeout"))
 	}
 }
 
-func (a *OIDCAuth) exchangeCodeForToken(ctx context.Context, tokenEndpoint, code, redirectURI, codeVerifier string) (string, error) {
-	data := url.Values{}
-	data.Set("grant_type", "authorization_code")
-	data.Set("code", code)
-	data.Set("redirect_uri", redirectURI)
-	data.Set("client_id", a.config.ClientID)
-	data.Set("code_verifier", codeVerifier)
+func (a *OIDCAuth) handleAuthCode(ctx context.Context, server *http.Server, tokenEndpoint, code, redirectURI, codeVerifier string) (string, error) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = server.Shutdown(shutdownCtx)
+	cancel()
 
+	tokenResp, err := a.exchangeCodeForToken(ctx, tokenEndpoint, code, redirectURI, codeVerifier)
+	if err != nil {
+		return "", fmt.Errorf("failed to exchange code for token: %w", err)
+	}
+
+	token := tokenResp.AccessToken
+	if token == "" {
+		token = tokenResp.IDToken
+	}
+
+	if err := a.saveTokenCache(token, tokenResp.RefreshToken, tokenResp.ExpiresIn); err != nil {
+		fmt.Printf("Warning: Failed to save token cache: %v\n", err)
+	}
+
+	return token, nil
+}
+
+func (a *OIDCAuth) shutdownAndReturn(server *http.Server, err error) (string, error) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = server.Shutdown(shutdownCtx)
+	cancel()
+	return "", err
+}
+
+type tokenResponse struct {
+	IDToken      string `json:"id_token"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+func (a *OIDCAuth) doTokenRequest(ctx context.Context, tokenEndpoint string, data url.Values) (*tokenResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenEndpoint, strings.NewReader(data.Encode()))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
@@ -288,7 +341,7 @@ func (a *OIDCAuth) exchangeCodeForToken(ctx context.Context, tokenEndpoint, code
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -296,28 +349,50 @@ func (a *OIDCAuth) exchangeCodeForToken(ctx context.Context, tokenEndpoint, code
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("token exchange failed: %s: %s", resp.Status, string(body))
+		return nil, fmt.Errorf("token request failed: %s: %s", resp.Status, string(body))
 	}
 
-	var tokenResp struct {
-		IDToken     string `json:"id_token"`
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
-	}
-
+	var tokenResp tokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", err
+		return nil, err
+	}
+	return &tokenResp, nil
+}
+
+func (a *OIDCAuth) exchangeCodeForToken(ctx context.Context, tokenEndpoint, code, redirectURI, codeVerifier string) (*tokenResponse, error) {
+	data := url.Values{}
+	data.Set("grant_type", "authorization_code")
+	data.Set("code", code)
+	data.Set("redirect_uri", redirectURI)
+	data.Set("client_id", a.config.ClientID)
+	data.Set("code_verifier", codeVerifier)
+
+	tokenResp, err := a.doTokenRequest(ctx, tokenEndpoint, data)
+	if err != nil {
+		return nil, fmt.Errorf("token exchange failed: %w", err)
 	}
 
-	// Prefer access_token, fallback to id_token
-	token := tokenResp.AccessToken
-	if token == "" {
-		token = tokenResp.IDToken
+	if tokenResp.AccessToken == "" && tokenResp.IDToken == "" {
+		return nil, fmt.Errorf("token endpoint returned neither id_token nor access_token")
 	}
-	if token == "" {
-		return "", fmt.Errorf("token endpoint returned neither id_token nor access_token")
+	return tokenResp, nil
+}
+
+func (a *OIDCAuth) refreshAccessToken(ctx context.Context, tokenEndpoint, refreshToken string) (*tokenResponse, error) {
+	data := url.Values{}
+	data.Set("grant_type", "refresh_token")
+	data.Set("refresh_token", refreshToken)
+	data.Set("client_id", a.config.ClientID)
+
+	tokenResp, err := a.doTokenRequest(ctx, tokenEndpoint, data)
+	if err != nil {
+		return nil, fmt.Errorf("token refresh failed: %w", err)
 	}
-	return token, nil
+
+	if tokenResp.AccessToken == "" && tokenResp.IDToken == "" {
+		return nil, fmt.Errorf("refresh response returned neither id_token nor access_token")
+	}
+	return tokenResp, nil
 }
 
 // DiscoveryDocument represents the OIDC discovery document structure.
@@ -356,6 +431,27 @@ func (a *OIDCAuth) getDiscovery(discoveryURL string) (*DiscoveryDocument, error)
 	return &discovery, nil
 }
 
+// LoadTokenCache reads the token cache from disk. Returns (nil, nil) if no cache file exists.
+func LoadTokenCache() (*TokenCache, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	cachePath := filepath.Join(homeDir, tokenCacheDir, tokenCacheFile)
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var cache TokenCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+	return &cache, nil
+}
+
 func (a *OIDCAuth) loadTokenCache() error {
 	data, err := os.ReadFile(a.cachePath)
 	if err != nil {
@@ -374,27 +470,29 @@ func (a *OIDCAuth) loadTokenCache() error {
 	return nil
 }
 
-func (a *OIDCAuth) saveTokenCache(token string) error {
-	// Parse token to get expiration
-	parser := jwt.NewParser()
-	claims := jwt.MapClaims{}
-	_, _, err := parser.ParseUnverified(token, claims)
-	if err != nil {
-		return fmt.Errorf("failed to parse token: %w", err)
-	}
-
+func (a *OIDCAuth) saveTokenCache(token, refreshToken string, expiresIn int) error {
 	var expiresAt time.Time
-	if exp, ok := claims["exp"].(float64); ok {
-		expiresAt = time.Unix(int64(exp), 0)
+	if expiresIn > 0 {
+		expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
 	} else {
-		// Default to 1 hour if no expiration
-		expiresAt = time.Now().Add(1 * time.Hour)
+		// Fall back to JWT exp claim for providers that don't set expires_in
+		parser := jwt.NewParser()
+		claims := jwt.MapClaims{}
+		if _, _, err := parser.ParseUnverified(token, claims); err == nil {
+			if exp, ok := claims["exp"].(float64); ok {
+				expiresAt = time.Unix(int64(exp), 0)
+			}
+		}
+		if expiresAt.IsZero() {
+			expiresAt = time.Now().Add(1 * time.Hour)
+		}
 	}
 
 	cache := TokenCache{
-		Token:     token,
-		ExpiresAt: expiresAt,
-		Issuer:    a.config.IssuerURL,
+		Token:        token,
+		RefreshToken: refreshToken,
+		ExpiresAt:    expiresAt,
+		Issuer:       a.config.IssuerURL,
 	}
 
 	data, err := json.Marshal(cache)
@@ -402,7 +500,6 @@ func (a *OIDCAuth) saveTokenCache(token string) error {
 		return err
 	}
 
-	// Ensure cache directory exists
 	if err := os.MkdirAll(filepath.Dir(a.cachePath), 0700); err != nil {
 		return err
 	}

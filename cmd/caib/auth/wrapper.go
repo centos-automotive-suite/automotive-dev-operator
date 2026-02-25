@@ -57,6 +57,37 @@ func GetTokenWithReauth(ctx context.Context, serverURL string, currentToken stri
 	return token, !fromCache, nil
 }
 
+// RefreshCachedToken attempts to refresh the cached token using the stored refresh token.
+// Returns the new access token or an error if refresh is not possible.
+func RefreshCachedToken(ctx context.Context, serverURL string, insecureSkipTLS bool) (string, error) {
+	config, err := GetOIDCConfigFromAPI(serverURL, insecureSkipTLS)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch OIDC configuration: %w", err)
+	}
+	if config == nil {
+		return "", fmt.Errorf("OIDC is not configured on the server")
+	}
+
+	oidcAuth := NewOIDCAuth(config.IssuerURL, config.ClientID, config.Scopes, insecureSkipTLS)
+	if oidcAuth == nil {
+		return "", fmt.Errorf("failed to initialize OIDC authenticator")
+	}
+
+	if err := oidcAuth.loadTokenCache(); err != nil {
+		return "", fmt.Errorf("no cached token found: %w", err)
+	}
+
+	if oidcAuth.tokenCache == nil || oidcAuth.tokenCache.RefreshToken == "" {
+		return "", fmt.Errorf("no refresh token stored; run 'caib login <server-url>' first")
+	}
+
+	token, err := oidcAuth.tryRefreshToken(ctx)
+	if err != nil {
+		return "", fmt.Errorf("refresh failed: %w", err)
+	}
+	return token, nil
+}
+
 // CreateClientWithReauth creates a client and handles re-authentication on auth errors.
 // If authToken is nil, it will be treated as empty and OIDC will be attempted.
 // OIDC errors are logged but do not prevent client creation (auth is optional).
