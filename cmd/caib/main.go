@@ -30,6 +30,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/auth"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/authcmd"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/catalog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/container"
@@ -693,7 +694,7 @@ Example:
 	containerCmd := container.NewContainerCmd()
 
 	// Add all commands
-	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, showCmd, downloadCmd, flashCmd, logsCmd, loginCmd, containerCmd, catalog.NewCatalogCmd())
+	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, showCmd, downloadCmd, flashCmd, logsCmd, loginCmd, containerCmd, catalog.NewCatalogCmd(), authcmd.NewAuthCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

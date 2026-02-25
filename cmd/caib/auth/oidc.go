@@ -431,6 +431,24 @@ func (a *OIDCAuth) getDiscovery(discoveryURL string) (*DiscoveryDocument, error)
 	return &discovery, nil
 }
 
+// LoadTokenCache reads the token cache from disk. Returns nil if no cache exists.
+func LoadTokenCache() (*TokenCache, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	cachePath := filepath.Join(homeDir, tokenCacheDir, tokenCacheFile)
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		return nil, err
+	}
+	var cache TokenCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+	return &cache, nil
+}
+
 func (a *OIDCAuth) loadTokenCache() error {
 	data, err := os.ReadFile(a.cachePath)
 	if err != nil {
