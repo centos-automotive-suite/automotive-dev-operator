@@ -96,7 +96,7 @@ func GetOIDCConfigFromAPI(serverURL string, insecureSkipTLS bool) (*OIDCConfig, 
 	return &OIDCConfig{
 		IssuerURL: issuerURL,
 		ClientID:  clientID,
-		Scopes:    []string{"openid", "profile", "email"},
+		Scopes:    []string{"openid", "profile", "email", "offline_access"},
 	}, nil
 }
 
@@ -129,7 +129,7 @@ func GetOIDCConfigFromLocalConfig() (*OIDCConfig, error) {
 
 	scopes := config.Scopes
 	if len(scopes) == 0 {
-		scopes = []string{"openid", "profile", "email"}
+		scopes = []string{"openid", "profile", "email", "offline_access"}
 	}
 
 	return &OIDCConfig{
