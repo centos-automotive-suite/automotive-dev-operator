@@ -902,6 +902,17 @@ func displayBuildResults(ctx context.Context, api *buildapiclient.Client, buildN
 	}
 }
 
+func displayBuildLogsCommand(buildName string) {
+	labelColor := func(a ...any) string { return fmt.Sprint(a...) }
+	commandColor := func(a ...any) string { return fmt.Sprint(a...) }
+	if supportsColorOutput() {
+		labelColor = color.New(color.FgHiWhite, color.Bold).SprintFunc()
+		commandColor = color.New(color.FgHiYellow, color.Bold).SprintFunc()
+	}
+
+	fmt.Printf("\n%s\n  %s\n\n", labelColor("View build logs:"), commandColor("caib logs "+buildName))
+}
+
 // runBuild handles the main 'build' command (bootc builds)
 func runBuild(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
@@ -977,7 +988,7 @@ func runBuild(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 	fmt.Printf("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
-	fmt.Printf("To follow this build later: caib logs %s\n", resp.Name)
+	displayBuildLogsCommand(resp.Name)
 
 	// Handle local file uploads if needed
 	localRefs, err := findLocalFileReferences(string(manifestBytes))
@@ -1074,7 +1085,7 @@ func runDisk(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 	fmt.Printf("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
-	fmt.Printf("To follow this build later: caib logs %s\n", resp.Name)
+	displayBuildLogsCommand(resp.Name)
 
 	if waitForBuild || followLogs || outputDir != "" || flashAfterBuild {
 		waitForBuildCompletion(ctx, api, resp.Name)
@@ -1509,7 +1520,7 @@ func runBuildDev(cmd *cobra.Command, args []string) {
 		handleError(err)
 	}
 	fmt.Printf("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
-	fmt.Printf("To follow this build later: caib logs %s\n", resp.Name)
+	displayBuildLogsCommand(resp.Name)
 
 	// Handle local file uploads if needed
 	localRefs, err := findLocalFileReferences(string(manifestBytes))
