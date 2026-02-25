@@ -90,17 +90,17 @@ func runStatus(_ *cobra.Command, _ []string) {
 		return
 	}
 
-	var expTime time.Time
-	if exp, ok := claims["exp"].(float64); ok {
-		expTime = time.Unix(int64(exp), 0)
+	exp, hasExp := claims["exp"].(float64)
+	if !hasExp {
+		fmt.Println(color.YellowString("Token has no expiration claim."))
+	} else {
+		expTime := time.Unix(int64(exp), 0)
+		remaining := time.Until(expTime)
+		duration := formatDuration(remaining)
+
+		fmt.Printf("Token expiry: %s\n", expTime.UTC().Format("2006-01-02 15:04:05 UTC"))
+		printTokenStatus(remaining, duration)
 	}
-
-	remaining := time.Until(expTime)
-	duration := formatDuration(remaining)
-
-	fmt.Printf("Token expiry: %s\n", expTime.UTC().Format("2006-01-02 15:04:05 UTC"))
-
-	printTokenStatus(remaining, duration)
 
 	if sub, ok := claims["sub"].(string); ok && sub != "" {
 		fmt.Printf("Subject: %s\n", sub)
@@ -144,9 +144,12 @@ func runRefresh(cmd *cobra.Command, _ []string) {
 		return
 	}
 
-	if token != "" {
-		fmt.Println("Access token refreshed successfully.")
+	if token == "" {
+		fmt.Println(color.RedString("Refresh returned an empty token."))
+		fmt.Println("Run 'caib login <server-url>' to re-authenticate.")
+		return
 	}
+	fmt.Println("Access token refreshed successfully.")
 }
 
 const tokenExpiryWarningSeconds = 300
