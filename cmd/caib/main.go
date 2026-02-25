@@ -907,11 +907,14 @@ func runBuild(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 	manifest = args[0]
 
+	validateManifestSuffix(manifest)
 	validateBootcBuildFlags()
 
 	if buildName == "" {
-		base := strings.TrimSuffix(filepath.Base(manifest), ".aib.yml")
-		base = strings.TrimSuffix(base, ".yml")
+		base := filepath.Base(manifest)
+		for _, suffix := range validManifestSuffixes {
+			base = strings.TrimSuffix(base, suffix)
+		}
 		buildName = fmt.Sprintf("%s-%s", sanitizeBuildName(base), time.Now().Format("20060102-150405"))
 		fmt.Printf("Auto-generated build name: %s\n", buildName)
 	} else {
@@ -1329,6 +1332,18 @@ func sanitizeBuildName(name string) string {
 
 // validateBuildName checks a user-provided build name and exits if it
 // contains only invalid characters after sanitization.
+var validManifestSuffixes = []string{".aib.yml", ".mpp.yml"}
+
+func validateManifestSuffix(filename string) {
+	for _, suffix := range validManifestSuffixes {
+		if strings.HasSuffix(filename, suffix) {
+			return
+		}
+	}
+	handleError(fmt.Errorf("manifest file %q must have one of the following extensions: %s",
+		filepath.Base(filename), strings.Join(validManifestSuffixes, ", ")))
+}
+
 func validateBuildName(name string) {
 	if sanitizeBuildName(name) == "" {
 		fmt.Printf("Error: build name '%s' contains only invalid characters\n", name)
@@ -1420,6 +1435,8 @@ func runBuildDev(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 	manifest = args[0]
 
+	validateManifestSuffix(manifest)
+
 	if serverURL == "" {
 		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
 	}
@@ -1434,8 +1451,10 @@ func runBuildDev(cmd *cobra.Command, args []string) {
 
 	// Auto-generate build name if not provided
 	if buildName == "" {
-		base := strings.TrimSuffix(filepath.Base(manifest), ".aib.yml")
-		base = strings.TrimSuffix(base, ".yml")
+		base := filepath.Base(manifest)
+		for _, suffix := range validManifestSuffixes {
+			base = strings.TrimSuffix(base, suffix)
+		}
 		buildName = fmt.Sprintf("%s-%s", sanitizeBuildName(base), time.Now().Format("20060102-150405"))
 		fmt.Printf("Auto-generated build name: %s\n", buildName)
 	} else {
