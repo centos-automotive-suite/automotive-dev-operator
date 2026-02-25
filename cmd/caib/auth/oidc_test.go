@@ -130,7 +130,7 @@ var _ = Describe("Token cache save/load", func() {
 
 	It("should save and load a token with refresh token", func() {
 		token := makeValidTestJWT("https://issuer.example.com", 1*time.Hour)
-		err := oidcAuth.saveTokenCache(token, "my-refresh-token")
+		err := oidcAuth.saveTokenCache(token, "my-refresh-token", 3600)
 		Expect(err).NotTo(HaveOccurred())
 
 		err = oidcAuth.loadTokenCache()
@@ -143,7 +143,7 @@ var _ = Describe("Token cache save/load", func() {
 
 	It("should save and load a token without refresh token", func() {
 		token := makeValidTestJWT("https://issuer.example.com", 1*time.Hour)
-		err := oidcAuth.saveTokenCache(token, "")
+		err := oidcAuth.saveTokenCache(token, "", 3600)
 		Expect(err).NotTo(HaveOccurred())
 
 		err = oidcAuth.loadTokenCache()
@@ -153,7 +153,7 @@ var _ = Describe("Token cache save/load", func() {
 
 	It("should reject cache when issuer doesn't match", func() {
 		token := makeValidTestJWT("https://issuer.example.com", 1*time.Hour)
-		Expect(oidcAuth.saveTokenCache(token, "rt")).To(Succeed())
+		Expect(oidcAuth.saveTokenCache(token, "rt", 3600)).To(Succeed())
 
 		oidcAuth.config.IssuerURL = "https://other-issuer.example.com"
 		err := oidcAuth.loadTokenCache()
@@ -168,7 +168,7 @@ var _ = Describe("Token cache save/load", func() {
 
 	It("should set correct file permissions on cache file", func() {
 		token := makeValidTestJWT("https://issuer.example.com", 1*time.Hour)
-		Expect(oidcAuth.saveTokenCache(token, "rt")).To(Succeed())
+		Expect(oidcAuth.saveTokenCache(token, "rt", 3600)).To(Succeed())
 
 		info, err := os.Stat(oidcAuth.cachePath)
 		Expect(err).NotTo(HaveOccurred())
@@ -177,7 +177,7 @@ var _ = Describe("Token cache save/load", func() {
 
 	It("should preserve refresh_token in JSON serialization", func() {
 		token := makeValidTestJWT("https://issuer.example.com", 1*time.Hour)
-		Expect(oidcAuth.saveTokenCache(token, "my-refresh")).To(Succeed())
+		Expect(oidcAuth.saveTokenCache(token, "my-refresh", 3600)).To(Succeed())
 
 		data, err := os.ReadFile(oidcAuth.cachePath)
 		Expect(err).NotTo(HaveOccurred())
@@ -189,7 +189,7 @@ var _ = Describe("Token cache save/load", func() {
 
 	It("should omit refresh_token from JSON when empty", func() {
 		token := makeValidTestJWT("https://issuer.example.com", 1*time.Hour)
-		Expect(oidcAuth.saveTokenCache(token, "")).To(Succeed())
+		Expect(oidcAuth.saveTokenCache(token, "", 3600)).To(Succeed())
 
 		data, err := os.ReadFile(oidcAuth.cachePath)
 		Expect(err).NotTo(HaveOccurred())
@@ -217,9 +217,9 @@ var _ = Describe("LoadTokenCache (exported)", func() {
 		_ = os.RemoveAll(tempDir)
 	})
 
-	It("should return error when no cache file exists", func() {
+	It("should return nil without error when no cache file exists", func() {
 		cache, err := LoadTokenCache()
-		Expect(err).To(HaveOccurred())
+		Expect(err).NotTo(HaveOccurred())
 		Expect(cache).To(BeNil())
 	})
 
@@ -526,7 +526,7 @@ var _ = Describe("GetTokenWithStatus", func() {
 			cachePath: cachePath,
 		}
 
-		Expect(oidcAuth.saveTokenCache(validToken, "some-refresh")).To(Succeed())
+		Expect(oidcAuth.saveTokenCache(validToken, "some-refresh", 3600)).To(Succeed())
 
 		ctx := context.Background()
 		token, fromCache, err := oidcAuth.GetTokenWithStatus(ctx)

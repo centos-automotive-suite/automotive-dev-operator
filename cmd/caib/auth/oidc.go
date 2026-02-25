@@ -134,7 +134,7 @@ func (a *OIDCAuth) tryRefreshToken(ctx context.Context) (string, error) {
 		refreshToken = a.tokenCache.RefreshToken
 	}
 
-	if err := a.saveTokenCache(token, refreshToken); err != nil {
+	if err := a.saveTokenCache(token, refreshToken, tokenResp.ExpiresIn); err != nil {
 		fmt.Printf("Warning: Failed to save token cache: %v\n", err)
 	}
 
@@ -302,7 +302,7 @@ func (a *OIDCAuth) handleAuthCode(ctx context.Context, server *http.Server, toke
 		token = tokenResp.IDToken
 	}
 
-	if err := a.saveTokenCache(token, tokenResp.RefreshToken); err != nil {
+	if err := a.saveTokenCache(token, tokenResp.RefreshToken, tokenResp.ExpiresIn); err != nil {
 		fmt.Printf("Warning: Failed to save token cache: %v\n", err)
 	}
 
@@ -431,7 +431,7 @@ func (a *OIDCAuth) getDiscovery(discoveryURL string) (*DiscoveryDocument, error)
 	return &discovery, nil
 }
 
-// LoadTokenCache reads the token cache from disk. Returns nil if no cache exists.
+// LoadTokenCache reads the token cache from disk. Returns (nil, nil) if no cache file exists.
 func LoadTokenCache() (*TokenCache, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -440,6 +440,9 @@ func LoadTokenCache() (*TokenCache, error) {
 	cachePath := filepath.Join(homeDir, tokenCacheDir, tokenCacheFile)
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var cache TokenCache
@@ -467,19 +470,22 @@ func (a *OIDCAuth) loadTokenCache() error {
 	return nil
 }
 
-func (a *OIDCAuth) saveTokenCache(token, refreshToken string) error {
-	parser := jwt.NewParser()
-	claims := jwt.MapClaims{}
-	_, _, err := parser.ParseUnverified(token, claims)
-	if err != nil {
-		return fmt.Errorf("failed to parse token: %w", err)
-	}
-
+func (a *OIDCAuth) saveTokenCache(token, refreshToken string, expiresIn int) error {
 	var expiresAt time.Time
-	if exp, ok := claims["exp"].(float64); ok {
-		expiresAt = time.Unix(int64(exp), 0)
+	if expiresIn > 0 {
+		expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
 	} else {
-		expiresAt = time.Now().Add(1 * time.Hour)
+		// Fall back to JWT exp claim for providers that don't set expires_in
+		parser := jwt.NewParser()
+		claims := jwt.MapClaims{}
+		if _, _, err := parser.ParseUnverified(token, claims); err == nil {
+			if exp, ok := claims["exp"].(float64); ok {
+				expiresAt = time.Unix(int64(exp), 0)
+			}
+		}
+		if expiresAt.IsZero() {
+			expiresAt = time.Now().Add(1 * time.Hour)
+		}
 	}
 
 	cache := TokenCache{

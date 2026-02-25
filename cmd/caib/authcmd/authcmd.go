@@ -71,13 +71,12 @@ func getInsecureSkipTLS(cmd *cobra.Command) bool {
 func runStatus(_ *cobra.Command, _ []string) {
 	cache, err := auth.LoadTokenCache()
 	if err != nil {
-		fmt.Println(color.RedString("No cached token found."))
-		fmt.Println("Run 'caib login <server-url>' to authenticate.")
+		fmt.Printf(color.RedString("Failed to read token cache: %v\n"), err)
 		return
 	}
 
-	if cache.Token == "" {
-		fmt.Println(color.RedString("Token cache is empty."))
+	if cache == nil || cache.Token == "" {
+		fmt.Println(color.RedString("No cached token found."))
 		fmt.Println("Run 'caib login <server-url>' to authenticate.")
 		return
 	}
