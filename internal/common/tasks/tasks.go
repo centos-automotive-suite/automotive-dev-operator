@@ -16,20 +16,62 @@ import (
 // BuildConfig defines configuration options for build operations
 // This is an internal type used for task generation
 type BuildConfig struct {
-	UseMemoryVolumes bool
-	MemoryVolumeSize string
-	PVCSize          string
-	RuntimeClassName string
+	UseMemoryVolumes            bool
+	MemoryVolumeSize            string
+	PVCSize                     string
+	RuntimeClassName            string
+	AutomotiveImageBuilderImage string
+	YQHelperImage               string
+	BuildTimeoutMinutes         int32
+	FlashTimeoutMinutes         int32
+	DefaultLeaseDuration        string
+}
+
+// getAutomotiveImageBuilderImage returns the AIB image from config or the default constant
+func (c *BuildConfig) getAutomotiveImageBuilderImage() string {
+	if c != nil && c.AutomotiveImageBuilderImage != "" {
+		return c.AutomotiveImageBuilderImage
+	}
+	return automotivev1alpha1.DefaultAutomotiveImageBuilderImage
+}
+
+// getYQHelperImage returns the yq helper image from config or the default constant
+func (c *BuildConfig) getYQHelperImage() string {
+	if c != nil && c.YQHelperImage != "" {
+		return c.YQHelperImage
+	}
+	return automotivev1alpha1.DefaultYQHelperImage
+}
+
+// getBuildTimeoutMinutes returns the build timeout from config or the default
+func (c *BuildConfig) getBuildTimeoutMinutes() int32 {
+	if c != nil && c.BuildTimeoutMinutes > 0 {
+		return c.BuildTimeoutMinutes
+	}
+	return automotivev1alpha1.DefaultBuildTimeoutMinutes
+}
+
+// getFlashTimeoutMinutes returns the flash timeout from config or the default
+func (c *BuildConfig) getFlashTimeoutMinutes() int32 {
+	if c != nil && c.FlashTimeoutMinutes > 0 {
+		return c.FlashTimeoutMinutes
+	}
+	return automotivev1alpha1.DefaultFlashTimeoutMinutes
+}
+
+// getDefaultLeaseDuration returns the default lease duration from config or the default
+func (c *BuildConfig) getDefaultLeaseDuration() string {
+	if c != nil && c.DefaultLeaseDuration != "" {
+		return c.DefaultLeaseDuration
+	}
+	return automotivev1alpha1.DefaultFlashLeaseDuration
 }
 
 // DefaultInternalRegistryURL is the standard in-cluster URL for the OpenShift internal image registry.
 const DefaultInternalRegistryURL = "image-registry.openshift-image-registry.svc:5000"
 
-// AutomotiveImageBuilder is the default container image for the automotive image builder.
-const AutomotiveImageBuilder = "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0"
-
 // GeneratePushArtifactRegistryTask creates a Tekton Task for pushing artifacts to a registry
-func GeneratePushArtifactRegistryTask(namespace string) *tektonv1.Task {
+func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
 	return &tektonv1.Task{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
@@ -100,7 +142,7 @@ func GeneratePushArtifactRegistryTask(namespace string) *tektonv1.Task {
 			Steps: []tektonv1.Step{
 				{
 					Name:  "push-artifact",
-					Image: "quay.io/konflux-ci/yq:latest",
+					Image: buildConfig.getYQHelperImage(),
 					Env: []corev1.EnvVar{
 						{
 							Name:  "DOCKER_CONFIG",
@@ -205,7 +247,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					Description: "automotive-image-builder container image to use",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: AutomotiveImageBuilder,
+						StringVal: buildConfig.getAutomotiveImageBuilderImage(),
 					},
 				},
 				{
@@ -307,7 +349,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 			Steps: []tektonv1.Step{
 				{
 					Name:   "find-manifest-file",
-					Image:  "quay.io/konflux-ci/yq:latest",
+					Image:  buildConfig.getYQHelperImage(),
 					Script: FindManifestScript,
 					VolumeMounts: []corev1.VolumeMount{
 						{
@@ -464,7 +506,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 }
 
 // GenerateTektonPipeline creates a Tekton Pipeline for automotive building process
-func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
+func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *tektonv1.Pipeline {
 	pipeline := &tektonv1.Pipeline{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
@@ -547,7 +589,7 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					Type: tektonv1.ParamTypeString,
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: AutomotiveImageBuilder,
+						StringVal: buildConfig.getAutomotiveImageBuilderImage(),
 					},
 					Description: "automotive-image-builder container image to use for building",
 				},
@@ -666,7 +708,7 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 					Description: "Jumpstarter lease duration in HH:MM:SS format",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "03:00:00",
+						StringVal: buildConfig.getDefaultLeaseDuration(),
 					},
 				},
 				{
@@ -842,7 +884,7 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 						{Name: "manifest-config-workspace", Workspace: "manifest-config-workspace"},
 						{Name: "registry-auth", Workspace: "registry-auth"},
 					},
-					Timeout: &metav1.Duration{Duration: 90 * time.Minute},
+					Timeout: &metav1.Duration{Duration: time.Duration(buildConfig.getBuildTimeoutMinutes()) * time.Minute},
 				},
 				{
 					Name: "push-disk-artifact",
@@ -1034,7 +1076,7 @@ func GenerateTektonPipeline(name, namespace string) *tektonv1.Pipeline {
 							Values:   []string{"", "null"},
 						},
 					},
-					Timeout: &metav1.Duration{Duration: 4 * time.Hour},
+					Timeout: &metav1.Duration{Duration: time.Duration(buildConfig.getFlashTimeoutMinutes()) * time.Minute},
 				},
 			},
 		},
@@ -1060,7 +1102,7 @@ func buildEnvFrom(envSecretRef string) []corev1.EnvFromSource {
 }
 
 // GenerateFlashTask creates a Tekton Task for flashing images to hardware via Jumpstarter
-func GenerateFlashTask(namespace string) *tektonv1.Task {
+func GenerateFlashTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
 	return &tektonv1.Task{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
@@ -1101,7 +1143,7 @@ func GenerateFlashTask(namespace string) *tektonv1.Task {
 					Description: "Lease duration in HH:MM:SS format",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "03:00:00",
+						StringVal: buildConfig.getDefaultLeaseDuration(),
 					},
 				},
 				{
@@ -1170,7 +1212,7 @@ func GenerateFlashTask(namespace string) *tektonv1.Task {
 						},
 					},
 					Script:  FlashImageScript,
-					Timeout: &metav1.Duration{Duration: 4 * time.Hour},
+					Timeout: &metav1.Duration{Duration: time.Duration(buildConfig.getFlashTimeoutMinutes()) * time.Minute},
 				},
 			},
 		},
@@ -1180,7 +1222,7 @@ func GenerateFlashTask(namespace string) *tektonv1.Task {
 // GenerateBuildBuilderJob creates a Job to build the aib-build helper container
 func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string) *corev1.Pod {
 	if aibImage == "" {
-		aibImage = AutomotiveImageBuilder
+		aibImage = automotivev1alpha1.DefaultAutomotiveImageBuilderImage
 	}
 
 	return &corev1.Pod{

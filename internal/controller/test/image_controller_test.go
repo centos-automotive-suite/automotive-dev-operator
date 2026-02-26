@@ -57,7 +57,7 @@ var _ = Describe("Image Controller", func() {
 						Target:       "qemu",
 						Architecture: "amd64",
 						ExportFormat: "qcow2",
-						Version:      "1.0.0",
+						Version:      "1.1.11",
 						Location: automotivev1alpha1.ImageLocation{
 							Type: "registry",
 							Registry: &automotivev1alpha1.RegistryLocation{

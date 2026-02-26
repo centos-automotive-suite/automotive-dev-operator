@@ -380,10 +380,15 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 	if err == nil && operatorConfig.Spec.OSBuilds != nil {
 		// Convert OSBuildsConfig to BuildConfig
 		buildConfig = &tasks.BuildConfig{
-			UseMemoryVolumes: operatorConfig.Spec.OSBuilds.UseMemoryVolumes,
-			MemoryVolumeSize: operatorConfig.Spec.OSBuilds.MemoryVolumeSize,
-			PVCSize:          operatorConfig.Spec.OSBuilds.PVCSize,
-			RuntimeClassName: operatorConfig.Spec.OSBuilds.RuntimeClassName,
+			UseMemoryVolumes:            operatorConfig.Spec.OSBuilds.UseMemoryVolumes,
+			MemoryVolumeSize:            operatorConfig.Spec.OSBuilds.MemoryVolumeSize,
+			PVCSize:                     operatorConfig.Spec.OSBuilds.PVCSize,
+			RuntimeClassName:            operatorConfig.Spec.OSBuilds.RuntimeClassName,
+			AutomotiveImageBuilderImage: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
+			YQHelperImage:               operatorConfig.Spec.GetImages().GetYQHelperImage(),
+			BuildTimeoutMinutes:         operatorConfig.Spec.OSBuilds.GetBuildTimeoutMinutes(),
+			FlashTimeoutMinutes:         operatorConfig.Spec.OSBuilds.GetFlashTimeoutMinutes(),
+			DefaultLeaseDuration:        operatorConfig.Spec.Jumpstarter.GetDefaultLeaseDuration(),
 		}
 	}
 	_ = buildConfig // buildConfig used for RuntimeClassName if needed
@@ -928,7 +933,9 @@ func (r *ImageBuildReconciler) createPushTaskRun(ctx context.Context, imageBuild
 		return fmt.Errorf("artifact filename is required for push")
 	}
 
-	pushTask := tasks.GeneratePushArtifactRegistryTask(OperatorNamespace)
+	// Fetch OperatorConfig to resolve image overrides for the push task
+	pushBuildConfig := r.resolveBuildConfig(ctx)
+	pushTask := tasks.GeneratePushArtifactRegistryTask(OperatorNamespace, pushBuildConfig)
 
 	params := []tektonv1.Param{
 		{
@@ -1252,7 +1259,11 @@ func (r *ImageBuildReconciler) createFlashTaskRun(
 		return fmt.Errorf("flash client config secret reference is required but not set")
 	}
 
-	flashTask := tasks.GenerateFlashTask(OperatorNamespace)
+	flashBuildConfig := &tasks.BuildConfig{
+		FlashTimeoutMinutes:  operatorConfig.Spec.OSBuilds.GetFlashTimeoutMinutes(),
+		DefaultLeaseDuration: operatorConfig.Spec.Jumpstarter.GetDefaultLeaseDuration(),
+	}
+	flashTask := tasks.GenerateFlashTask(OperatorNamespace, flashBuildConfig)
 
 	params := []tektonv1.Param{
 		{
@@ -1594,6 +1605,29 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 
 	log.Info("Created upload pod, will check status on next reconciliation", "pod", podName)
 	return nil
+}
+
+// resolveBuildConfig fetches OperatorConfig and returns a BuildConfig for task generation.
+// Returns a minimal BuildConfig with defaults if OperatorConfig is unavailable.
+func (r *ImageBuildReconciler) resolveBuildConfig(ctx context.Context) *tasks.BuildConfig {
+	operatorConfig := &automotivev1alpha1.OperatorConfig{}
+	if err := r.Get(ctx, types.NamespacedName{Name: "config", Namespace: OperatorNamespace}, operatorConfig); err != nil {
+		return &tasks.BuildConfig{}
+	}
+	bc := &tasks.BuildConfig{
+		AutomotiveImageBuilderImage: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
+		YQHelperImage:               operatorConfig.Spec.GetImages().GetYQHelperImage(),
+		DefaultLeaseDuration:        operatorConfig.Spec.Jumpstarter.GetDefaultLeaseDuration(),
+	}
+	if operatorConfig.Spec.OSBuilds != nil {
+		bc.UseMemoryVolumes = operatorConfig.Spec.OSBuilds.UseMemoryVolumes
+		bc.MemoryVolumeSize = operatorConfig.Spec.OSBuilds.MemoryVolumeSize
+		bc.PVCSize = operatorConfig.Spec.OSBuilds.PVCSize
+		bc.RuntimeClassName = operatorConfig.Spec.OSBuilds.RuntimeClassName
+		bc.BuildTimeoutMinutes = operatorConfig.Spec.OSBuilds.GetBuildTimeoutMinutes()
+		bc.FlashTimeoutMinutes = operatorConfig.Spec.OSBuilds.GetFlashTimeoutMinutes()
+	}
+	return bc
 }
 
 func (r *ImageBuildReconciler) updateStatus(

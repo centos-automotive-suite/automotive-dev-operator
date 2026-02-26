@@ -315,7 +315,7 @@ func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *au
 
 	// Create/update build-api deployment
 	r.Log.Info("Creating/updating build-api deployment")
-	buildAPIDeployment := r.buildBuildAPIDeployment(owner.Namespace, isOpenShift)
+	buildAPIDeployment := r.buildBuildAPIDeployment(owner.Namespace, isOpenShift, owner)
 	if err := r.createOrUpdate(ctx, buildAPIDeployment, owner); err != nil {
 		r.Log.Error(err, "Failed to create/update build-api deployment")
 		return fmt.Errorf("failed to create/update build-api deployment: %w", err)
@@ -561,10 +561,15 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 	var buildConfig *tasks.BuildConfig
 	if config.Spec.OSBuilds != nil {
 		buildConfig = &tasks.BuildConfig{
-			UseMemoryVolumes: config.Spec.OSBuilds.UseMemoryVolumes,
-			MemoryVolumeSize: config.Spec.OSBuilds.MemoryVolumeSize,
-			PVCSize:          config.Spec.OSBuilds.PVCSize,
-			RuntimeClassName: config.Spec.OSBuilds.RuntimeClassName,
+			UseMemoryVolumes:            config.Spec.OSBuilds.UseMemoryVolumes,
+			MemoryVolumeSize:            config.Spec.OSBuilds.MemoryVolumeSize,
+			PVCSize:                     config.Spec.OSBuilds.PVCSize,
+			RuntimeClassName:            config.Spec.OSBuilds.RuntimeClassName,
+			AutomotiveImageBuilderImage: config.Spec.GetImages().GetAutomotiveImageBuilderImage(),
+			YQHelperImage:               config.Spec.GetImages().GetYQHelperImage(),
+			BuildTimeoutMinutes:         config.Spec.OSBuilds.GetBuildTimeoutMinutes(),
+			FlashTimeoutMinutes:         config.Spec.OSBuilds.GetFlashTimeoutMinutes(),
+			DefaultLeaseDuration:        config.Spec.Jumpstarter.GetDefaultLeaseDuration(),
 		}
 	}
 
@@ -577,8 +582,8 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 	// Generate and deploy Tekton tasks
 	tektonTasks := []*tektonv1.Task{
 		tasks.GenerateBuildAutomotiveImageTask(config.Namespace, buildConfig, ""),
-		tasks.GeneratePushArtifactRegistryTask(config.Namespace),
-		tasks.GenerateFlashTask(config.Namespace),
+		tasks.GeneratePushArtifactRegistryTask(config.Namespace, buildConfig),
+		tasks.GenerateFlashTask(config.Namespace, buildConfig),
 	}
 
 	for _, task := range tektonTasks {
@@ -597,7 +602,7 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 	}
 
 	// Generate and deploy Tekton pipeline
-	pipeline := tasks.GenerateTektonPipeline("automotive-build-pipeline", config.Namespace)
+	pipeline := tasks.GenerateTektonPipeline("automotive-build-pipeline", config.Namespace, buildConfig)
 	pipeline.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = config.Name
 
 	if err := controllerutil.SetControllerReference(config, pipeline, r.Scheme); err != nil {
@@ -680,7 +685,7 @@ func (r *OperatorConfigReconciler) deployBuildController(ctx context.Context, co
 	}
 
 	// Create/update Deployment with owner reference for reconciliation
-	deployment := r.buildBuildControllerDeployment(config.Namespace)
+	deployment := r.buildBuildControllerDeployment(config.Namespace, config)
 	if err := controllerutil.SetControllerReference(config, deployment, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set controller reference on build controller deployment: %w", err)
 	}

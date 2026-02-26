@@ -430,5 +430,5 @@ func (s *ImageBuildSpec) GetFlashLeaseDuration() string {
 	if s.Flash != nil && s.Flash.LeaseDuration != "" {
 		return s.Flash.LeaseDuration
 	}
-	return "03:00:00"
+	return DefaultFlashLeaseDuration
 }

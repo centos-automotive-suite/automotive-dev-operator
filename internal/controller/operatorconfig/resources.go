@@ -14,26 +14,22 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-const (
-	defaultOperatorImage = "quay.io/rh-sdv-cloud/automotive-dev-operator:latest"
-	buildControllerName  = "ado-build-controller"
-)
+const buildControllerName = "ado-build-controller"
 
-// getOperatorImage returns the operator image from env var or default
-func getOperatorImage() string {
+// getOperatorImage returns the operator image from env var, then config, then default constant
+func getOperatorImage(images *automotivev1alpha1.ImagesConfig) string {
 	if img := os.Getenv("OPERATOR_IMAGE"); img != "" {
 		return img
 	}
-	return defaultOperatorImage
+	return images.GetOperatorImage()
 }
 
 // buildBuildAPIContainers builds the container list for build-API deployment, conditionally including oauth-proxy
-func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isOpenShift bool) []corev1.Container {
+func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isOpenShift bool, config *automotivev1alpha1.OperatorConfig) []corev1.Container {
 	buildAPIEnv := []corev1.EnvVar{
 		{
 			Name:  "BUILD_API_NAMESPACE",
@@ -73,22 +69,18 @@ func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isO
 			},
 		},
 	}
+	images := config.Spec.GetImages()
+	var resourcesCfg *automotivev1alpha1.BuildAPIResourcesConfig
+	if config.Spec.BuildAPI != nil {
+		resourcesCfg = config.Spec.BuildAPI.Resources
+	}
 	containers := []corev1.Container{
 		{
-			Name:    "build-api",
-			Image:   getOperatorImage(),
-			Command: []string{"/build-api"},
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("50m"),
-					corev1.ResourceMemory: resource.MustParse("64Mi"),
-				},
-				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("200m"),
-					corev1.ResourceMemory: resource.MustParse("512Mi"),
-				},
-			},
-			Env: buildAPIEnv,
+			Name:      "build-api",
+			Image:     getOperatorImage(images),
+			Command:   []string{"/build-api"},
+			Resources: resourcesCfg.GetBuildAPIResources(),
+			Env:       buildAPIEnv,
 			Ports: []corev1.ContainerPort{
 				{
 					Name:          "http",
@@ -143,7 +135,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isO
 	if isOpenShift {
 		containers = append(containers, corev1.Container{
 			Name:  "oauth-proxy",
-			Image: "registry.redhat.io/openshift4/ose-oauth-proxy:latest",
+			Image: images.GetOAuthProxyImage(),
 			Args: []string{
 				"--provider=openshift",
 				"--https-address=",
@@ -183,16 +175,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isO
 					Protocol:      corev1.ProtocolTCP,
 				},
 			},
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("10m"),
-					corev1.ResourceMemory: resource.MustParse("32Mi"),
-				},
-				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("100m"),
-					corev1.ResourceMemory: resource.MustParse("128Mi"),
-				},
-			},
+			Resources: resourcesCfg.GetOAuthProxyResources(),
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: boolPtr(false),
 			},
@@ -202,7 +185,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isO
 	return containers
 }
 
-func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, isOpenShift bool) *appsv1.Deployment {
+func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, isOpenShift bool, config *automotivev1alpha1.OperatorConfig) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "ado-build-api",
@@ -233,7 +216,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, isO
 					InitContainers: []corev1.Container{
 						{
 							Name:    "init-secrets",
-							Image:   getOperatorImage(),
+							Image:   getOperatorImage(config.Spec.GetImages()),
 							Command: []string{"/init-secrets"},
 							Env: []corev1.EnvVar{
 								{
@@ -250,7 +233,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, isO
 							},
 						},
 					},
-					Containers: r.buildBuildAPIContainers(namespace, isOpenShift),
+					Containers: r.buildBuildAPIContainers(namespace, isOpenShift, config),
 					// No volumes needed - Build API reads directly from OperatorConfig CRD
 				},
 			},
@@ -471,7 +454,7 @@ func generateRandomToken(length int) (string, error) {
 	return string(bytes), nil
 }
 
-func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace string) *appsv1.Deployment {
+func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace string, config *automotivev1alpha1.OperatorConfig) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      buildControllerName,
@@ -505,7 +488,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 					Containers: []corev1.Container{
 						{
 							Name:    "manager",
-							Image:   getOperatorImage(),
+							Image:   getOperatorImage(config.Spec.GetImages()),
 							Command: []string{"/manager"},
 							Args: []string{
 								"--mode=build",
@@ -516,7 +499,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 							Env: []corev1.EnvVar{
 								{
 									Name:  "OPERATOR_IMAGE",
-									Value: getOperatorImage(),
+									Value: getOperatorImage(config.Spec.GetImages()),
 								},
 								{
 									Name:  "WATCH_NAMESPACE",
@@ -550,16 +533,13 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 								InitialDelaySeconds: 5,
 								PeriodSeconds:       10,
 							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("100m"),
-									corev1.ResourceMemory: resource.MustParse("256Mi"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("1000m"),
-									corev1.ResourceMemory: resource.MustParse("512Mi"),
-								},
-							},
+							Resources: func() corev1.ResourceRequirements {
+								var resourcesCfg *automotivev1alpha1.BuildAPIResourcesConfig
+								if config.Spec.BuildAPI != nil {
+									resourcesCfg = config.Spec.BuildAPI.Resources
+								}
+								return resourcesCfg.GetBuildControllerResources()
+							}(),
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: boolPtr(false),
 								Capabilities: &corev1.Capabilities{
