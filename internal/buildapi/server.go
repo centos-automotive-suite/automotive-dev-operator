@@ -305,6 +305,7 @@ type APILimits struct {
 	MaxUploadFileSize           int64
 	MaxTotalUploadSize          int64
 	MaxLogStreamDurationMinutes int32
+	ClientTokenExpiryDays       int32
 }
 
 // DefaultAPILimits returns the default limits
@@ -313,6 +314,7 @@ func DefaultAPILimits() APILimits {
 		MaxUploadFileSize:           1 * 1024 * 1024 * 1024, // 1GB
 		MaxTotalUploadSize:          2 * 1024 * 1024 * 1024, // 2GB
 		MaxLogStreamDurationMinutes: 120,                    // 2 hours
+		ClientTokenExpiryDays:       automotivev1alpha1.DefaultClientTokenExpiryDays,
 	}
 }
 
@@ -417,6 +419,9 @@ func LoadLimitsFromConfig(cfg *automotivev1alpha1.BuildAPIConfig) APILimits {
 	}
 	if cfg.MaxLogStreamDurationMinutes > 0 {
 		limits.MaxLogStreamDurationMinutes = cfg.MaxLogStreamDurationMinutes
+	}
+	if cfg.ClientTokenExpiryDays > 0 {
+		limits.ClientTokenExpiryDays = cfg.ClientTokenExpiryDays
 	}
 	return limits
 }
@@ -1302,7 +1307,7 @@ func applyBuildDefaults(req *BuildRequest) error {
 		return fmt.Errorf("mode cannot be empty")
 	}
 	if req.AutomotiveImageBuilder == "" {
-		req.AutomotiveImageBuilder = "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0"
+		req.AutomotiveImageBuilder = automotivev1alpha1.DefaultAutomotiveImageBuilderImage
 	}
 	if req.ManifestFileName == "" {
 		req.ManifestFileName = "manifest.aib.yml"
@@ -2781,18 +2786,24 @@ func (a *APIServer) createFlash(c *gin.Context) {
 	namespace := resolveNamespace()
 	requestedBy := a.resolveRequester(c)
 
+	// Load OperatorConfig for target mappings, image overrides, and lease duration defaults
+	operatorConfig := &automotivev1alpha1.OperatorConfig{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: "config", Namespace: namespace}, operatorConfig); err != nil {
+		if !k8serrors.IsNotFound(err) {
+			a.log.Error(err, "failed to load OperatorConfig for flash, using defaults")
+		}
+		operatorConfig = &automotivev1alpha1.OperatorConfig{}
+	}
+
 	// Get exporter selector from OperatorConfig if target is specified
 	exporterSelector := req.ExporterSelector
 	flashCmd := req.FlashCmd
 	if req.Target != "" && exporterSelector == "" {
-		operatorConfig := &automotivev1alpha1.OperatorConfig{}
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "config", Namespace: namespace}, operatorConfig); err == nil {
-			if operatorConfig.Spec.Jumpstarter != nil {
-				if mapping, ok := operatorConfig.Spec.Jumpstarter.TargetMappings[req.Target]; ok {
-					exporterSelector = mapping.Selector
-					if flashCmd == "" {
-						flashCmd = mapping.FlashCmd
-					}
+		if operatorConfig.Spec.Jumpstarter != nil {
+			if mapping, ok := operatorConfig.Spec.Jumpstarter.TargetMappings[req.Target]; ok {
+				exporterSelector = mapping.Selector
+				if flashCmd == "" {
+					flashCmd = mapping.FlashCmd
 				}
 			}
 		}
@@ -2845,13 +2856,27 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		return
 	}
 
-	// Get the flash task spec
-	flashTask := tasks.GenerateFlashTask(namespace)
+	// Build task config from OperatorConfig for flash task generation
+	var flashBuildConfig *tasks.BuildConfig
+	if operatorConfig.Spec.OSBuilds != nil {
+		flashBuildConfig = &tasks.BuildConfig{
+			FlashTimeoutMinutes:  operatorConfig.Spec.OSBuilds.GetFlashTimeoutMinutes(),
+			DefaultLeaseDuration: operatorConfig.Spec.Jumpstarter.GetDefaultLeaseDuration(),
+		}
+	}
 
-	// Lease duration
+	// Get the flash task spec
+	flashTask := tasks.GenerateFlashTask(namespace, flashBuildConfig)
+
+	// Lease duration: request > FlashTimeoutMinutes (as HH:MM:SS) > Jumpstarter default > constant
 	leaseDuration := req.LeaseDuration
 	if leaseDuration == "" {
-		leaseDuration = "03:00:00" // Default 3 hours
+		if operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.FlashTimeoutMinutes > 0 {
+			m := operatorConfig.Spec.OSBuilds.FlashTimeoutMinutes
+			leaseDuration = fmt.Sprintf("%02d:%02d:00", m/60, m%60)
+		} else {
+			leaseDuration = operatorConfig.Spec.Jumpstarter.GetDefaultLeaseDuration()
+		}
 	}
 
 	// Create the flash TaskRun

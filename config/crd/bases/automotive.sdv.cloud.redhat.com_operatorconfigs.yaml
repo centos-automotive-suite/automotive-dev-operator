@@ -399,6 +399,12 @@ spec:
                           type: object
                         type: array
                     type: object
+                  clientTokenExpiryDays:
+                    description: |-
+                      ClientTokenExpiryDays is the number of days before client tokens expire
+                      Default: 30
+                    format: int32
+                    type: integer
                   maxLogStreamDurationMinutes:
                     description: |-
                       MaxLogStreamDurationMinutes is the maximum duration for log streaming in minutes
@@ -417,6 +423,191 @@ spec:
                       Default: 1073741824 (1GB)
                     format: int64
                     type: integer
+                  resources:
+                    description: Resources defines resource requirements for Build
+                      API components
+                    properties:
+                      buildAPI:
+                        description: BuildAPI defines resource requirements for the
+                          Build API container
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      buildController:
+                        description: BuildController defines resource requirements
+                          for the build controller container
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      oauthProxy:
+                        description: OAuthProxy defines resource requirements for
+                          the OAuth proxy sidecar
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                    type: object
                 type: object
               containerBuilds:
                 description: ContainerBuilds defines configuration for container build
@@ -431,10 +622,37 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              images:
+                description: Images defines container image references used by the
+                  operator
+                properties:
+                  automotiveImageBuilder:
+                    description: AutomotiveImageBuilder is the container image for
+                      automotive-image-builder
+                    type: string
+                  oauthProxy:
+                    description: OAuthProxy is the OAuth proxy sidecar image for OpenShift
+                      deployments
+                    type: string
+                  operator:
+                    description: Operator is the operator container image (overridden
+                      by OPERATOR_IMAGE env var when set)
+                    type: string
+                  yqHelper:
+                    description: YQHelper is the yq helper image used in Tekton task
+                      steps
+                    type: string
+                type: object
               jumpstarter:
                 description: Jumpstarter defines configuration for Jumpstarter device
                   flashing integration
                 properties:
+                  defaultLeaseDuration:
+                    description: |-
+                      DefaultLeaseDuration is the cluster-wide default lease duration in HH:MM:SS format
+                      Can be overridden per-ImageBuild via FlashSpec.LeaseDuration
+                      Default: "03:00:00"
+                    type: string
                   image:
                     default: quay.io/jumpstarter-dev/jumpstarter:latest
                     description: Image is the container image for Jumpstarter CLI
@@ -469,6 +687,12 @@ spec:
               osBuilds:
                 description: OSBuilds defines the configuration for OS build operations
                 properties:
+                  buildTimeoutMinutes:
+                    description: |-
+                      BuildTimeoutMinutes is the timeout for build-image pipeline tasks in minutes
+                      Default: 90
+                    format: int32
+                    type: integer
                   clusterRegistryRoute:
                     description: |-
                       ClusterRegistryRoute is the external route for the cluster's internal image registry
@@ -480,6 +704,12 @@ spec:
                     description: Enabled determines if Tekton tasks for OS builds
                       should be deployed
                     type: boolean
+                  flashTimeoutMinutes:
+                    description: |-
+                      FlashTimeoutMinutes is the timeout for flash-image pipeline tasks in minutes
+                      Default: 240 (4 hours)
+                    format: int32
+                    type: integer
                   memoryVolumeSize:
                     description: |-
                       MemoryVolumeSize specifies the size limit for memory-backed volumes

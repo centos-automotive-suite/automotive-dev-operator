@@ -157,7 +157,7 @@ components:
           type: string
         automotiveImageBuilder:
           type: string
-          default: quay.io/centos-sig-automotive/automotive-image-builder:1.0.0
+          default: quay.io/centos-sig-automotive/automotive-image-builder:1.1.11
         storageClass:
           type: string
         runtimeClassName:

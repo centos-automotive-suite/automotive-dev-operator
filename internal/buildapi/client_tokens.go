@@ -16,10 +16,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 )
 
-const (
-	clientTokenPrefix = "ado-build-api-client-"
-	clientTokenExpiry = 30 * 24 * time.Hour
-)
+const clientTokenPrefix = "ado-build-api-client-"
 
 // oidcAuthResult represents the result of OIDC authentication attempt
 type oidcAuthResult struct {
@@ -106,7 +103,7 @@ func (a *APIServer) signClientToken(username string) (string, time.Time, error) 
 		return "", time.Time{}, fmt.Errorf("internal JWT is not configured")
 	}
 
-	expiresAt := time.Now().Add(clientTokenExpiry)
+	expiresAt := time.Now().Add(time.Duration(a.limits.ClientTokenExpiryDays) * 24 * time.Hour)
 	audience := a.internalJWT.audience
 	if audience == "" {
 		audience = "ado-build-api"

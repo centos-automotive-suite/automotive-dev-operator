@@ -14,7 +14,7 @@ metadata:
             "architecture": "amd64",
             "aib": {
               "distro": "autosd",
-              "image": "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0",
+              "image": "quay.io/centos-sig-automotive/automotive-image-builder:1.1.11",
               "manifest": "# Sample AIB manifest\nname: sample-build\n",
               "manifestFileName": "sample.aib.yml",
               "mode": "image",

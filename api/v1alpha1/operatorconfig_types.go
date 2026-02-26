@@ -18,31 +18,160 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apiserverv1beta1 "k8s.io/apiserver/pkg/apis/apiserver/v1beta1"
 )
 
-// BuildConfig defines configuration options for build operations
-// This type is used internally for compatibility with task generation
-type BuildConfig struct {
-	// UseMemoryVolumes determines whether to use memory-backed volumes for build operations
-	// When true, all emptyDir volumes (build-dir, run-dir, container-storage, etc.) use tmpfs
-	// Default: false (disk-backed)
-	UseMemoryVolumes bool `json:"useMemoryVolumes,omitempty"`
+const (
+	// DefaultAutomotiveImageBuilderImage is the default container image for automotive-image-builder
+	DefaultAutomotiveImageBuilderImage = "quay.io/centos-sig-automotive/automotive-image-builder:1.1.11"
 
-	// MemoryVolumeSize specifies the size limit for memory-backed volumes (required if UseMemoryVolumes is true)
-	// Example: "2Gi"
-	MemoryVolumeSize string `json:"memoryVolumeSize,omitempty"`
+	// DefaultYQHelperImage is the default yq helper image used in Tekton task steps
+	DefaultYQHelperImage = "quay.io/konflux-ci/yq:latest"
 
-	// PVCSize specifies the size for persistent volume claims created for build workspaces
-	// Default: "8Gi"
+	// DefaultOAuthProxyImage is the default OAuth proxy sidecar image for OpenShift
+	DefaultOAuthProxyImage = "registry.redhat.io/openshift4/ose-oauth-proxy:latest"
+
+	// DefaultOperatorImage is the default operator container image
+	DefaultOperatorImage = "quay.io/rh-sdv-cloud/automotive-dev-operator:latest"
+
+	// DefaultBuildTimeoutMinutes is the default timeout for build-image pipeline tasks
+	DefaultBuildTimeoutMinutes int32 = 90
+
+	// DefaultFlashTimeoutMinutes is the default timeout for flash-image pipeline tasks
+	DefaultFlashTimeoutMinutes int32 = 240
+
+	// DefaultClientTokenExpiryDays is the default expiry for client tokens in days
+	DefaultClientTokenExpiryDays int32 = 30
+
+	// DefaultFlashLeaseDuration is the default Jumpstarter lease duration in HH:MM:SS format
+	DefaultFlashLeaseDuration = "03:00:00"
+)
+
+// ImagesConfig defines container image references used by the operator
+type ImagesConfig struct {
+	// AutomotiveImageBuilder is the container image for automotive-image-builder
 	// +optional
-	PVCSize string `json:"pvcSize,omitempty"`
+	AutomotiveImageBuilder string `json:"automotiveImageBuilder,omitempty"`
 
-	// RuntimeClassName specifies the runtime class to use for the build pod
-	// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+	// YQHelper is the yq helper image used in Tekton task steps
 	// +optional
-	RuntimeClassName string `json:"runtimeClassName,omitempty"`
+	YQHelper string `json:"yqHelper,omitempty"`
+
+	// OAuthProxy is the OAuth proxy sidecar image for OpenShift deployments
+	// +optional
+	OAuthProxy string `json:"oauthProxy,omitempty"`
+
+	// Operator is the operator container image (overridden by OPERATOR_IMAGE env var when set)
+	// +optional
+	Operator string `json:"operator,omitempty"`
+}
+
+// GetAutomotiveImageBuilderImage returns the AIB image, falling back to the default
+func (c *ImagesConfig) GetAutomotiveImageBuilderImage() string {
+	if c != nil && c.AutomotiveImageBuilder != "" {
+		return c.AutomotiveImageBuilder
+	}
+	return DefaultAutomotiveImageBuilderImage
+}
+
+// GetYQHelperImage returns the yq helper image, falling back to the default
+func (c *ImagesConfig) GetYQHelperImage() string {
+	if c != nil && c.YQHelper != "" {
+		return c.YQHelper
+	}
+	return DefaultYQHelperImage
+}
+
+// GetOAuthProxyImage returns the OAuth proxy image, falling back to the default
+func (c *ImagesConfig) GetOAuthProxyImage() string {
+	if c != nil && c.OAuthProxy != "" {
+		return c.OAuthProxy
+	}
+	return DefaultOAuthProxyImage
+}
+
+// GetOperatorImage returns the operator image, falling back to the default
+func (c *ImagesConfig) GetOperatorImage() string {
+	if c != nil && c.Operator != "" {
+		return c.Operator
+	}
+	return DefaultOperatorImage
+}
+
+// BuildAPIResourcesConfig defines resource requirements for Build API components
+type BuildAPIResourcesConfig struct {
+	// BuildAPI defines resource requirements for the Build API container
+	// +optional
+	BuildAPI *corev1.ResourceRequirements `json:"buildAPI,omitempty"`
+
+	// OAuthProxy defines resource requirements for the OAuth proxy sidecar
+	// +optional
+	OAuthProxy *corev1.ResourceRequirements `json:"oauthProxy,omitempty"`
+
+	// BuildController defines resource requirements for the build controller container
+	// +optional
+	BuildController *corev1.ResourceRequirements `json:"buildController,omitempty"`
+}
+
+// GetBuildAPIResources returns the Build API resource requirements with defaults
+func (c *BuildAPIResourcesConfig) GetBuildAPIResources() corev1.ResourceRequirements {
+	if c != nil && c.BuildAPI != nil {
+		return *c.BuildAPI
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("50m"),
+			corev1.ResourceMemory: resource.MustParse("64Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("200m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+	}
+}
+
+// GetOAuthProxyResources returns the OAuth proxy resource requirements with defaults
+func (c *BuildAPIResourcesConfig) GetOAuthProxyResources() corev1.ResourceRequirements {
+	if c != nil && c.OAuthProxy != nil {
+		return *c.OAuthProxy
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("10m"),
+			corev1.ResourceMemory: resource.MustParse("32Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+	}
+}
+
+// GetBuildControllerResources returns the build controller resource requirements with defaults
+func (c *BuildAPIResourcesConfig) GetBuildControllerResources() corev1.ResourceRequirements {
+	if c != nil && c.BuildController != nil {
+		return *c.BuildController
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1000m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+	}
+}
+
+// GetImages returns the ImagesConfig, returning an empty struct if nil (so getters fall back to defaults)
+func (s *OperatorConfigSpec) GetImages() *ImagesConfig {
+	if s.Images != nil {
+		return s.Images
+	}
+	return &ImagesConfig{}
 }
 
 // JumpstarterTargetMapping defines the Jumpstarter configuration for a specific build target
@@ -71,6 +200,12 @@ type JumpstarterConfig struct {
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 
+	// DefaultLeaseDuration is the cluster-wide default lease duration in HH:MM:SS format
+	// Can be overridden per-ImageBuild via FlashSpec.LeaseDuration
+	// Default: "03:00:00"
+	// +optional
+	DefaultLeaseDuration string `json:"defaultLeaseDuration,omitempty"`
+
 	// TargetMappings maps build targets to Jumpstarter exporter configurations
 	// +optional
 	TargetMappings map[string]JumpstarterTargetMapping `json:"targetMappings,omitempty"`
@@ -82,6 +217,14 @@ func (c *JumpstarterConfig) GetJumpstarterImage() string {
 		return c.Image
 	}
 	return DefaultJumpstarterImage
+}
+
+// GetDefaultLeaseDuration returns the default flash lease duration, falling back to the constant default
+func (c *JumpstarterConfig) GetDefaultLeaseDuration() string {
+	if c != nil && c.DefaultLeaseDuration != "" {
+		return c.DefaultLeaseDuration
+	}
+	return DefaultFlashLeaseDuration
 }
 
 // BuildAPIConfig defines configuration for the Build API server
@@ -101,9 +244,26 @@ type BuildAPIConfig struct {
 	// +optional
 	MaxLogStreamDurationMinutes int32 `json:"maxLogStreamDurationMinutes,omitempty"`
 
+	// ClientTokenExpiryDays is the number of days before client tokens expire
+	// Default: 30
+	// +optional
+	ClientTokenExpiryDays int32 `json:"clientTokenExpiryDays,omitempty"`
+
+	// Resources defines resource requirements for Build API components
+	// +optional
+	Resources *BuildAPIResourcesConfig `json:"resources,omitempty"`
+
 	// Authentication configuration for the Build API server.
 	// +optional
 	Authentication *AuthenticationConfig `json:"authentication,omitempty"`
+}
+
+// GetClientTokenExpiryDays returns the client token expiry in days, falling back to the default
+func (c *BuildAPIConfig) GetClientTokenExpiryDays() int32 {
+	if c != nil && c.ClientTokenExpiryDays > 0 {
+		return c.ClientTokenExpiryDays
+	}
+	return DefaultClientTokenExpiryDays
 }
 
 // AuthenticationConfig defines authentication methods for the Build API.
@@ -153,6 +313,10 @@ type OperatorConfigSpec struct {
 	// +optional
 	BuildAPI *BuildAPIConfig `json:"buildAPI,omitempty"`
 
+	// Images defines container image references used by the operator
+	// +optional
+	Images *ImagesConfig `json:"images,omitempty"`
+
 	// Jumpstarter defines configuration for Jumpstarter device flashing integration
 	// +optional
 	Jumpstarter *JumpstarterConfig `json:"jumpstarter,omitempty"`
@@ -197,6 +361,16 @@ type OSBuildsConfig struct {
 	// +optional
 	UploadTimeoutMinutes int32 `json:"uploadTimeoutMinutes,omitempty"`
 
+	// BuildTimeoutMinutes is the timeout for build-image pipeline tasks in minutes
+	// Default: 90
+	// +optional
+	BuildTimeoutMinutes int32 `json:"buildTimeoutMinutes,omitempty"`
+
+	// FlashTimeoutMinutes is the timeout for flash-image pipeline tasks in minutes
+	// Default: 240 (4 hours)
+	// +optional
+	FlashTimeoutMinutes int32 `json:"flashTimeoutMinutes,omitempty"`
+
 	// NodeSelector specifies node labels that build pods must match for scheduling
 	// These labels are added to the pod template used by Tekton PipelineRuns
 	// Example: {"dedicated": "builds", "disktype": "ssd"}
@@ -209,6 +383,22 @@ type OSBuildsConfig struct {
 	//           "value": "builds", "effect": "NoSchedule"}]
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
+// GetBuildTimeoutMinutes returns the build timeout in minutes, falling back to the default
+func (c *OSBuildsConfig) GetBuildTimeoutMinutes() int32 {
+	if c != nil && c.BuildTimeoutMinutes > 0 {
+		return c.BuildTimeoutMinutes
+	}
+	return DefaultBuildTimeoutMinutes
+}
+
+// GetFlashTimeoutMinutes returns the flash timeout in minutes, falling back to the default
+func (c *OSBuildsConfig) GetFlashTimeoutMinutes() int32 {
+	if c != nil && c.FlashTimeoutMinutes > 0 {
+		return c.FlashTimeoutMinutes
+	}
+	return DefaultFlashTimeoutMinutes
 }
 
 // OperatorConfigStatus defines the observed state of OperatorConfig

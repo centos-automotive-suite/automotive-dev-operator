@@ -19,6 +19,7 @@ package operatorconfig
 import (
 	"testing"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 	"gopkg.in/yaml.v3"
@@ -30,6 +31,14 @@ func TestResources(t *testing.T) {
 	RunSpecs(t, "OperatorConfig Resources Suite")
 }
 
+func defaultTestConfig() *automotivev1alpha1.OperatorConfig {
+	return &automotivev1alpha1.OperatorConfig{
+		Spec: automotivev1alpha1.OperatorConfigSpec{
+			OSBuilds: &automotivev1alpha1.OSBuildsConfig{Enabled: true},
+		},
+	}
+}
+
 var _ = Describe("OperatorConfig Resources", func() {
 	var r *OperatorConfigReconciler
 
@@ -39,25 +48,25 @@ var _ = Describe("OperatorConfig Resources", func() {
 
 	Describe("buildBuildAPIDeployment", func() {
 		It("should use ado-operator service account", func() {
-			deployment := r.buildBuildAPIDeployment("test-namespace", false)
+			deployment := r.buildBuildAPIDeployment("test-namespace", false, defaultTestConfig())
 			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-operator"))
 		})
 
 		It("should use ado-operator service account on OpenShift", func() {
-			deployment := r.buildBuildAPIDeployment("test-namespace", true)
+			deployment := r.buildBuildAPIDeployment("test-namespace", true, defaultTestConfig())
 			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-operator"))
 		})
 	})
 
 	Describe("buildBuildAPIContainers", func() {
 		It("should not include oauth-proxy on non-OpenShift", func() {
-			containers := r.buildBuildAPIContainers("test-namespace", false)
+			containers := r.buildBuildAPIContainers("test-namespace", false, defaultTestConfig())
 			Expect(containers).To(HaveLen(1))
 			Expect(containers[0].Name).To(Equal("build-api"))
 		})
 
 		It("should include oauth-proxy on OpenShift with ado-operator SA", func() {
-			containers := r.buildBuildAPIContainers("test-namespace", true)
+			containers := r.buildBuildAPIContainers("test-namespace", true, defaultTestConfig())
 			Expect(containers).To(HaveLen(2))
 
 			oauthProxy := containers[1]
@@ -66,7 +75,7 @@ var _ = Describe("OperatorConfig Resources", func() {
 		})
 
 		It("should not reference ado-controller-manager in oauth-proxy args", func() {
-			containers := r.buildBuildAPIContainers("test-namespace", true)
+			containers := r.buildBuildAPIContainers("test-namespace", true, defaultTestConfig())
 			for _, arg := range containers[1].Args {
 				Expect(arg).NotTo(ContainSubstring("controller-manager"))
 			}
@@ -74,7 +83,7 @@ var _ = Describe("OperatorConfig Resources", func() {
 
 		It("should set BUILD_API_NAMESPACE environment variable to provided namespace", func() {
 			testNamespace := "custom-test-namespace"
-			containers := r.buildBuildAPIContainers(testNamespace, false)
+			containers := r.buildBuildAPIContainers(testNamespace, false, defaultTestConfig())
 
 			buildAPIContainer := containers[0]
 			var foundBuildAPINamespace bool
@@ -90,7 +99,7 @@ var _ = Describe("OperatorConfig Resources", func() {
 		})
 
 		It("should have health check probes configured for build-api container", func() {
-			containers := r.buildBuildAPIContainers("test-namespace", false)
+			containers := r.buildBuildAPIContainers("test-namespace", false, defaultTestConfig())
 			buildAPIContainer := containers[0]
 
 			// Check liveness probe
@@ -153,18 +162,18 @@ var _ = Describe("OperatorConfig Resources", func() {
 
 	Describe("buildBuildControllerDeployment", func() {
 		It("should use ado-build-controller service account", func() {
-			deployment := r.buildBuildControllerDeployment("test-namespace")
+			deployment := r.buildBuildControllerDeployment("test-namespace", defaultTestConfig())
 			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-build-controller"))
 		})
 
 		It("should run in build mode", func() {
-			deployment := r.buildBuildControllerDeployment("test-namespace")
+			deployment := r.buildBuildControllerDeployment("test-namespace", defaultTestConfig())
 			container := deployment.Spec.Template.Spec.Containers[0]
 			Expect(container.Args).To(ContainElement("--mode=build"))
 		})
 
 		It("should set pod-level RunAsNonRoot", func() {
-			deployment := r.buildBuildControllerDeployment("test-namespace")
+			deployment := r.buildBuildControllerDeployment("test-namespace", defaultTestConfig())
 			podSec := deployment.Spec.Template.Spec.SecurityContext
 			Expect(podSec).NotTo(BeNil())
 			Expect(podSec.RunAsNonRoot).NotTo(BeNil())
@@ -172,7 +181,7 @@ var _ = Describe("OperatorConfig Resources", func() {
 		})
 
 		It("should drop all capabilities and disallow privilege escalation", func() {
-			deployment := r.buildBuildControllerDeployment("test-namespace")
+			deployment := r.buildBuildControllerDeployment("test-namespace", defaultTestConfig())
 			container := deployment.Spec.Template.Spec.Containers[0]
 			sec := container.SecurityContext
 			Expect(sec).NotTo(BeNil())
@@ -184,7 +193,7 @@ var _ = Describe("OperatorConfig Resources", func() {
 
 		It("should set WATCH_NAMESPACE environment variable to provided namespace", func() {
 			testNamespace := "custom-test-namespace"
-			deployment := r.buildBuildControllerDeployment(testNamespace)
+			deployment := r.buildBuildControllerDeployment(testNamespace, defaultTestConfig())
 			container := deployment.Spec.Template.Spec.Containers[0]
 
 			var foundWatchNamespace bool
