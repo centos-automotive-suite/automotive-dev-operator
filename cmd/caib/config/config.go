@@ -113,7 +113,7 @@ func DeriveServerFromJumpstarter() string {
 		fmt.Printf("Warning: Jumpstarter config found, but could not reach derived Build API server %s.\n", apiURL)
 		return ""
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Reachable — persist to config so future invocations skip derivation
 	fmt.Printf("Using Build API server derived from Jumpstarter config: %s\n", apiURL)

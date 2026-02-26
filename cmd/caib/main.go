@@ -693,7 +693,7 @@ Example:
 	_ = flashCmd.MarkFlagRequired("client")
 
 	// build-container command (Shipwright-based container builds)
-	containerCmd := container.NewContainerCmd()
+	containerCmd := container.NewContainerCmd(defaultServer)
 
 	// Add all commands
 	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, showCmd, downloadCmd, flashCmd, logsCmd, loginCmd, containerCmd, catalog.NewCatalogCmd(), authcmd.NewAuthCmd())
