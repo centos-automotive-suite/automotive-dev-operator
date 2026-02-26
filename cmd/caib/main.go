@@ -1955,6 +1955,29 @@ func handleError(err error) {
 	os.Exit(1)
 }
 
+func replaceFlashImagePlaceholders(cmd, imageURI string) string {
+	cmd = strings.ReplaceAll(cmd, "{image_uri}", imageURI)
+	cmd = strings.ReplaceAll(cmd, "{artifact_url}", imageURI)
+	cmd = strings.ReplaceAll(cmd, "${IMAGE}", imageURI)
+	cmd = strings.ReplaceAll(cmd, "${IMAGE_REF}", imageURI)
+	return cmd
+}
+
+func hasUnresolvedFlashImagePlaceholder(cmd string) bool {
+	placeholders := []string{
+		"{image_uri}",
+		"{artifact_url}",
+		"${IMAGE}",
+		"${IMAGE_REF}",
+	}
+	for _, placeholder := range placeholders {
+		if strings.Contains(cmd, placeholder) {
+			return true
+		}
+	}
+	return false
+}
+
 // displayFlashInstructions shows colorful flashing instructions when flash is not executed or fails
 func displayFlashInstructions(st *buildapitypes.BuildResponse, isFailure bool) {
 	if st.Jumpstarter == nil || !st.Jumpstarter.Available {
@@ -2017,8 +2040,25 @@ func displayFlashInstructions(st *buildapitypes.BuildResponse, isFailure bool) {
 	}
 
 	if st.Jumpstarter.FlashCmd != "" {
+		flashCmd := st.Jumpstarter.FlashCmd
+		imageURI := st.DiskImage
+		if imageURI == "" {
+			imageURI = st.ContainerImage
+		}
+		if imageURI != "" {
+			flashCmd = replaceFlashImagePlaceholders(flashCmd, imageURI)
+		}
+
+		if hasUnresolvedFlashImagePlaceholder(flashCmd) {
+			fmt.Printf("  %s\n", infoColor("Flash command template:"))
+			fmt.Printf("    %s%s\n", commandPrefix, commandColor(replaceFlashImagePlaceholders(flashCmd, "<image-uri>")))
+			fmt.Printf("  %s\n", infoColor("No pushed disk image URI is available for this build."))
+			fmt.Printf("  %s\n", infoColor("Use --push-disk <registry/repo:tag> or --internal-registry to produce a flashable URI."))
+			return
+		}
+
 		fmt.Printf("  %s\n", infoColor("Flash command:"))
-		fmt.Printf("    %s%s\n", commandPrefix, commandColor(st.Jumpstarter.FlashCmd))
+		fmt.Printf("    %s%s\n", commandPrefix, commandColor(flashCmd))
 	}
 }
 
