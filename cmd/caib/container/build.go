@@ -34,6 +34,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/ui"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
@@ -51,6 +52,7 @@ var (
 	containerBuildTimeout  int
 	architecture           string
 	useInternalRegistry    bool
+	registryAuthFile       string
 	insecureSkipTLS        bool
 )
 
@@ -98,6 +100,12 @@ Examples:
 	cmd.Flags().StringArrayVar(&containerBuildArgs, "build-arg", []string{}, "build argument KEY=VALUE (can be repeated)")
 	cmd.Flags().StringVarP(&architecture, "arch", "a", getDefaultArch(), "target architecture (amd64, arm64)")
 	cmd.Flags().IntVar(&containerBuildTimeout, "timeout", 30, "build timeout in minutes")
+	cmd.Flags().StringVar(
+		&registryAuthFile,
+		"registry-auth-file",
+		"",
+		"path to Docker/Podman auth file for push authentication (takes precedence over env vars and auto-discovery)",
+	)
 	cmd.Flags().BoolVar(&useInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 
 	_ = cmd.MarkFlagRequired("containerfile")
@@ -152,24 +160,16 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 
 	var registryCreds *buildapitypes.RegistryCredentials
 	if !useInternalRegistry {
-		effectiveRegistryURL, registryUsername, registryPassword := extractRegistryCredentials(containerBuildPush, "")
-		if err := validateRegistryCredentials(effectiveRegistryURL, registryUsername, registryPassword); err != nil {
+		effectiveRegistryURL, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(containerBuildPush, "")
+		var err error
+		registryCreds, err = registryauth.ResolveRegistryCredentials(
+			effectiveRegistryURL,
+			registryUsername,
+			registryPassword,
+			registryAuthFile,
+		)
+		if err != nil {
 			handleError(err)
-		}
-
-		if effectiveRegistryURL != "" && registryUsername != "" && registryPassword != "" {
-			dockerConfig, err := buildDockerConfigJSON(effectiveRegistryURL, registryUsername, registryPassword)
-			if err != nil {
-				handleError(fmt.Errorf("failed to create registry credentials payload: %w", err))
-			}
-			registryCreds = &buildapitypes.RegistryCredentials{
-				Enabled:      true,
-				AuthType:     "username-password",
-				RegistryURL:  effectiveRegistryURL,
-				Username:     registryUsername,
-				Password:     registryPassword,
-				DockerConfig: dockerConfig,
-			}
 		}
 	}
 

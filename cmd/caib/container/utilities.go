@@ -18,8 +18,6 @@ package container
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -224,72 +222,4 @@ func isValidKubernetesName(name string) bool {
 	}
 	re := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	return re.MatchString(name)
-}
-
-// extractRegistryCredentials extracts registry credentials from image references
-func extractRegistryCredentials(primaryRef, secondaryRef string) (string, string, string) {
-	// Get credentials from environment variables only
-	username := os.Getenv("REGISTRY_USERNAME")
-	password := os.Getenv("REGISTRY_PASSWORD")
-
-	// Determine the reference to use for URL extraction
-	ref := primaryRef
-	if ref == "" {
-		ref = secondaryRef
-	}
-
-	// If no reference, return empty
-	if ref == "" {
-		return "", username, password
-	}
-
-	// Warn if credentials missing (will fall back to Docker/Podman auth files)
-	if username == "" || password == "" {
-		fmt.Println("Warning: No registry credentials provided via environment variables.")
-		fmt.Println("Will attempt to use Docker/Podman auth files as fallback.")
-	}
-
-	// Extract registry URL from reference
-	parts := strings.SplitN(ref, "/", 2)
-	if len(parts) > 1 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost") {
-		return parts[0], username, password
-	}
-	return "docker.io", username, password
-}
-
-// validateRegistryCredentials validates registry credentials
-func validateRegistryCredentials(registryURL, username, password string) error {
-	// If no registry URL, no credentials needed
-	if registryURL == "" {
-		return nil
-	}
-
-	// Both username and password must be provided together, or neither
-	if (username == "") != (password == "") {
-		if username == "" {
-			return fmt.Errorf("REGISTRY_PASSWORD is set but REGISTRY_USERNAME is missing")
-		}
-		return fmt.Errorf("REGISTRY_USERNAME is set but REGISTRY_PASSWORD is missing")
-	}
-
-	return nil
-}
-
-// buildDockerConfigJSON builds Docker config JSON
-func buildDockerConfigJSON(registryURL, username, password string) (string, error) {
-	authValue := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
-	payload := map[string]any{
-		"auths": map[string]map[string]string{
-			registryURL: {
-				"username": username,
-				"password": password,
-				"auth":     authValue,
-			},
-		},
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
 }

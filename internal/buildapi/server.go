@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -81,6 +82,7 @@ const (
 var getClientFromRequestFn = getClientFromRequest
 var getRESTConfigFromRequestFn = getRESTConfigFromRequest
 var createInternalRegistrySecretFn = createInternalRegistrySecret
+var errRegistryCredentialsRequiredForPush = errors.New("registry credentials are required when push repository is specified")
 var loadOperatorConfigFn = func(
 	ctx context.Context,
 	k8sClient client.Client,
@@ -1346,7 +1348,7 @@ func setupBuildSecrets(
 	// Create push secret if pushing to registry (PushRepository for bootc, ExportOCI for disk images)
 	if req.PushRepository != "" || req.ExportOCI != "" {
 		if req.RegistryCredentials == nil || !req.RegistryCredentials.Enabled {
-			return "", "", fmt.Errorf("registry credentials are required when push repository is specified")
+			return "", "", errRegistryCredentialsRequiredForPush
 		}
 		pushSecretName, err = createPushSecret(ctx, k8sClient, namespace, req.Name, req.RegistryCredentials)
 		if err != nil {
@@ -1385,7 +1387,11 @@ func (a *APIServer) resolveRegistryForBuild(
 
 	envSecretRef, pushSecretName, err := setupBuildSecrets(ctx, k8sClient, namespace, req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if errors.Is(err, errRegistryCredentialsRequiredForPush) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return "", "", err
 	}
 	return envSecretRef, pushSecretName, nil
