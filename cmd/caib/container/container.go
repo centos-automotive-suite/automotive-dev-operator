@@ -19,7 +19,7 @@ package container
 import "github.com/spf13/cobra"
 
 // NewContainerCmd creates the container command with subcommands
-func NewContainerCmd() *cobra.Command {
+func NewContainerCmd(defaultServer string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "container",
 		Short: "Build container images using Shipwright",
@@ -28,8 +28,8 @@ func NewContainerCmd() *cobra.Command {
 
 	cmd.PersistentFlags().BoolVar(&insecureSkipTLS, "insecure-skip-tls-verify", false, "skip TLS certificate verification")
 
-	cmd.AddCommand(newBuildCmd())
-	cmd.AddCommand(newLogsCmd())
+	cmd.AddCommand(newBuildCmd(defaultServer))
+	cmd.AddCommand(newLogsCmd(defaultServer))
 
 	return cmd
 }

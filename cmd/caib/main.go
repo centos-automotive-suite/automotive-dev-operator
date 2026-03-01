@@ -400,6 +400,8 @@ func downloadOCIArtifactIfRequested(output, exportOCI, registryUsername, registr
 	}
 }
 func main() {
+	defaultServer := config.DefaultServer()
+
 	rootCmd := &cobra.Command{
 		Use:     "caib",
 		Short:   "Cloud Automotive Image Builder",
@@ -565,7 +567,7 @@ Example:
 	}
 
 	// build command flags (bootc - the default)
-	buildCmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	buildCmd.Flags().StringVar(&serverURL, "server", defaultServer, "REST API server base URL")
 	buildCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	buildCmd.Flags().StringVarP(&buildName, "name", "n", "", "name for the ImageBuild (auto-generated if omitted)")
 	buildCmd.Flags().StringVarP(&distro, "distro", "d", "autosd", "distribution to build")
@@ -602,14 +604,14 @@ Example:
 	buildCmd.Flags().StringVar(&internalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
 
 	listCmd.Flags().StringVar(
-		&serverURL, "server", config.DefaultServer(), "REST API server base URL (e.g. https://api.example)",
+		&serverURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
 	)
 	listCmd.Flags().StringVar(
 		&authToken, "token", os.Getenv("CAIB_TOKEN"),
 		"Bearer token for authentication (e.g., OpenShift access token)",
 	)
 	showCmd.Flags().StringVar(
-		&serverURL, "server", config.DefaultServer(), "REST API server base URL (e.g. https://api.example)",
+		&serverURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
 	)
 	showCmd.Flags().StringVar(
 		&authToken, "token", os.Getenv("CAIB_TOKEN"),
@@ -620,7 +622,7 @@ Example:
 	)
 
 	// disk command flags (create disk from existing container)
-	diskCmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	diskCmd.Flags().StringVar(&serverURL, "server", defaultServer, "REST API server base URL")
 	diskCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	diskCmd.Flags().StringVarP(&buildName, "name", "n", "", "name for the build job (auto-generated if omitted)")
 	diskCmd.Flags().StringVarP(&outputDir, "output", "o", "", "download disk image to file from registry (requires --push)")
@@ -651,7 +653,7 @@ Example:
 	diskCmd.Flags().StringVar(&internalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
 
 	// build-dev command flags (traditional ostree/package builds)
-	buildDevCmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	buildDevCmd.Flags().StringVar(&serverURL, "server", defaultServer, "REST API server base URL")
 	buildDevCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	buildDevCmd.Flags().StringVarP(&buildName, "name", "n", "", "name for the ImageBuild")
 	buildDevCmd.Flags().StringVarP(&distro, "distro", "d", "autosd", "distribution to build")
@@ -682,17 +684,17 @@ Example:
 	buildDevCmd.Flags().StringVar(&internalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
 
 	// logs command flags
-	logsCmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	logsCmd.Flags().StringVar(&serverURL, "server", defaultServer, "REST API server base URL")
 	logsCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	logsCmd.Flags().IntVar(&timeout, "timeout", 60, "timeout in minutes")
 
 	// download command flags
-	downloadCmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	downloadCmd.Flags().StringVar(&serverURL, "server", defaultServer, "REST API server base URL")
 	downloadCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	downloadCmd.Flags().StringVarP(&outputDir, "output", "o", "", "destination file or directory for the artifact")
 
 	// flash command flags
-	flashCmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	flashCmd.Flags().StringVar(&serverURL, "server", defaultServer, "REST API server base URL")
 	flashCmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	flashCmd.Flags().StringVar(&jumpstarterClient, "client", "", "path to Jumpstarter client config file (required)")
 	flashCmd.Flags().StringVarP(&flashName, "name", "n", "", "name for the flash job (auto-generated if omitted)")
@@ -704,7 +706,7 @@ Example:
 	_ = flashCmd.MarkFlagRequired("client")
 
 	// build-container command (Shipwright-based container builds)
-	containerCmd := container.NewContainerCmd()
+	containerCmd := container.NewContainerCmd(defaultServer)
 
 	// Sealed operations - top-level commands matching AIB CLI structure
 
@@ -827,7 +829,7 @@ func runLogin(_ *cobra.Command, args []string) {
 // validateBootcBuildFlags validates flag combinations for the build command
 func validateBootcBuildFlags() {
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		handleError(serverRequiredError())
 	}
 
 	if useInternalRegistry {
@@ -1109,7 +1111,7 @@ func runDisk(cmd *cobra.Command, args []string) {
 	containerRef = args[0]
 
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		handleError(serverRequiredError())
 	}
 
 	if useInternalRegistry {
@@ -1544,7 +1546,7 @@ func runBuildDev(cmd *cobra.Command, args []string) {
 	validateManifestSuffix(manifest)
 
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		handleError(serverRequiredError())
 	}
 
 	if useInternalRegistry {
@@ -2049,6 +2051,14 @@ func handleError(err error) {
 	os.Exit(1)
 }
 
+// if jumpstarter endpoint exists but unusable, we already warned the user. hide the jmp login part.
+func serverRequiredError() error {
+	if config.JumpstarterEndpoint() != "" {
+		return fmt.Errorf("server is required: (pass --server, set CAIB_SERVER, or run 'caib login <server-url>')")
+	}
+	return fmt.Errorf("server is required: (pass --server, set CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')")
+}
+
 func replaceFlashImagePlaceholders(cmd, imageURI string) string {
 	cmd = strings.ReplaceAll(cmd, "{image_uri}", imageURI)
 	cmd = strings.ReplaceAll(cmd, "{artifact_url}", imageURI)
@@ -2337,8 +2347,7 @@ func isTarInsideGzip(filePath string) bool {
 func runList(_ *cobra.Command, _ []string) {
 	ctx := context.Background()
 	if strings.TrimSpace(serverURL) == "" {
-		fmt.Println("Error: --server is required (or set CAIB_SERVER, or run 'caib login <server-url>')")
-		os.Exit(1)
+		handleError(serverRequiredError())
 	}
 
 	var items []buildapitypes.BuildListItem
@@ -2383,7 +2392,7 @@ func runShow(_ *cobra.Command, args []string) {
 	showBuildName := args[0]
 
 	if strings.TrimSpace(serverURL) == "" {
-		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		handleError(serverRequiredError())
 	}
 
 	var st *buildapitypes.BuildResponse
@@ -2526,8 +2535,7 @@ func runLogs(_ *cobra.Command, args []string) {
 	name := args[0]
 
 	if strings.TrimSpace(serverURL) == "" {
-		fmt.Println("Error: --server is required (or set CAIB_SERVER, or run 'caib login <server-url>')")
-		os.Exit(1)
+		handleError(serverRequiredError())
 	}
 
 	api, err := createBuildAPIClient(serverURL, &authToken)
@@ -2596,7 +2604,7 @@ func runDownload(_ *cobra.Command, args []string) {
 	downloadBuildName := args[0]
 
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		handleError(serverRequiredError())
 	}
 
 	if outputDir == "" {
@@ -2736,7 +2744,7 @@ func runFlash(_ *cobra.Command, args []string) {
 	imageRef := args[0]
 
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		handleError(serverRequiredError())
 	}
 
 	if jumpstarterClient == "" {

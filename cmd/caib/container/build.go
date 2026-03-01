@@ -33,7 +33,6 @@ import (
 	containersarchive "github.com/containers/storage/pkg/archive"
 	"github.com/spf13/cobra"
 
-	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/ui"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
@@ -65,7 +64,7 @@ const (
 )
 
 // newBuildCmd creates the container build subcommand with required -f flag
-func newBuildCmd() *cobra.Command {
+func newBuildCmd(defaultServer string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build [context-dir]",
 		Short: "Build a container image from a Containerfile using Shipwright",
@@ -89,7 +88,7 @@ Examples:
 		Run:  runBuildContainer,
 	}
 
-	cmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	cmd.Flags().StringVar(&serverURL, "server", defaultServer, "REST API server base URL")
 	cmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	cmd.Flags().StringVarP(&buildName, "name", "n", "", "name for the build (auto-generated if omitted)")
 	cmd.Flags().StringVar(&containerBuildPush, "push", "", "push built image to registry (required unless --internal-registry)")

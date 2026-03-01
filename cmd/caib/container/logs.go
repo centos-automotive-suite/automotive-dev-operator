@@ -31,8 +31,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 )
 
 // logStreamState encapsulates state for log streaming with automatic reconnection
@@ -46,7 +44,7 @@ type logStreamState struct {
 const maxLogRetries = 24 // ~2 minutes at 5s intervals
 
 // newLogsCmd creates the container logs subcommand
-func newLogsCmd() *cobra.Command {
+func newLogsCmd(defaultServer string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <build-name>",
 		Short: "Follow logs of a container build",
@@ -63,7 +61,7 @@ Examples:
 		Run:  runContainerLogs,
 	}
 
-	cmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	cmd.Flags().StringVar(&serverURL, "server", defaultServer, "REST API server base URL")
 	cmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 
 	return cmd
