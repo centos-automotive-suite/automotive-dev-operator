@@ -110,15 +110,19 @@ func DeriveServerFromJumpstarter() string {
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	resp, err := httpClient.Get(apiURL + "/v1/healthz")
 	if err != nil {
-		fmt.Printf("Warning: Jumpstarter config found, but could not reach derived Build API server %s.\n", apiURL)
+		fmt.Fprintf(os.Stderr, "Warning: Jumpstarter config found, but could not reach derived Build API server %s.\n", apiURL)
 		return ""
 	}
 	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Warning: Jumpstarter config found, but derived Build API server %s returned HTTP %d.\n", apiURL, resp.StatusCode)
+		return ""
+	}
 
 	// Reachable — persist to config so future invocations skip derivation
-	fmt.Printf("Using Build API server derived from Jumpstarter config: %s\n", apiURL)
+	fmt.Fprintf(os.Stderr, "Using Build API server derived from Jumpstarter config: %s\n", apiURL)
 	if err := SaveServerURL(apiURL); err != nil {
-		fmt.Printf("Warning: could not save derived server URL to config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: could not save derived server URL to config: %v\n", err)
 	}
 	return apiURL
 }
