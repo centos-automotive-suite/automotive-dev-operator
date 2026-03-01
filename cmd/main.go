@@ -47,6 +47,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/containerbuild"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/image"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/imagebuild"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/imagereseal"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/operatorconfig"
 	// +kubebuilder:scaffold:imports
 )
@@ -262,6 +263,16 @@ func main() {
 
 		if err = containerBuildReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "ContainerBuild")
+			os.Exit(1)
+		}
+
+		imageResealReconciler := &imagereseal.Reconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+			Log:    ctrl.Log.WithName("controllers").WithName("ImageReseal"),
+		}
+		if err = imageResealReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "ImageReseal")
 			os.Exit(1)
 		}
 	}
