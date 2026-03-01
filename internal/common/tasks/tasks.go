@@ -73,9 +73,6 @@ const DefaultInternalRegistryURL = "image-registry.openshift-image-registry.svc:
 // volumeNameContainerStorage is the common volume name for container storage across tasks.
 const volumeNameContainerStorage = "container-storage"
 
-// AutomotiveImageBuilder is the default container image for the automotive image builder.
-const AutomotiveImageBuilder = "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0"
-
 // GeneratePushArtifactRegistryTask creates a Tekton Task for pushing artifacts to a registry
 func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
 	return &tektonv1.Task{
@@ -1144,7 +1141,7 @@ func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tek
 					Description: "AIB container image to use for building",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: AutomotiveImageBuilder,
+						StringVal: automotivev1alpha1.DefaultAutomotiveImageBuilderImage,
 					},
 				},
 				{
@@ -1477,7 +1474,7 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 				Name:        "aib-image",
 				Type:        tektonv1.ParamTypeString,
 				Description: "AIB container image",
-				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: AutomotiveImageBuilder},
+				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: automotivev1alpha1.DefaultAutomotiveImageBuilderImage},
 			},
 			{
 				Name:        "builder-image",

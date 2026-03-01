@@ -3456,7 +3456,7 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp SealedOperation) {
 
 	aibImage := req.AIBImage
 	if aibImage == "" {
-		aibImage = tasks.AutomotiveImageBuilder
+		aibImage = automotivev1alpha1.DefaultAutomotiveImageBuilderImage
 	}
 
 	imageSealed := &automotivev1alpha1.ImageReseal{

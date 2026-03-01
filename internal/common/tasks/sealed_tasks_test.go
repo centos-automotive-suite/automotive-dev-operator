@@ -19,6 +19,7 @@ package tasks
 import (
 	"testing"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 )
@@ -125,7 +126,7 @@ var _ = Describe("Sealed Tasks", func() {
 			It("should have default for aib-image", func() {
 				val := findParam("reseal", "aib-image")
 				Expect(val).NotTo(BeNil())
-				Expect(*val).To(Equal(AutomotiveImageBuilder))
+				Expect(*val).To(Equal(automotivev1alpha1.DefaultAutomotiveImageBuilderImage))
 			})
 
 			It("should have empty defaults for optional params", func() {
