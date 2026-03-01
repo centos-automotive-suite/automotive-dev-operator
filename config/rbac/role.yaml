@@ -76,6 +76,7 @@ rules:
   - catalogimages
   - containerbuilds
   - imagebuilds
+  - imagereseals
   - images
   - operatorconfigs
   verbs:
@@ -92,6 +93,7 @@ rules:
   - catalogimages/finalizers
   - containerbuilds/finalizers
   - imagebuilds/finalizers
+  - imagereseals/finalizers
   - images/finalizers
   - operatorconfigs/finalizers
   verbs:
@@ -102,6 +104,7 @@ rules:
   - catalogimages/status
   - containerbuilds/status
   - imagebuilds/status
+  - imagereseals/status
   - images/status
   - operatorconfigs/status
   verbs:

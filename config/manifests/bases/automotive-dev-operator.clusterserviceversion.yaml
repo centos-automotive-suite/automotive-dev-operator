@@ -77,6 +77,18 @@ metadata:
               "enabled": true
             }
           }
+        },
+        {
+          "apiVersion": "automotive.sdv.cloud.redhat.com/v1alpha1",
+          "kind": "ImageReseal",
+          "metadata": {
+            "name": "imagereseal-sample"
+          },
+          "spec": {
+            "operation": "prepare-reseal",
+            "inputRef": "quay.io/example/bootc-image:latest",
+            "outputRef": "quay.io/example/bootc-image:prepared"
+          }
         }
       ]
     capabilities: Basic Install
@@ -99,6 +111,12 @@ spec:
       displayName: Catalog Image
       kind: CatalogImage
       name: catalogimages.automotive.sdv.cloud.redhat.com
+      version: v1alpha1
+    - description: ImageReseal represents a sealed disk image operation (prepare-reseal,
+        reseal, extract-for-signing, inject-signed)
+      displayName: Image Reseal
+      kind: ImageReseal
+      name: imagereseals.automotive.sdv.cloud.redhat.com
       version: v1alpha1
     - description: ImageBuild is the Schema for the imagebuilds API
       displayName: Image Build
