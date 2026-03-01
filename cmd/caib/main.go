@@ -34,6 +34,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/catalog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/container"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/ui"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
@@ -96,11 +97,12 @@ var (
 	compressionAlgo        string
 	authToken              string
 
-	containerPush  string
-	buildDiskImage bool
-	diskFormat     string
-	exportOCI      string
-	builderImage   string
+	containerPush    string
+	buildDiskImage   bool
+	diskFormat       string
+	exportOCI        string
+	builderImage     string
+	registryAuthFile string
 
 	containerRef   string
 	rebuildBuilder bool
@@ -334,54 +336,6 @@ func writeRegistryCredentialsFile(token string) (string, error) {
 	return name, nil
 }
 
-func extractRegistryCredentials(primaryRef, secondaryRef string) (string, string, string) {
-	// Get credentials from environment variables only
-	username := os.Getenv("REGISTRY_USERNAME")
-	password := os.Getenv("REGISTRY_PASSWORD")
-
-	// Determine the reference to use for URL extraction
-	ref := primaryRef
-	if ref == "" {
-		ref = secondaryRef
-	}
-
-	// If no reference, return empty
-	if ref == "" {
-		return "", username, password
-	}
-
-	// Warn if credentials missing (will fall back to Docker/Podman auth files)
-	if username == "" || password == "" {
-		fmt.Println("Warning: No registry credentials provided via environment variables.")
-		fmt.Println("Will attempt to use Docker/Podman auth files as fallback.")
-	}
-
-	// Extract registry URL from reference
-	parts := strings.SplitN(ref, "/", 2)
-	if len(parts) > 1 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost") {
-		return parts[0], username, password
-	}
-	return defaultRegistry, username, password
-}
-
-// validateRegistryCredentials validates registry credentials and returns an error for partial credentials
-func validateRegistryCredentials(registryURL, username, password string) error {
-	// If no registry URL, no credentials needed
-	if registryURL == "" {
-		return nil
-	}
-
-	// Both username and password must be provided together, or neither
-	if (username == "") != (password == "") {
-		if username == "" {
-			return fmt.Errorf("REGISTRY_PASSWORD is set but REGISTRY_USERNAME is missing")
-		}
-		return fmt.Errorf("REGISTRY_USERNAME is set but REGISTRY_PASSWORD is missing")
-	}
-
-	return nil
-}
-
 func validateOutputRequiresPush(output, pushRef, flagName string) {
 	if output == "" {
 		return
@@ -580,6 +534,12 @@ Example:
 	buildCmd.Flags().StringVar(&compressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
 	buildCmd.Flags().StringVar(&exportOCI, "push-disk", "", "push disk image as OCI artifact to registry (implies --disk)")
 	buildCmd.Flags().StringVar(
+		&registryAuthFile,
+		"registry-auth-file",
+		"",
+		"path to Docker/Podman auth file for push authentication (takes precedence over env vars and auto-discovery)",
+	)
+	buildCmd.Flags().StringVar(
 		&automotiveImageBuilder, "aib-image",
 		"quay.io/centos-sig-automotive/automotive-image-builder:latest", "AIB container image",
 	)
@@ -629,6 +589,12 @@ Example:
 	)
 	diskCmd.Flags().StringVar(&compressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
 	diskCmd.Flags().StringVar(&exportOCI, "push", "", "push disk image as OCI artifact to registry")
+	diskCmd.Flags().StringVar(
+		&registryAuthFile,
+		"registry-auth-file",
+		"",
+		"path to Docker/Podman auth file for push authentication (takes precedence over env vars and auto-discovery)",
+	)
 	diskCmd.Flags().StringVarP(&distro, "distro", "d", "autosd", "distribution")
 	diskCmd.Flags().StringVarP(&target, "target", "t", "qemu", "target platform")
 	diskCmd.Flags().StringVarP(&architecture, "arch", "a", getDefaultArch(), "architecture (amd64, arm64)")
@@ -662,6 +628,12 @@ Example:
 	buildDevCmd.Flags().StringVarP(&outputDir, "output", "o", "", "download artifact to file from registry (requires --push)")
 	buildDevCmd.Flags().StringVar(&compressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
 	buildDevCmd.Flags().StringVar(&exportOCI, "push", "", "push disk image as OCI artifact to registry")
+	buildDevCmd.Flags().StringVar(
+		&registryAuthFile,
+		"registry-auth-file",
+		"",
+		"path to Docker/Podman auth file for push authentication (takes precedence over env vars and auto-discovery)",
+	)
 	buildDevCmd.Flags().StringVar(
 		&automotiveImageBuilder, "aib-image",
 		"quay.io/centos-sig-automotive/automotive-image-builder:latest", "AIB container image",
@@ -872,19 +844,12 @@ func applyRegistryCredentialsToRequest(req *buildapitypes.BuildRequest) {
 		// for the container push.
 	}
 
-	effectiveRegistryURL, registryUsername, registryPassword := extractRegistryCredentials(containerPush, exportOCI)
-	if err := validateRegistryCredentials(effectiveRegistryURL, registryUsername, registryPassword); err != nil {
+	effectiveRegistryURL, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(containerPush, exportOCI)
+	registryCreds, err := registryauth.ResolveRegistryCredentials(effectiveRegistryURL, registryUsername, registryPassword, registryAuthFile)
+	if err != nil {
 		handleError(err)
 	}
-	if effectiveRegistryURL != "" && registryUsername != "" && registryPassword != "" {
-		req.RegistryCredentials = &buildapitypes.RegistryCredentials{
-			Enabled:     true,
-			AuthType:    "username-password",
-			RegistryURL: effectiveRegistryURL,
-			Username:    registryUsername,
-			Password:    registryPassword,
-		}
-	}
+	req.RegistryCredentials = registryCreds
 }
 
 // fetchTargetDefaults fetches the operator config once and returns it.
@@ -992,8 +957,10 @@ func displayBuildResults(ctx context.Context, api *buildapiclient.Client, buildN
 		if exportOCI != "" {
 			fmt.Printf("%s %s\n", labelColor("Disk image pushed to:"), valueColor(exportOCI))
 		}
-		_, registryUsername, registryPassword := extractRegistryCredentials(containerPush, exportOCI)
-		downloadOCIArtifactIfRequested(outputDir, exportOCI, registryUsername, registryPassword, insecureSkipTLS)
+		if outputDir != "" {
+			_, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(containerPush, exportOCI)
+			downloadOCIArtifactIfRequested(outputDir, exportOCI, registryUsername, registryPassword, insecureSkipTLS)
+		}
 	}
 }
 
@@ -1214,12 +1181,7 @@ func pullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 			Password: password,
 		}
 	} else {
-		fmt.Printf("No explicit credentials provided, will use Docker/Podman auth files if available\n")
-		// containers/image will automatically use:
-		// - $HOME/.docker/config.json
-		// - $XDG_RUNTIME_DIR/containers/auth.json
-		// - /run/containers/$UID/auth.json
-		// - $HOME/.config/containers/auth.json
+		fmt.Printf("No explicit credentials provided, will use local container auth files if available\n")
 	}
 
 	// Configure TLS verification
@@ -2631,8 +2593,8 @@ func runDownload(_ *cobra.Command, args []string) {
 		registryPassword = st.RegistryToken
 	} else {
 		var effectiveRegistryURL string
-		effectiveRegistryURL, registryUsername, registryPassword = extractRegistryCredentials(ociRef, "")
-		if err := validateRegistryCredentials(effectiveRegistryURL, registryUsername, registryPassword); err != nil {
+		effectiveRegistryURL, registryUsername, registryPassword = registryauth.ExtractRegistryCredentials(ociRef, "")
+		if err := registryauth.ValidateRegistryCredentials(effectiveRegistryURL, registryUsername, registryPassword); err != nil {
 			handleError(err)
 		}
 	}
