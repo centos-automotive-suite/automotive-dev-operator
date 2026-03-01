@@ -44,16 +44,18 @@ import (
 )
 
 const (
-	archAMD64      = "amd64"
-	archARM64      = "arm64"
-	phaseCompleted = "Completed"
-	phaseFailed    = "Failed"
-	phaseFlashing  = "Flashing"
-	phasePending   = "Pending"
-	phaseUploading = "Uploading"
-	errPrefixBuild = "build"
-	errPrefixFlash = "flash"
-	errPrefixPush  = "push"
+	archAMD64       = "amd64"
+	archARM64       = "arm64"
+	phaseCompleted  = "Completed"
+	phaseFailed     = "Failed"
+	phaseFlashing   = "Flashing"
+	phasePending    = "Pending"
+	phaseUploading  = "Uploading"
+	phaseRunning    = "Running"
+	errPrefixBuild  = "build"
+	errPrefixFlash  = "flash"
+	errPrefixPush   = "push"
+	defaultRegistry = "docker.io"
 )
 
 var (
@@ -117,6 +119,17 @@ var (
 
 	// TLS options
 	insecureSkipTLS bool
+
+	// Sealed operation options
+	sealedBuilderImage      string
+	sealedArchitecture      string
+	sealedKeySecret         string
+	sealedKeyPasswordSecret string
+	sealedKeyFile           string
+	sealedKeyPassword       string
+	sealedInputRef          string
+	sealedOutputRef         string
+	sealedSignedRef         string
 )
 
 // envBool parses a boolean from environment variable
@@ -348,7 +361,7 @@ func extractRegistryCredentials(primaryRef, secondaryRef string) (string, string
 	if len(parts) > 1 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost") {
 		return parts[0], username, password
 	}
-	return "docker.io", username, password
+	return defaultRegistry, username, password
 }
 
 // validateRegistryCredentials validates registry credentials and returns an error for partial credentials
@@ -693,8 +706,89 @@ Example:
 	// build-container command (Shipwright-based container builds)
 	containerCmd := container.NewContainerCmd()
 
+	// Sealed operations - top-level commands matching AIB CLI structure
+
+	prepareResealCmd := &cobra.Command{
+		Use:   "prepare-reseal [source-container] [output-container]",
+		Short: "Prepare a bootc container image for resealing",
+		Long: `Prepare a bootc container image for resealing. With --server, runs on
+the cluster via the Build API; otherwise runs locally using the AIB container.
+
+Input and output can be given as positionals or via --input and --output (any order).
+
+Examples:
+
+  # Run locally
+  caib prepare-reseal ./input.qcow2 ./output.qcow2 --workspace ./work`,
+		Args: cobra.RangeArgs(0, 2),
+		Run:  runPrepareReseal,
+	}
+
+	resealCmd := &cobra.Command{
+		Use:   "reseal [source-container] [output-container]",
+		Short: "Reseal a prepared bootc container image with a new key",
+		Long: `Reseal a bootc container image that was prepared with prepare-reseal.
+With --server, runs on the cluster via the Build API; otherwise runs locally.
+
+Input and output can be given as positionals or via --input and --output (any order).
+If no seal key is provided, an ephemeral key is generated for one-time use.`,
+		Args: cobra.RangeArgs(0, 2),
+		Run:  runReseal,
+	}
+
+	extractForSigningCmd := &cobra.Command{
+		Use:   "extract-for-signing [source-container] [output-artifact]",
+		Short: "Extract components from a container image for external signing",
+		Long: `Extract components that need to be signed (e.g. for secure boot) from a
+container image. Sign the extracted contents externally, then use inject-signed.
+
+Input and output can be given as positionals or via --input and --output (any order).`,
+		Args: cobra.RangeArgs(0, 2),
+		Run:  runExtractForSigning,
+	}
+
+	injectSignedCmd := &cobra.Command{
+		Use:   "inject-signed [source-container] [signed-artifact] [output-container]",
+		Short: "Inject signed components back into a container image",
+		Long: `Inject externally signed components (from extract-for-signing) back into the
+container image. Optionally reseals in the same step with --key.
+
+Input, signed artifact, and output can be given as positionals or via --input, --signed, --output (any order).`,
+		Args: cobra.RangeArgs(0, 3),
+		Run:  runInjectSigned,
+	}
+
+	// Sealed operation shared flags helper
+	addSealedFlags := func(cmd *cobra.Command) {
+		cmd.Flags().StringVar(&serverURL, "server", config.DefaultServer(), "Build API server URL")
+		cmd.Flags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+		cmd.Flags().StringVar(&sealedInputRef, "input", "", "Input/source container or artifact ref")
+		cmd.Flags().StringVar(&sealedOutputRef, "output", "", "Output container or artifact ref")
+		cmd.Flags().StringVar(
+			&automotiveImageBuilder, "aib-image",
+			"quay.io/centos-sig-automotive/automotive-image-builder:latest", "AIB container image",
+		)
+		cmd.Flags().StringVar(&sealedBuilderImage, "builder-image", "", "Builder container image (overrides --arch default)")
+		cmd.Flags().StringVar(&sealedArchitecture, "arch", "", "Target architecture for default builder image (amd64, arm64); auto-detected if not set")
+		cmd.Flags().StringArrayVar(&aibExtraArgs, "extra-args", nil, "Extra arguments to pass to AIB (repeatable)")
+		cmd.Flags().BoolVarP(&waitForBuild, "wait", "w", false, "Wait for completion")
+		cmd.Flags().BoolVarP(&followLogs, "follow", "f", true, "Stream task logs")
+		cmd.Flags().StringVar(&sealedKeySecret, "key-secret", "", "Name of existing cluster secret containing sealing key (data key 'private-key')")
+		cmd.Flags().StringVar(&sealedKeyPasswordSecret, "key-password-secret", "", "Name of existing cluster secret containing key password (data key 'password')")
+		cmd.Flags().StringVar(&sealedKeyFile, "key", "", "Path to local PEM key file (uploaded to cluster automatically)")
+		cmd.Flags().StringVar(&sealedKeyPassword, "passwd", "", "Password for encrypted key file (used with --key)")
+		cmd.Flags().IntVar(&timeout, "timeout", 120, "Timeout in minutes")
+	}
+	addSealedFlags(prepareResealCmd)
+	addSealedFlags(resealCmd)
+	addSealedFlags(extractForSigningCmd)
+	addSealedFlags(injectSignedCmd)
+	injectSignedCmd.Flags().StringVar(&sealedSignedRef, "signed", "", "Signed artifact ref for inject-signed")
+
 	// Add all commands
-	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, showCmd, downloadCmd, flashCmd, logsCmd, loginCmd, containerCmd, catalog.NewCatalogCmd(), authcmd.NewAuthCmd())
+	rootCmd.AddCommand(buildCmd, diskCmd, buildDevCmd, listCmd, showCmd, downloadCmd, flashCmd, logsCmd, loginCmd,
+		containerCmd, prepareResealCmd, resealCmd, extractForSigningCmd, injectSignedCmd,
+		catalog.NewCatalogCmd(), authcmd.NewAuthCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -1785,7 +1879,7 @@ func waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, nam
 				continue
 			}
 
-			if st.Phase == "Pending" {
+			if st.Phase == phasePending {
 				streamState.reset()
 				if userFollowRequested && !pendingWarningShown {
 					fmt.Println("Waiting for build to start before streaming logs...")
@@ -1838,7 +1932,7 @@ func (s *logStreamState) reset() {
 }
 
 func isBuildActive(phase string) bool {
-	return phase == "Building" || phase == "Running" || phase == "Uploading" || phase == phaseFlashing
+	return phase == "Building" || phase == phaseRunning || phase == "Uploading" || phase == phaseFlashing
 }
 
 // tryLogStreaming attempts to stream logs and returns error if it fails
@@ -2750,7 +2844,7 @@ func waitForFlashCompletion(ctx context.Context, api *buildapiclient.Client, nam
 				continue
 			}
 
-			if st.Phase == "Pending" {
+			if st.Phase == phasePending {
 				streamState.reset()
 				if !pendingWarningShown {
 					fmt.Println("Waiting for flash to start before streaming logs...")
@@ -2759,7 +2853,7 @@ func waitForFlashCompletion(ctx context.Context, api *buildapiclient.Client, nam
 				continue
 			}
 
-			if st.Phase == "Running" {
+			if st.Phase == phaseRunning {
 				if streamState.retryCount == 0 {
 					fmt.Println("Flash is running. Attempting to stream logs...")
 					pendingWarningShown = false
@@ -2800,4 +2894,271 @@ func tryFlashLogStreaming(ctx context.Context, logClient *http.Client, name stri
 	}
 
 	return handleLogStreamError(resp, state)
+}
+
+// ── Sealed operations ──
+
+func sealedRegistryCredentials(refs ...string) (registryURL, username, password string) {
+	username = strings.TrimSpace(os.Getenv("REGISTRY_USERNAME"))
+	password = strings.TrimSpace(os.Getenv("REGISTRY_PASSWORD"))
+	if username == "" || password == "" {
+		return "", "", ""
+	}
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		parts := strings.SplitN(ref, "/", 2)
+		if len(parts) < 2 {
+			return defaultRegistry, username, password
+		}
+		first := parts[0]
+		if strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" {
+			return first, username, password
+		}
+		return defaultRegistry, username, password
+	}
+	return "", "", ""
+}
+
+// sealedBuildRequest builds a SealedRequest from CLI flags
+func sealedBuildRequest(op buildapitypes.SealedOperation, inputRef, outputRef, signedRef string) (buildapitypes.SealedRequest, error) {
+	req := buildapitypes.SealedRequest{
+		Operation:    op,
+		InputRef:     inputRef,
+		OutputRef:    outputRef,
+		SignedRef:    signedRef,
+		AIBImage:     automotiveImageBuilder,
+		BuilderImage: sealedBuilderImage,
+		Architecture: sealedArchitecture,
+		AIBExtraArgs: aibExtraArgs,
+	}
+	if regURL, user, pass := sealedRegistryCredentials(inputRef, outputRef, signedRef); regURL != "" {
+		req.RegistryCredentials = &buildapitypes.RegistryCredentials{
+			Enabled:     true,
+			AuthType:    "username-password",
+			RegistryURL: regURL,
+			Username:    user,
+			Password:    pass,
+		}
+	}
+	if strings.TrimSpace(sealedKeyFile) != "" {
+		keyData, err := os.ReadFile(strings.TrimSpace(sealedKeyFile))
+		if err != nil {
+			return req, fmt.Errorf("failed to read key file %s: %w", sealedKeyFile, err)
+		}
+		req.KeyContent = string(keyData)
+		if strings.TrimSpace(sealedKeyPassword) != "" {
+			req.KeyPassword = strings.TrimSpace(sealedKeyPassword)
+		}
+	} else if strings.TrimSpace(sealedKeySecret) != "" {
+		req.KeySecretRef = strings.TrimSpace(sealedKeySecret)
+		if strings.TrimSpace(sealedKeyPasswordSecret) != "" {
+			req.KeyPasswordSecretRef = strings.TrimSpace(sealedKeyPasswordSecret)
+		}
+	}
+	return req, nil
+}
+
+// sealedRunViaAPI creates a sealed job via the Build API and optionally waits/streams logs
+func sealedRunViaAPI(op buildapitypes.SealedOperation, inputRef, outputRef, signedRef string) {
+	api, err := createBuildAPIClient(serverURL, &authToken)
+	if err != nil {
+		handleError(err)
+	}
+	ctx := context.Background()
+	req, err := sealedBuildRequest(op, inputRef, outputRef, signedRef)
+	if err != nil {
+		handleError(err)
+	}
+	resp, err := api.CreateSealed(ctx, req)
+	if err != nil {
+		handleError(err)
+	}
+	fmt.Printf("Job %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
+	if waitForBuild || followLogs {
+		sealedWaitForCompletion(ctx, api, op, resp.Name)
+	}
+}
+
+const maxSealedLogRetries = 24
+
+func sealedWaitForCompletion(ctx context.Context, api *buildapiclient.Client, op buildapitypes.SealedOperation, name string) {
+	fmt.Println("Waiting for job to complete...")
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	sealedTimeout := time.Duration(timeout) * time.Minute
+	deadline := time.Now().Add(sealedTimeout)
+	var lastPhase string
+	logRetries := 0
+	logStreaming := false
+	logRetryWarningShown := false
+	for time.Now().Before(deadline) {
+		st, err := api.GetSealed(ctx, op, name)
+		if err != nil {
+			fmt.Printf("status check failed: %v\n", err)
+			<-ticker.C
+			continue
+		}
+		if st.Phase != lastPhase {
+			fmt.Printf("status: %s - %s\n", st.Phase, st.Message)
+			lastPhase = st.Phase
+		}
+		if st.Phase == phaseCompleted {
+			fmt.Println("Job completed successfully.")
+			if st.OutputRef != "" {
+				fmt.Printf("Output: %s\n", st.OutputRef)
+			}
+			return
+		}
+		if st.Phase == phaseFailed {
+			fmt.Printf("Error: job failed: %s\n", st.Message)
+			os.Exit(1)
+		}
+		if followLogs && !logStreaming && (st.Phase == phaseRunning || st.Phase == phasePending) {
+			if logRetries < maxSealedLogRetries {
+				sErr := sealedStreamLogs(op, name)
+				if sErr != nil {
+					logRetries++
+					if !logRetryWarningShown {
+						fmt.Printf("Waiting for logs... (attempt %d/%d)\n", logRetries, maxSealedLogRetries)
+						logRetryWarningShown = true
+					}
+				} else {
+					logStreaming = true
+				}
+			} else if !logRetryWarningShown {
+				fmt.Printf("Log streaming failed after %d attempts. Falling back to status updates.\n", maxSealedLogRetries)
+				logRetryWarningShown = true
+				followLogs = false
+			}
+		}
+		<-ticker.C
+	}
+	fmt.Printf("Error: timed out after %v\n", sealedTimeout)
+	os.Exit(1)
+}
+
+func sealedStreamLogs(op buildapitypes.SealedOperation, name string) error {
+	logURL := strings.TrimRight(serverURL, "/") + buildapitypes.SealedOperationAPIPath(op) + "/" + url.PathEscape(name) + "/logs?follow=1"
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, logURL, nil)
+	if t := strings.TrimSpace(authToken); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("log stream failed: %w", err)
+	}
+	defer func() {
+		if cErr := resp.Body.Close(); cErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", cErr)
+		}
+	}()
+	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
+		return fmt.Errorf("log endpoint not ready (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("log stream error: HTTP %d", resp.StatusCode)
+	}
+	fmt.Println("Streaming logs...")
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		fmt.Println(scanner.Text())
+	}
+	_ = scanner.Err()
+	return nil
+}
+
+// ── Sealed command runners ──
+
+// resolveSealedTwoRefs returns input and output refs from --input/--output flags or positionals (any order).
+func resolveSealedTwoRefs(args []string) (inputRef, outputRef string, err error) {
+	in := strings.TrimSpace(sealedInputRef)
+	out := strings.TrimSpace(sealedOutputRef)
+	if in != "" && out != "" {
+		return in, out, nil
+	}
+	if in != "" && len(args) >= 1 {
+		return in, strings.TrimSpace(args[0]), nil
+	}
+	if out != "" && len(args) >= 1 {
+		return strings.TrimSpace(args[0]), out, nil
+	}
+	if len(args) >= 2 {
+		return strings.TrimSpace(args[0]), strings.TrimSpace(args[1]), nil
+	}
+	return "", "", fmt.Errorf("need two refs: use positionals (source output) or --input and --output in any order")
+}
+
+// resolveSealedThreeRefs returns input, signed, and output refs from --input/--signed/--output flags or positionals (any order).
+func resolveSealedThreeRefs(args []string) (inputRef, signedRef, outputRef string, err error) {
+	in := strings.TrimSpace(sealedInputRef)
+	signed := strings.TrimSpace(sealedSignedRef)
+	out := strings.TrimSpace(sealedOutputRef)
+	if in != "" && signed != "" && out != "" {
+		return in, signed, out, nil
+	}
+	// Count how many from flags; remaining from args in order: input, signed, output
+	fromFlags := 0
+	if in != "" {
+		fromFlags++
+	}
+	if signed != "" {
+		fromFlags++
+	}
+	if out != "" {
+		fromFlags++
+	}
+	need := 3 - fromFlags
+	if len(args) < need {
+		return "", "", "", fmt.Errorf("need three refs (source, signed-artifact, output): use positionals or --input, --signed, --output in any order")
+	}
+	idx := 0
+	if in == "" {
+		in = strings.TrimSpace(args[idx])
+		idx++
+	}
+	if signed == "" {
+		signed = strings.TrimSpace(args[idx])
+		idx++
+	}
+	if out == "" {
+		out = strings.TrimSpace(args[idx])
+	}
+	return in, signed, out, nil
+}
+
+func runPrepareReseal(_ *cobra.Command, args []string) {
+	inputRef, outputRef, err := resolveSealedTwoRefs(args)
+	if err != nil {
+		handleError(err)
+	}
+	sealedRunViaAPI(buildapitypes.SealedPrepareReseal, inputRef, outputRef, "")
+}
+
+func runReseal(_ *cobra.Command, args []string) {
+	inputRef, outputRef, err := resolveSealedTwoRefs(args)
+	if err != nil {
+		handleError(err)
+	}
+	sealedRunViaAPI(buildapitypes.SealedReseal, inputRef, outputRef, "")
+}
+
+func runExtractForSigning(_ *cobra.Command, args []string) {
+	inputRef, outputRef, err := resolveSealedTwoRefs(args)
+	if err != nil {
+		handleError(err)
+	}
+	sealedRunViaAPI(buildapitypes.SealedExtractForSigning, inputRef, outputRef, "")
+}
+
+func runInjectSigned(_ *cobra.Command, args []string) {
+	inputRef, signedRef, outputRef, err := resolveSealedThreeRefs(args)
+	if err != nil {
+		handleError(err)
+	}
+	sealedRunViaAPI(buildapitypes.SealedInjectSigned, inputRef, outputRef, signedRef)
 }

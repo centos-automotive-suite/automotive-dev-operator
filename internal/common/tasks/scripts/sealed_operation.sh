@@ -1,0 +1,433 @@
+#!/bin/bash
+set -e
+umask 0022
+
+validate_arg() {
+  local arg="$1"
+  local name="$2"
+  if [[ "$arg" =~ [\;\|\&\$\`\(\)\{\}\<\>\!\\] ]]; then
+    echo "ERROR: Invalid characters in $name: $arg"
+    exit 1
+  fi
+}
+
+log_command() {
+  local -a cmd=("$@")
+  local -a redacted=()
+  local skip_next=0
+  local arg=""
+
+  for arg in "${cmd[@]}"; do
+    if [ "$skip_next" -eq 1 ]; then
+      redacted+=("[REDACTED]")
+      skip_next=0
+      continue
+    fi
+    case "$arg" in
+      --passwd|--password|--token|--auth|--key)
+        redacted+=("$arg")
+        skip_next=1
+        ;;
+      pass:*)
+        redacted+=("pass:[REDACTED]")
+        ;;
+      *)
+        redacted+=("$arg")
+        ;;
+    esac
+  done
+
+  echo "Running: ${redacted[*]}"
+}
+
+echo "=== Operation: ${OPERATION} ==="
+echo "Input ref: ${INPUT_REF}"
+
+WORKSPACE="${WORKSPACE:-/workspace/shared}"
+mkdir -p "$WORKSPACE"
+cd "$WORKSPACE"
+
+# ── Container storage and /var/tmp setup (shared with build task via common.sh) ──
+setup_container_config
+setup_var_tmp
+install_custom_ca_certs
+
+# ── Registry auth (combined SA token + user credentials) ──
+TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || echo "")
+REGISTRY="image-registry.openshift-image-registry.svc:5000"
+
+mkdir -p "$HOME/.config"
+if [ -n "$TOKEN" ]; then
+  cat > "$HOME/.authjson" <<EOF
+{
+  "auths": {
+    "$REGISTRY": {
+      "auth": "$(echo -n "serviceaccount:$TOKEN" | base64 -w0)"
+    }
+  }
+}
+EOF
+else
+  echo '{"auths":{}}' > "$HOME/.authjson"
+fi
+chmod 600 "$HOME/.authjson"
+export REGISTRY_AUTH_FILE="$HOME/.authjson"
+
+# Read additional registry credentials from workspace
+REGISTRY_AUTH_DIR="${REGISTRY_AUTH_PATH:-/workspace/registry-auth}"
+REGISTRY_URL=""
+REGISTRY_USERNAME=""
+REGISTRY_PASSWORD=""
+if [ -f "$REGISTRY_AUTH_DIR/REGISTRY_URL" ]; then
+  REGISTRY_URL=$(cat "$REGISTRY_AUTH_DIR/REGISTRY_URL")
+fi
+if [ -f "$REGISTRY_AUTH_DIR/REGISTRY_USERNAME" ]; then
+  REGISTRY_USERNAME=$(cat "$REGISTRY_AUTH_DIR/REGISTRY_USERNAME")
+fi
+if [ -f "$REGISTRY_AUTH_DIR/REGISTRY_PASSWORD" ]; then
+  REGISTRY_PASSWORD=$(cat "$REGISTRY_AUTH_DIR/REGISTRY_PASSWORD")
+fi
+
+ORAS_REGISTRY_CONFIG=""
+if [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ] && [ -n "$REGISTRY_URL" ]; then
+  echo "Creating registry auth from username/password for $REGISTRY_URL"
+  AUTH_STRING=$(echo -n "$REGISTRY_USERNAME:$REGISTRY_PASSWORD" | base64 -w0)
+  SA_AUTH=""
+  if [ -n "$TOKEN" ]; then
+    SA_AUTH=",\"$REGISTRY\":{\"auth\":\"$(echo -n "serviceaccount:$TOKEN" | base64 -w0)\"}"
+  fi
+  cat > "$HOME/.custom_authjson" <<EOF
+{
+  "auths": {
+    "$REGISTRY_URL": {
+      "auth": "$AUTH_STRING"
+    }${SA_AUTH}
+  }
+}
+EOF
+  chmod 600 "$HOME/.custom_authjson"
+  export REGISTRY_AUTH_FILE="$HOME/.custom_authjson"
+  ORAS_REGISTRY_CONFIG="$WORKSPACE/.oras-auth.json"
+  cp "$REGISTRY_AUTH_FILE" "$ORAS_REGISTRY_CONFIG"
+  chmod 600 "$ORAS_REGISTRY_CONFIG"
+fi
+
+# ── Seal key setup ──
+SEAL_KEY_FILE=""
+SEAL_KEY_PASSWORD=""
+declare -a SEAL_KEY_ARGS=()
+if [ -f "/workspace/sealing-key/private-key" ]; then
+  SEAL_KEY_FILE="/workspace/sealing-key/private-key"
+  SEAL_KEY_ARGS=("--key" "$SEAL_KEY_FILE")
+  echo "Using seal key from workspace"
+fi
+if [ -f "/workspace/sealing-key-password/password" ]; then
+  SEAL_KEY_PASSWORD=$(cat /workspace/sealing-key-password/password)
+  SEAL_KEY_ARGS+=("--passwd" "pass:$SEAL_KEY_PASSWORD")
+  echo "Using seal key password from workspace"
+fi
+
+# ── Resolve architecture ──
+if [ -n "${ARCHITECTURE:-}" ]; then
+  RESOLVED_ARCH="$ARCHITECTURE"
+else
+  case "$(uname -m)" in
+    x86_64)  RESOLVED_ARCH="amd64" ;;
+    aarch64) RESOLVED_ARCH="arm64" ;;
+    *)       RESOLVED_ARCH="$(uname -m)" ;;
+  esac
+fi
+echo "Architecture: $RESOLVED_ARCH"
+
+# ── Shared helpers ──
+
+pull_source_container() {
+  local source="$1"
+  if [ -z "$source" ]; then
+    echo "ERROR: input-ref (source container) is required" >&2
+    exit 1
+  fi
+  echo "Pulling source container: $source"
+  local -a pull_cmd=(skopeo copy "docker://$source" "containers-storage:$source")
+  log_command "${pull_cmd[@]}"
+  if ! "${pull_cmd[@]}" 2>/dev/null; then
+    echo "Public pull failed, trying with auth..."
+    pull_cmd=(skopeo copy --authfile="$REGISTRY_AUTH_FILE" "docker://$source" "containers-storage:$source")
+    log_command "${pull_cmd[@]}"
+    "${pull_cmd[@]}"
+  fi
+}
+
+# Priority: 1) explicit BUILDER_IMAGE param  2) source container annotation  3) internal registry default
+resolve_and_pull_builder() {
+  local source="$1"
+  local builder_image="${BUILDER_IMAGE:-}"
+
+  if [ -z "${builder_image:-}" ]; then
+    local annotation_key="automotive.sdv.cloud.redhat.com/builder-image"
+    echo "No builder image specified, checking source container labels..."
+    builder_image=$(skopeo inspect "containers-storage:$source" 2>/dev/null \
+      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('Labels',{}).get('$annotation_key',''))" 2>/dev/null) || true
+
+    if [ -n "$builder_image" ]; then
+      # Rewrite external OpenShift registry route to internal service URL
+      if [[ "$builder_image" == default-route-openshift-image-registry.apps.* ]]; then
+        local path="${builder_image#*/}"
+        builder_image="image-registry.openshift-image-registry.svc:5000/${path}"
+        echo "Rewrote external registry route to internal URL"
+      fi
+      echo "Resolved builder image from source container label: $builder_image"
+    else
+      local ns
+      ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || echo "automotive-dev-operator-system")
+      builder_image="image-registry.openshift-image-registry.svc:5000/${ns}/aib-build:autosd-${RESOLVED_ARCH}"
+      echo "No annotation found, using default builder image: $builder_image"
+    fi
+  else
+    echo "Using explicitly provided builder image: $builder_image"
+  fi
+
+  BUILD_CONTAINER_ARGS=()
+  LOCAL_BUILDER="localhost/aib-builder:local"
+  echo "Pulling builder image: $builder_image -> $LOCAL_BUILDER"
+  local -a pull_cmd=(skopeo copy --authfile="$REGISTRY_AUTH_FILE" "docker://$builder_image" "containers-storage:$LOCAL_BUILDER")
+  log_command "${pull_cmd[@]}"
+  if ! "${pull_cmd[@]}" 2>/dev/null; then
+    echo "Auth pull failed for builder, trying public pull..."
+    pull_cmd=(skopeo copy "docker://$builder_image" "containers-storage:$LOCAL_BUILDER")
+    log_command "${pull_cmd[@]}"
+    "${pull_cmd[@]}"
+  fi
+  BUILD_CONTAINER_ARGS=("--build-container" "$LOCAL_BUILDER")
+}
+
+push_output_container() {
+  local output_ref="$1"
+  local source_tag="$2"
+  if [ -n "$output_ref" ]; then
+    echo "Pushing output container to registry: $output_ref"
+    local -a push_cmd=(skopeo copy --authfile="$REGISTRY_AUTH_FILE" "containers-storage:$source_tag" "docker://$output_ref")
+    log_command "${push_cmd[@]}"
+    "${push_cmd[@]}"
+    echo "Output container pushed successfully to $output_ref"
+  fi
+}
+
+validate_arg "${INPUT_REF}" "input-ref"
+validate_arg "${OUTPUT_REF:-}" "output-ref"
+validate_arg "${SIGNED_REF:-}" "signed-ref"
+
+# ── Install oras (for extract-for-signing / inject-signed) ──
+install_oras() {
+  if command -v oras >/dev/null 2>&1; then return; fi
+  ORAS_VERSION="1.2.0"
+  case "$(uname -m)" in
+    x86_64) ORAS_ARCH="amd64" ;;
+    aarch64|arm64) ORAS_ARCH="arm64" ;;
+    *) echo "ERROR: Unsupported architecture $(uname -m)" >&2; exit 1 ;;
+  esac
+  local ORAS_TARBALL="oras_${ORAS_VERSION}_linux_${ORAS_ARCH}.tar.gz"
+  local ORAS_BASE_URL="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}"
+  local ORAS_CHECKSUMS="oras_${ORAS_VERSION}_checksums.txt"
+
+  echo "Installing oras ${ORAS_VERSION} with integrity verification..."
+
+  curl -sSLf -o "/tmp/${ORAS_TARBALL}" "${ORAS_BASE_URL}/${ORAS_TARBALL}" || {
+    echo "ERROR: Failed to download ORAS tarball" >&2; exit 1
+  }
+  curl -sSLf -o "/tmp/${ORAS_CHECKSUMS}" "${ORAS_BASE_URL}/${ORAS_CHECKSUMS}" || {
+    echo "ERROR: Failed to download ORAS checksums" >&2; exit 1
+  }
+
+  local expected_checksum
+  expected_checksum=$(grep "${ORAS_TARBALL}" "/tmp/${ORAS_CHECKSUMS}" | cut -d' ' -f1)
+  if [ -z "$expected_checksum" ]; then
+    echo "ERROR: Could not find checksum for ${ORAS_TARBALL} in checksums file" >&2
+    exit 1
+  fi
+
+  local actual_checksum
+  if command -v sha256sum >/dev/null; then
+    actual_checksum=$(sha256sum "/tmp/${ORAS_TARBALL}" | cut -d' ' -f1)
+  elif command -v shasum >/dev/null; then
+    actual_checksum=$(shasum -a 256 "/tmp/${ORAS_TARBALL}" | cut -d' ' -f1)
+  else
+    echo "ERROR: Neither sha256sum nor shasum available for checksum verification" >&2
+    exit 1
+  fi
+
+  if [ "$expected_checksum" != "$actual_checksum" ]; then
+    echo "ERROR: Checksum verification failed for ${ORAS_TARBALL}" >&2
+    echo "  Expected: $expected_checksum" >&2
+    echo "  Actual:   $actual_checksum" >&2
+    exit 1
+  fi
+  echo "Checksum verification passed: $expected_checksum"
+
+  tar -xzf "/tmp/${ORAS_TARBALL}" -C /tmp oras || {
+    echo "ERROR: Failed to extract ORAS from tarball" >&2; exit 1
+  }
+  mv /tmp/oras /usr/local/bin/oras
+  chmod +x /usr/local/bin/oras
+  rm -f "/tmp/${ORAS_TARBALL}" "/tmp/${ORAS_CHECKSUMS}"
+}
+
+oras_pull() {
+  if [ -n "$ORAS_REGISTRY_CONFIG" ]; then
+    oras pull --registry-config "$ORAS_REGISTRY_CONFIG" "$@"
+  else
+    oras pull "$@"
+  fi
+}
+
+oras_push() {
+  if [ -n "$ORAS_REGISTRY_CONFIG" ]; then
+    oras push --registry-config "$ORAS_REGISTRY_CONFIG" "$@"
+  else
+    oras push "$@"
+  fi
+}
+
+# ── Operation: prepare-reseal / reseal ──
+run_container_seal_op() {
+  local op="$1"
+  local source_container="${INPUT_REF}"
+  local output_container="${OUTPUT_REF:-localhost/reseal-output:latest}"
+
+  echo "=== ${op} Configuration ==="
+  echo "SOURCE: $source_container"
+  echo "OUTPUT: $output_container"
+  echo "BUILDER: ${BUILDER_IMAGE:-<will resolve from source>}"
+  echo "============================"
+
+  pull_source_container "$source_container"
+  resolve_and_pull_builder "$source_container"
+
+  # Run the operation
+  local -a seal_cmd=(aib --verbose "$op")
+  if [ -n "$SEAL_KEY_FILE" ] && [ -f "$SEAL_KEY_FILE" ]; then
+    echo "Key provided - running $op with provided key..."
+    seal_cmd+=("${SEAL_KEY_ARGS[@]}")
+  else
+    echo "No key provided - aib may use ephemeral key for one-time seal"
+  fi
+  seal_cmd+=("${BUILD_CONTAINER_ARGS[@]}" "$source_container" "$output_container")
+  log_command "${seal_cmd[@]}"
+  "${seal_cmd[@]}"
+
+  echo "${op} completed successfully"
+  push_output_container "${OUTPUT_REF:-}" "$output_container"
+}
+
+# ── Operation: extract-for-signing ──
+run_extract_for_signing() {
+  local source_container="${INPUT_REF}"
+
+  echo "=== extract-for-signing Configuration ==="
+  echo "SOURCE: $source_container"
+  echo "OUTPUT: ${OUTPUT_REF:-<local only>}"
+  echo "=========================================="
+
+  pull_source_container "$source_container"
+
+  mkdir -p output_dir
+  local -a extract_cmd=(aib --verbose extract-for-signing "$source_container" output_dir)
+  log_command "${extract_cmd[@]}"
+  "${extract_cmd[@]}"
+
+  echo "extract-for-signing completed successfully"
+  echo "Extracted signing artifacts:"
+  ls -la output_dir/
+
+  if [ -n "${OUTPUT_REF:-}" ]; then
+    install_oras
+    echo "Pushing signing artifacts to ${OUTPUT_REF}..."
+    tar -C output_dir -czf output.tar.gz .
+    oras_push "${OUTPUT_REF}" output.tar.gz
+    echo "Signing artifacts pushed to ${OUTPUT_REF}"
+  fi
+}
+
+# ── Operation: inject-signed ──
+run_inject_signed() {
+  local source_container="${INPUT_REF}"
+  local output_container="${OUTPUT_REF:-localhost/injected-signed:latest}"
+
+  echo "=== inject-signed Configuration ==="
+  echo "SOURCE: $source_container"
+  echo "OUTPUT: $output_container"
+  echo "SIGNED: ${SIGNED_REF:-<not set>}"
+  echo "BUILDER: ${BUILDER_IMAGE:-<will resolve from source>}"
+  echo "RESEAL-WITH-KEY: ${SEAL_KEY_FILE:-<not set>}"
+  echo "====================================="
+
+  if [ -z "${SIGNED_REF:-}" ]; then
+    echo "ERROR: SIGNED_REF is required for inject-signed" >&2
+    exit 1
+  fi
+
+  pull_source_container "$source_container"
+  resolve_and_pull_builder "$source_container"
+
+  # Build --reseal-with-key argument (inject-signed uses different flag than reseal)
+  declare -a RESEAL_KEY_ARGS=()
+  if [ -n "$SEAL_KEY_FILE" ] && [ -f "$SEAL_KEY_FILE" ]; then
+    RESEAL_KEY_ARGS=("--reseal-with-key" "$SEAL_KEY_FILE")
+    if [ -n "$SEAL_KEY_PASSWORD" ]; then
+      RESEAL_KEY_ARGS+=("--passwd" "pass:$SEAL_KEY_PASSWORD")
+    fi
+    echo "Will reseal after injecting signed files"
+  fi
+
+  # Pull signed artifacts via oras
+  install_oras
+  echo "Pulling signed artifacts from ${SIGNED_REF}..."
+  mkdir -p signed_extract
+  oras_pull "${SIGNED_REF}" --output signed_extract
+
+  # Handle tarball extraction
+  mkdir -p signed_dir
+  TARBALL=$(find signed_extract -type f \( -name '*.tar.gz' -o -name '*.tgz' \) 2>/dev/null | head -1)
+  if [ -n "$TARBALL" ]; then
+    echo "Extracting signed artifacts tarball: $TARBALL"
+    tar -xzf "$TARBALL" -C signed_dir
+  else
+    echo "Copying signed artifacts preserving directory structure"
+    cp -r signed_extract/. signed_dir/
+  fi
+  echo "Signed artifacts ready:"
+  ls -la signed_dir/
+
+  local -a inject_cmd=(aib --verbose inject-signed "${BUILD_CONTAINER_ARGS[@]}" "${RESEAL_KEY_ARGS[@]}" "$source_container" signed_dir "$output_container")
+  log_command "${inject_cmd[@]}"
+  "${inject_cmd[@]}"
+
+  echo "inject-signed completed successfully"
+  push_output_container "${OUTPUT_REF:-}" "$output_container"
+}
+
+# ── Dispatch ──
+echo "Running: aib --verbose ${OPERATION} ..."
+case "${OPERATION}" in
+  prepare-reseal|reseal)
+    run_container_seal_op "${OPERATION}"
+    ;;
+  extract-for-signing)
+    run_extract_for_signing
+    ;;
+  inject-signed)
+    run_inject_signed
+    ;;
+  *)
+    echo "ERROR: Unknown operation ${OPERATION}" >&2
+    exit 1
+    ;;
+esac
+
+# Write the output reference to the Tekton result for downstream consumption
+if [ -n "${RESULT_PATH:-}" ] && [ -n "${OUTPUT_REF:-}" ]; then
+  printf '%s' "${OUTPUT_REF}" > "${RESULT_PATH}"
+  echo "Result written to ${RESULT_PATH}: ${OUTPUT_REF}"
+fi
+
+echo "=== Operation completed ==="

@@ -70,6 +70,9 @@ func (c *BuildConfig) getDefaultLeaseDuration() string {
 // DefaultInternalRegistryURL is the standard in-cluster URL for the OpenShift internal image registry.
 const DefaultInternalRegistryURL = "image-registry.openshift-image-registry.svc:5000"
 
+// volumeNameContainerStorage is the common volume name for container storage across tasks.
+const volumeNameContainerStorage = "container-storage"
+
 // GeneratePushArtifactRegistryTask creates a Tekton Task for pushing artifacts to a registry
 func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
 	return &tektonv1.Task{
@@ -408,7 +411,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 							MountPath: "/manifest-work",
 						},
 						{
-							Name:      "container-storage",
+							Name:      volumeNameContainerStorage,
 							MountPath: "/var/lib/containers/storage",
 						},
 						{
@@ -449,7 +452,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					},
 				},
 				{
-					Name: "container-storage",
+					Name: volumeNameContainerStorage,
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
 					},
@@ -1101,6 +1104,222 @@ func buildEnvFrom(envSecretRef string) []corev1.EnvFromSource {
 	}
 }
 
+// GeneratePrepareBuilderTask creates a Tekton Task that checks for/builds the aib-build helper container
+func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
+	task := &tektonv1.Task{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1",
+			Kind:       "Task",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "prepare-builder",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "automotive-dev-operator",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+			},
+		},
+		Spec: tektonv1.TaskSpec{
+			Params: []tektonv1.ParamSpec{
+				{
+					Name:        "distro",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Distribution to build helper for",
+				},
+				{
+					Name:        "builder-image",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Optional: use this builder image instead of auto-building",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "automotive-image-builder",
+					Type:        tektonv1.ParamTypeString,
+					Description: "AIB container image to use for building",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: automotivev1alpha1.DefaultAutomotiveImageBuilderImage,
+					},
+				},
+				{
+					Name:        "cluster-registry-route",
+					Type:        tektonv1.ParamTypeString,
+					Description: "External route for cluster image registry (for nested container access)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "target-architecture",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Target architecture for the builder image (amd64, arm64)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "amd64",
+					},
+				},
+				{
+					Name:        "rebuild-builder",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Force rebuild of the bootc builder image (true/false)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "false",
+					},
+				},
+			},
+			Results: []tektonv1.TaskResult{
+				{
+					Name:        "builder-image-ref",
+					Description: "The builder image reference to use for disk builds",
+				},
+			},
+			StepTemplate: &tektonv1.StepTemplate{
+				SecurityContext: &corev1.SecurityContext{
+					Privileged: ptr.To(true),
+					SELinuxOptions: &corev1.SELinuxOptions{
+						Type: "unconfined_t",
+					},
+				},
+			},
+			Workspaces: []tektonv1.WorkspaceDeclaration{
+				{
+					Name:        "manifest-config-workspace",
+					Description: "Workspace for manifest configuration (custom definitions)",
+					MountPath:   "/workspace/manifest-config",
+					Optional:    true,
+				},
+			},
+			Steps: []tektonv1.Step{
+				{
+					Name:    "prepare-builder",
+					Image:   "$(params.automotive-image-builder)",
+					Timeout: &metav1.Duration{Duration: 30 * time.Minute},
+					Env: []corev1.EnvVar{
+						{
+							Name:  "DISTRO",
+							Value: "$(params.distro)",
+						},
+						{
+							Name:  "BUILDER_IMAGE",
+							Value: "$(params.builder-image)",
+						},
+						{
+							Name:  "RESULT_PATH",
+							Value: "$(results.builder-image-ref.path)",
+						},
+						{
+							Name:  "CLUSTER_REGISTRY_ROUTE",
+							Value: "$(params.cluster-registry-route)",
+						},
+						{
+							Name:  "TARGET_ARCH",
+							Value: "$(params.target-architecture)",
+						},
+						{
+							Name:  "REBUILD_BUILDER",
+							Value: "$(params.rebuild-builder)",
+						},
+						{
+							Name:  "AIB_IMAGE",
+							Value: "$(params.automotive-image-builder)",
+						},
+						{
+							Name:  "USE_MEMORY_VOLUMES",
+							Value: fmt.Sprintf("%t", buildConfig != nil && buildConfig.UseMemoryVolumes),
+						},
+					},
+					Script: BuildBuilderScript,
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "dev",
+							MountPath: "/dev",
+						},
+						{
+							Name:      volumeNameContainerStorage,
+							MountPath: "/var/lib/containers/storage",
+						},
+						{
+							Name:      "run-osbuild",
+							MountPath: "/run/osbuild",
+						},
+						{
+							Name:      "var-tmp",
+							MountPath: "/var/tmp",
+						},
+						{
+							Name:      "custom-ca",
+							MountPath: "/etc/pki/ca-trust/custom",
+							ReadOnly:  true,
+						},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "dev",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{
+							Path: "/dev",
+						},
+					},
+				},
+				{
+					Name: volumeNameContainerStorage,
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				{
+					Name: "run-osbuild",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				{
+					Name: "var-tmp",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				{
+					Name: "custom-ca",
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "rhivos-ca-bundle",
+							},
+							Optional: ptr.To(true),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if buildConfig != nil && buildConfig.UseMemoryVolumes {
+		for i := range task.Spec.Volumes {
+			vol := &task.Spec.Volumes[i]
+
+			if vol.Name == volumeNameContainerStorage || vol.Name == "run-osbuild" || vol.Name == "var-tmp" {
+				vol.EmptyDir = &corev1.EmptyDirVolumeSource{
+					Medium: corev1.StorageMediumMemory,
+				}
+				if buildConfig.MemoryVolumeSize != "" {
+					sizeLimit := resource.MustParse(buildConfig.MemoryVolumeSize)
+					vol.EmptyDir.SizeLimit = &sizeLimit
+				}
+			}
+		}
+	}
+
+	return task
+}
+
 // GenerateFlashTask creates a Tekton Task for flashing images to hardware via Jumpstarter
 func GenerateFlashTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
 	return &tektonv1.Task{
@@ -1219,6 +1438,188 @@ func GenerateFlashTask(namespace string, buildConfig *BuildConfig) *tektonv1.Tas
 	}
 }
 
+// SealedTaskRunLabel is the label used to identify reseal-operation TaskRuns in the API.
+const SealedTaskRunLabel = "automotive.sdv.cloud.redhat.com/reseal-taskrun"
+
+// SealedOperationNames is the list of sealed operation names (used for task names and validation).
+var SealedOperationNames = []string{"prepare-reseal", "reseal", "extract-for-signing", "inject-signed"}
+
+// SealedTaskName returns the Tekton Task name for a reseal operation (e.g. "prepare-reseal" -> "prepare-reseal").
+func SealedTaskName(operation string) string {
+	return operation
+}
+
+// sealedTaskSpec returns the common TaskSpec for all sealed tasks (shared params, workspaces, step script).
+func sealedTaskSpec(operation string) tektonv1.TaskSpec {
+	return tektonv1.TaskSpec{
+		Params: []tektonv1.ParamSpec{
+			{
+				Name:        "input-ref",
+				Type:        tektonv1.ParamTypeString,
+				Description: "OCI/container reference to the input image",
+			},
+			{
+				Name:        "output-ref",
+				Type:        tektonv1.ParamTypeString,
+				Description: "OCI/container reference where to push the result",
+				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
+			},
+			{
+				Name:        "signed-ref",
+				Type:        tektonv1.ParamTypeString,
+				Description: "OCI reference to signed artifacts (required for inject-signed)",
+				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
+			},
+			{
+				Name:        "aib-image",
+				Type:        tektonv1.ParamTypeString,
+				Description: "AIB container image",
+				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: automotivev1alpha1.DefaultAutomotiveImageBuilderImage},
+			},
+			{
+				Name:        "builder-image",
+				Type:        tektonv1.ParamTypeString,
+				Description: "Builder container image for reseal operations",
+				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
+			},
+			{
+				Name:        "architecture",
+				Type:        tektonv1.ParamTypeString,
+				Description: "Target architecture (e.g., amd64, arm64); auto-detected if empty",
+				Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
+			},
+		},
+		Results: []tektonv1.TaskResult{
+			{
+				Name:        "output-container",
+				Description: "Reference to the output container image",
+			},
+		},
+		Workspaces: []tektonv1.WorkspaceDeclaration{
+			{Name: "shared", Description: "Workspace for input/output artifacts", MountPath: "/workspace/shared"},
+			{Name: "registry-auth", Description: "Optional registry credentials", MountPath: "/workspace/registry-auth", Optional: true},
+			{Name: "sealing-key", Description: "Optional secret containing sealing key (data key 'private-key')", MountPath: "/workspace/sealing-key", Optional: true},
+			{Name: "sealing-key-password", Description: "Optional secret containing key password (data key 'password')", MountPath: "/workspace/sealing-key-password", Optional: true},
+		},
+		StepTemplate: &tektonv1.StepTemplate{
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: ptr.To(true),
+				SELinuxOptions: &corev1.SELinuxOptions{
+					Type: "unconfined_t",
+				},
+			},
+		},
+		Steps: []tektonv1.Step{
+			{
+				Name:  "run-op",
+				Image: "$(params.aib-image)",
+				Env: []corev1.EnvVar{
+					{Name: "OPERATION", Value: operation},
+					{Name: "INPUT_REF", Value: "$(params.input-ref)"},
+					{Name: "OUTPUT_REF", Value: "$(params.output-ref)"},
+					{Name: "SIGNED_REF", Value: "$(params.signed-ref)"},
+					{Name: "WORKSPACE", Value: "/workspace/shared"},
+					{Name: "REGISTRY_AUTH_PATH", Value: "/workspace/registry-auth"},
+					{Name: "BUILDER_IMAGE", Value: "$(params.builder-image)"},
+					{Name: "ARCHITECTURE", Value: "$(params.architecture)"},
+					{Name: "RESULT_PATH", Value: "$(results.output-container.path)"},
+				},
+				Script:  SealedOperationScript,
+				Timeout: &metav1.Duration{Duration: 2 * time.Hour},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      "dev",
+						MountPath: "/dev",
+					},
+					{
+						Name:      volumeNameContainerStorage,
+						MountPath: "/var/lib/containers/storage",
+					},
+					{
+						Name:      "var-tmp",
+						MountPath: "/var/tmp",
+					},
+					{
+						Name:      "custom-ca",
+						MountPath: "/etc/pki/ca-trust/custom",
+						ReadOnly:  true,
+					},
+					{
+						Name:      "sysfs",
+						MountPath: "/sys",
+					},
+				},
+			},
+		},
+		Volumes: []corev1.Volume{
+			{
+				Name: "dev",
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: "/dev",
+					},
+				},
+			},
+			{
+				Name: volumeNameContainerStorage,
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+			{
+				Name: "var-tmp",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+			{
+				Name: "custom-ca",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "rhivos-ca-bundle",
+						},
+						Optional: ptr.To(true),
+					},
+				},
+			},
+			{
+				Name: "sysfs",
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: "/sys",
+					},
+				},
+			},
+		},
+	}
+}
+
+// GenerateSealedTaskForOperation creates a Tekton Task for one sealed operation (e.g. sealed-prepare-reseal).
+func GenerateSealedTaskForOperation(namespace, operation string) *tektonv1.Task {
+	return &tektonv1.Task{
+		TypeMeta: metav1.TypeMeta{APIVersion: "tekton.dev/v1", Kind: "Task"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SealedTaskName(operation),
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "automotive-dev-operator",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+			},
+		},
+		Spec: sealedTaskSpec(operation),
+	}
+}
+
+// GenerateSealedTasks returns all four sealed-operation Tasks for the given namespace (for OperatorConfig).
+func GenerateSealedTasks(namespace string) []*tektonv1.Task {
+	out := make([]*tektonv1.Task, 0, len(SealedOperationNames))
+	for _, op := range SealedOperationNames {
+		out = append(out, GenerateSealedTaskForOperation(namespace, op))
+	}
+	return out
+}
+
 // GenerateBuildBuilderJob creates a Job to build the aib-build helper container
 func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string) *corev1.Pod {
 	if aibImage == "" {
@@ -1270,7 +1671,7 @@ func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string)
 							MountPath: "/dev",
 						},
 						{
-							Name:      "container-storage",
+							Name:      volumeNameContainerStorage,
 							MountPath: "/var/lib/containers/storage",
 						},
 						{
@@ -1294,7 +1695,7 @@ func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string)
 					},
 				},
 				{
-					Name: "container-storage",
+					Name: volumeNameContainerStorage,
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{
 							Medium: corev1.StorageMediumMemory,
