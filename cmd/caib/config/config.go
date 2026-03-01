@@ -2,9 +2,11 @@
 package config
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,19 +97,36 @@ func DeriveServerFromJumpstarter() string {
 
 	// Derive Build API URL from gRPC endpoint:
 	// grpc.jumpstarter-lab.apps.example.com:443 → https://ado-build-api-<ns>.apps.example.com
-	host := grpcEndpoint
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		host = host[:idx]
+	if !strings.Contains(grpcEndpoint, "://") {
+		grpcEndpoint = "grpc://" + grpcEndpoint // add dummy scheme - required for url.Parse
 	}
-	host = strings.TrimPrefix(host, "grpc.")
-	dotIdx := strings.Index(host, ".")
-	if dotIdx == -1 || dotIdx == len(host)-1 {
+	u, err := url.Parse(grpcEndpoint)
+	if err != nil || u.Hostname() == "" {
 		return ""
 	}
-	apiURL := fmt.Sprintf("https://%s-%s.%s", buildAPIRoutePrefix, buildAPINamespace, host[dotIdx+1:])
+	host := u.Hostname()
+	var baseDomain string
+	if idx := strings.Index(host, ".apps."); idx != -1 {
+		baseDomain = host[idx+1:]
+	} else {
+		// fallback: strip first two labels: jumpstarter service name and namespace
+		parts := strings.SplitN(host, ".", 3)
+		if len(parts) < 3 {
+			return ""
+		}
+		baseDomain = parts[2]
+	}
+	apiURL := fmt.Sprintf("https://%s-%s.%s", buildAPIRoutePrefix, buildAPINamespace, baseDomain)
 
-	// Check reachability via the health endpoint
-	httpClient := &http.Client{Timeout: 5 * time.Second}
+	// Check reachability via the health endpoint.
+	// TLS verification is skipped here intentionally: this is a connectivity probe only,
+	// matching the behavior of caib login <url> which also saves the URL without any TLS check.
+	httpClient := &http.Client{ //nolint:gosec
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+	}
 	resp, err := httpClient.Get(apiURL + "/v1/healthz")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Jumpstarter config found, but could not reach derived Build API server %s.\n", apiURL)
