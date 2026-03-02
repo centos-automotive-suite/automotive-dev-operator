@@ -33,8 +33,6 @@ import (
 )
 
 const namespace = "automotive-dev-operator-system"
-const Failed = "Failed"
-const archArm64 = "arm64"
 
 // hasOpenShiftRouteCRD returns true when the OpenShift Route CRD exists (OpenShift cluster).
 // On Kind there is no Route CRD, so OIDC suite can skip before creating any resources.
@@ -212,13 +210,13 @@ var _ = Describe("controller", Ordered, func() {
 			if strings.Contains(strings.ToLower(os.Getenv("RUNNER_ARCH")), "arm") ||
 				strings.Contains(strings.ToLower(os.Getenv("HOSTTYPE")), "arm") ||
 				strings.Contains(strings.ToLower(os.Getenv("PROCESSOR_ARCHITECTURE")), "arm") {
-				arch = archArm64
+				arch = "arm64"
 			}
 			// Also check uname for local development
 			unameCmd := exec.Command("uname", "-m")
 			unameOutput, _ := utils.Run(unameCmd)
 			if strings.Contains(string(unameOutput), "arm64") || strings.Contains(string(unameOutput), "aarch64") {
-				arch = archArm64
+				arch = "arm64"
 			}
 
 			imageBuildYAML := fmt.Sprintf(`
@@ -226,7 +224,7 @@ apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
 kind: ImageBuild
 metadata:
   name: e2e-real-build
-  namespace: %s
+  namespace: automotive-dev-operator-system
 spec:
   # Common fields
   architecture: %s
@@ -264,7 +262,7 @@ spec:
 				if phase == "" {
 					return fmt.Errorf("build not started yet, phase is empty")
 				}
-				if phase == Failed {
+				if phase == "Failed" {
 					// Get more details on failure
 					cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
 						"-n", namespace, "-o", "jsonpath={.status.message}")
@@ -284,7 +282,7 @@ spec:
 					return err
 				}
 				phase := string(output)
-				if phase == Failed {
+				if phase == "Failed" {
 					// Get more details on failure
 					cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
 						"-n", namespace, "-o", "jsonpath={.status.message}")
@@ -322,7 +320,6 @@ spec:
 				"-n", namespace, "--ignore-not-found=true")
 			_, _ = utils.Run(cmd)
 		})
-
 	})
 })
 
@@ -504,12 +501,12 @@ var _ = Describe("OIDC Authentication", Ordered, func() {
 
 		It("should handle OIDC configuration when provided", func() {
 			By("creating OperatorConfig with OIDC authentication")
-			operatorConfigYAML := fmt.Sprintf(`
+			operatorConfigYAML := `
 apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
 kind: OperatorConfig
 metadata:
   name: config
-  namespace: %s
+  namespace: automotive-dev-operator-system
 spec:
   buildAPI:
     authentication:
@@ -523,7 +520,7 @@ spec:
             username:
               claim: preferred_username
               prefix: ""
-`, namespace)
+`
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(operatorConfigYAML)
 			_, err := utils.Run(cmd)
