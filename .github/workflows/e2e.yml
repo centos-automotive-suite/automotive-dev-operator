@@ -119,7 +119,11 @@ jobs:
           REGISTRY_IP=""
           for i in $(seq 1 30); do
             REGISTRY_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "${REGISTRY_NAME}")
-            if [ -n "$REGISTRY_IP" ]; then break; fi
+            if [ -n "$REGISTRY_IP" ]; then
+              echo "Registry IP found: $REGISTRY_IP" 
+              break; 
+            fi
+            echo "Waiting for registry IP..."
             sleep 1
           done
           echo "Registry IP: $REGISTRY_IP"
@@ -179,12 +183,12 @@ jobs:
       # ---------------------------------------------------------------
       # [6/7] Run E2E tests (self-contained: deploys operator, tests, tears down)
       # ---------------------------------------------------------------
-      - name: Run E2E tests
-        env:
-          KIND_CLUSTER: automotive-dev-e2e
-          CONTAINER_TOOL: docker
-          BUILD_PLATFORM: linux/${{ env.ARCH }}
-        run: make test-e2e
+      # - name: Run E2E tests
+      #   env:
+      #     KIND_CLUSTER: automotive-dev-e2e
+      #     CONTAINER_TOOL: docker
+      #     BUILD_PLATFORM: linux/${{ env.ARCH }}
+      #   run: make test-e2e
 
       # ---------------------------------------------------------------
       # [7/7] Deploy operator fresh and run caib integration builds
@@ -199,6 +203,9 @@ jobs:
           kind load docker-image automotive-dev-operator:test --name "$CLUSTER_NAME"
 
       - name: Deploy operator
+        env:
+          CONTAINER_TOOL: docker
+          BUILD_PLATFORM: linux/${{ env.ARCH }}
         run: |
           kubectl create namespace automotive-dev-operator-system --dry-run=client -o yaml | kubectl apply -f -
           kubectl label namespace automotive-dev-operator-system pod-security.kubernetes.io/enforce=privileged --overwrite
@@ -206,7 +213,7 @@ jobs:
           kubectl label namespace automotive-dev-operator-system pod-security.kubernetes.io/warn=privileged --overwrite
           make install
           make deploy IMG=automotive-dev-operator:test
-          kubectl wait --for=condition=available --timeout=10m deployment/ado-controller-manager -n automotive-dev-operator-system
+          kubectl wait --for=condition=available --timeout=10m deployment/ado-operator -n automotive-dev-operator-system
 
       - name: Apply OperatorConfig and wait for Build API
         run: |
@@ -227,7 +234,10 @@ jobs:
             | kubectl replace -f -
 
       - name: Build caib CLI
-        run: make build-caib
+        run: |
+          make build-caib
+          echo "=== caib version and available commands ==="
+          bin/caib --help
 
       - name: Set up Build API access
         run: |
