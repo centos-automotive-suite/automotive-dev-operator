@@ -126,7 +126,7 @@ func runStatus(_ *cobra.Command, _ []string) {
 }
 
 func runRefresh(cmd *cobra.Command, _ []string) {
-	serverURL := config.DefaultServer()
+	serverURL := config.DefaultServerWithDerive()
 	if serverURL == "" {
 		fmt.Println(color.RedString("No server configured."))
 		fmt.Println("Run 'caib login <server-url>' first.")

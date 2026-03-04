@@ -3,6 +3,7 @@ package image
 
 import (
 	"os"
+	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
@@ -74,10 +75,17 @@ type Options struct {
 
 // NewImageCmd creates the top-level `caib image` command with all image workflow subcommands.
 func NewImageCmd(opts Options) *cobra.Command {
+	defaultServer := config.DefaultServer()
 	cmd := &cobra.Command{
 		Use:   "image",
 		Short: "Build and manage image workflows",
 		Long:  `Commands for creating, managing, and inspecting image builds.`,
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			if opts.ServerURL != nil && strings.TrimSpace(*opts.ServerURL) == "" {
+				*opts.ServerURL = config.DefaultServerWithDerive()
+			}
+			return nil
+		},
 	}
 
 	buildCmd := newBuildCmd(opts)
@@ -95,7 +103,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	injectSignedCmd := newInjectSignedCmd(opts)
 
 	// build command flags (bootc - the default)
-	buildCmd.Flags().StringVar(opts.ServerURL, "server", config.DefaultServer(), "REST API server base URL")
+	buildCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	buildCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	buildCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the ImageBuild (auto-generated if omitted)")
 	buildCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution to build")
@@ -138,14 +146,14 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
 
 	listCmd.Flags().StringVar(
-		opts.ServerURL, "server", config.DefaultServer(), "REST API server base URL (e.g. https://api.example)",
+		opts.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
 	)
 	listCmd.Flags().StringVar(
 		opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"),
 		"Bearer token for authentication (e.g., OpenShift access token)",
 	)
 	showCmd.Flags().StringVar(
-		opts.ServerURL, "server", config.DefaultServer(), "REST API server base URL (e.g. https://api.example)",
+		opts.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
 	)
 	showCmd.Flags().StringVar(
 		opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"),
@@ -156,7 +164,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	)
 
 	// disk command flags (create disk from existing container)
-	diskCmd.Flags().StringVar(opts.ServerURL, "server", config.DefaultServer(), "REST API server base URL")
+	diskCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	diskCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	diskCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the build job (auto-generated if omitted)")
 	diskCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "download disk image to file from registry (requires --push)")
@@ -193,7 +201,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	diskCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
 
 	// build-dev command flags (traditional ostree/package builds)
-	buildDevCmd.Flags().StringVar(opts.ServerURL, "server", config.DefaultServer(), "REST API server base URL")
+	buildDevCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	buildDevCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	buildDevCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the ImageBuild")
 	buildDevCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution to build")
@@ -230,17 +238,17 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
 
 	// logs command flags
-	logsCmd.Flags().StringVar(opts.ServerURL, "server", config.DefaultServer(), "REST API server base URL")
+	logsCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	logsCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	logsCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
 
 	// download command flags
-	downloadCmd.Flags().StringVar(opts.ServerURL, "server", config.DefaultServer(), "REST API server base URL")
+	downloadCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	downloadCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	downloadCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "destination file or directory for the artifact")
 
 	// flash command flags
-	flashCmd.Flags().StringVar(opts.ServerURL, "server", config.DefaultServer(), "REST API server base URL")
+	flashCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	flashCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	flashCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required)")
 	flashCmd.Flags().StringVarP(opts.FlashName, "name", "n", "", "name for the flash job (auto-generated if omitted)")
@@ -252,10 +260,10 @@ func NewImageCmd(opts Options) *cobra.Command {
 	_ = flashCmd.MarkFlagRequired("client")
 
 	// Sealed operation shared flags
-	addSealedFlags(prepareResealCmd, opts)
-	addSealedFlags(resealCmd, opts)
-	addSealedFlags(extractForSigningCmd, opts)
-	addSealedFlags(injectSignedCmd, opts)
+	addSealedFlags(prepareResealCmd, opts, defaultServer)
+	addSealedFlags(resealCmd, opts, defaultServer)
+	addSealedFlags(extractForSigningCmd, opts, defaultServer)
+	addSealedFlags(injectSignedCmd, opts, defaultServer)
 	injectSignedCmd.Flags().StringVar(opts.SealedSignedRef, "signed", "", "Signed artifact ref for inject-signed")
 
 	cmd.AddCommand(
@@ -480,8 +488,8 @@ Input, signed artifact, and output can be given as positionals or via --input, -
 	}
 }
 
-func addSealedFlags(cmd *cobra.Command, opts Options) {
-	cmd.Flags().StringVar(opts.ServerURL, "server", config.DefaultServer(), "Build API server URL")
+func addSealedFlags(cmd *cobra.Command, opts Options, defaultServer string) {
+	cmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "Build API server URL")
 	cmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	cmd.Flags().StringVar(opts.SealedInputRef, "input", "", "Input/source container or artifact ref")
 	cmd.Flags().StringVar(opts.SealedOutputRef, "output", "", "Output container or artifact ref")

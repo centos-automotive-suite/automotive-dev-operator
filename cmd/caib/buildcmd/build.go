@@ -110,7 +110,7 @@ func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command, defaultWait, defau
 // validateBootcBuildFlags validates flag combinations for the build command.
 func (h *Handler) validateBootcBuildFlags() error {
 	if strings.TrimSpace(*h.opts.ServerURL) == "" {
-		return fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')")
+		return fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')")
 	}
 
 	if *h.opts.UseInternalRegistry && *h.opts.ExportOCI != "" {
@@ -448,7 +448,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 	*h.opts.ContainerRef = containerRef
 
 	if strings.TrimSpace(*h.opts.ServerURL) == "" {
-		h.handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
 	}
 
@@ -557,7 +557,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	}
 
 	if strings.TrimSpace(*h.opts.ServerURL) == "" {
-		h.handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
 	}
 

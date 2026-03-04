@@ -138,7 +138,7 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 	fmt.Printf("Containerfile: %s\n", filepath.Join(absContextDir, containerfile))
 
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 	}
 
 	if containerBuildPush != "" && useInternalRegistry {

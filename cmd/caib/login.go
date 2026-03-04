@@ -13,42 +13,51 @@ import (
 
 // runLogin saves the server URL and optionally performs OIDC authentication.
 func runLogin(_ *cobra.Command, args []string) {
-	raw := strings.TrimSpace(args[0])
-	if raw == "" {
-		handleError(fmt.Errorf("server URL is required"))
-		return
-	}
-	server := raw
-	if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
-		server = "https://" + server
-	}
+	var server string
 
-	parsedURL, err := url.Parse(server)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-		handleError(fmt.Errorf("invalid server URL %q", server))
-		return
+	if len(args) == 0 {
+		server = config.DeriveServerFromJumpstarter()
+		if server == "" {
+			handleError(fmt.Errorf("no Jumpstarter config found or derived endpoint unreachable; provide a server URL explicitly"))
+			return
+		}
+	} else {
+		server = strings.TrimSpace(args[0])
+		if server == "" {
+			handleError(fmt.Errorf("server URL is required"))
+			return
+		}
+		if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
+			server = "https://" + server
+		}
+
+		parsedURL, err := url.Parse(server)
+		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+			handleError(fmt.Errorf("invalid server URL %q", server))
+			return
+		}
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			handleError(fmt.Errorf("invalid server URL %q: scheme must be http or https", server))
+			return
+		}
+		if parsedURL.User != nil {
+			handleError(fmt.Errorf("server URL must not include credentials"))
+			return
+		}
+		if parsedURL.RawQuery != "" {
+			handleError(fmt.Errorf("server URL must not include query parameters"))
+			return
+		}
+		if parsedURL.Fragment != "" {
+			handleError(fmt.Errorf("server URL must not include fragments"))
+			return
+		}
+		if parsedURL.Path != "" && parsedURL.Path != "/" {
+			handleError(fmt.Errorf("server URL must not include a non-root path"))
+			return
+		}
+		server = parsedURL.Scheme + "://" + parsedURL.Host
 	}
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		handleError(fmt.Errorf("invalid server URL %q: scheme must be http or https", server))
-		return
-	}
-	if parsedURL.User != nil {
-		handleError(fmt.Errorf("server URL must not include credentials"))
-		return
-	}
-	if parsedURL.RawQuery != "" {
-		handleError(fmt.Errorf("server URL must not include query parameters"))
-		return
-	}
-	if parsedURL.Fragment != "" {
-		handleError(fmt.Errorf("server URL must not include fragments"))
-		return
-	}
-	if parsedURL.Path != "" && parsedURL.Path != "/" {
-		handleError(fmt.Errorf("server URL must not include a non-root path"))
-		return
-	}
-	server = parsedURL.Scheme + "://" + parsedURL.Host
 
 	if err := config.SaveServerURL(server); err != nil {
 		handleError(fmt.Errorf("failed to save server URL: %w", err))

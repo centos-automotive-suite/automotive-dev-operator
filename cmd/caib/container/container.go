@@ -16,7 +16,12 @@ limitations under the License.
 
 package container
 
-import "github.com/spf13/cobra"
+import (
+	"strings"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
+	"github.com/spf13/cobra"
+)
 
 // NewContainerCmd creates the container command with subcommands
 func NewContainerCmd() *cobra.Command {
@@ -24,6 +29,12 @@ func NewContainerCmd() *cobra.Command {
 		Use:   "container",
 		Short: "Build container images using Shipwright",
 		Long:  `Build container images using Shipwright Build and push to registries.`,
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			if strings.TrimSpace(serverURL) == "" {
+				serverURL = config.DefaultServerWithDerive()
+			}
+			return nil
+		},
 	}
 
 	cmd.PersistentFlags().BoolVar(&insecureSkipTLS, "insecure-skip-tls-verify", false, "skip TLS certificate verification")

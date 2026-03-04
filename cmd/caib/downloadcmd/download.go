@@ -49,7 +49,7 @@ func (h *Handler) RunDownload(_ *cobra.Command, args []string) {
 	downloadBuildName := args[0]
 
 	if h.opts.ServerURL == nil || strings.TrimSpace(*h.opts.ServerURL) == "" {
-		h.handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
 	}
 	if h.opts.OutputDir == nil || strings.TrimSpace(*h.opts.OutputDir) == "" {

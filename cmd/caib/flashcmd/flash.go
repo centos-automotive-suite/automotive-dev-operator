@@ -81,7 +81,7 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 	server := strings.TrimSpace(*h.opts.ServerURL)
 
 	if server == "" {
-		h.handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
 	}
 

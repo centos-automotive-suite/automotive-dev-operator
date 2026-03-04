@@ -46,10 +46,10 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	server := serverURL
 	if server == "" {
-		server = config.DefaultServer()
+		server = config.DefaultServerWithDerive()
 	}
 	if server == "" {
-		return fmt.Errorf("server URL required (use --server, CAIB_SERVER, or run 'caib login <server-url>')")
+		return fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')")
 	}
 
 	token := authToken
