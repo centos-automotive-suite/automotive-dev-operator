@@ -129,7 +129,7 @@ func runRefresh(cmd *cobra.Command, _ []string) {
 	serverURL := config.DefaultServerWithDerive()
 	if serverURL == "" {
 		fmt.Println(color.RedString("No server configured."))
-		fmt.Println("Run 'caib login <server-url>' first.")
+		fmt.Println("Run 'caib login <server-url>' or 'jmp login <endpoint>' first.")
 		return
 	}
 

@@ -17,18 +17,17 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-// writeJumpstarterConfig creates jumpstarter config.yaml and clients/<alias>.yaml under baseDir.
-func writeJumpstarterConfig(baseDir, alias, endpoint string) {
+// writeJumpstarterConfig creates jumpstarter config.yaml and clients/mycluster.yaml under baseDir.
+func writeJumpstarterConfig(baseDir, endpoint string) {
+	const alias = "mycluster"
 	jmpDir := filepath.Join(baseDir, "jumpstarter")
 	ExpectWithOffset(1, os.MkdirAll(filepath.Join(jmpDir, "clients"), 0700)).To(Succeed())
 
 	configYAML := "config:\n  current-client: " + alias + "\n"
 	ExpectWithOffset(1, os.WriteFile(filepath.Join(jmpDir, "config.yaml"), []byte(configYAML), 0600)).To(Succeed())
 
-	if alias != "" {
-		clientYAML := "endpoint: " + endpoint + "\n"
-		ExpectWithOffset(1, os.WriteFile(filepath.Join(jmpDir, "clients", alias+".yaml"), []byte(clientYAML), 0600)).To(Succeed())
-	}
+	clientYAML := "endpoint: " + endpoint + "\n"
+	ExpectWithOffset(1, os.WriteFile(filepath.Join(jmpDir, "clients", alias+".yaml"), []byte(clientYAML), 0600)).To(Succeed())
 }
 
 var _ = Describe("DeriveServerFromJumpstarter", func() {
@@ -55,7 +54,7 @@ var _ = Describe("DeriveServerFromJumpstarter", func() {
 	})
 
 	It("derives correct URL from .apps. domain and saves config on health 200", func() {
-		writeJumpstarterConfig(tempDir, "mycluster", "grpc.lab.apps.example.com:443")
+		writeJumpstarterConfig(tempDir, "grpc.lab.apps.example.com:443")
 
 		var requestedURL string
 		healthHTTPClient = &http.Client{
@@ -82,7 +81,7 @@ var _ = Describe("DeriveServerFromJumpstarter", func() {
 	})
 
 	It("derives correct URL using fallback (non-.apps. domain)", func() {
-		writeJumpstarterConfig(tempDir, "mycluster", "svc.namespace.cluster.local:443")
+		writeJumpstarterConfig(tempDir, "svc.namespace.cluster.local:443")
 
 		var requestedURL string
 		healthHTTPClient = &http.Client{
@@ -103,7 +102,7 @@ var _ = Describe("DeriveServerFromJumpstarter", func() {
 	})
 
 	It("returns empty when health check returns non-200", func() {
-		writeJumpstarterConfig(tempDir, "mycluster", "grpc.lab.apps.example.com:443")
+		writeJumpstarterConfig(tempDir, "grpc.lab.apps.example.com:443")
 
 		healthHTTPClient = &http.Client{
 			Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
@@ -134,7 +133,7 @@ var _ = Describe("DeriveServerFromJumpstarter", func() {
 	})
 
 	It("returns empty when health check returns a network error", func() {
-		writeJumpstarterConfig(tempDir, "mycluster", "grpc.lab.apps.example.com:443")
+		writeJumpstarterConfig(tempDir, "grpc.lab.apps.example.com:443")
 
 		healthHTTPClient = &http.Client{
 			Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
@@ -146,7 +145,7 @@ var _ = Describe("DeriveServerFromJumpstarter", func() {
 	})
 
 	It("returns empty when endpoint has fewer than 3 domain labels", func() {
-		writeJumpstarterConfig(tempDir, "mycluster", "localhost:443")
+		writeJumpstarterConfig(tempDir, "localhost:443")
 
 		called := false
 		healthHTTPClient = &http.Client{
@@ -196,7 +195,7 @@ var _ = Describe("DefaultServerWithDerive", func() {
 	It("returns CAIB_SERVER env when set, without calling derive", func() {
 		Expect(os.Setenv("CAIB_SERVER", "https://from-env.example.com")).To(Succeed())
 		Expect(SaveServerURL("https://from-config.example.com")).To(Succeed())
-		writeJumpstarterConfig(tempDir, "mycluster", "grpc.lab.apps.example.com:443")
+		writeJumpstarterConfig(tempDir, "grpc.lab.apps.example.com:443")
 
 		called := false
 		healthHTTPClient = &http.Client{
@@ -215,7 +214,7 @@ var _ = Describe("DefaultServerWithDerive", func() {
 
 	It("returns saved config when CAIB_SERVER is empty, without calling derive", func() {
 		Expect(SaveServerURL("https://from-config.example.com")).To(Succeed())
-		writeJumpstarterConfig(tempDir, "mycluster", "grpc.lab.apps.example.com:443")
+		writeJumpstarterConfig(tempDir, "grpc.lab.apps.example.com:443")
 
 		called := false
 		healthHTTPClient = &http.Client{
@@ -233,7 +232,7 @@ var _ = Describe("DefaultServerWithDerive", func() {
 	})
 
 	It("falls through to Jumpstarter derivation when env and config are empty", func() {
-		writeJumpstarterConfig(tempDir, "mycluster", "grpc.lab.apps.example.com:443")
+		writeJumpstarterConfig(tempDir, "grpc.lab.apps.example.com:443")
 
 		healthHTTPClient = &http.Client{
 			Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {

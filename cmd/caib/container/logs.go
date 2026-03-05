@@ -77,7 +77,6 @@ func runContainerLogs(_ *cobra.Command, args []string) {
 
 	if strings.TrimSpace(serverURL) == "" {
 		handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
-		return
 	}
 
 	// Verify the build exists and show current status

@@ -139,7 +139,7 @@ func DeriveServerFromJumpstarter() string {
 		client = &http.Client{ //nolint:gosec
 			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec
 			},
 		}
 	}
