@@ -3,6 +3,7 @@ package tasks
 import (
 	_ "embed" // Required for go:embed directives
 	"fmt"
+	"strings"
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -25,6 +26,8 @@ type BuildConfig struct {
 	BuildTimeoutMinutes         int32
 	FlashTimeoutMinutes         int32
 	DefaultLeaseDuration        string
+	TrustedCABundleKind         string
+	TrustedCABundleName         string
 }
 
 // getAutomotiveImageBuilderImage returns the AIB image from config or the default constant
@@ -72,6 +75,39 @@ const DefaultInternalRegistryURL = "image-registry.openshift-image-registry.svc:
 
 // volumeNameContainerStorage is the common volume name for container storage across tasks.
 const volumeNameContainerStorage = "container-storage"
+
+const defaultTrustedCABundleConfigMap = "rhivos-ca-bundle"
+
+func trustedCABundleVolumeSource(buildConfig *BuildConfig) corev1.VolumeSource {
+	kind := "ConfigMap"
+	name := defaultTrustedCABundleConfigMap
+	if buildConfig != nil {
+		if buildConfig.TrustedCABundleKind != "" {
+			kind = buildConfig.TrustedCABundleKind
+		}
+		if buildConfig.TrustedCABundleName != "" {
+			name = buildConfig.TrustedCABundleName
+		}
+	}
+
+	if strings.EqualFold(kind, "Secret") {
+		return corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: name,
+				Optional:   ptr.To(true),
+			},
+		}
+	}
+
+	return corev1.VolumeSource{
+		ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{
+				Name: name,
+			},
+			Optional: ptr.To(true),
+		},
+	}
+}
 
 // GeneratePushArtifactRegistryTask creates a Tekton Task for pushing artifacts to a registry
 func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
@@ -466,15 +502,8 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					},
 				},
 				{
-					Name: "custom-ca",
-					VolumeSource: corev1.VolumeSource{
-						ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: "rhivos-ca-bundle",
-							},
-							Optional: ptr.To(true),
-						},
-					},
+					Name:         "custom-ca",
+					VolumeSource: trustedCABundleVolumeSource(buildConfig),
 				},
 				{
 					Name: "sysfs",
@@ -1287,15 +1316,8 @@ func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tek
 					},
 				},
 				{
-					Name: "custom-ca",
-					VolumeSource: corev1.VolumeSource{
-						ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: "rhivos-ca-bundle",
-							},
-							Optional: ptr.To(true),
-						},
-					},
+					Name:         "custom-ca",
+					VolumeSource: trustedCABundleVolumeSource(buildConfig),
 				},
 			},
 		},
@@ -1450,7 +1472,7 @@ func SealedTaskName(operation string) string {
 }
 
 // sealedTaskSpec returns the common TaskSpec for all sealed tasks (shared params, workspaces, step script).
-func sealedTaskSpec(operation string) tektonv1.TaskSpec {
+func sealedTaskSpec(operation string, buildConfig *BuildConfig) tektonv1.TaskSpec {
 	return tektonv1.TaskSpec{
 		Params: []tektonv1.ParamSpec{
 			{
@@ -1574,15 +1596,8 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 				},
 			},
 			{
-				Name: "custom-ca",
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "rhivos-ca-bundle",
-						},
-						Optional: ptr.To(true),
-					},
-				},
+				Name:         "custom-ca",
+				VolumeSource: trustedCABundleVolumeSource(buildConfig),
 			},
 			{
 				Name: "sysfs",
@@ -1597,7 +1612,11 @@ func sealedTaskSpec(operation string) tektonv1.TaskSpec {
 }
 
 // GenerateSealedTaskForOperation creates a Tekton Task for one sealed operation (e.g. sealed-prepare-reseal).
-func GenerateSealedTaskForOperation(namespace, operation string) *tektonv1.Task {
+func GenerateSealedTaskForOperation(namespace, operation string, buildConfig ...*BuildConfig) *tektonv1.Task {
+	var cfg *BuildConfig
+	if len(buildConfig) > 0 {
+		cfg = buildConfig[0]
+	}
 	return &tektonv1.Task{
 		TypeMeta: metav1.TypeMeta{APIVersion: "tekton.dev/v1", Kind: "Task"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -1608,15 +1627,19 @@ func GenerateSealedTaskForOperation(namespace, operation string) *tektonv1.Task 
 				"app.kubernetes.io/part-of":    "automotive-dev",
 			},
 		},
-		Spec: sealedTaskSpec(operation),
+		Spec: sealedTaskSpec(operation, cfg),
 	}
 }
 
 // GenerateSealedTasks returns all four sealed-operation Tasks for the given namespace (for OperatorConfig).
-func GenerateSealedTasks(namespace string) []*tektonv1.Task {
+func GenerateSealedTasks(namespace string, buildConfig ...*BuildConfig) []*tektonv1.Task {
+	var cfg *BuildConfig
+	if len(buildConfig) > 0 {
+		cfg = buildConfig[0]
+	}
 	out := make([]*tektonv1.Task, 0, len(SealedOperationNames))
 	for _, op := range SealedOperationNames {
-		out = append(out, GenerateSealedTaskForOperation(namespace, op))
+		out = append(out, GenerateSealedTaskForOperation(namespace, op, cfg))
 	}
 	return out
 }

@@ -116,9 +116,10 @@ EOF
 
 # Install custom CA certificates if available.
 install_custom_ca_certs() {
-  if [ -d /etc/pki/ca-trust/custom ] && ls /etc/pki/ca-trust/custom/*.pem >/dev/null 2>&1; then
+  if [ -d /etc/pki/ca-trust/custom ] && (ls /etc/pki/ca-trust/custom/*.pem >/dev/null 2>&1 || ls /etc/pki/ca-trust/custom/*.crt >/dev/null 2>&1); then
     echo "Installing custom CA certificates..."
     cp /etc/pki/ca-trust/custom/*.pem /etc/pki/ca-trust/source/anchors/ 2>/dev/null || true
+    cp /etc/pki/ca-trust/custom/*.crt /etc/pki/ca-trust/source/anchors/ 2>/dev/null || true
     update-ca-trust extract 2>/dev/null || true
   fi
 }
