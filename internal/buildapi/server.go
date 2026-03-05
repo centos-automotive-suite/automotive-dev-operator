@@ -1389,6 +1389,8 @@ func (a *APIServer) resolveRegistryForBuild(
 	if err != nil {
 		if errors.Is(err, errRegistryCredentialsRequiredForPush) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		} else if k8serrors.IsAlreadyExists(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}
@@ -1536,6 +1538,9 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Append a short random suffix to ensure unique names for parallel builds
+	req.Name = fmt.Sprintf("%s-%s", req.Name, uuid.New().String()[:5])
 
 	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
