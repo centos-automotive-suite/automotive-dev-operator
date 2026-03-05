@@ -44,6 +44,9 @@ import (
 )
 
 const (
+	// OperatorNamespace is the namespace where the operator is deployed.
+	OperatorNamespace = "automotive-dev-operator-system"
+
 	phasePending   = "Pending"
 	phaseRunning   = "Running"
 	phaseCompleted = "Completed"
@@ -122,7 +125,8 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 		}
 	}
 
-	if err := r.ensureSealedTasks(ctx, sealed.Namespace); err != nil {
+	buildConfig := r.resolveBuildConfig(ctx)
+	if err := r.ensureSealedTasks(ctx, sealed.Namespace, buildConfig); err != nil {
 		return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to ensure reseal tasks: %v", err))
 	}
 
@@ -259,9 +263,9 @@ func (r *Reconciler) handleRunningPipelineRun(ctx context.Context, sealed *autom
 
 const sealedManagedByLabel = "app.kubernetes.io/managed-by"
 
-func (r *Reconciler) ensureSealedTasks(ctx context.Context, namespace string) error {
+func (r *Reconciler) ensureSealedTasks(ctx context.Context, namespace string, buildConfig *tasks.BuildConfig) error {
 	for _, op := range tasks.SealedOperationNames {
-		task := tasks.GenerateSealedTaskForOperation(namespace, op)
+		task := tasks.GenerateSealedTaskForOperation(namespace, op, buildConfig)
 		if err := r.ensureSealedTask(ctx, task); err != nil {
 			return err
 		}
@@ -693,6 +697,31 @@ func (r *Reconciler) isTransientSecret(ctx context.Context, namespace, name stri
 		return false
 	}
 	return secret.Labels[transientLabel] == "true"
+}
+
+func (r *Reconciler) resolveBuildConfig(ctx context.Context) *tasks.BuildConfig {
+	operatorConfig := &automotivev1alpha1.OperatorConfig{}
+	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: OperatorNamespace}, operatorConfig); err != nil {
+		return &tasks.BuildConfig{}
+	}
+	bc := &tasks.BuildConfig{
+		AutomotiveImageBuilderImage: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
+	}
+	if operatorConfig.Spec.OSBuilds != nil {
+		applyTrustedCABundleFromOSBuilds(bc, operatorConfig.Spec.OSBuilds)
+	}
+	return bc
+}
+
+func applyTrustedCABundleFromOSBuilds(buildConfig *tasks.BuildConfig, osBuilds *automotivev1alpha1.OSBuildsConfig) {
+	if buildConfig == nil || osBuilds == nil || osBuilds.Certificates == nil {
+		return
+	}
+	if osBuilds.Certificates.TrustedCABundle != nil {
+		buildConfig.TrustedCABundleKind = osBuilds.Certificates.TrustedCABundle.Kind
+		buildConfig.TrustedCABundleName = osBuilds.Certificates.TrustedCABundle.Name
+		return
+	}
 }
 
 // deleteSecretWithRetry attempts to delete a secret with exponential backoff retry
