@@ -179,7 +179,7 @@ type OperatorConfigReconciler struct {
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tekton.dev,resources=tasks;pipelines;pipelineruns,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile manages the OperatorConfig resource lifecycle.
+// Reconcile reconciles the OperatorConfig resource lifecycle.
 func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("operatorconfig", req.NamespacedName)
 	log.Info("=== Reconciliation started ===")
@@ -275,7 +275,10 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if statusChanged {
-		log.Info("Updating status", "phase", config.Status.Phase, "osBuildsDeployed", config.Status.OSBuildsDeployed, "jumpstarterAvailable", config.Status.JumpstarterAvailable)
+		log.Info("Updating status",
+			"phase", config.Status.Phase,
+			"osBuildsDeployed", config.Status.OSBuildsDeployed,
+			"jumpstarterAvailable", config.Status.JumpstarterAvailable)
 		if err := r.Status().Update(ctx, config); err != nil {
 			log.Error(err, "Failed to update status")
 			return ctrl.Result{}, err
@@ -571,6 +574,10 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 			FlashTimeoutMinutes:         config.Spec.OSBuilds.GetFlashTimeoutMinutes(),
 			DefaultLeaseDuration:        config.Spec.Jumpstarter.GetDefaultLeaseDuration(),
 		}
+		if config.Spec.OSBuilds.Certificates != nil && config.Spec.OSBuilds.Certificates.TrustedCABundle != nil {
+			buildConfig.TrustedCABundleKind = config.Spec.OSBuilds.Certificates.TrustedCABundle.Kind
+			buildConfig.TrustedCABundleName = config.Spec.OSBuilds.Certificates.TrustedCABundle.Name
+		}
 	}
 
 	// Create target defaults ConfigMap (architecture, partition rules, etc.)
@@ -585,7 +592,7 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		tasks.GeneratePushArtifactRegistryTask(config.Namespace, buildConfig),
 		tasks.GenerateFlashTask(config.Namespace, buildConfig),
 	}
-	tektonTasks = append(tektonTasks, tasks.GenerateSealedTasks(config.Namespace)...)
+	tektonTasks = append(tektonTasks, tasks.GenerateSealedTasks(config.Namespace, buildConfig)...)
 
 	for _, task := range tektonTasks {
 		task.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = config.Name
