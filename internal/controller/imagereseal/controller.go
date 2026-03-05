@@ -125,7 +125,10 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 		}
 	}
 
-	buildConfig := r.resolveBuildConfig(ctx)
+	buildConfig, err := r.resolveBuildConfig(ctx)
+	if err != nil {
+		return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to resolve build config: %v", err))
+	}
 	if err := r.ensureSealedTasks(ctx, sealed.Namespace, buildConfig); err != nil {
 		return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to ensure reseal tasks: %v", err))
 	}
@@ -699,10 +702,13 @@ func (r *Reconciler) isTransientSecret(ctx context.Context, namespace, name stri
 	return secret.Labels[transientLabel] == "true"
 }
 
-func (r *Reconciler) resolveBuildConfig(ctx context.Context) *tasks.BuildConfig {
+func (r *Reconciler) resolveBuildConfig(ctx context.Context) (*tasks.BuildConfig, error) {
 	operatorConfig := &automotivev1alpha1.OperatorConfig{}
 	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: OperatorNamespace}, operatorConfig); err != nil {
-		return &tasks.BuildConfig{}
+		if k8serrors.IsNotFound(err) {
+			return &tasks.BuildConfig{}, nil
+		}
+		return nil, err
 	}
 	bc := &tasks.BuildConfig{
 		AutomotiveImageBuilderImage: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
@@ -710,7 +716,7 @@ func (r *Reconciler) resolveBuildConfig(ctx context.Context) *tasks.BuildConfig 
 	if operatorConfig.Spec.OSBuilds != nil {
 		applyTrustedCABundleFromOSBuilds(bc, operatorConfig.Spec.OSBuilds)
 	}
-	return bc
+	return bc, nil
 }
 
 func applyTrustedCABundleFromOSBuilds(buildConfig *tasks.BuildConfig, osBuilds *automotivev1alpha1.OSBuildsConfig) {

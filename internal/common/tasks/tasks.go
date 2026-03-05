@@ -197,6 +197,11 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 							SubPath:   ".dockerconfigjson",
 						},
 						{
+							Name:      "custom-ca",
+							MountPath: "/etc/pki/ca-trust/custom",
+							ReadOnly:  true,
+						},
+						{
 							Name:      "target-defaults",
 							MountPath: "/etc/target-defaults",
 							ReadOnly:  true,
@@ -223,6 +228,10 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 							Optional: ptr.To(true),
 						},
 					},
+				},
+				{
+					Name:         "custom-ca",
+					VolumeSource: trustedCABundleVolumeSource(buildConfig),
 				},
 			},
 		},

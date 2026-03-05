@@ -178,8 +178,8 @@ type OperatorConfigReconciler struct {
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tekton.dev,resources=tasks;pipelines;pipelineruns,verbs=get;list;watch;create;update;patch;delete
+
 // Reconcile reconciles the OperatorConfig resource lifecycle.
-//nolint:revive // Kubebuilder marker block must stay directly above Reconcile.
 func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("operatorconfig", req.NamespacedName)
 	log.Info("=== Reconciliation started ===")

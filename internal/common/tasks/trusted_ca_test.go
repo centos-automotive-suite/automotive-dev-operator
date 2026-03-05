@@ -5,6 +5,7 @@ import (
 )
 
 const customCAVolumeName = "custom-ca"
+const testTrustedCASecretName = "my-test-ca-secret"
 
 func TestTrustedCABundleVolumeSource_DefaultsToConfigMap(t *testing.T) {
 	src := trustedCABundleVolumeSource(nil)
@@ -20,14 +21,14 @@ func TestTrustedCABundleVolumeSource_DefaultsToConfigMap(t *testing.T) {
 func TestTrustedCABundleVolumeSource_UsesSecretWhenConfigured(t *testing.T) {
 	src := trustedCABundleVolumeSource(&BuildConfig{
 		TrustedCABundleKind: "Secret",
-		TrustedCABundleName: "my-test-ca-secret",
+		TrustedCABundleName: testTrustedCASecretName,
 	})
 
 	if src.Secret == nil {
 		t.Fatalf("expected Secret source")
 	}
-	if src.Secret.SecretName != "my-test-ca-secret" {
-		t.Fatalf("expected secret name my-test-ca-secret, got %q", src.Secret.SecretName)
+	if src.Secret.SecretName != testTrustedCASecretName {
+		t.Fatalf("expected secret name %s, got %q", testTrustedCASecretName, src.Secret.SecretName)
 	}
 }
 
@@ -56,7 +57,7 @@ func TestGenerateSealedTaskForOperation_UsesConfiguredTrustedCABundle(t *testing
 func TestGenerateBuildAutomotiveImageTask_UsesConfiguredTrustedCABundle(t *testing.T) {
 	task := GenerateBuildAutomotiveImageTask("test-ns", &BuildConfig{
 		TrustedCABundleKind: "Secret",
-		TrustedCABundleName: "my-test-ca-secret",
+		TrustedCABundleName: testTrustedCASecretName,
 	}, "")
 
 	for _, vol := range task.Spec.Volumes {
@@ -66,8 +67,8 @@ func TestGenerateBuildAutomotiveImageTask_UsesConfiguredTrustedCABundle(t *testi
 		if vol.Secret == nil {
 			t.Fatalf("expected custom-ca volume to be secret-backed")
 		}
-		if vol.Secret.SecretName != "my-test-ca-secret" {
-			t.Fatalf("expected custom-ca secret name my-test-ca-secret, got %q", vol.Secret.SecretName)
+		if vol.Secret.SecretName != testTrustedCASecretName {
+			t.Fatalf("expected custom-ca secret name %s, got %q", testTrustedCASecretName, vol.Secret.SecretName)
 		}
 		return
 	}
@@ -75,14 +76,24 @@ func TestGenerateBuildAutomotiveImageTask_UsesConfiguredTrustedCABundle(t *testi
 	t.Fatalf("%s volume not found in generated build task", customCAVolumeName)
 }
 
-func TestGeneratePushArtifactRegistryTask_NoCustomCABundleVolume(t *testing.T) {
+func TestGeneratePushArtifactRegistryTask_UsesConfiguredTrustedCABundle(t *testing.T) {
 	task := GeneratePushArtifactRegistryTask("test-ns", &BuildConfig{
-		TrustedCABundleKind: "",
-		TrustedCABundleName: "ignored",
+		TrustedCABundleKind: "Secret",
+		TrustedCABundleName: testTrustedCASecretName,
 	})
+
 	for _, vol := range task.Spec.Volumes {
-		if vol.Name == customCAVolumeName {
-			t.Fatalf("push-artifact-registry task should not include %s volume", customCAVolumeName)
+		if vol.Name != customCAVolumeName {
+			continue
 		}
+		if vol.Secret == nil {
+			t.Fatalf("expected custom-ca volume to be secret-backed")
+		}
+		if vol.Secret.SecretName != testTrustedCASecretName {
+			t.Fatalf("expected custom-ca secret name %s, got %q", testTrustedCASecretName, vol.Secret.SecretName)
+		}
+		return
 	}
+
+	t.Fatalf("%s volume not found in generated push task", customCAVolumeName)
 }
