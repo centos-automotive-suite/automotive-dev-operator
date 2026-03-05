@@ -383,6 +383,27 @@ type OSBuildsConfig struct {
 	//           "value": "builds", "effect": "NoSchedule"}]
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// Certificates defines trusted certificate configuration for build tasks.
+	// +optional
+	Certificates *BuildCertificatesConfig `json:"certificates,omitempty"`
+}
+
+// CertificateSourceRef references a Secret or ConfigMap that contains trusted CA certificates.
+type CertificateSourceRef struct {
+	// Kind indicates the source kind for trusted CA bundle.
+	// +kubebuilder:validation:Enum=ConfigMap;Secret
+	Kind string `json:"kind"`
+
+	// Name is the name of the Secret or ConfigMap.
+	Name string `json:"name"`
+}
+
+// BuildCertificatesConfig defines trusted certificate sources for build workloads.
+type BuildCertificatesConfig struct {
+	// TrustedCABundle references a Secret or ConfigMap mounted into build tasks.
+	// +optional
+	TrustedCABundle *CertificateSourceRef `json:"trustedCABundle,omitempty"`
 }
 
 // GetBuildTimeoutMinutes returns the build timeout in minutes, falling back to the default
