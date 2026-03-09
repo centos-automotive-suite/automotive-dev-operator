@@ -5,6 +5,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/catalog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/container"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/image"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -33,6 +34,7 @@ func newRootCmd() *cobra.Command {
 		container.NewContainerCmd(),
 		catalog.NewCatalogCmd(),
 		authcmd.NewAuthCmd(),
+		workspace.NewWorkspaceCmd(),
 	)
 
 	return rootCmd

@@ -1,0 +1,677 @@
+// Package workspace implements CLI commands for developer workspace management.
+package workspace
+
+import (
+	"archive/tar"
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"text/tabwriter"
+
+	"github.com/gorilla/websocket"
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
+	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
+	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+)
+
+var (
+	serverURL       string
+	authToken       string
+	insecureSkipTLS bool
+
+	// create flags
+	fromBuild        string
+	leaseID          string
+	architecture     string
+	toolchainImage   string
+	clientConfigFile string
+
+	// resource flags
+	cpuRequest    string
+	memoryRequest string
+
+	// deploy flags
+	artifactPath string
+	destPath     string
+)
+
+// NewWorkspaceCmd creates the workspace command with subcommands.
+func NewWorkspaceCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "workspace",
+		Short: "Manage developer workspaces for application building",
+		Long: `Create and manage persistent developer workspaces with cross-compilation
+toolchains for building C/C++/Rust applications targeting automotive boards.
+
+Workspaces run as pods on the cluster with a persistent volume for your source
+code and build artifacts. Use sync to upload source, exec to compile, and
+deploy to push binaries to a board via Jumpstarter.
+
+Examples:
+  # Create a workspace with a Jumpstarter lease from a previous flash
+  caib workspace create my-app --from-build my-os-build
+
+  # Sync source, build, and deploy
+  caib workspace sync my-app ./src
+  caib workspace exec my-app -- make -j4
+  caib workspace deploy my-app --artifact /workspace/src/build/app --dest /usr/local/bin/app`,
+	}
+
+	cmd.PersistentFlags().StringVar(&serverURL, "server", config.DefaultServer(), "REST API server base URL")
+	cmd.PersistentFlags().StringVar(&authToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	cmd.PersistentFlags().BoolVar(&insecureSkipTLS, "insecure-skip-tls-verify", false, "skip TLS certificate verification")
+
+	cmd.AddCommand(
+		newCreateCmd(),
+		newListCmd(),
+		newShowCmd(),
+		newDeleteCmd(),
+		newSyncCmd(),
+		newExecCmd(),
+		newShellCmd(),
+		newDeployCmd(),
+	)
+
+	return cmd
+}
+
+func newCreateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a new developer workspace",
+		Long: `Create a persistent workspace pod with a cross-compilation toolchain.
+
+The workspace includes gcc, g++, cargo, cmake, meson, and the Jumpstarter CLI,
+all from the AutoSD-10 nightly repos to match the target board's libraries.
+
+Examples:
+  # Basic workspace
+  caib workspace create my-app
+
+  # Workspace linked to a flashed board
+  caib workspace create my-app --from-build my-os-build --client ~/.config/jumpstarter/clients/myboard.yaml
+
+  # Workspace with explicit lease and architecture
+  caib workspace create my-app --lease lease-abc123 --arch amd64 --client ~/.config/jumpstarter/clients/myboard.yaml`,
+		Args: cobra.ExactArgs(1),
+		Run:  runCreate,
+	}
+
+	cmd.Flags().StringVar(&fromBuild, "from-build", "", "ImageBuild name to extract Jumpstarter lease from")
+	cmd.Flags().StringVar(&leaseID, "lease", "", "direct Jumpstarter lease ID")
+	cmd.Flags().StringVarP(&architecture, "arch", "a", "", "target architecture (default: from OperatorConfig)")
+	cmd.Flags().StringVar(&toolchainImage, "image", "", "toolchain container image (default: from OperatorConfig)")
+	cmd.Flags().StringVar(&clientConfigFile, "client", "", "path to Jumpstarter client config file")
+	cmd.Flags().StringVar(&cpuRequest, "cpu", "", "CPU request/limit (e.g., \"1\", \"500m\")")
+	cmd.Flags().StringVar(&memoryRequest, "memory", "", "memory request/limit (e.g., \"2Gi\", \"512Mi\")")
+
+	return cmd
+}
+
+func newListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all workspaces",
+		Run:   runList,
+	}
+}
+
+func newShowCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show <name>",
+		Short: "Show workspace details",
+		Args:  cobra.ExactArgs(1),
+		Run:   runShow,
+	}
+}
+
+func newDeleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Delete a workspace and its storage",
+		Args:  cobra.ExactArgs(1),
+		Run:   runDelete,
+	}
+}
+
+func newSyncCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sync <name> [directory]",
+		Short: "Upload local source directory to a workspace",
+		Long: `Sync uploads a local directory to the workspace's /workspace/src/ path.
+If no directory is specified, the current directory is used.
+
+Examples:
+  caib workspace sync my-app ./src
+  caib workspace sync my-app`,
+		Args: cobra.RangeArgs(1, 2),
+		Run:  runSync,
+	}
+}
+
+func newExecCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "exec <name> -- <command...>",
+		Short: "Execute a command in a workspace",
+		Long: `Execute a command in the workspace pod and stream the output.
+
+Everything after -- is passed as the command to execute inside the workspace.
+
+Examples:
+  caib workspace exec my-app -- make -j4
+  caib workspace exec my-app -- cargo build --release
+  caib workspace exec my-app -- ls -la /workspace/src`,
+		Args:               cobra.MinimumNArgs(1),
+		DisableFlagParsing: false,
+		Run:                runExec,
+	}
+}
+
+func newShellCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "shell <name>",
+		Short: "Open an interactive shell in a workspace",
+		Long: `Open an interactive shell session in the workspace pod.
+
+Your terminal is connected directly to the workspace container,
+giving you a full shell with the cross-compilation toolchain.
+
+Examples:
+  caib workspace shell my-app`,
+		Args: cobra.ExactArgs(1),
+		Run:  runShell,
+	}
+}
+
+func newDeployCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "deploy <name>",
+		Short: "Deploy an artifact from a workspace to a board via Jumpstarter",
+		Long: `Deploy copies a built artifact from the workspace to the target board
+using the Jumpstarter lease associated with the workspace.
+
+Examples:
+  caib workspace deploy my-app --artifact /workspace/src/build/app --dest /usr/local/bin/app`,
+		Args: cobra.ExactArgs(1),
+		Run:  runDeploy,
+	}
+
+	cmd.Flags().StringVar(&artifactPath, "artifact", "", "path to artifact inside the workspace (required)")
+	cmd.Flags().StringVar(&destPath, "dest", "", "destination path on the board (required)")
+	_ = cmd.MarkFlagRequired("artifact")
+	_ = cmd.MarkFlagRequired("dest")
+
+	return cmd
+}
+
+// --- Command implementations ---
+
+func runCreate(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	var clientConfigB64 string
+	if clientConfigFile != "" {
+		data, err := os.ReadFile(clientConfigFile)
+		if err != nil {
+			handleError(fmt.Errorf("failed to read client config file: %w", err))
+		}
+		clientConfigB64 = base64.StdEncoding.EncodeToString(data)
+	}
+
+	req := buildapitypes.WorkspaceRequest{
+		Name:         name,
+		FromBuild:    fromBuild,
+		Lease:        leaseID,
+		Arch:         architecture,
+		Image:        toolchainImage,
+		ClientConfig: clientConfigB64,
+		CPU:          cpuRequest,
+		Memory:       memoryRequest,
+	}
+
+	var resp *buildapitypes.WorkspaceResponse
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		r, cerr := client.CreateWorkspace(context.Background(), req)
+		if cerr != nil {
+			return cerr
+		}
+		resp = r
+		return nil
+	})
+	if err != nil {
+		handleError(fmt.Errorf("failed to create workspace: %w", err))
+	}
+
+	fmt.Printf("Workspace %q created\n", resp.Name)
+	fmt.Printf("  Architecture: %s\n", resp.Arch)
+	fmt.Printf("  Pod:          %s\n", resp.PodName)
+	if resp.Lease != "" {
+		fmt.Printf("  Lease:        %s\n", resp.Lease)
+	}
+	fmt.Printf("  Phase:        %s\n", resp.Phase)
+}
+
+func runList(_ *cobra.Command, _ []string) {
+	requireServer()
+
+	var workspaces []buildapitypes.WorkspaceResponse
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		ws, cerr := client.ListWorkspaces(context.Background())
+		if cerr != nil {
+			return cerr
+		}
+		workspaces = ws
+		return nil
+	})
+	if err != nil {
+		handleError(fmt.Errorf("failed to list workspaces: %w", err))
+	}
+
+	if len(workspaces) == 0 {
+		fmt.Println("No workspaces found")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(w, "NAME\tARCH\tPHASE\tLEASE\tAGE")
+	for _, ws := range workspaces {
+		lease := ws.Lease
+		if lease == "" {
+			lease = "-"
+		}
+		age := ws.Age
+		if age == "" {
+			age = "-"
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", ws.Name, ws.Arch, ws.Phase, lease, age)
+	}
+	_ = w.Flush()
+}
+
+func runShow(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	var ws *buildapitypes.WorkspaceResponse
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		r, cerr := client.GetWorkspace(context.Background(), name)
+		if cerr != nil {
+			return cerr
+		}
+		ws = r
+		return nil
+	})
+	if err != nil {
+		handleError(fmt.Errorf("failed to get workspace: %w", err))
+	}
+
+	fmt.Printf("Name:         %s\n", ws.Name)
+	fmt.Printf("Architecture: %s\n", ws.Arch)
+	fmt.Printf("Phase:        %s\n", ws.Phase)
+	fmt.Printf("Pod:          %s\n", ws.PodName)
+	if ws.Lease != "" {
+		fmt.Printf("Lease:        %s\n", ws.Lease)
+	}
+	if ws.Age != "" {
+		fmt.Printf("Age:          %s\n", ws.Age)
+	}
+}
+
+func runDelete(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		return client.DeleteWorkspace(context.Background(), name)
+	})
+	if err != nil {
+		handleError(fmt.Errorf("failed to delete workspace: %w", err))
+	}
+
+	fmt.Printf("Workspace %q deleted\n", name)
+}
+
+func runSync(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	srcDir := "."
+	if len(args) > 1 {
+		srcDir = args[1]
+	}
+
+	absDir, err := filepath.Abs(srcDir)
+	if err != nil {
+		handleError(fmt.Errorf("invalid directory: %w", err))
+	}
+	info, err := os.Stat(absDir)
+	if err != nil || !info.IsDir() {
+		handleError(fmt.Errorf("source directory does not exist or is not a directory: %s", absDir))
+	}
+
+	files, err := gitTrackedFiles(absDir)
+	if err != nil {
+		handleError(fmt.Errorf("failed to list git-tracked files: %w", err))
+	}
+	if len(files) == 0 {
+		handleError(fmt.Errorf("no git-tracked files found in %s", absDir))
+	}
+
+	fmt.Printf("Syncing %d tracked files to workspace %q...\n", len(files), name)
+
+	// Build tar into buffer so we know total size and get a clean EOF
+	var buf bytes.Buffer
+	if err := tarTrackedFiles(absDir, files, &buf); err != nil {
+		handleError(fmt.Errorf("failed to create tar archive: %w", err))
+	}
+
+	totalBytes := int64(buf.Len())
+	pr := newProgressReader(&buf, totalBytes)
+
+	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		return client.SyncWorkspace(context.Background(), name, pr)
+	})
+	pr.finish()
+	if err != nil {
+		handleError(fmt.Errorf("failed to sync workspace: %w", err))
+	}
+
+	fmt.Println("Files synced")
+}
+
+// gitTrackedFiles returns the list of git-tracked files relative to dir.
+func gitTrackedFiles(dir string) ([]string, error) {
+	cmd := exec.Command("git", "ls-files", "--cached", "--exclude-standard")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files failed (is this a git repo?): %w", err)
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// tarTrackedFiles writes a tar archive of the given files (relative to baseDir) to w.
+func tarTrackedFiles(baseDir string, files []string, w io.Writer) error {
+	tw := tar.NewWriter(w)
+	defer func() { _ = tw.Close() }()
+
+	for _, relPath := range files {
+		absPath := filepath.Join(baseDir, relPath)
+		f, err := os.Open(absPath)
+		if err != nil {
+			continue // file may have been deleted since ls-files
+		}
+		fi, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			continue
+		}
+		if !fi.Mode().IsRegular() {
+			_ = f.Close()
+			continue
+		}
+
+		hdr, err := tar.FileInfoHeader(fi, "")
+		if err != nil {
+			_ = f.Close()
+			return fmt.Errorf("creating tar header for %s: %w", relPath, err)
+		}
+		hdr.Name = relPath
+
+		if err := tw.WriteHeader(hdr); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("writing tar header for %s: %w", relPath, err)
+		}
+
+		_, err = io.Copy(tw, f)
+		_ = f.Close()
+		if err != nil {
+			return fmt.Errorf("writing %s to tar: %w", relPath, err)
+		}
+	}
+
+	return nil
+}
+
+func runExec(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	// Everything after the workspace name (or after --) is the command
+	cmdParts := args[1:]
+	if len(cmdParts) == 0 {
+		handleError(fmt.Errorf("no command specified; use: caib workspace exec <name> -- <command>"))
+	}
+	command := strings.Join(cmdParts, " ")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	req := buildapitypes.WorkspaceExecRequest{Command: command}
+
+	var body io.ReadCloser
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		r, cerr := client.ExecWorkspace(ctx, name, req)
+		if cerr != nil {
+			return cerr
+		}
+		body = r
+		return nil
+	})
+	if err != nil {
+		handleError(fmt.Errorf("exec failed: %w", err))
+	}
+	defer func() { _ = body.Close() }()
+
+	streamToStdout(body)
+}
+
+func runShell(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	// Set terminal to raw mode
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		handleError(fmt.Errorf("stdin is not a terminal"))
+	}
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		handleError(fmt.Errorf("failed to set raw terminal: %w", err))
+	}
+	defer func() { _ = term.Restore(fd, oldState) }()
+
+	// Restore terminal on signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		_ = term.Restore(fd, oldState)
+		os.Exit(0)
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var ws *websocket.Conn
+	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		conn, cerr := client.ShellWorkspace(ctx, name)
+		if cerr != nil {
+			return cerr
+		}
+		ws = conn
+		return nil
+	})
+	if err != nil {
+		_ = term.Restore(fd, oldState)
+		handleError(fmt.Errorf("shell failed: %w", err))
+	}
+	defer func() { _ = ws.Close() }()
+
+	// stdin -> WebSocket
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, rerr := os.Stdin.Read(buf)
+			if n > 0 {
+				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				_ = ws.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+				return
+			}
+		}
+	}()
+
+	// WebSocket -> stdout
+	for {
+		_, msg, rerr := ws.ReadMessage()
+		if rerr != nil {
+			if closeErr, ok := rerr.(*websocket.CloseError); ok && closeErr.Code != websocket.CloseNormalClosure {
+				_ = term.Restore(fd, oldState)
+				fmt.Fprintf(os.Stderr, "shell error: %s\n", closeErr.Text)
+			}
+			return
+		}
+		_, _ = os.Stdout.Write(msg)
+	}
+}
+
+func runDeploy(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	req := buildapitypes.WorkspaceDeployRequest{
+		ArtifactPath: artifactPath,
+		DestPath:     destPath,
+	}
+
+	fmt.Printf("Deploying %s to board at %s...\n", artifactPath, destPath)
+
+	var body io.ReadCloser
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		r, cerr := client.DeployWorkspace(ctx, name, req)
+		if cerr != nil {
+			return cerr
+		}
+		body = r
+		return nil
+	})
+	if err != nil {
+		handleError(fmt.Errorf("deploy failed: %w", err))
+	}
+	defer func() { _ = body.Close() }()
+
+	streamToStdout(body)
+}
+
+// --- Helpers ---
+
+func requireServer() {
+	if serverURL == "" {
+		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+	}
+}
+
+func handleError(err error) {
+	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	os.Exit(1)
+}
+
+func streamToStdout(r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		fmt.Println(scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "stream error: %v\n", err)
+	}
+}
+
+// progressReader wraps an io.Reader and renders an upload progress bar
+// using the same visual style as the build progress bar (█░).
+type progressReader struct {
+	r     io.Reader
+	total int64
+	read  int64
+	last  int // last printed percentage
+	isTTY bool
+}
+
+func newProgressReader(r io.Reader, total int64) *progressReader {
+	return &progressReader{
+		r:     r,
+		total: total,
+		isTTY: term.IsTerminal(int(os.Stdout.Fd())),
+		last:  -1,
+	}
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.read += int64(n)
+	if p.total > 0 {
+		pct := int(p.read * 100 / p.total)
+		if pct != p.last {
+			p.last = pct
+			p.render(pct)
+		}
+	}
+	return n, err
+}
+
+func (p *progressReader) render(pct int) {
+	barWidth := 30
+	filled := barWidth * pct / 100
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	sizeInfo := fmt.Sprintf("%s / %s", humanSize(p.read), humanSize(p.total))
+	if p.isTTY {
+		_, _ = fmt.Fprintf(os.Stdout, "\r  Upload   │%s│ %3d%% %s", bar, pct, sizeInfo)
+	} else if pct%25 == 0 || pct == 100 {
+		_, _ = fmt.Fprintf(os.Stdout, "  Upload: %d%% %s\n", pct, sizeInfo)
+	}
+}
+
+func (p *progressReader) finish() {
+	if p.total > 0 && p.isTTY {
+		_, _ = fmt.Fprintln(os.Stdout)
+	}
+}
+
+func humanSize(b int64) string {
+	switch {
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
