@@ -5,5 +5,5 @@ metadata:
 rules:
 - apiGroups: ["security.openshift.io"]
   resources: ["securitycontextconstraints"]
-  resourceNames: ["privileged"]
+  resourceNames: ["privileged", "ado-workspace-scc"]
   verbs: ["use"]

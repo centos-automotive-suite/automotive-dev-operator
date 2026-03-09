@@ -7,6 +7,6 @@ roleRef:
   kind: ClusterRole
   name: scc-privileged-role
 subjects:
-- kind: Group
-  apiGroup: rbac.authorization.k8s.io
-  name: system:serviceaccounts
+- kind: ServiceAccount
+  name: operator
+  namespace: system
