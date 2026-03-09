@@ -47,6 +47,15 @@ const (
 
 	// DefaultFlashLeaseDuration is the default Jumpstarter lease duration in HH:MM:SS format
 	DefaultFlashLeaseDuration = "03:00:00"
+
+	// DefaultToolchainImage is the default container image for workspace toolchains
+	DefaultToolchainImage = "quay.io/centos-sig-automotive/autosd-toolchain:latest"
+
+	// DefaultWorkspaceArch is the default target architecture for workspaces
+	DefaultWorkspaceArch = "arm64"
+
+	// DefaultWorkspacePVCSize is the default PVC size for workspace storage
+	DefaultWorkspacePVCSize = "10Gi"
 )
 
 // ImagesConfig defines container image references used by the operator
@@ -66,6 +75,10 @@ type ImagesConfig struct {
 	// Operator is the operator container image (overridden by OPERATOR_IMAGE env var when set)
 	// +optional
 	Operator string `json:"operator,omitempty"`
+
+	// Toolchain is the container image for workspace toolchains
+	// +optional
+	Toolchain string `json:"toolchain,omitempty"`
 }
 
 // GetAutomotiveImageBuilderImage returns the AIB image, falling back to the default
@@ -98,6 +111,14 @@ func (c *ImagesConfig) GetOperatorImage() string {
 		return c.Operator
 	}
 	return DefaultOperatorImage
+}
+
+// GetToolchainImage returns the toolchain image, falling back to the default
+func (c *ImagesConfig) GetToolchainImage() string {
+	if c != nil && c.Toolchain != "" {
+		return c.Toolchain
+	}
+	return DefaultToolchainImage
 }
 
 // BuildAPIResourcesConfig defines resource requirements for Build API components
@@ -299,6 +320,49 @@ type ContainerBuildsConfig struct {
 	UploadTimeoutMinutes int32 `json:"uploadTimeoutMinutes,omitempty"`
 }
 
+// WorkspacesConfig defines configuration for developer workspaces
+type WorkspacesConfig struct {
+	// DefaultArchitecture is the default target architecture for workspaces
+	// +optional
+	DefaultArchitecture string `json:"defaultArchitecture,omitempty"`
+
+	// PVCSize is the size for persistent volume claims created for workspace storage
+	// +optional
+	PVCSize string `json:"pvcSize,omitempty"`
+
+	// Resources defines the default CPU and memory requests/limits for workspace containers
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// MaxResources defines the maximum CPU and memory that users can request for workspace containers
+	// +optional
+	MaxResources *corev1.ResourceRequirements `json:"maxResources,omitempty"`
+
+	// NodeSelector specifies node labels that workspace pods must match for scheduling
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations specifies tolerations to be added to workspace pods
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
+// GetDefaultArchitecture returns the default workspace architecture, falling back to the default
+func (c *WorkspacesConfig) GetDefaultArchitecture() string {
+	if c != nil && c.DefaultArchitecture != "" {
+		return c.DefaultArchitecture
+	}
+	return DefaultWorkspaceArch
+}
+
+// GetPVCSize returns the workspace PVC size, falling back to the default
+func (c *WorkspacesConfig) GetPVCSize() string {
+	if c != nil && c.PVCSize != "" {
+		return c.PVCSize
+	}
+	return DefaultWorkspacePVCSize
+}
+
 // OperatorConfigSpec defines the desired state of OperatorConfig
 type OperatorConfigSpec struct {
 	// OSBuilds defines the configuration for OS build operations
@@ -320,6 +384,10 @@ type OperatorConfigSpec struct {
 	// Jumpstarter defines configuration for Jumpstarter device flashing integration
 	// +optional
 	Jumpstarter *JumpstarterConfig `json:"jumpstarter,omitempty"`
+
+	// Workspaces defines configuration for developer workspaces
+	// +optional
+	Workspaces *WorkspacesConfig `json:"workspaces,omitempty"`
 }
 
 // OSBuildsConfig defines configuration for OS build operations
