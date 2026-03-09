@@ -148,10 +148,8 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 	// Load workspace configuration from OperatorConfig
 	operatorConfig, _ := loadOperatorConfigFn(c.Request.Context(), k8sClient, namespace)
 	var wsConfig *automotivev1alpha1.WorkspacesConfig
-	var imagesConfig *automotivev1alpha1.ImagesConfig
 	if operatorConfig != nil {
 		wsConfig = operatorConfig.Spec.Workspaces
-		imagesConfig = operatorConfig.Spec.GetImages()
 	}
 
 	arch := req.Arch
@@ -160,7 +158,7 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 	}
 	image := req.Image
 	if image == "" {
-		image = imagesConfig.GetToolchainImage()
+		image = wsConfig.GetToolchainImage()
 	}
 	pvcSize := wsConfig.GetPVCSize()
 
