@@ -615,6 +615,11 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		return fmt.Errorf("failed to create/update pipeline: %w", err)
 	}
 
+	// Deploy workspace infrastructure (ServiceAccount + SCC binding)
+	if err := r.deployWorkspaceInfra(ctx, config); err != nil {
+		return fmt.Errorf("failed to deploy workspace infrastructure: %w", err)
+	}
+
 	r.Log.Info("OSBuilds deployment completed successfully")
 	return nil
 }
@@ -802,7 +807,65 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 		return fmt.Errorf("failed to cleanup build controller: %w", err)
 	}
 
+	// Cleanup workspace infrastructure
+	if err := r.cleanupWorkspaceInfra(ctx, config); err != nil {
+		return fmt.Errorf("failed to cleanup workspace infrastructure: %w", err)
+	}
+
 	r.Log.Info("OSBuilds cleanup completed successfully")
+	return nil
+}
+
+func (r *OperatorConfigReconciler) deployWorkspaceInfra(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	r.Log.Info("Deploying workspace infrastructure")
+
+	// Create ServiceAccount for workspace pods
+	sa := r.buildWorkspaceServiceAccount(config.Namespace)
+	if err := r.createOrUpdate(ctx, sa, config); err != nil {
+		return fmt.Errorf("failed to create/update workspace service account: %w", err)
+	}
+
+	// On OpenShift, grant the anyuid SCC so workspace pods can run as root
+	if r.detectOpenShift(ctx, config.Namespace) {
+		clusterRole := r.buildWorkspaceSCCClusterRole()
+		if err := r.createOrUpdate(ctx, clusterRole, config); err != nil {
+			return fmt.Errorf("failed to create/update workspace SCC cluster role: %w", err)
+		}
+
+		roleBinding := r.buildWorkspaceSCCRoleBinding(config.Namespace)
+		if err := r.createOrUpdate(ctx, roleBinding, config); err != nil {
+			return fmt.Errorf("failed to create/update workspace SCC role binding: %w", err)
+		}
+	}
+
+	r.Log.Info("Workspace infrastructure deployed successfully")
+	return nil
+}
+
+func (r *OperatorConfigReconciler) cleanupWorkspaceInfra(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	r.Log.Info("Cleaning up workspace infrastructure")
+
+	sa := &corev1.ServiceAccount{}
+	sa.Name = workspaceServiceAccountName
+	sa.Namespace = config.Namespace
+	if err := r.Delete(ctx, sa); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete workspace service account: %w", err)
+	}
+
+	clusterRole := &rbacv1.ClusterRole{}
+	clusterRole.Name = workspaceServiceAccountName + "-privileged"
+	if err := r.Delete(ctx, clusterRole); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete workspace SCC cluster role: %w", err)
+	}
+
+	roleBinding := &rbacv1.RoleBinding{}
+	roleBinding.Name = workspaceServiceAccountName + "-privileged"
+	roleBinding.Namespace = config.Namespace
+	if err := r.Delete(ctx, roleBinding); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete workspace SCC role binding: %w", err)
+	}
+
+	r.Log.Info("Workspace infrastructure cleanup completed")
 	return nil
 }
 
