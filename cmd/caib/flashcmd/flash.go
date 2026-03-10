@@ -37,6 +37,7 @@ type Options struct {
 	Target            *string
 	ExporterSelector  *string
 	LeaseDuration     *string
+	FlashCmd          *string
 	WaitForBuild      *bool
 	FollowLogs        *bool
 	InsecureSkipTLS   *bool
@@ -116,6 +117,7 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		ExporterSelector: *h.opts.ExporterSelector,
 		ClientConfig:     clientConfigB64,
 		LeaseDuration:    *h.opts.LeaseDuration,
+		FlashCmd:         *h.opts.FlashCmd,
 	}
 
 	resp, err := api.CreateFlash(ctx, req)

@@ -62,6 +62,7 @@ type Options struct {
 	FlashAfterBuild        *bool
 	JumpstarterClient      *string
 	LeaseDuration          *string
+	FlashCmd               *string
 
 	UseInternalRegistry       *bool
 	InternalRegistryImageName *string
@@ -408,6 +409,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		req.FlashEnabled = true
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
+		req.FlashCmd = *h.opts.FlashCmd
 	}
 
 	resp, err := api.CreateBuild(ctx, req)
@@ -524,6 +526,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		req.FlashEnabled = true
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
+		req.FlashCmd = *h.opts.FlashCmd
 	}
 
 	resp, err := api.CreateBuild(ctx, req)
@@ -658,6 +661,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		req.FlashEnabled = true
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
+		req.FlashCmd = *h.opts.FlashCmd
 	}
 
 	resp, err := api.CreateBuild(ctx, req)

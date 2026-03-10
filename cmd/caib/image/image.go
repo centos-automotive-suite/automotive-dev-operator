@@ -57,6 +57,7 @@ type Options struct {
 	FlashName         *string
 	ExporterSelector  *string
 	LeaseDuration     *string
+	FlashCmd          *string
 
 	UseInternalRegistry       *bool
 	InternalRegistryImageName *string
@@ -140,6 +141,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
 	buildCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
 	buildCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	buildCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	// Internal registry options
 	buildCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
@@ -195,6 +197,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	diskCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
 	diskCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
 	diskCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	diskCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	// Internal registry options
 	diskCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	diskCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
@@ -232,6 +235,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
 	buildDevCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
 	buildDevCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	buildDevCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	// Internal registry options
 	buildDevCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildDevCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
@@ -255,6 +259,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	flashCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform for exporter lookup")
 	flashCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector (alternative to --target)")
 	flashCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration (HH:MM:SS)")
+	flashCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	flashCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow flash logs (shows full log output instead of progress bar)")
 	flashCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", true, "wait for flash to complete")
 	_ = flashCmd.MarkFlagRequired("client")

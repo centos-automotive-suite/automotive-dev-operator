@@ -159,6 +159,10 @@ spec:
                       The secret should have a key "client.yaml" with the config contents
                       If set, flash is enabled automatically
                     type: string
+                  flashCmd:
+                    description: FlashCmd overrides the flash command from OperatorConfig
+                      target mappings
+                    type: string
                   leaseDuration:
                     default: "03:00:00"
                     description: LeaseDuration is the duration for the device lease

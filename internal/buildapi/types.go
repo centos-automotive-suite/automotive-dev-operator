@@ -142,6 +142,7 @@ type BuildRequest struct {
 	FlashEnabled       bool   `json:"flashEnabled,omitempty"`       // Enable flashing after build
 	FlashClientConfig  string `json:"flashClientConfig,omitempty"`  // Base64-encoded Jumpstarter client config
 	FlashLeaseDuration string `json:"flashLeaseDuration,omitempty"` // Lease duration in HH:MM:SS format
+	FlashCmd           string `json:"flashCmd,omitempty"`           // Override flash command from OperatorConfig
 }
 
 // RegistryCredentials contains authentication details for container registries.

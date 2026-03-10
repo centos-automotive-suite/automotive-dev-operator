@@ -66,6 +66,10 @@ type FlashSpec struct {
 	// LeaseDuration is the duration for the device lease in HH:MM:SS format
 	// +kubebuilder:default="03:00:00"
 	LeaseDuration string `json:"leaseDuration,omitempty"`
+
+	// FlashCmd overrides the flash command from OperatorConfig target mappings
+	// +optional
+	FlashCmd string `json:"flashCmd,omitempty"`
 }
 
 // AIBSpec defines the automotive-image-builder configuration
@@ -423,6 +427,14 @@ func (s *ImageBuildSpec) GetRebuildBuilder() bool {
 		return s.AIB.RebuildBuilder
 	}
 	return false
+}
+
+// GetFlashCmd returns the user-specified flash command override, or empty string
+func (s *ImageBuildSpec) GetFlashCmd() string {
+	if s.Flash != nil {
+		return s.Flash.FlashCmd
+	}
+	return ""
 }
 
 // GetFlashLeaseDuration returns the flash lease duration, or default

@@ -569,6 +569,10 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				flashCmd = mapping.FlashCmd
 			}
 		}
+		// User-specified flash command overrides OperatorConfig
+		if userCmd := imageBuild.Spec.GetFlashCmd(); userCmd != "" {
+			flashCmd = userCmd
+		}
 		if flashExporterSelector == "" {
 			return fmt.Errorf("flash enabled but no Jumpstarter target mapping found for target %q; "+
 				"configure OperatorConfig.spec.jumpstarter.targetMappings[%q] with selector and flashCmd", target, target)
@@ -1281,6 +1285,10 @@ func (r *ImageBuildReconciler) createFlashTaskRun(
 			exporterSelector = mapping.Selector
 			flashCmd = mapping.FlashCmd
 		}
+	}
+	// User-specified flash command overrides OperatorConfig
+	if userCmd := imageBuild.Spec.GetFlashCmd(); userCmd != "" {
+		flashCmd = userCmd
 	}
 
 	if exporterSelector == "" {

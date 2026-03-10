@@ -1590,6 +1590,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		flashSpec = &automotivev1alpha1.FlashSpec{
 			ClientConfigSecretRef: flashSecretName,
 			LeaseDuration:         req.FlashLeaseDuration,
+			FlashCmd:              req.FlashCmd,
 		}
 	}
 
@@ -1769,7 +1770,10 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 				if operatorConfig.Spec.Jumpstarter != nil {
 					if mapping, ok := operatorConfig.Spec.Jumpstarter.TargetMappings[build.Spec.GetTarget()]; ok {
 						jumpstarterInfo.ExporterSelector = mapping.Selector
-						flashCmd := mapping.FlashCmd
+						flashCmd := build.Spec.GetFlashCmd()
+						if flashCmd == "" {
+							flashCmd = mapping.FlashCmd
+						}
 						// Replace placeholders in flash command using translated URLs
 						if flashCmd != "" {
 							imageURI := diskImage
