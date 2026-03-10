@@ -26,7 +26,8 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck // Dot import is standard for Ginkgo
 )
 
-// Run executes the provided command within this context
+// Run executes the provided command within this context.
+// Not goroutine-safe due to os.Chdir; use RunSafe for concurrent execution.
 func Run(cmd *exec.Cmd) ([]byte, error) {
 	dir, _ := GetProjectDir()
 	cmd.Dir = dir
@@ -39,6 +40,24 @@ func Run(cmd *exec.Cmd) ([]byte, error) {
 	command := strings.Join(cmd.Args, " ")
 	_, _ = fmt.Fprintf(GinkgoWriter, "running: %s\n", command)
 	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return output, fmt.Errorf("%s failed with error: (%v) %s", command, err, string(output))
+	}
+
+	return output, nil
+}
+
+// RunSafe executes the provided command using cmd.Dir only (no os.Chdir).
+// Safe to call from multiple goroutines concurrently.
+func RunSafe(cmd *exec.Cmd) ([]byte, error) {
+	dir, _ := GetProjectDir()
+	cmd.Dir = dir
+
+	cmd.Env = append(os.Environ(), "GO111MODULE=on")
+	command := strings.Join(cmd.Args, " ")
+	_, _ = fmt.Fprintf(GinkgoWriter, "running: %s\n", command)
+	output, err := cmd.CombinedOutput()
+	_, _ = fmt.Fprintf(GinkgoWriter, "finished: %s\n", command)
 	if err != nil {
 		return output, fmt.Errorf("%s failed with error: (%v) %s", command, err, string(output))
 	}

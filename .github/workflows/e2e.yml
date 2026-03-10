@@ -15,11 +15,18 @@ env:
   GO_VERSION: '1.24'
   KIND_VERSION: v0.24.0
   KUBECTL_VERSION: v1.31.0
+  TEKTON_VERSION: v1.9.1
+  INGRESS_NGINX_VERSION: v1.14.3
+  CLUSTER_NAME: automotive-dev-e2e
+  REGISTRY_NAME: kind-registry
+  REGISTRY_PORT: '5001'
+  REGISTRY_HOST: image-registry.openshift-image-registry.svc
+  ARCH: arm64
 
 jobs:
   e2e-tests:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 90
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,64 +39,179 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgpgme-dev
+          sudo apt-get install -y libgpgme-dev jq
 
       - name: Install kubectl
         run: |
-          curl -LO "https://dl.k8s.io/release/${{ env.KUBECTL_VERSION }}/bin/linux/arm64/kubectl"
+          curl -LO "https://dl.k8s.io/release/${{ env.KUBECTL_VERSION }}/bin/linux/${{ env.ARCH }}/kubectl"
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
           kubectl version --client
 
       - name: Install Kind
         run: |
-          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/${{ env.KIND_VERSION }}/kind-linux-arm64"
+          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/${{ env.KIND_VERSION }}/kind-linux-${{ env.ARCH }}"
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
           kind version
 
+      # ---------------------------------------------------------------
+      # [1/7] Local Registry
+      # ---------------------------------------------------------------
+      - name: Set up local registry
+        run: |
+          docker run -d --restart=always \
+            -p "127.0.0.1:${REGISTRY_PORT}:5000" \
+            -p "127.0.0.1:5000:5000" \
+            --name "${REGISTRY_NAME}" \
+            registry:2
+
+          echo "127.0.0.1 ${REGISTRY_HOST}" | sudo tee -a /etc/hosts
+
+          mkdir -p "${HOME}/.config/containers/registries.conf.d"
+          tee "${HOME}/.config/containers/registries.conf.d/kind-e2e-registry.conf" <<EOF
+          [[registry]]
+          location = "${REGISTRY_HOST}:5000"
+          insecure = true
+          EOF
+
+      # ---------------------------------------------------------------
+      # [2/7] Kind Cluster
+      # ---------------------------------------------------------------
       - name: Create Kind cluster
         run: |
-          kind create cluster --name automotive-dev-e2e --wait 5m
-          kubectl cluster-info
-          kubectl get nodes
-          # Label node for OperatorConfig nodeSelector
+          kind create cluster --name "$CLUSTER_NAME" --wait 5m
+          kubectl cluster-info --context "kind-$CLUSTER_NAME"
           kubectl label nodes --all aib=true
+          kubectl get nodes --show-labels
 
+      - name: Connect registry to Kind network
+        run: |
+          docker network connect kind "${REGISTRY_NAME}"
+          for node in $(kind get nodes --name "${CLUSTER_NAME}"); do
+            kubectl annotate node "${node}" "kind.x-k8s.io/registry=localhost:${REGISTRY_PORT}" --overwrite
+          done
+          kubectl wait --for=condition=Ready nodes --all --timeout=60s
+
+      # ---------------------------------------------------------------
+      # [3/7] Internal DNS for Registry (OpenShift spoof)
+      # ---------------------------------------------------------------
+      - name: Set up registry DNS spoof
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: local-registry-hosting
+            namespace: kube-public
+          data:
+            localRegistryHosting.v1: |
+              host: "localhost:${REGISTRY_PORT}"
+              help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
+          EOF
+
+          kubectl create namespace openshift-image-registry --dry-run=client -o yaml | kubectl apply -f -
+
+          REGISTRY_IP=""
+          for i in $(seq 1 30); do
+            REGISTRY_IP=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "${REGISTRY_NAME}" 2>/dev/null || true)
+            if [ -n "$REGISTRY_IP" ]; then
+              echo "Registry IP found: $REGISTRY_IP" 
+              break; 
+            fi
+            echo "Waiting for registry IP... (attempt $i/30)"
+            sleep 1
+          done
+          echo "Registry IP: $REGISTRY_IP"
+          if [ -z "$REGISTRY_IP" ]; then
+            echo "Failed to discover a Kind-network IP for ${REGISTRY_NAME}" >&2
+            exit 1
+          fi
+
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: image-registry
+            namespace: openshift-image-registry
+          spec:
+            ports:
+            - port: 5000
+              protocol: TCP
+              targetPort: 5000
+            clusterIP: None
+          ---
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: image-registry
+            namespace: openshift-image-registry
+          subsets:
+          - addresses:
+            - ip: ${REGISTRY_IP}
+            ports:
+            - port: 5000
+              name: registry
+              protocol: TCP
+          EOF
+
+      # ---------------------------------------------------------------
+      # [4/7] Infrastructure (Tekton & Ingress)
+      # ---------------------------------------------------------------
       - name: Install Tekton Pipelines
         run: |
-          kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
+          kubectl apply --filename https://infra.tekton.dev/tekton-releases/pipeline/previous/${{ env.TEKTON_VERSION }}/release.yaml
           echo "Waiting for Tekton Pipelines to be ready..."
           kubectl wait --for=condition=ready pod --all -n tekton-pipelines --timeout=5m
 
       - name: Install NGINX Ingress Controller
         run: |
-          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-${{ env.INGRESS_NGINX_VERSION }}/deploy/static/provider/kind/deploy.yaml
           echo "Waiting for NGINX Ingress Controller to be ready..."
           kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=3m
+
+      # ---------------------------------------------------------------
+      # [5/7] Run E2E tests (self-contained: deploys operator, tests, tears down)
+      # ---------------------------------------------------------------
+      - name: Build caib CLI
+        run: make build-caib
 
       - name: Run E2E tests
         env:
           KIND_CLUSTER: automotive-dev-e2e
           CONTAINER_TOOL: docker
-        run: |
-          make test-e2e
+          BUILD_PLATFORM: linux/${{ env.ARCH }}
+          REGISTRY_HOST: ${{ env.REGISTRY_HOST }}
+          REGISTRY_USERNAME: kind
+          REGISTRY_PASSWORD: kind
+          CAIB_SERVER: http://localhost:8080
+        run: make test-e2e
 
       - name: Collect logs on failure
         if: failure()
         run: |
           echo "=== Operator Logs ==="
-          kubectl logs -n automotive-dev-operator-system -l control-plane=operator --tail=100
+          kubectl logs -n automotive-dev-operator-system -l control-plane=operator --tail=200 || true
           echo "=== All Pods in operator namespace ==="
-          kubectl get pods -n automotive-dev-operator-system -o wide
+          kubectl get pods -n automotive-dev-operator-system -o wide || true
+          echo "=== PipelineRuns ==="
+          kubectl get pipelinerun -n automotive-dev-operator-system -o yaml || true
           echo "=== Events ==="
-          kubectl get events -n automotive-dev-operator-system --sort-by='.lastTimestamp'
+          kubectl get events -n automotive-dev-operator-system --sort-by='.lastTimestamp' || true
           echo "=== OperatorConfig ==="
           kubectl get operatorconfig -n automotive-dev-operator-system -o yaml || true
           echo "=== ImageBuilds ==="
           kubectl get imagebuilds -n automotive-dev-operator-system -o yaml || true
+          echo "=== Build Image Pod Logs ==="
+          for pod in $(kubectl get pods -n automotive-dev-operator-system -o name | grep build-image-pod); do
+            echo "--- $pod ---"
+            kubectl logs -n automotive-dev-operator-system "$pod" -c step-build-image --tail=100 || true
+          done
 
       - name: Cleanup
         if: always()
         run: |
-          kind delete cluster --name automotive-dev-e2e || true
+          kind delete cluster --name "$CLUSTER_NAME" || true
+          docker rm -f "$REGISTRY_NAME" || true
+          sudo sed -i "/${REGISTRY_HOST}/d" /etc/hosts 2>/dev/null || true
+          rm -f "${HOME}/.config/containers/registries.conf.d/kind-e2e-registry.conf" || true

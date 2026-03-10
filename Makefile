@@ -120,7 +120,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
 test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v -timeout 15m
+	go test ./test/e2e/ -v -ginkgo.v -timeout 85m
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
