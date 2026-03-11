@@ -85,7 +85,7 @@ func createFlashOCIAuthSecret(
 		return "", nil, &httpError{code: http.StatusBadRequest, message: fmt.Sprintf("invalid registry credentials: %v", err)}
 	}
 	if ociUsername == "" || ociPassword == "" {
-		return "", nil, nil
+		return "", nil, &httpError{code: http.StatusBadRequest, message: "registry credentials enabled but missing username or password"}
 	}
 	secretName := fmt.Sprintf("%s-flash-oci-auth", flashName)
 	ociSecret := &corev1.Secret{
@@ -108,11 +108,12 @@ func createFlashOCIAuthSecret(
 	}
 	created, createErr := clientset.CoreV1().Secrets(namespace).Create(ctx, ociSecret, metav1.CreateOptions{})
 	if createErr != nil {
-		if !k8serrors.IsAlreadyExists(createErr) {
-			return "", nil, &httpError{
-				code:    http.StatusInternalServerError,
-				message: fmt.Sprintf("failed to create flash OCI auth secret: %v", createErr),
-			}
+		if k8serrors.IsAlreadyExists(createErr) {
+			return "", nil, &httpError{code: http.StatusConflict, message: fmt.Sprintf("flash OCI auth secret %s already exists", secretName)}
+		}
+		return "", nil, &httpError{
+			code:    http.StatusInternalServerError,
+			message: fmt.Sprintf("failed to create flash OCI auth secret: %v", createErr),
 		}
 	}
 	return secretName, created, nil
@@ -126,6 +127,9 @@ func extractOCICredentials(creds *RegistryCredentials) (string, string, error) {
 	}
 	switch creds.AuthType {
 	case authTypeUsernamePassword:
+		if creds.Username == "" || creds.Password == "" {
+			return "", "", fmt.Errorf("username-password auth enabled but missing username or password")
+		}
 		return creds.Username, creds.Password, nil
 	case authTypeDockerConfig:
 		if creds.DockerConfig == "" {
