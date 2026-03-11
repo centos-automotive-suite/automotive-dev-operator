@@ -11,6 +11,7 @@ import (
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	"github.com/go-logr/logr"
 	routev1 "github.com/openshift/api/route/v1"
@@ -650,7 +651,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			}, registrySecret); err != nil {
 				return fmt.Errorf("failed to read registry secret %q for flash OCI credentials: %w", imageBuild.Spec.SecretRef, err)
 			}
-			regUser, regPass := extractFlashCredentials(registrySecret)
+			regUser, regPass := extractFlashCredentials(registrySecret, flashImageRef)
 			if len(regUser) == 0 && len(regPass) == 0 {
 				log.Info("No usable credentials found in registry secret for flash OCI auth",
 					"secret", imageBuild.Spec.SecretRef)
@@ -1951,7 +1952,7 @@ func (r *ImageBuildReconciler) shutdownUploadPod(ctx context.Context, imageBuild
 // extractFlashCredentials extracts username/password from a registry secret for flash OCI auth.
 // It first checks for explicit REGISTRY_USERNAME/REGISTRY_PASSWORD keys, then falls back
 // to parsing .dockerconfigjson or REGISTRY_AUTH_FILE_CONTENT to decode credentials.
-func extractFlashCredentials(secret *corev1.Secret) ([]byte, []byte) {
+func extractFlashCredentials(secret *corev1.Secret, registryURL string) ([]byte, []byte) {
 	regUser := secret.Data["REGISTRY_USERNAME"]
 	regPass := secret.Data["REGISTRY_PASSWORD"]
 	if len(regUser) > 0 && len(regPass) > 0 {
@@ -1975,18 +1976,39 @@ func extractFlashCredentials(secret *corev1.Secret) ([]byte, []byte) {
 	if err := json.Unmarshal(dockerConfig, &cfg); err != nil {
 		return nil, nil
 	}
+
+	// Prefer the entry matching the target registry
+	if registryURL != "" {
+		for key, entry := range cfg.Auths {
+			if !registryutil.RegistryHostMatches(key, registryURL) {
+				continue
+			}
+			if user, pass := decodeAuthEntry(entry.Auth); user != nil {
+				return user, pass
+			}
+		}
+	}
+
+	// Fall back to first valid entry
 	for _, entry := range cfg.Auths {
-		if entry.Auth == "" {
-			continue
+		if user, pass := decodeAuthEntry(entry.Auth); user != nil {
+			return user, pass
 		}
-		decoded, err := base64.StdEncoding.DecodeString(entry.Auth)
-		if err != nil {
-			continue
-		}
-		parts := strings.SplitN(string(decoded), ":", 2)
-		if len(parts) == 2 {
-			return []byte(parts[0]), []byte(parts[1])
-		}
+	}
+	return nil, nil
+}
+
+func decodeAuthEntry(auth string) ([]byte, []byte) {
+	if auth == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(auth)
+	if err != nil {
+		return nil, nil
+	}
+	parts := strings.SplitN(string(decoded), ":", 2)
+	if len(parts) == 2 {
+		return []byte(parts[0]), []byte(parts[1])
 	}
 	return nil, nil
 }
