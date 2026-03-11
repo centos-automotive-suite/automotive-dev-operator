@@ -22,10 +22,12 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
+	"github.com/onsi/gomega/format"
 )
 
 // Run e2e tests using the Ginkgo runner.
 func TestE2E(t *testing.T) {
+	format.MaxLength = 0
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting automotive-dev-operator suite\n")
 	RunSpecs(t, "e2e suite")

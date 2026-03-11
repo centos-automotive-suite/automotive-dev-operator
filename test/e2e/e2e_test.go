@@ -208,411 +208,295 @@ var _ = Describe("controller", Ordered, func() {
 			EventuallyWithOffset(1, verifyBuildAPIDeployment, 3*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
-		It("should build a real automotive image", func() {
-			var err error
+		Context("caib image build", func() {
+			var portForwardCmd *exec.Cmd
+			var registryHost string
+			var arch string
+			var caibToken string
+			var projectimage = "automotive-dev-operator:test"
+			var caibBuildTimeout = 45 * time.Minute // max timeout for caib builds
 
-			By("creating an ImageBuild CR for a real build")
-			// Detect architecture for the build
-			arch := "amd64"
-			if strings.Contains(strings.ToLower(os.Getenv("RUNNER_ARCH")), "arm") ||
-				strings.Contains(strings.ToLower(os.Getenv("HOSTTYPE")), "arm") ||
-				strings.Contains(strings.ToLower(os.Getenv("PROCESSOR_ARCHITECTURE")), "arm") {
-				arch = archARM64
-			}
-			// Also check uname for local development
-			unameCmd := exec.Command("uname", "-m")
-			unameOutput, _ := utils.Run(unameCmd)
-			if strings.Contains(string(unameOutput), archARM64) || strings.Contains(string(unameOutput), aarch64) {
-				arch = archARM64
-			}
-
-			imageBuildYAML := fmt.Sprintf(`
-apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
-kind: ImageBuild
-metadata:
-  name: e2e-real-build
-  namespace: automotive-dev-operator-system
-spec:
-  # Common fields
-  architecture: %s
-  
-  # AIB configuration
-  aib:
-    distro: autosd
-    target: qemu
-    mode: image
-    manifest: |
-      name: e2e-test-image
-    manifestFileName: "manifest.aib.yml"
-    image: quay.io/centos-sig-automotive/automotive-image-builder:latest
-  
-  # Export configuration
-  export:
-    format: qcow2
-    compression: gzip
-    buildDiskImage: false
-`, arch)
-			cmd := exec.Command("kubectl", "apply", "-f", "-")
-			cmd.Stdin = strings.NewReader(imageBuildYAML)
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("waiting for build to start")
-			verifyBuildStarted := func() error {
-				cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
-					"-n", namespace, "-o", "jsonpath={.status.phase}")
-				output, err := utils.Run(cmd)
-				if err != nil {
-					return err
+			BeforeAll(func() {
+				registryHost = os.Getenv("REGISTRY_HOST")
+				if registryHost == "" {
+					Skip("REGISTRY_HOST not set; caib build tests require a local registry")
 				}
-				phase := string(output)
-				if phase == "" {
-					return fmt.Errorf("build not started yet, phase is empty")
+
+				arch = os.Getenv("ARCH")
+				if arch == "" {
+					unameCmd := exec.Command("uname", "-m")
+					unameOutput, _ := utils.Run(unameCmd)
+					switch strings.TrimSpace(string(unameOutput)) {
+					case archARM64, aarch64:
+						arch = archARM64
+					default:
+						arch = "amd64"
+					}
 				}
-				if phase == "Failed" {
-					// Get more details on failure
-					cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
-						"-n", namespace, "-o", "jsonpath={.status.message}")
-					msg, _ := utils.Run(cmd)
-					return fmt.Errorf("build failed: %s", string(msg))
+
+				By("ensuring namespace has privileged PSA labels")
+				cmd := exec.Command("kubectl", "label", "namespace", namespace,
+					"pod-security.kubernetes.io/enforce=privileged", "--overwrite")
+				_, err := utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+				cmd = exec.Command("kubectl", "label", "namespace", namespace,
+					"pod-security.kubernetes.io/audit=privileged", "--overwrite")
+				_, _ = utils.Run(cmd)
+				cmd = exec.Command("kubectl", "label", "namespace", namespace,
+					"pod-security.kubernetes.io/warn=privileged", "--overwrite")
+				_, _ = utils.Run(cmd)
+
+				By("building the manager(Operator) image")
+				cmd = exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectimage))
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("loading the the manager(Operator) image on Kind")
+				err = utils.LoadImageToKindClusterWithName(projectimage)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("installing CRDs")
+				cmd = exec.Command("make", "install")
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("deploying the operator")
+				cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage))
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("waiting for operator deployment to be available")
+				cmd = exec.Command("kubectl", "wait", "--for=condition=available",
+					"--timeout=10m", "deployment/ado-operator", "-n", namespace)
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("waiting for Build API deployment to be available")
+				cmd = exec.Command("kubectl", "apply", "-f",
+					"config/samples/automotive_v1_operatorconfig.yaml")
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("waiting for Build API deployment to be available")
+				cmd = exec.Command("kubectl", "wait", "--for=condition=available",
+					"--timeout=8m", "deployment/ado-build-api", "-n", namespace)
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("patching OperatorConfig for Kind registry")
+				cmd = exec.Command("kubectl", "patch", "operatorconfig", "config",
+					"-n", namespace, "--type=merge",
+					"-p", fmt.Sprintf(`{"spec":{"osBuilds":{"clusterRegistryRoute":"%s:5000"}}}`, registryHost))
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("waiting for push-artifact-registry Task to be created")
+				waitForPushTask := func() error {
+					taskCmd := exec.Command("kubectl", "get", "task", "push-artifact-registry", "-n", namespace)
+					_, taskErr := utils.Run(taskCmd)
+					return taskErr
 				}
-				return nil
-			}
-			EventuallyWithOffset(1, verifyBuildStarted, 2*time.Minute, 5*time.Second).Should(Succeed())
+				EventuallyWithOffset(1, waitForPushTask, 2*time.Minute, 5*time.Second).Should(Succeed(),
+					"push-artifact-registry Task was not created in time")
 
-			By("waiting for build to complete (this may take several minutes)")
-			verifyBuildCompleted := func() error {
-				cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
-					"-n", namespace, "-o", "jsonpath={.status.phase}")
-				output, err := utils.Run(cmd)
-				if err != nil {
-					return err
+				// Kind-specific workaround: the local registry uses plain HTTP (no TLS),
+				// so oras push needs --plain-http. On OpenShift the internal registry has
+				// TLS and this flag is not required.
+				// runAsUser: 0 is needed because plain Kubernetes lacks OpenShift's SCC
+				// (Security Context Constraints) that would grant the push step access to
+				// root-owned build artifacts in the shared workspace.
+				By("patching push-artifact-registry Task for Kind (plain-http + runAsUser 0)")
+				cmd = exec.Command("kubectl", "annotate", "task", "push-artifact-registry",
+					"-n", namespace, "automotive.sdv.cloud.redhat.com/unmanaged=true", "--overwrite")
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				cmd = exec.Command("bash", "-c",
+					`kubectl get task push-artifact-registry -n `+namespace+` -o json `+
+						`| jq '.spec.steps[0].script |= gsub("push --disable-path-validation"; "push --plain-http --disable-path-validation")' `+
+						`| jq '.spec.steps[0].securityContext = {"runAsUser": 0}' `+
+						`| kubectl replace -f -`)
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("ensuring port 8080 is free before starting port-forward")
+				if conn, dialErr := net.DialTimeout("tcp", "localhost:8080", 500*time.Millisecond); dialErr == nil {
+					_ = conn.Close()
+					Fail("port 8080 is already in use; cannot set up port-forward to Build API")
 				}
-				phase := string(output)
-				if phase == "Failed" {
-					// Get more details on failure
-					cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
-						"-n", namespace, "-o", "jsonpath={.status.message}")
-					msg, _ := utils.Run(cmd)
-					// Also get PipelineRun logs
-					cmd = exec.Command("kubectl", "get", "pipelineruns", "-n", namespace,
-						"-l", "automotive.sdv.cloud.redhat.com/imagebuild-name=e2e-real-build",
-						"-o", "jsonpath={.items[0].status.conditions[0].message}")
-					prMsg, _ := utils.Run(cmd)
-					Fail(fmt.Sprintf("Build failed: %s\nPipelineRun message: %s", string(msg), string(prMsg)))
+
+				By("setting up port-forward to Build API")
+				portForwardCmd = exec.Command("kubectl", "port-forward",
+					"-n", namespace, "svc/ado-build-api", "8080:8080")
+				err = portForwardCmd.Start()
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+				By("waiting for Build API to respond on port-forward")
+				httpClient := &http.Client{Timeout: 2 * time.Second}
+				waitForBuildAPI := func() error {
+					resp, httpErr := httpClient.Get("http://localhost:8080/v1/healthz")
+					if httpErr != nil {
+						return httpErr
+					}
+					_ = resp.Body.Close()
+					if resp.StatusCode == http.StatusOK {
+						return nil
+					}
+					return fmt.Errorf("unexpected status %d from Build API /v1/healthz", resp.StatusCode)
 				}
-				if phase != "Completed" {
-					return fmt.Errorf("build not completed yet, phase: %s", phase)
-				}
-				return nil
-			}
-			// Allow up to 10 minutes for the build to complete
-			EventuallyWithOffset(1, verifyBuildCompleted, 10*time.Minute, 15*time.Second).Should(Succeed())
+				EventuallyWithOffset(1, waitForBuildAPI, 30*time.Second, 1*time.Second).Should(Succeed(),
+					"Build API on localhost:8080 did not become ready")
 
-			By("verifying build status has expected fields")
-			cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
-				"-n", namespace, "-o", "jsonpath={.status.pipelineRunName}")
-			pipelineRunName, err := utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-			ExpectWithOffset(1, string(pipelineRunName)).NotTo(BeEmpty(), "PipelineRunName should be set")
+				By("creating service account and token")
+				cmd = exec.Command("kubectl", "create", "serviceaccount", "caib",
+					"-n", namespace, "--dry-run=client", "-o", "yaml")
+				saYAML, saErr := utils.Run(cmd)
+				ExpectWithOffset(1, saErr).NotTo(HaveOccurred())
+				cmd = exec.Command("kubectl", "apply", "-f", "-")
+				cmd.Stdin = strings.NewReader(string(saYAML))
+				_, saErr = utils.Run(cmd)
+				ExpectWithOffset(1, saErr).NotTo(HaveOccurred())
 
-			cmd = exec.Command("kubectl", "get", "imagebuild", "e2e-real-build",
-				"-n", namespace, "-o", "jsonpath={.status.message}")
-			message, err := utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-			ExpectWithOffset(1, string(message)).To(ContainSubstring("completed"), "Message should indicate completion")
+				By("creating caib token")
+				cmd = exec.Command("kubectl", "create", "token", "caib",
+					"-n", namespace, "--duration=1h")
+				tokenOutput, tokenErr := utils.Run(cmd)
+				ExpectWithOffset(1, tokenErr).NotTo(HaveOccurred())
+				caibToken = strings.TrimSpace(string(tokenOutput))
+				ExpectWithOffset(1, caibToken).NotTo(BeEmpty(), "CAIB_TOKEN must not be empty")
+				prevToken, hadPrevToken := os.LookupEnv("CAIB_TOKEN")
+				prevServer, hadPrevServer := os.LookupEnv("CAIB_SERVER")
+				DeferCleanup(func() {
+					if hadPrevToken {
+						_ = os.Setenv("CAIB_TOKEN", prevToken)
+					} else {
+						_ = os.Unsetenv("CAIB_TOKEN")
+					}
+					if hadPrevServer {
+						_ = os.Setenv("CAIB_SERVER", prevServer)
+					} else {
+						_ = os.Unsetenv("CAIB_SERVER")
+					}
+				})
+				setErr := os.Setenv("CAIB_TOKEN", caibToken)
+				ExpectWithOffset(1, setErr).NotTo(HaveOccurred())
+				setErr = os.Setenv("CAIB_SERVER", "http://localhost:8080")
+				ExpectWithOffset(1, setErr).NotTo(HaveOccurred())
+			})
 
-			By("cleaning up real build resources")
-			cmd = exec.Command("kubectl", "delete", "imagebuild", "e2e-real-build",
-				"-n", namespace, "--ignore-not-found=true")
-			_, _ = utils.Run(cmd)
-		})
-	})
-
-	Context("caib image build", func() {
-		var portForwardCmd *exec.Cmd
-		var registryHost string
-		var arch string
-		var caibToken string
-		var projectimage = "automotive-dev-operator:test"
-		var caibBuildTimeout = 45 * time.Minute // max timeout for caib builds
-
-		BeforeAll(func() {
-			registryHost = os.Getenv("REGISTRY_HOST")
-			if registryHost == "" {
-				Skip("REGISTRY_HOST not set; caib build tests require a local registry")
-			}
-
-			arch = os.Getenv("ARCH")
-			if arch == "" {
-				unameCmd := exec.Command("uname", "-m")
-				unameOutput, _ := utils.Run(unameCmd)
-				switch strings.TrimSpace(string(unameOutput)) {
-				case archARM64, aarch64:
-					arch = archARM64
-				default:
-					arch = "amd64"
-				}
-			}
-
-			By("ensuring namespace has privileged PSA labels")
-			cmd := exec.Command("kubectl", "label", "namespace", namespace,
-				"pod-security.kubernetes.io/enforce=privileged", "--overwrite")
-			_, err := utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-			cmd = exec.Command("kubectl", "label", "namespace", namespace,
-				"pod-security.kubernetes.io/audit=privileged", "--overwrite")
-			_, _ = utils.Run(cmd)
-			cmd = exec.Command("kubectl", "label", "namespace", namespace,
-				"pod-security.kubernetes.io/warn=privileged", "--overwrite")
-			_, _ = utils.Run(cmd)
-
-			By("building the manager(Operator) image")
-			cmd = exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectimage))
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("loading the the manager(Operator) image on Kind")
-			err = utils.LoadImageToKindClusterWithName(projectimage)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("installing CRDs")
-			cmd = exec.Command("make", "install")
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("deploying the operator")
-			cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage))
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("waiting for operator deployment to be available")
-			cmd = exec.Command("kubectl", "wait", "--for=condition=available",
-				"--timeout=10m", "deployment/ado-operator", "-n", namespace)
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("waiting for Build API deployment to be available")
-			cmd = exec.Command("kubectl", "apply", "-f",
-				"config/samples/automotive_v1_operatorconfig.yaml")
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("waiting for Build API deployment to be available")
-			cmd = exec.Command("kubectl", "wait", "--for=condition=available",
-				"--timeout=8m", "deployment/ado-build-api", "-n", namespace)
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("patching OperatorConfig for Kind registry")
-			cmd = exec.Command("kubectl", "patch", "operatorconfig", "config",
-				"-n", namespace, "--type=merge",
-				"-p", fmt.Sprintf(`{"spec":{"osBuilds":{"clusterRegistryRoute":"%s:5000"}}}`, registryHost))
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("waiting for push-artifact-registry Task to be created")
-			waitForPushTask := func() error {
-				taskCmd := exec.Command("kubectl", "get", "task", "push-artifact-registry", "-n", namespace)
-				_, taskErr := utils.Run(taskCmd)
-				return taskErr
-			}
-			EventuallyWithOffset(1, waitForPushTask, 2*time.Minute, 5*time.Second).Should(Succeed(),
-				"push-artifact-registry Task was not created in time")
-
-			// Kind-specific workaround: the local registry uses plain HTTP (no TLS),
-			// so oras push needs --plain-http. On OpenShift the internal registry has
-			// TLS and this flag is not required.
-			// runAsUser: 0 is needed because plain Kubernetes lacks OpenShift's SCC
-			// (Security Context Constraints) that would grant the push step access to
-			// root-owned build artifacts in the shared workspace.
-			By("patching push-artifact-registry Task for Kind (plain-http + runAsUser 0)")
-			cmd = exec.Command("kubectl", "annotate", "task", "push-artifact-registry",
-				"-n", namespace, "automotive.sdv.cloud.redhat.com/unmanaged=true", "--overwrite")
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			cmd = exec.Command("bash", "-c",
-				`kubectl get task push-artifact-registry -n `+namespace+` -o json `+
-					`| jq '.spec.steps[0].script |= gsub("push --disable-path-validation"; "push --plain-http --disable-path-validation")' `+
-					`| jq '.spec.steps[0].securityContext = {"runAsUser": 0}' `+
-					`| kubectl replace -f -`)
-			_, err = utils.Run(cmd)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("ensuring port 8080 is free before starting port-forward")
-			if conn, dialErr := net.DialTimeout("tcp", "localhost:8080", 500*time.Millisecond); dialErr == nil {
-				_ = conn.Close()
-				Fail("port 8080 is already in use; cannot set up port-forward to Build API")
-			}
-
-			By("setting up port-forward to Build API")
-			portForwardCmd = exec.Command("kubectl", "port-forward",
-				"-n", namespace, "svc/ado-build-api", "8080:8080")
-			err = portForwardCmd.Start()
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-			By("waiting for Build API to respond on port-forward")
-			httpClient := &http.Client{Timeout: 2 * time.Second}
-			waitForBuildAPI := func() error {
-				resp, httpErr := httpClient.Get("http://localhost:8080/v1/healthz")
-				if httpErr != nil {
-					return httpErr
-				}
-				_ = resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					return nil
-				}
-				return fmt.Errorf("unexpected status %d from Build API /v1/healthz", resp.StatusCode)
-			}
-			EventuallyWithOffset(1, waitForBuildAPI, 30*time.Second, 1*time.Second).Should(Succeed(),
-				"Build API on localhost:8080 did not become ready")
-
-			By("creating service account and token")
-			cmd = exec.Command("kubectl", "create", "serviceaccount", "caib",
-				"-n", namespace, "--dry-run=client", "-o", "yaml")
-			saYAML, saErr := utils.Run(cmd)
-			ExpectWithOffset(1, saErr).NotTo(HaveOccurred())
-			cmd = exec.Command("kubectl", "apply", "-f", "-")
-			cmd.Stdin = strings.NewReader(string(saYAML))
-			_, saErr = utils.Run(cmd)
-			ExpectWithOffset(1, saErr).NotTo(HaveOccurred())
-
-			By("creating caib token")
-			cmd = exec.Command("kubectl", "create", "token", "caib",
-				"-n", namespace, "--duration=1h")
-			tokenOutput, tokenErr := utils.Run(cmd)
-			ExpectWithOffset(1, tokenErr).NotTo(HaveOccurred())
-			caibToken = strings.TrimSpace(string(tokenOutput))
-			ExpectWithOffset(1, caibToken).NotTo(BeEmpty(), "CAIB_TOKEN must not be empty")
-			prevToken, hadPrevToken := os.LookupEnv("CAIB_TOKEN")
-			prevServer, hadPrevServer := os.LookupEnv("CAIB_SERVER")
-			DeferCleanup(func() {
-				if hadPrevToken {
-					_ = os.Setenv("CAIB_TOKEN", prevToken)
-				} else {
-					_ = os.Unsetenv("CAIB_TOKEN")
-				}
-				if hadPrevServer {
-					_ = os.Setenv("CAIB_SERVER", prevServer)
-				} else {
-					_ = os.Unsetenv("CAIB_SERVER")
+			AfterAll(func() {
+				if portForwardCmd != nil {
+					if portForwardCmd.Process != nil {
+						_ = portForwardCmd.Process.Kill()
+					}
+					_ = portForwardCmd.Wait()
 				}
 			})
-			setErr := os.Setenv("CAIB_TOKEN", caibToken)
-			ExpectWithOffset(1, setErr).NotTo(HaveOccurred())
-			setErr = os.Setenv("CAIB_SERVER", "http://localhost:8080")
-			ExpectWithOffset(1, setErr).NotTo(HaveOccurred())
-		})
 
-		AfterAll(func() {
-			if portForwardCmd != nil {
-				if portForwardCmd.Process != nil {
-					_ = portForwardCmd.Process.Kill()
+			verifyCaibList := func(caibBuildName string) {
+				listCmd := exec.Command("bin/caib", "image", "list")
+				listOutput, listErr := utils.Run(listCmd)
+				ExpectWithOffset(2, listErr).NotTo(HaveOccurred())
+				lines := strings.Split(string(listOutput), "\n")
+				found := false
+				for _, line := range lines {
+					if strings.Contains(line, caibBuildName) {
+						ExpectWithOffset(2, line).To(ContainSubstring("Completed"))
+						found = true
+						break
+					}
 				}
-				_ = portForwardCmd.Wait()
+				ExpectWithOffset(2, found).To(BeTrue(),
+					fmt.Sprintf("build %q not found in caib list output:\n%s", caibBuildName, string(listOutput)))
 			}
-		})
 
-		verifyCaibList := func(caibBuildName string) {
-			listCmd := exec.Command("bin/caib", "image", "list")
-			listOutput, listErr := utils.Run(listCmd)
-			ExpectWithOffset(2, listErr).NotTo(HaveOccurred())
-			lines := strings.Split(string(listOutput), "\n")
-			found := false
-			for _, line := range lines {
-				if strings.Contains(line, caibBuildName) {
-					ExpectWithOffset(2, line).To(ContainSubstring("Completed"))
-					found = true
-					break
+			It("should build container and disk images in parallel via caib", func() {
+				containerBuildName := "e2e-test-build-image"
+				diskBuildName := "e2e-test-build-disk-image"
+				diskDir, tmpErr := os.MkdirTemp("", "caib-disk-*")
+				ExpectWithOffset(1, tmpErr).NotTo(HaveOccurred())
+				DeferCleanup(func() { _ = os.RemoveAll(diskDir) })
+				diskImageOutput := diskDir + "/automotive-os-test2-latest.qcow2"
+
+				type buildResult struct {
+					output []byte
+					err    error
 				}
-			}
-			ExpectWithOffset(2, found).To(BeTrue(),
-				fmt.Sprintf("build %q not found in caib list output:\n%s", caibBuildName, string(listOutput)))
-		}
 
-		It("should build container and disk images in parallel via caib", func() {
-			containerBuildName := "e2e-test-build-image"
-			diskBuildName := "e2e-test-build-disk-image"
-			diskDir, tmpErr := os.MkdirTemp("", "caib-disk-*")
-			ExpectWithOffset(1, tmpErr).NotTo(HaveOccurred())
-			DeferCleanup(func() { _ = os.RemoveAll(diskDir) })
-			diskImageOutput := diskDir + "/automotive-os-test2-latest.qcow2"
+				ctx, cancel := context.WithTimeout(context.Background(), caibBuildTimeout)
+				defer cancel()
 
-			type buildResult struct {
-				output []byte
-				err    error
-			}
+				var wg sync.WaitGroup
+				containerCh := make(chan buildResult, 1)
+				diskCh := make(chan buildResult, 1)
 
-			ctx, cancel := context.WithTimeout(context.Background(), caibBuildTimeout)
-			defer cancel()
+				By("launching container build and disk build in parallel")
+				wg.Add(2)
 
-			var wg sync.WaitGroup
-			containerCh := make(chan buildResult, 1)
-			diskCh := make(chan buildResult, 1)
+				go func() {
+					defer wg.Done()
+					cmd := exec.CommandContext(ctx, "bin/caib", "image", "build", "test/config/test-manifest.aib.yml",
+						"--name", containerBuildName,
+						"--arch", arch,
+						"--push", fmt.Sprintf("%s:5000/myorg/automotive-os-test1:latest", registryHost),
+						"--follow")
+					out, err := utils.RunSafe(cmd)
+					containerCh <- buildResult{output: out, err: err}
+				}()
 
-			By("launching container build and disk build in parallel")
-			wg.Add(2)
+				go func() {
+					defer wg.Done()
+					cmd := exec.CommandContext(ctx, "bin/caib", "image", "build", "test/config/test-manifest.aib.yml",
+						"--name", diskBuildName,
+						"--arch", arch,
+						"--push", fmt.Sprintf("%s:5000/myorg/automotive-os-test2:latest", registryHost),
+						"--target", "qemu",
+						"--disk",
+						"--format", "qcow2",
+						"--push-disk", fmt.Sprintf("%s:5000/myorg/automotive-os-test2:latest-disk", registryHost),
+						"--output", diskImageOutput,
+						"--follow")
+					out, err := utils.RunSafe(cmd)
+					diskCh <- buildResult{output: out, err: err}
+				}()
 
-			go func() {
-				defer wg.Done()
-				cmd := exec.CommandContext(ctx, "bin/caib", "image", "build", "test/config/test-manifest.aib.yml",
-					"--name", containerBuildName,
-					"--arch", arch,
-					"--push", fmt.Sprintf("%s:5000/myorg/automotive-os-test1:latest", registryHost))
-				out, err := utils.RunSafe(cmd)
-				containerCh <- buildResult{output: out, err: err}
-			}()
+				done := make(chan struct{})
+				go func() {
+					wg.Wait()
+					close(done)
+				}()
+				select {
+				case <-done:
+				case <-ctx.Done():
+					Fail(fmt.Sprintf("caib builds did not complete within %v", caibBuildTimeout))
+				}
+				By("verifying container build completed successfully")
+				cr := <-containerCh
+				_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib container build (%s) ---\n%s\n", containerBuildName, string(cr.output))
+				ExpectWithOffset(1, cr.err).NotTo(HaveOccurred(),
+					fmt.Sprintf("container build failed:\n%sError: %v\n", string(cr.output), cr.err))
+				ExpectWithOffset(1, string(cr.output)).To(ContainSubstring("Completed"))
 
-			go func() {
-				defer wg.Done()
-				cmd := exec.CommandContext(ctx, "bin/caib", "image", "build", "test/config/test-manifest.aib.yml",
-					"--name", diskBuildName,
-					"--arch", arch,
-					"--push", fmt.Sprintf("%s:5000/myorg/automotive-os-test2:latest", registryHost),
-					"--target", "qemu",
-					"--disk",
-					"--format", "qcow2",
-					"--push-disk", fmt.Sprintf("%s:5000/myorg/automotive-os-test2:latest-disk", registryHost),
-					"--output", diskImageOutput)
-				out, err := utils.RunSafe(cmd)
-				diskCh <- buildResult{output: out, err: err}
-			}()
+				By("verifying disk build completed successfully")
+				dr := <-diskCh
+				_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib disk build (%s) ---\n%s\n", diskBuildName, string(dr.output))
+				ExpectWithOffset(1, dr.err).NotTo(HaveOccurred(),
+					fmt.Sprintf("disk build failed:\n%sError: %v\n", string(dr.output), dr.err))
+				ExpectWithOffset(1, string(dr.output)).To(ContainSubstring("Completed"))
 
-			done := make(chan struct{})
-			go func() {
-				wg.Wait()
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-ctx.Done():
-				Fail(fmt.Sprintf("caib builds did not complete within %v", caibBuildTimeout))
-			}
-			By("verifying container build completed successfully")
-			cr := <-containerCh
-			ExpectWithOffset(1, cr.err).NotTo(HaveOccurred(),
-				fmt.Sprintf("container build failed:\n%sError: %v\n", string(cr.output), cr.err))
-			ExpectWithOffset(1, string(cr.output)).To(ContainSubstring("Completed"))
+				By("verifying container build appears in caib list")
+				verifyCaibList(containerBuildName)
 
-			By("verifying disk build completed successfully")
-			dr := <-diskCh
-			ExpectWithOffset(1, dr.err).NotTo(HaveOccurred(),
-				fmt.Sprintf("disk build failed:\n%sError: %v\n", string(dr.output), dr.err))
-			ExpectWithOffset(1, string(dr.output)).To(ContainSubstring("Completed"))
+				By("verifying disk build appears in caib list")
+				verifyCaibList(diskBuildName)
 
-			By("verifying container build appears in caib list")
-			verifyCaibList(containerBuildName)
-
-			By("verifying disk build appears in caib list")
-			verifyCaibList(diskBuildName)
-
-			By("verifying disk image file was downloaded")
-			diskImageDownloadFile := fmt.Sprintf("%s.gz", diskImageOutput)
-			info, statErr := os.Stat(diskImageDownloadFile)
-			ExpectWithOffset(1, statErr).NotTo(HaveOccurred())
-			ExpectWithOffset(1, info.Mode().IsRegular()).To(BeTrue())
-			ExpectWithOffset(1, info.Size()).To(BeNumerically(">", 0))
+				By("verifying disk image file was downloaded")
+				diskImageDownloadFile := fmt.Sprintf("%s.gz", diskImageOutput)
+				info, statErr := os.Stat(diskImageDownloadFile)
+				ExpectWithOffset(1, statErr).NotTo(HaveOccurred())
+				ExpectWithOffset(1, info.Mode().IsRegular()).To(BeTrue())
+				ExpectWithOffset(1, info.Size()).To(BeNumerically(">", 0))
+			})
 		})
 	})
 })
