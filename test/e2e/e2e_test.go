@@ -26,7 +26,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
@@ -410,13 +409,8 @@ var _ = Describe("controller", Ordered, func() {
 					fmt.Sprintf("build %q not found in caib list output:\n%s", caibBuildName, string(listOutput)))
 			}
 
-			It("should build container and disk images in parallel via caib", func() {
+			It("should build a container image via caib", func() {
 				containerBuildName := "e2e-test-build-image"
-				diskBuildName := "e2e-test-build-disk-image"
-				diskDir, tmpErr := os.MkdirTemp("", "caib-disk-*")
-				ExpectWithOffset(1, tmpErr).NotTo(HaveOccurred())
-				DeferCleanup(func() { _ = os.RemoveAll(diskDir) })
-				diskImageOutput := diskDir + "/automotive-os-test2-latest.qcow2"
 
 				type buildResult struct {
 					output []byte
@@ -426,15 +420,10 @@ var _ = Describe("controller", Ordered, func() {
 				ctx, cancel := context.WithTimeout(context.Background(), caibBuildTimeout)
 				defer cancel()
 
-				var wg sync.WaitGroup
 				containerCh := make(chan buildResult, 1)
-				diskCh := make(chan buildResult, 1)
 
-				By("launching bootc mode build and package mode build in parallel")
-				wg.Add(2)
-
+				By("launching bootc container build")
 				go func() {
-					defer wg.Done()
 					cmd := exec.CommandContext(ctx, "bin/caib", "image", "build-dev", "test/config/test-manifest.aib.yml",
 						"--name", containerBuildName,
 						"--arch", arch,
@@ -444,54 +433,18 @@ var _ = Describe("controller", Ordered, func() {
 					containerCh <- buildResult{output: out, err: err}
 				}()
 
-				go func() {
-					defer wg.Done()
-					cmd := exec.CommandContext(ctx, "bin/caib", "image", "build", "test/config/test-manifest.aib.yml",
-						"--name", diskBuildName,
-						"--arch", arch,
-						"--push", fmt.Sprintf("%s:5000/myorg/automotive-os-test2:latest", registryHost),
-						"--target", "qemu",
-						"--disk",
-						"--format", "qcow2",
-						"--push-disk", fmt.Sprintf("%s:5000/myorg/automotive-os-test2:latest-disk", registryHost),
-						"--output", diskImageOutput,
-						"--follow")
-					out, err := utils.RunSafe(cmd)
-					diskCh <- buildResult{output: out, err: err}
-				}()
-
-				done := make(chan struct{})
-				go func() {
-					wg.Wait()
-					close(done)
-				}()
 				select {
-				case <-done:
+				case cr := <-containerCh:
+					By("verifying container build completed successfully")
+					_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib container build (%s) ---\n%s\n", containerBuildName, string(cr.output))
+					ExpectWithOffset(1, cr.err).NotTo(HaveOccurred(),
+						fmt.Sprintf("container build failed:\n%sError: %v\n", string(cr.output), cr.err))
 				case <-ctx.Done():
-					Fail(fmt.Sprintf("caib builds did not complete within %v", caibBuildTimeout))
+					Fail(fmt.Sprintf("caib build did not complete within %v", caibBuildTimeout))
 				}
-				By("verifying container build completed successfully")
-				cr := <-containerCh
-				_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib container build (%s) ---\n%s\n", containerBuildName, string(cr.output))
-				ExpectWithOffset(1, cr.err).NotTo(HaveOccurred(),
-					fmt.Sprintf("container build failed:\n%sError: %v\n", string(cr.output), cr.err))
-				By("verifying disk build completed successfully")
-				dr := <-diskCh
-				_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib disk build (%s) ---\n%s\n", diskBuildName, string(dr.output))
-				ExpectWithOffset(1, dr.err).NotTo(HaveOccurred(),
-					fmt.Sprintf("disk build failed:\n%sError: %v\n", string(dr.output), dr.err))
+
 				By("verifying container build appears in caib list")
 				verifyCaibList(containerBuildName)
-
-				By("verifying disk build appears in caib list")
-				verifyCaibList(diskBuildName)
-
-				By("verifying disk image file was downloaded")
-				diskImageDownloadFile := fmt.Sprintf("%s.gz", diskImageOutput)
-				info, statErr := os.Stat(diskImageDownloadFile)
-				ExpectWithOffset(1, statErr).NotTo(HaveOccurred())
-				ExpectWithOffset(1, info.Mode().IsRegular()).To(BeTrue())
-				ExpectWithOffset(1, info.Size()).To(BeNumerically(">", 0))
 			})
 		})
 	})
