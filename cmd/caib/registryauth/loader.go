@@ -4,11 +4,12 @@ package registryauth
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 )
 
 type authConfigFile struct {
@@ -32,30 +33,8 @@ func authEntryHasCredentials(entry authConfigEntry) bool {
 	return strings.TrimSpace(entry.Username) != "" && strings.TrimSpace(entry.Password) != ""
 }
 
-func normalizeRegistryHost(raw string) string {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return ""
-	}
-	if strings.Contains(value, "://") {
-		parsed, err := url.Parse(value)
-		if err == nil && parsed.Host != "" {
-			value = parsed.Host
-		}
-	}
-	value = strings.TrimPrefix(value, "//")
-	value = strings.SplitN(value, "/", 2)[0]
-	value = strings.TrimSuffix(value, "/")
-	return strings.ToLower(strings.TrimSpace(value))
-}
-
 func registryAuthKeyMatches(authKey, registryURL string) bool {
-	keyHost := normalizeRegistryHost(authKey)
-	registryHost := normalizeRegistryHost(registryURL)
-	if keyHost == "" || registryHost == "" {
-		return false
-	}
-	return keyHost == registryHost
+	return registryutil.RegistryHostMatches(authKey, registryURL)
 }
 
 func authFileHasRegistryAuth(content []byte, registryURL string) (bool, error) {

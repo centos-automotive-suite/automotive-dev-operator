@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -151,7 +152,7 @@ func decodeDockerConfigAuth(dockerConfig, registryURL string) (string, string, e
 	// Try matching the target registry first
 	if registryURL != "" {
 		for key, entry := range cfg.Auths {
-			if !strings.Contains(key, registryURL) {
+			if !registryutil.RegistryHostMatches(key, registryURL) {
 				continue
 			}
 			if user, pass, ok := decodeAuthField(entry.Auth); ok {
