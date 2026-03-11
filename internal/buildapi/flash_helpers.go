@@ -120,7 +120,7 @@ func createFlashOCIAuthSecret(
 }
 
 // extractOCICredentials extracts username/password from RegistryCredentials.
-// For docker-config auth, it prefers the entry matching RegistryURL, falling back to the first valid entry.
+// For docker-config auth, it returns the entry matching RegistryURL.
 func extractOCICredentials(creds *RegistryCredentials) (string, string, error) {
 	if creds == nil || !creds.Enabled {
 		return "", "", nil
@@ -141,8 +141,8 @@ func extractOCICredentials(creds *RegistryCredentials) (string, string, error) {
 	}
 }
 
-// decodeDockerConfigAuth parses a docker config JSON and extracts username/password.
-// If registryURL is non-empty, it prefers the matching entry; otherwise takes the first valid one.
+// decodeDockerConfigAuth parses a docker config JSON and extracts username/password
+// for the entry matching registryURL.
 func decodeDockerConfigAuth(dockerConfig, registryURL string) (string, string, error) {
 	var cfg struct {
 		Auths map[string]struct {
@@ -153,25 +153,15 @@ func decodeDockerConfigAuth(dockerConfig, registryURL string) (string, string, e
 		return "", "", fmt.Errorf("failed to parse docker config: %w", err)
 	}
 
-	// Try matching the target registry first
-	if registryURL != "" {
-		for key, entry := range cfg.Auths {
-			if !registryutil.RegistryHostMatches(key, registryURL) {
-				continue
-			}
-			if user, pass, ok := decodeAuthField(entry.Auth); ok {
-				return user, pass, nil
-			}
+	for key, entry := range cfg.Auths {
+		if !registryutil.RegistryHostMatches(key, registryURL) {
+			continue
 		}
-	}
-
-	// Fall back to first valid entry
-	for _, entry := range cfg.Auths {
 		if user, pass, ok := decodeAuthField(entry.Auth); ok {
 			return user, pass, nil
 		}
 	}
-	return "", "", fmt.Errorf("no valid credentials found in docker config")
+	return "", "", fmt.Errorf("no credentials found for registry %s", registryURL)
 }
 
 // decodeAuthField decodes a base64-encoded "user:password" auth field.

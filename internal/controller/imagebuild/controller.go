@@ -637,8 +637,17 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 					"password": []byte(tokenResp.Status.Token),
 				},
 			}
-			if _, err := clientset.CoreV1().Secrets(imageBuild.Namespace).Create(ctx, ociSecret, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
-				return fmt.Errorf("failed to create flash OCI auth secret: %w", err)
+			_, err = clientset.CoreV1().Secrets(imageBuild.Namespace).Create(ctx, ociSecret, metav1.CreateOptions{})
+			if errors.IsAlreadyExists(err) {
+				existing, getErr := clientset.CoreV1().Secrets(imageBuild.Namespace).Get(ctx, ociSecret.Name, metav1.GetOptions{})
+				if getErr != nil {
+					return fmt.Errorf("failed to get existing flash OCI auth secret: %w", getErr)
+				}
+				existing.Data = ociSecret.Data
+				_, err = clientset.CoreV1().Secrets(imageBuild.Namespace).Update(ctx, existing, metav1.UpdateOptions{})
+			}
+			if err != nil {
+				return fmt.Errorf("failed to create/update flash OCI auth secret: %w", err)
 			}
 		} else if imageBuild.Spec.SecretRef != "" && flashImageRef != "" {
 			// External registry: read credentials from the registry-auth secret and
@@ -678,8 +687,19 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 						"password": regPass,
 					},
 				}
-				if err := r.Create(ctx, ociSecret); err != nil && !errors.IsAlreadyExists(err) {
-					return fmt.Errorf("failed to create flash OCI auth secret from registry credentials: %w", err)
+				if err := r.Create(ctx, ociSecret); err != nil {
+					if errors.IsAlreadyExists(err) {
+						existing := &corev1.Secret{}
+						if err := r.Get(ctx, client.ObjectKey{Namespace: imageBuild.Namespace, Name: flashOCIAuthSecretName}, existing); err != nil {
+							return fmt.Errorf("failed to get existing flash OCI auth secret: %w", err)
+						}
+						existing.Data = ociSecret.Data
+						if err := r.Update(ctx, existing); err != nil {
+							return fmt.Errorf("failed to update flash OCI auth secret: %w", err)
+						}
+					} else {
+						return fmt.Errorf("failed to create flash OCI auth secret from registry credentials: %w", err)
+					}
 				}
 			}
 		}
@@ -1402,6 +1422,8 @@ func (r *ImageBuildReconciler) cleanupTransientSecrets(
 	if flashSecretRef := imageBuild.Spec.GetFlashClientConfigSecretRef(); flashSecretRef != "" {
 		r.deleteSecretWithRetry(ctx, imageBuild.Namespace, flashSecretRef, "flash client config", log)
 	}
+	// Cleanup flash OCI auth secret
+	r.deleteSecretWithRetry(ctx, imageBuild.Namespace, imageBuild.Name+"-flash-oci-auth", "flash OCI auth", log)
 }
 
 // deleteSecretWithRetry attempts to delete a secret with exponential backoff retry
