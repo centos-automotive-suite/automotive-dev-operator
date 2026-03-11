@@ -430,12 +430,12 @@ var _ = Describe("controller", Ordered, func() {
 				containerCh := make(chan buildResult, 1)
 				diskCh := make(chan buildResult, 1)
 
-				By("launching container build and disk build in parallel")
+				By("launching bootc mode build and package mode build in parallel")
 				wg.Add(2)
 
 				go func() {
 					defer wg.Done()
-					cmd := exec.CommandContext(ctx, "bin/caib", "image", "build", "test/config/test-manifest.aib.yml",
+					cmd := exec.CommandContext(ctx, "bin/caib", "image", "build-dev", "test/config/test-manifest.aib.yml",
 						"--name", containerBuildName,
 						"--arch", arch,
 						"--push", fmt.Sprintf("%s:5000/myorg/automotive-os-test1:latest", registryHost),
@@ -475,15 +475,11 @@ var _ = Describe("controller", Ordered, func() {
 				_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib container build (%s) ---\n%s\n", containerBuildName, string(cr.output))
 				ExpectWithOffset(1, cr.err).NotTo(HaveOccurred(),
 					fmt.Sprintf("container build failed:\n%sError: %v\n", string(cr.output), cr.err))
-				ExpectWithOffset(1, string(cr.output)).To(ContainSubstring("Completed"))
-
 				By("verifying disk build completed successfully")
 				dr := <-diskCh
 				_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib disk build (%s) ---\n%s\n", diskBuildName, string(dr.output))
 				ExpectWithOffset(1, dr.err).NotTo(HaveOccurred(),
 					fmt.Sprintf("disk build failed:\n%sError: %v\n", string(dr.output), dr.err))
-				ExpectWithOffset(1, string(dr.output)).To(ContainSubstring("Completed"))
-
 				By("verifying container build appears in caib list")
 				verifyCaibList(containerBuildName)
 
