@@ -4,6 +4,8 @@ package imagebuild
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -648,11 +650,11 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			}, registrySecret); err != nil {
 				return fmt.Errorf("failed to read registry secret %q for flash OCI credentials: %w", imageBuild.Spec.SecretRef, err)
 			}
-			regUser := registrySecret.Data["REGISTRY_USERNAME"]
-			regPass := registrySecret.Data["REGISTRY_PASSWORD"]
-			hasUser := len(regUser) > 0
-			hasPass := len(regPass) > 0
-			if hasUser && hasPass {
+			regUser, regPass := extractFlashCredentials(registrySecret)
+			if len(regUser) == 0 && len(regPass) == 0 {
+				log.Info("No usable credentials found in registry secret for flash OCI auth",
+					"secret", imageBuild.Spec.SecretRef)
+			} else if len(regUser) > 0 && len(regPass) > 0 {
 				flashOCIAuthSecretName = imageBuild.Name + "-flash-oci-auth"
 				ociSecret := &corev1.Secret{
 					ObjectMeta: metav1.ObjectMeta{
@@ -678,13 +680,6 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				if err := r.Create(ctx, ociSecret); err != nil && !errors.IsAlreadyExists(err) {
 					return fmt.Errorf("failed to create flash OCI auth secret from registry credentials: %w", err)
 				}
-			} else if hasUser || hasPass {
-				missing := "REGISTRY_PASSWORD"
-				if !hasUser {
-					missing = "REGISTRY_USERNAME"
-				}
-				log.Info("Partial registry credentials in secret, skipping flash OCI auth",
-					"secret", imageBuild.Spec.SecretRef, "missing", missing)
 			}
 		}
 
@@ -1951,4 +1946,47 @@ func (r *ImageBuildReconciler) shutdownUploadPod(ctx context.Context, imageBuild
 
 	log.Info("Upload pod deleted")
 	return nil
+}
+
+// extractFlashCredentials extracts username/password from a registry secret for flash OCI auth.
+// It first checks for explicit REGISTRY_USERNAME/REGISTRY_PASSWORD keys, then falls back
+// to parsing .dockerconfigjson or REGISTRY_AUTH_FILE_CONTENT to decode credentials.
+func extractFlashCredentials(secret *corev1.Secret) ([]byte, []byte) {
+	regUser := secret.Data["REGISTRY_USERNAME"]
+	regPass := secret.Data["REGISTRY_PASSWORD"]
+	if len(regUser) > 0 && len(regPass) > 0 {
+		return regUser, regPass
+	}
+
+	// Fall back to docker config JSON
+	dockerConfig := secret.Data[".dockerconfigjson"]
+	if len(dockerConfig) == 0 {
+		dockerConfig = secret.Data["REGISTRY_AUTH_FILE_CONTENT"]
+	}
+	if len(dockerConfig) == 0 {
+		return nil, nil
+	}
+
+	var cfg struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}
+	if err := json.Unmarshal(dockerConfig, &cfg); err != nil {
+		return nil, nil
+	}
+	for _, entry := range cfg.Auths {
+		if entry.Auth == "" {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(entry.Auth)
+		if err != nil {
+			continue
+		}
+		parts := strings.SplitN(string(decoded), ":", 2)
+		if len(parts) == 2 {
+			return []byte(parts[0]), []byte(parts[1])
+		}
+	}
+	return nil, nil
 }

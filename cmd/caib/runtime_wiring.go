@@ -192,6 +192,7 @@ func (s runtimeState) newHandlers() handlerSet {
 			WaitForBuild:      s.WaitForBuild,
 			FollowLogs:        s.FollowLogs,
 			InsecureSkipTLS:   s.InsecureSkipTLS,
+			RegistryAuthFile:  s.RegistryAuthFile,
 			HandleError:       handleError,
 		}),
 		sealed: sealedcmd.NewHandler(sealedcmd.Options{

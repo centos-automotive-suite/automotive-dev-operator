@@ -15,6 +15,7 @@ import (
 
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/logstream"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
 	"github.com/spf13/cobra"
@@ -41,6 +42,7 @@ type Options struct {
 	WaitForBuild      *bool
 	FollowLogs        *bool
 	InsecureSkipTLS   *bool
+	RegistryAuthFile  *string
 
 	HandleError func(error)
 }
@@ -119,6 +121,21 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		LeaseDuration:    *h.opts.LeaseDuration,
 		FlashCmd:         *h.opts.FlashCmd,
 	}
+
+	// Resolve OCI registry credentials for the flash image
+	authFile := ""
+	if h.opts.RegistryAuthFile != nil {
+		authFile = *h.opts.RegistryAuthFile
+	}
+	registryURL, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(imageRef, "")
+	registryCreds, credErr := registryauth.ResolveRegistryCredentials(
+		registryURL, registryUsername, registryPassword, authFile,
+	)
+	if credErr != nil {
+		h.handleError(fmt.Errorf("failed to resolve registry credentials: %w", credErr))
+		return
+	}
+	req.RegistryCredentials = registryCreds
 
 	resp, err := api.CreateFlash(ctx, req)
 	if err != nil {

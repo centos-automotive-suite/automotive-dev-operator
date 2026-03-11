@@ -2870,20 +2870,8 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		operatorConfig = &automotivev1alpha1.OperatorConfig{}
 	}
 
-	// Get exporter selector from OperatorConfig if target is specified
-	exporterSelector := req.ExporterSelector
-	flashCmd := req.FlashCmd
-	if req.Target != "" && exporterSelector == "" {
-		if operatorConfig.Spec.Jumpstarter != nil {
-			if mapping, ok := operatorConfig.Spec.Jumpstarter.TargetMappings[req.Target]; ok {
-				exporterSelector = mapping.Selector
-				if flashCmd == "" {
-					flashCmd = mapping.FlashCmd
-				}
-			}
-		}
-	}
-
+	// Resolve exporter selector and flash command from OperatorConfig
+	exporterSelector, flashCmd := resolveFlashTargetConfig(req, operatorConfig)
 	if exporterSelector == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "exporterSelector or valid target is required"})
 		return
@@ -2895,39 +2883,18 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		flashCmd = strings.ReplaceAll(flashCmd, "{artifact_url}", req.ImageRef)
 	}
 
-	// Decode client config to verify it's valid base64
-	clientConfigBytes, err := base64.StdEncoding.DecodeString(req.ClientConfig)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "clientConfig must be base64 encoded"})
+	// Create Jumpstarter client config secret
+	secretName, createdSecret, secretErr := createFlashClientConfigSecret(ctx, clientset, namespace, req)
+	if secretErr != nil {
+		c.JSON(secretErr.code, gin.H{"error": secretErr.message})
 		return
 	}
 
-	// Create secret for client config
-	secretName := fmt.Sprintf("%s-jumpstarter-client", req.Name)
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":                  "build-api",
-				"app.kubernetes.io/part-of":                     "automotive-dev",
-				flashTaskRunLabel:                               req.Name,
-				"automotive.sdv.cloud.redhat.com/resource-type": "jumpstarter-client",
-			},
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"client.yaml": clientConfigBytes,
-		},
-	}
-
-	createdSecret, err := clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
-	if err != nil {
-		if k8serrors.IsAlreadyExists(err) {
-			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("flash %s already exists", req.Name)})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create secret: %v", err)})
+	// Create OCI auth secret for flash image pull credentials
+	flashOCIAuthSecretName, createdOCIAuthSecret, ociErr := createFlashOCIAuthSecret(ctx, clientset, namespace, req.Name, req.RegistryCredentials)
+	if ociErr != nil {
+		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+		c.JSON(ociErr.code, gin.H{"error": ociErr.message})
 		return
 	}
 
@@ -2954,6 +2921,24 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		}
 	}
 
+	// Build workspace bindings
+	workspaces := []tektonv1.WorkspaceBinding{
+		{
+			Name: "jumpstarter-client",
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: secretName,
+			},
+		},
+	}
+	if flashOCIAuthSecretName != "" {
+		workspaces = append(workspaces, tektonv1.WorkspaceBinding{
+			Name: "flash-oci-auth",
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: flashOCIAuthSecretName,
+			},
+		})
+	}
+
 	// Create the flash TaskRun
 	taskRun := &tektonv1.TaskRun{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2978,26 +2963,22 @@ func (a *APIServer) createFlash(c *gin.Context) {
 				{Name: "flash-cmd", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: flashCmd}},
 				{Name: "lease-duration", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: leaseDuration}},
 			},
-			Workspaces: []tektonv1.WorkspaceBinding{
-				{
-					Name: "jumpstarter-client",
-					Secret: &corev1.SecretVolumeSource{
-						SecretName: secretName,
-					},
-				},
-			},
+			Workspaces: workspaces,
 		},
 	}
 
 	if err := k8sClient.Create(ctx, taskRun); err != nil {
-		// Clean up the secret if TaskRun creation fails
+		// Clean up secrets if TaskRun creation fails
 		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+		if flashOCIAuthSecretName != "" {
+			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, flashOCIAuthSecretName, metav1.DeleteOptions{})
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create flash TaskRun: %v", err)})
 		return
 	}
 
-	// Set owner reference on secret for automatic cleanup
-	createdSecret.OwnerReferences = []metav1.OwnerReference{
+	// Set owner reference on secrets for automatic cleanup
+	ownerRef := []metav1.OwnerReference{
 		{
 			APIVersion: "tekton.dev/v1",
 			Kind:       "TaskRun",
@@ -3005,8 +2986,15 @@ func (a *APIServer) createFlash(c *gin.Context) {
 			UID:        taskRun.UID,
 		},
 	}
+	createdSecret.OwnerReferences = ownerRef
 	if _, err := clientset.CoreV1().Secrets(namespace).Update(ctx, createdSecret, metav1.UpdateOptions{}); err != nil {
 		log.Printf("WARNING: failed to set owner reference on secret %s: %v", secretName, err)
+	}
+	if createdOCIAuthSecret != nil {
+		createdOCIAuthSecret.OwnerReferences = ownerRef
+		if _, updErr := clientset.CoreV1().Secrets(namespace).Update(ctx, createdOCIAuthSecret, metav1.UpdateOptions{}); updErr != nil {
+			log.Printf("WARNING: failed to set owner reference on flash OCI auth secret %s: %v", flashOCIAuthSecretName, updErr)
+		}
 	}
 
 	writeJSON(c, http.StatusAccepted, FlashResponse{

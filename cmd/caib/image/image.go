@@ -260,6 +260,12 @@ func NewImageCmd(opts Options) *cobra.Command {
 	flashCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector (alternative to --target)")
 	flashCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration (HH:MM:SS)")
 	flashCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	flashCmd.Flags().StringVar(
+		opts.RegistryAuthFile,
+		"registry-auth-file",
+		"",
+		"path to Docker/Podman auth file for OCI image pull authentication (takes precedence over env vars and auto-discovery)",
+	)
 	flashCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow flash logs (shows full log output instead of progress bar)")
 	flashCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", true, "wait for flash to complete")
 	_ = flashCmd.MarkFlagRequired("client")

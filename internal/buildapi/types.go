@@ -184,6 +184,8 @@ type FlashRequest struct {
 	ClientConfig string `json:"clientConfig"`
 	// LeaseDuration is the Jumpstarter lease duration in HH:MM:SS format (default: "01:00:00")
 	LeaseDuration string `json:"leaseDuration,omitempty"`
+	// RegistryCredentials contains OCI registry auth for pulling the flash image on the exporter
+	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
 }
 
 // FlashResponse is returned by flash operations
