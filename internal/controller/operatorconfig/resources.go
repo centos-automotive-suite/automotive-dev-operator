@@ -18,7 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-const buildControllerName = "ado-build-controller"
+const (
+	buildControllerName         = "ado-build-controller"
+	workspaceServiceAccountName = "ado-workspace"
+)
 
 // getOperatorImage returns the operator image from env var, then config, then default constant
 func getOperatorImage(images *automotivev1alpha1.ImagesConfig) string {
@@ -315,7 +318,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIRoute(namespace string, config *
 				Name: "ado-build-api",
 			},
 			Port: &routev1.RoutePort{
-				TargetPort: intstr.FromString("proxy"),
+				TargetPort: intstr.FromString("http"),
 			},
 			TLS: &routev1.TLSConfig{
 				Termination:                   routev1.TLSTerminationEdge,
@@ -627,6 +630,22 @@ func (r *OperatorConfigReconciler) buildBuildControllerClusterRole() *rbacv1.Clu
 				Resources: []string{"catalogimages/finalizers"},
 				Verbs:     []string{"update"},
 			},
+			// Workspace controller RBAC
+			{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"workspaces"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+			},
+			{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"workspaces/status"},
+				Verbs:     []string{"get", "update", "patch"},
+			},
+			{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"workspaces/finalizers"},
+				Verbs:     []string{"update"},
+			},
 			// Read-only access to OperatorConfig (for build config)
 			{
 				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
@@ -652,7 +671,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerClusterRole() *rbacv1.Clu
 			{
 				APIGroups: []string{""},
 				Resources: []string{"secrets"},
-				Verbs:     []string{"get", "list", "watch", "delete"},
+				Verbs:     []string{"get", "list", "watch", "create", "delete"},
 			},
 			{
 				APIGroups: []string{""},
@@ -808,6 +827,67 @@ func (r *OperatorConfigReconciler) buildBuildControllerLeaderElectionRoleBinding
 			{
 				Kind:      "ServiceAccount",
 				Name:      buildControllerName,
+				Namespace: namespace,
+			},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildWorkspaceServiceAccount(namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      workspaceServiceAccountName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "workspace",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildWorkspaceSCCClusterRole() *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: workspaceServiceAccountName + "-privileged",
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "workspace",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups:     []string{"security.openshift.io"},
+				Resources:     []string{"securitycontextconstraints"},
+				ResourceNames: []string{"privileged"},
+				Verbs:         []string{"use"},
+			},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildWorkspaceSCCRoleBinding(namespace string) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      workspaceServiceAccountName + "-privileged",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "workspace",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     workspaceServiceAccountName + "-privileged",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      workspaceServiceAccountName,
 				Namespace: namespace,
 			},
 		},
