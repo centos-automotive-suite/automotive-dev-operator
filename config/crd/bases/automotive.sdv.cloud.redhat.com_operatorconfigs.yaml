@@ -693,6 +693,29 @@ spec:
                       Default: 90
                     format: int32
                     type: integer
+                  certificates:
+                    description: Certificates defines trusted certificate configuration
+                      for build tasks.
+                    properties:
+                      trustedCABundle:
+                        description: TrustedCABundle references a Secret or ConfigMap
+                          mounted into build tasks.
+                        properties:
+                          kind:
+                            description: Kind indicates the source kind for trusted
+                              CA bundle.
+                            enum:
+                            - ConfigMap
+                            - Secret
+                            type: string
+                          name:
+                            description: Name is the name of the Secret or ConfigMap.
+                            type: string
+                        required:
+                        - kind
+                        - name
+                        type: object
+                    type: object
                   clusterRegistryRoute:
                     description: |-
                       ClusterRegistryRoute is the external route for the cluster's internal image registry

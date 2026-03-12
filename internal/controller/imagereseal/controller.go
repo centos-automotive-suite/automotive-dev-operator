@@ -41,9 +41,13 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 )
 
 const (
+	// OperatorNamespace is the namespace where the operator is deployed.
+	OperatorNamespace = "automotive-dev-operator-system"
+
 	phasePending   = "Pending"
 	phaseRunning   = "Running"
 	phaseCompleted = "Completed"
@@ -122,7 +126,11 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 		}
 	}
 
-	if err := r.ensureSealedTasks(ctx, sealed.Namespace); err != nil {
+	buildConfig, err := r.resolveBuildConfig(ctx)
+	if err != nil {
+		return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to resolve build config: %v", err))
+	}
+	if err := r.ensureSealedTasks(ctx, sealed.Namespace, buildConfig); err != nil {
 		return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to ensure reseal tasks: %v", err))
 	}
 
@@ -259,9 +267,9 @@ func (r *Reconciler) handleRunningPipelineRun(ctx context.Context, sealed *autom
 
 const sealedManagedByLabel = "app.kubernetes.io/managed-by"
 
-func (r *Reconciler) ensureSealedTasks(ctx context.Context, namespace string) error {
+func (r *Reconciler) ensureSealedTasks(ctx context.Context, namespace string, buildConfig *tasks.BuildConfig) error {
 	for _, op := range tasks.SealedOperationNames {
-		task := tasks.GenerateSealedTaskForOperation(namespace, op)
+		task := tasks.GenerateSealedTaskForOperation(namespace, op, buildConfig)
 		if err := r.ensureSealedTask(ctx, task); err != nil {
 			return err
 		}
@@ -693,6 +701,23 @@ func (r *Reconciler) isTransientSecret(ctx context.Context, namespace, name stri
 		return false
 	}
 	return secret.Labels[transientLabel] == "true"
+}
+
+func (r *Reconciler) resolveBuildConfig(ctx context.Context) (*tasks.BuildConfig, error) {
+	operatorConfig := &automotivev1alpha1.OperatorConfig{}
+	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: OperatorNamespace}, operatorConfig); err != nil {
+		if k8serrors.IsNotFound(err) {
+			return &tasks.BuildConfig{}, nil
+		}
+		return nil, err
+	}
+	bc := &tasks.BuildConfig{
+		AutomotiveImageBuilderImage: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
+	}
+	if operatorConfig.Spec.OSBuilds != nil {
+		controllerutils.ApplyTrustedCABundleFromOSBuilds(bc, operatorConfig.Spec.OSBuilds)
+	}
+	return bc, nil
 }
 
 // deleteSecretWithRetry attempts to delete a secret with exponential backoff retry
