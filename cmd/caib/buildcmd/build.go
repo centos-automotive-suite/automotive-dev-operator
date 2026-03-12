@@ -737,7 +737,7 @@ func (h *Handler) handleFileUploads(
 	for _, ref := range localRefs {
 		uploads = append(uploads, buildapiclient.Upload{
 			SourcePath: ref["source_path"],
-			DestPath:   ref["path"],
+			DestPath:   ref["source_path"],
 		})
 	}
 
