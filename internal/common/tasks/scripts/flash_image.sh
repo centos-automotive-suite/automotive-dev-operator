@@ -82,14 +82,14 @@ if [ -n "${OCI_USERNAME}" ] && [ -n "${OCI_PASSWORD}" ]; then
     jmp shell ${JMP_SHELL_ARGS} -- env \
         OCI_USERNAME="${OCI_USERNAME}" \
         OCI_PASSWORD="${OCI_PASSWORD}" \
-        ${FLASH_CMD}
+        sh -c "${FLASH_CMD}"
     FLASH_EXIT=$?
     set -e  # Restore errexit
 else
     # No credentials, run flash command directly
     # shellcheck disable=SC2086
     set +e  # Temporarily disable errexit to capture exit code
-    jmp shell ${JMP_SHELL_ARGS} -- ${FLASH_CMD}
+    jmp shell ${JMP_SHELL_ARGS} -- sh -c "${FLASH_CMD}"
     FLASH_EXIT=$?
     set -e  # Restore errexit
 fi
