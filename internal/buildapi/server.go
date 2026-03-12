@@ -1591,6 +1591,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			ClientConfigSecretRef: flashSecretName,
 			LeaseDuration:         req.FlashLeaseDuration,
 			FlashCmd:              req.FlashCmd,
+			ExporterSelector:      req.FlashExporterSelector,
 		}
 	}
 

@@ -70,6 +70,11 @@ type FlashSpec struct {
 	// FlashCmd overrides the flash command from OperatorConfig target mappings
 	// +optional
 	FlashCmd string `json:"flashCmd,omitempty"`
+
+	// ExporterSelector overrides the exporter selector from OperatorConfig target mappings
+	// When set, the target-based lookup is skipped entirely
+	// +optional
+	ExporterSelector string `json:"exporterSelector,omitempty"`
 }
 
 // AIBSpec defines the automotive-image-builder configuration
@@ -427,6 +432,14 @@ func (s *ImageBuildSpec) GetRebuildBuilder() bool {
 		return s.AIB.RebuildBuilder
 	}
 	return false
+}
+
+// GetFlashExporterSelector returns the user-specified exporter selector override, or empty string
+func (s *ImageBuildSpec) GetFlashExporterSelector() string {
+	if s.Flash != nil {
+		return s.Flash.ExporterSelector
+	}
+	return ""
 }
 
 // GetFlashCmd returns the user-specified flash command override, or empty string

@@ -142,6 +142,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
 	buildCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
 	buildCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	buildCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
 	// Internal registry options
 	buildCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
@@ -198,6 +199,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	diskCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
 	diskCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
 	diskCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	diskCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
 	// Internal registry options
 	diskCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	diskCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
@@ -236,6 +238,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
 	buildDevCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
 	buildDevCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	buildDevCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
 	// Internal registry options
 	buildDevCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildDevCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")

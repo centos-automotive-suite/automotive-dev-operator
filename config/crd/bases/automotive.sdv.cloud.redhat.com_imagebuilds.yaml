@@ -159,6 +159,11 @@ spec:
                       The secret should have a key "client.yaml" with the config contents
                       If set, flash is enabled automatically
                     type: string
+                  exporterSelector:
+                    description: |-
+                      ExporterSelector overrides the exporter selector from OperatorConfig target mappings
+                      When set, the target-based lookup is skipped entirely
+                    type: string
                   flashCmd:
                     description: FlashCmd overrides the flash command from OperatorConfig
                       target mappings

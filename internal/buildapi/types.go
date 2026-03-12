@@ -139,10 +139,11 @@ type BuildRequest struct {
 	InternalRegistryTag       string `json:"internalRegistryTag,omitempty"`       // Tag for internal registry image (default: build name)
 
 	// Flash configuration for Jumpstarter device flashing after build
-	FlashEnabled       bool   `json:"flashEnabled,omitempty"`       // Enable flashing after build
-	FlashClientConfig  string `json:"flashClientConfig,omitempty"`  // Base64-encoded Jumpstarter client config
-	FlashLeaseDuration string `json:"flashLeaseDuration,omitempty"` // Lease duration in HH:MM:SS format
-	FlashCmd           string `json:"flashCmd,omitempty"`           // Override flash command from OperatorConfig
+	FlashEnabled          bool   `json:"flashEnabled,omitempty"`          // Enable flashing after build
+	FlashClientConfig     string `json:"flashClientConfig,omitempty"`     // Base64-encoded Jumpstarter client config
+	FlashLeaseDuration    string `json:"flashLeaseDuration,omitempty"`    // Lease duration in HH:MM:SS format
+	FlashCmd              string `json:"flashCmd,omitempty"`              // Override flash command from OperatorConfig
+	FlashExporterSelector string `json:"flashExporterSelector,omitempty"` // Override exporter selector from OperatorConfig
 }
 
 // RegistryCredentials contains authentication details for container registries.

@@ -63,6 +63,7 @@ type Options struct {
 	JumpstarterClient      *string
 	LeaseDuration          *string
 	FlashCmd               *string
+	ExporterSelector       *string
 
 	UseInternalRegistry       *bool
 	InternalRegistryImageName *string
@@ -385,7 +386,8 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, *h.opts.FlashAfterBuild)
+	validateFlash := *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
+	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
 	if cfgErr != nil {
 		h.handleError(cfgErr)
 		return
@@ -410,6 +412,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
 		req.FlashCmd = *h.opts.FlashCmd
+		req.FlashExporterSelector = *h.opts.ExporterSelector
 	}
 
 	resp, err := api.CreateBuild(ctx, req)
@@ -502,7 +505,8 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, *h.opts.FlashAfterBuild)
+	validateFlash := *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
+	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
 	if cfgErr != nil {
 		h.handleError(cfgErr)
 		return
@@ -527,6 +531,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
 		req.FlashCmd = *h.opts.FlashCmd
+		req.FlashExporterSelector = *h.opts.ExporterSelector
 	}
 
 	resp, err := api.CreateBuild(ctx, req)
@@ -636,7 +641,8 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, *h.opts.FlashAfterBuild)
+	validateFlash := *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
+	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
 	if cfgErr != nil {
 		h.handleError(cfgErr)
 		return
@@ -662,6 +668,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
 		req.FlashCmd = *h.opts.FlashCmd
+		req.FlashExporterSelector = *h.opts.ExporterSelector
 	}
 
 	resp, err := api.CreateBuild(ctx, req)
