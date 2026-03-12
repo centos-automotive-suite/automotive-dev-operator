@@ -665,7 +665,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			}, registrySecret); err != nil {
 				return fmt.Errorf("failed to read registry secret %q for flash OCI credentials: %w", imageBuild.Spec.SecretRef, err)
 			}
-			regUser, regPass := extractFlashCredentials(registrySecret, flashImageRef)
+			regUser, regPass := extractFlashCredentials(registrySecret, flashImageRef, log)
 			if len(regUser) == 0 && len(regPass) == 0 {
 				log.Info("No usable credentials found in registry secret for flash OCI auth",
 					"secret", imageBuild.Spec.SecretRef)
@@ -1979,7 +1979,7 @@ func (r *ImageBuildReconciler) shutdownUploadPod(ctx context.Context, imageBuild
 // extractFlashCredentials extracts username/password from a registry secret for flash OCI auth.
 // It first checks for explicit REGISTRY_USERNAME/REGISTRY_PASSWORD keys, then falls back
 // to parsing .dockerconfigjson or REGISTRY_AUTH_FILE_CONTENT to decode credentials.
-func extractFlashCredentials(secret *corev1.Secret, registryURL string) ([]byte, []byte) {
+func extractFlashCredentials(secret *corev1.Secret, registryURL string, log logr.Logger) ([]byte, []byte) {
 	regUser := secret.Data["REGISTRY_USERNAME"]
 	regPass := secret.Data["REGISTRY_PASSWORD"]
 	if len(regUser) > 0 && len(regPass) > 0 {
@@ -1992,6 +1992,7 @@ func extractFlashCredentials(secret *corev1.Secret, registryURL string) ([]byte,
 		dockerConfig = secret.Data["REGISTRY_AUTH_FILE_CONTENT"]
 	}
 	if len(dockerConfig) == 0 {
+		log.Error(nil, "No docker config found in secret", "secret", secret.Name)
 		return nil, nil
 	}
 
@@ -2001,41 +2002,35 @@ func extractFlashCredentials(secret *corev1.Secret, registryURL string) ([]byte,
 		} `json:"auths"`
 	}
 	if err := json.Unmarshal(dockerConfig, &cfg); err != nil {
+		log.Error(err, "Failed to parse docker config JSON from secret", "secret", secret.Name)
 		return nil, nil
 	}
 
-	// Prefer the entry matching the target registry
-	if registryURL != "" {
-		for key, entry := range cfg.Auths {
-			if !registryutil.RegistryHostMatches(key, registryURL) {
-				continue
-			}
-			if user, pass := decodeAuthEntry(entry.Auth); user != nil {
-				return user, pass
-			}
+	for key, entry := range cfg.Auths {
+		if !registryutil.RegistryHostMatches(key, registryURL) {
+			continue
 		}
-	}
-
-	// Fall back to first valid entry
-	for _, entry := range cfg.Auths {
-		if user, pass := decodeAuthEntry(entry.Auth); user != nil {
+		if user, pass := decodeAuthEntry(entry.Auth, log); user != nil {
 			return user, pass
 		}
 	}
+	log.Error(nil, "No matching credentials found in docker config", "secret", secret.Name, "registry", registryURL)
 	return nil, nil
 }
 
-func decodeAuthEntry(auth string) ([]byte, []byte) {
+func decodeAuthEntry(auth string, log logr.Logger) ([]byte, []byte) {
 	if auth == "" {
 		return nil, nil
 	}
 	decoded, err := base64.StdEncoding.DecodeString(auth)
 	if err != nil {
+		log.Error(err, "Failed to base64-decode auth entry")
 		return nil, nil
 	}
 	parts := strings.SplitN(string(decoded), ":", 2)
 	if len(parts) == 2 {
 		return []byte(parts[0]), []byte(parts[1])
 	}
+	log.Error(nil, "Auth entry missing ':' separator after decoding")
 	return nil, nil
 }
