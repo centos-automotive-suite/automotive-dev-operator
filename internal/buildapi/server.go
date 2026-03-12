@@ -457,24 +457,6 @@ func safeFilename(filename string) bool {
 		}
 	}
 
-	// Reject path traversal attempts
-	if strings.Contains(filename, "..") {
-		return false
-	}
-
-	// Reject absolute paths (should be relative)
-	if strings.HasPrefix(filename, "/") {
-		return false
-	}
-
-	// Reject filenames that are just dots or empty components after splitting
-	parts := strings.Split(filename, "/")
-	for _, part := range parts {
-		if part == "" || part == "." || part == ".." {
-			return false
-		}
-	}
-
 	return true
 }
 
@@ -1933,8 +1915,10 @@ func validateDestPath(dest string) (string, error) {
 	if !safeFilename(dest) {
 		return "", fmt.Errorf("invalid destination filename: %s", dest)
 	}
-	cleanDest := path.Clean(dest)
-	if strings.HasPrefix(cleanDest, "..") || strings.HasPrefix(cleanDest, "/") {
+	// Root the path so path.Clean resolves all ".." without escaping,
+	// then strip the leading "/" to make it relative to /workspace/shared/.
+	cleanDest := strings.TrimPrefix(path.Clean("/"+dest), "/")
+	if cleanDest == "" || cleanDest == "." {
 		return "", fmt.Errorf("invalid destination path: %s", dest)
 	}
 	return cleanDest, nil

@@ -25,13 +25,6 @@ func FindLocalFileReferences(manifestContent string) ([]map[string]string, error
 			return fmt.Errorf("empty or root path is not allowed")
 		}
 
-		normalizedPath := filepath.ToSlash(path)
-		for _, segment := range strings.Split(normalizedPath, "/") {
-			if segment == ".." {
-				return fmt.Errorf("directory traversal detected in path: %s", path)
-			}
-		}
-
 		if filepath.IsAbs(path) {
 			safeDirectories := configuredSafeDirectories()
 			if len(safeDirectories) > 0 {
