@@ -162,6 +162,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 
 				handleErr := fmt.Errorf("%s failed: %s", errPrefix, st.Message)
 				if isFlashFailure {
+					h.displayBuildResults(ctx, api, name)
 					h.handleFlashError(handleErr, st)
 				} else {
 					h.handleError(handleErr)
