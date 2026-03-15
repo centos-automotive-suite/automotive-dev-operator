@@ -437,7 +437,7 @@ type OperatorConfigStatus struct {
 	// OSBuildsDeployed indicates if the OS Builds Tekton tasks are currently deployed
 	OSBuildsDeployed bool `json:"osBuildsDeployed,omitempty"`
 
-	// JumpstarterAvailable indicates if Jumpstarter CRDs are present in the cluster
+	// JumpstarterAvailable indicates if Jumpstarter is available (explicitly configured or local CRDs detected)
 	JumpstarterAvailable bool `json:"jumpstarterAvailable,omitempty"`
 }
 

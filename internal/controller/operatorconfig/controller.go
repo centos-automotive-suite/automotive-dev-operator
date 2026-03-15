@@ -267,8 +267,8 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	// Detect Jumpstarter availability
-	jumpstarterAvailable := r.detectJumpstarter(ctx)
+	// Detect Jumpstarter availability: explicitly configured or auto-detected from local CRDs
+	jumpstarterAvailable := config.Spec.Jumpstarter != nil || r.detectJumpstarter(ctx)
 	if config.Status.JumpstarterAvailable != jumpstarterAvailable {
 		config.Status.JumpstarterAvailable = jumpstarterAvailable
 		statusChanged = true
