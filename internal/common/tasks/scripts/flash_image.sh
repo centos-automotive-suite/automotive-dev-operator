@@ -24,23 +24,32 @@ FLASH_CMD=$(echo "${FLASH_CMD}" | sed "s|{image_uri}|${IMAGE_REF}|g")
 
 
 LEASE_DURATION="${LEASE_DURATION:-03:00:00}"
+EXISTING_LEASE="${EXISTING_LEASE:-}"
 
 echo "Flash command: ${FLASH_CMD}"
-echo "Lease duration: ${LEASE_DURATION}"
-echo ""
 
-echo "Creating lease on exporter matching: ${EXPORTER_SELECTOR}"
+USER_PROVIDED_LEASE=false
 
-LEASE_NAME=$(jmp create lease --client-config "${JMP_CLIENT_CONFIG}" -l "${EXPORTER_SELECTOR}" --duration "${LEASE_DURATION}" -o name)
+if [[ -n "${EXISTING_LEASE}" ]]; then
+    echo "Using existing lease: ${EXISTING_LEASE}"
+    LEASE_NAME="${EXISTING_LEASE}"
+    USER_PROVIDED_LEASE=true
+else
+    echo "Lease duration: ${LEASE_DURATION}"
+    echo ""
+    echo "Creating lease on exporter matching: ${EXPORTER_SELECTOR}"
 
-if [[ -z "${LEASE_NAME}" ]]; then
-    echo "ERROR: Failed to create lease"
-    exit 1
+    LEASE_NAME=$(jmp create lease --client-config "${JMP_CLIENT_CONFIG}" -l "${EXPORTER_SELECTOR}" --duration "${LEASE_DURATION}" -o name)
+
+    if [[ -z "${LEASE_NAME}" ]]; then
+        echo "ERROR: Failed to create lease"
+        exit 1
+    fi
+
+    echo ""
+    echo "Lease acquired: ${LEASE_NAME}"
+    echo "Duration: ${LEASE_DURATION}"
 fi
-
-echo ""
-echo "Lease acquired: ${LEASE_NAME}"
-echo "Duration: ${LEASE_DURATION}"
 echo ""
 
 # Write lease ID to Tekton result
@@ -51,7 +60,7 @@ fi
 FLASH_SUCCESS=false
 
 cleanup() {
-    if [[ "${FLASH_SUCCESS}" != "true" ]]; then
+    if [[ "${FLASH_SUCCESS}" != "true" ]] && [[ "${USER_PROVIDED_LEASE}" != "true" ]]; then
         echo ""
         echo "Releasing lease ${LEASE_NAME} due to failure..."
         jmp delete leases --client-config "${JMP_CLIENT_CONFIG}" "${LEASE_NAME}" || true

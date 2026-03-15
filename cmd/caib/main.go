@@ -49,6 +49,7 @@ var (
 	flashName         string
 	exporterSelector  string
 	leaseDuration     string
+	leaseName         string
 	flashCmdOverride  string
 
 	// Internal registry options

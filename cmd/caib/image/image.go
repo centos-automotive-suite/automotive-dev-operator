@@ -57,6 +57,7 @@ type Options struct {
 	FlashName         *string
 	ExporterSelector  *string
 	LeaseDuration     *string
+	LeaseName         *string
 	FlashCmd          *string
 
 	UseInternalRegistry       *bool
@@ -140,7 +141,8 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// Jumpstarter flash options
 	buildCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
 	buildCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
-	buildCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	buildCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	buildCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	buildCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	buildCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
 	// Internal registry options
@@ -197,7 +199,8 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// Jumpstarter flash options
 	diskCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
 	diskCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
-	diskCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	diskCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	diskCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	diskCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	diskCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
 	// Internal registry options
@@ -236,7 +239,8 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// Jumpstarter flash options
 	buildDevCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
 	buildDevCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
-	buildDevCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	buildDevCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	buildDevCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	buildDevCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	buildDevCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
 	// Internal registry options
@@ -261,7 +265,8 @@ func NewImageCmd(opts Options) *cobra.Command {
 	flashCmd.Flags().StringVarP(opts.FlashName, "name", "n", "", "name for the flash job (auto-generated if omitted)")
 	flashCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform for exporter lookup")
 	flashCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector (alternative to --target)")
-	flashCmd.Flags().StringVar(opts.LeaseDuration, "lease", "03:00:00", "device lease duration (HH:MM:SS)")
+	flashCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration (HH:MM:SS)")
+	flashCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	flashCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	flashCmd.Flags().StringVar(
 		opts.RegistryAuthFile,

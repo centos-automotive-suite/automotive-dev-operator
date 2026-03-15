@@ -142,6 +142,7 @@ type BuildRequest struct {
 	FlashEnabled          bool   `json:"flashEnabled,omitempty"`          // Enable flashing after build
 	FlashClientConfig     string `json:"flashClientConfig,omitempty"`     // Base64-encoded Jumpstarter client config
 	FlashLeaseDuration    string `json:"flashLeaseDuration,omitempty"`    // Lease duration in HH:MM:SS format
+	FlashLeaseName        string `json:"flashLeaseName,omitempty"`        // Existing lease name (mutually exclusive with FlashLeaseDuration)
 	FlashCmd              string `json:"flashCmd,omitempty"`              // Override flash command from OperatorConfig
 	FlashExporterSelector string `json:"flashExporterSelector,omitempty"` // Override exporter selector from OperatorConfig
 }
@@ -183,8 +184,10 @@ type FlashRequest struct {
 	FlashCmd string `json:"flashCmd,omitempty"`
 	// ClientConfig is the base64-encoded Jumpstarter client config file content
 	ClientConfig string `json:"clientConfig"`
-	// LeaseDuration is the Jumpstarter lease duration in HH:MM:SS format (default: "01:00:00")
+	// LeaseDuration is the Jumpstarter lease duration in HH:MM:SS format (default: "03:00:00")
 	LeaseDuration string `json:"leaseDuration,omitempty"`
+	// LeaseName is an existing Jumpstarter lease name (mutually exclusive with LeaseDuration)
+	LeaseName string `json:"leaseName,omitempty"`
 	// RegistryCredentials contains OCI registry auth for pulling the flash image on the exporter
 	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
 }
@@ -241,6 +244,7 @@ type BuildParameters struct {
 	BuildDiskImage         bool   `json:"buildDiskImage,omitempty"`
 	FlashEnabled           bool   `json:"flashEnabled,omitempty"`
 	FlashLeaseDuration     string `json:"flashLeaseDuration,omitempty"`
+	FlashLeaseName         string `json:"flashLeaseName,omitempty"`
 	UseServiceAccountAuth  bool   `json:"useServiceAccountAuth,omitempty"`
 }
 

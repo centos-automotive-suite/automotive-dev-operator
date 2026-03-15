@@ -38,6 +38,7 @@ type Options struct {
 	Target            *string
 	ExporterSelector  *string
 	LeaseDuration     *string
+	LeaseName         *string
 	FlashCmd          *string
 	WaitForBuild      *bool
 	FollowLogs        *bool
@@ -99,6 +100,12 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	// Validate mutual exclusivity of --lease and --lease-duration
+	if *h.opts.LeaseName != "" && cmd.Flags().Changed("lease-duration") {
+		h.handleError(fmt.Errorf("--lease and --lease-duration are mutually exclusive"))
+		return
+	}
+
 	api, err := common.CreateBuildAPIClient(server, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
@@ -118,8 +125,11 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		Target:           *h.opts.Target,
 		ExporterSelector: *h.opts.ExporterSelector,
 		ClientConfig:     clientConfigB64,
-		LeaseDuration:    *h.opts.LeaseDuration,
+		LeaseName:        *h.opts.LeaseName,
 		FlashCmd:         *h.opts.FlashCmd,
+	}
+	if req.LeaseName == "" {
+		req.LeaseDuration = *h.opts.LeaseDuration
 	}
 
 	// Resolve OCI registry credentials for the flash image
@@ -179,13 +189,18 @@ func parseLeaseDuration(duration string) (time.Duration, error) {
 func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.Client, name string) {
 	fmt.Println("Waiting for flash to complete...")
 
-	leaseDuration, err := parseLeaseDuration(*h.opts.LeaseDuration)
-	if err != nil {
-		h.handleError(fmt.Errorf("invalid lease duration: %w", err))
-		return
+	var timeoutDuration time.Duration
+	if *h.opts.LeaseName != "" {
+		// Using an existing lease; use a generous default timeout
+		timeoutDuration = 4*time.Hour + 10*time.Minute
+	} else {
+		leaseDuration, err := parseLeaseDuration(*h.opts.LeaseDuration)
+		if err != nil {
+			h.handleError(fmt.Errorf("invalid lease duration: %w", err))
+			return
+		}
+		timeoutDuration = leaseDuration + 10*time.Minute
 	}
-
-	timeoutDuration := leaseDuration + 10*time.Minute
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeoutDuration)
 	defer cancel()
 	ticker := time.NewTicker(5 * time.Second)

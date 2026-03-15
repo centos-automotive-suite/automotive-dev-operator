@@ -733,6 +733,10 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: imageBuild.Spec.GetFlashLeaseDuration()},
 			},
 			tektonv1.Param{
+				Name:  "flash-lease-name",
+				Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: imageBuild.Spec.GetFlashLeaseName()},
+			},
+			tektonv1.Param{
 				Name:  "jumpstarter-image",
 				Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: operatorConfig.Spec.Jumpstarter.GetJumpstarterImage()},
 			},
@@ -1354,6 +1358,10 @@ func (r *ImageBuildReconciler) createFlashTaskRun(
 		{
 			Name:  "lease-duration",
 			Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: leaseDuration},
+		},
+		{
+			Name:  "lease-name",
+			Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: imageBuild.Spec.GetFlashLeaseName()},
 		},
 	}
 
