@@ -758,6 +758,15 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					},
 				},
 				{
+					Name:        "flash-lease-name",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Existing Jumpstarter lease name to use instead of creating a new one",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
 					Name:        "jumpstarter-image",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Container image for Jumpstarter CLI operations",
@@ -1097,6 +1106,13 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 							},
 						},
 						{
+							Name: "lease-name",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.flash-lease-name)",
+							},
+						},
+						{
 							Name: "jumpstarter-image",
 							Value: tektonv1.ParamValue{
 								Type:      tektonv1.ParamTypeString,
@@ -1402,6 +1418,15 @@ func GenerateFlashTask(namespace string, buildConfig *BuildConfig) *tektonv1.Tas
 					},
 				},
 				{
+					Name:        "lease-name",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Existing Jumpstarter lease name to use instead of creating a new one",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
 					Name:        "jumpstarter-image",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Container image for Jumpstarter CLI operations",
@@ -1452,6 +1477,10 @@ func GenerateFlashTask(namespace string, buildConfig *BuildConfig) *tektonv1.Tas
 						{
 							Name:  "LEASE_DURATION",
 							Value: "$(params.lease-duration)",
+						},
+						{
+							Name:  "EXISTING_LEASE",
+							Value: "$(params.lease-name)",
 						},
 						{
 							Name:  "JMP_CLIENT_CONFIG",

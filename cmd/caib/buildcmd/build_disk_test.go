@@ -40,6 +40,7 @@ func newTestDiskOpts() Options {
 		flashAfterBuild      bool
 		jumpstarterClient    string
 		leaseDuration        = "03:00:00"
+		leaseName            string
 		useInternalRegistry  bool
 		internalRegImageName string
 		internalRegTag       string
@@ -75,6 +76,7 @@ func newTestDiskOpts() Options {
 		FlashAfterBuild:           &flashAfterBuild,
 		JumpstarterClient:         &jumpstarterClient,
 		LeaseDuration:             &leaseDuration,
+		LeaseName:                 &leaseName,
 		UseInternalRegistry:       &useInternalRegistry,
 		InternalRegistryImageName: &internalRegImageName,
 		InternalRegistryTag:       &internalRegTag,

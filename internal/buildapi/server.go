@@ -1572,6 +1572,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		flashSpec = &automotivev1alpha1.FlashSpec{
 			ClientConfigSecretRef: flashSecretName,
 			LeaseDuration:         req.FlashLeaseDuration,
+			LeaseName:             req.FlashLeaseName,
 			FlashCmd:              req.FlashCmd,
 			ExporterSelector:      req.FlashExporterSelector,
 		}
@@ -1828,6 +1829,7 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 			BuildDiskImage:         build.Spec.GetBuildDiskImage(),
 			FlashEnabled:           build.Spec.IsFlashEnabled(),
 			FlashLeaseDuration:     build.Spec.GetFlashLeaseDuration(),
+			FlashLeaseName:         build.Spec.GetFlashLeaseName(),
 			UseServiceAccountAuth:  build.Spec.GetUseServiceAccountAuth(),
 		},
 	})
@@ -2825,6 +2827,12 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		return
 	}
 
+	// Validate mutual exclusivity of lease-name and lease-duration
+	if req.LeaseName != "" && req.LeaseDuration != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lease-name and lease-duration are mutually exclusive"})
+		return
+	}
+
 	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
@@ -2895,9 +2903,10 @@ func (a *APIServer) createFlash(c *gin.Context) {
 	// Get the flash task spec
 	flashTask := tasks.GenerateFlashTask(namespace, flashBuildConfig)
 
-	// Lease duration: request > FlashTimeoutMinutes (as HH:MM:SS) > Jumpstarter default > constant
+	// Lease duration: only resolve when not using an existing lease
+	// Fallback: request > FlashTimeoutMinutes (as HH:MM:SS) > Jumpstarter default > constant
 	leaseDuration := req.LeaseDuration
-	if leaseDuration == "" {
+	if req.LeaseName == "" && leaseDuration == "" {
 		if operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.FlashTimeoutMinutes > 0 {
 			m := operatorConfig.Spec.OSBuilds.FlashTimeoutMinutes
 			leaseDuration = fmt.Sprintf("%02d:%02d:00", m/60, m%60)
@@ -2947,6 +2956,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 				{Name: "exporter-selector", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: exporterSelector}},
 				{Name: "flash-cmd", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: flashCmd}},
 				{Name: "lease-duration", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: leaseDuration}},
+				{Name: "lease-name", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: req.LeaseName}},
 			},
 			Workspaces: workspaces,
 		},

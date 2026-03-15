@@ -173,6 +173,11 @@ spec:
                     description: LeaseDuration is the duration for the device lease
                       in HH:MM:SS format
                     type: string
+                  leaseName:
+                    description: |-
+                      LeaseName is an existing Jumpstarter lease name to use instead of creating a new one
+                      Mutually exclusive with LeaseDuration
+                    type: string
                 type: object
               pushSecretRef:
                 description: |-

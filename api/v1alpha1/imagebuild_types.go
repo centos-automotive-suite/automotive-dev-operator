@@ -67,6 +67,11 @@ type FlashSpec struct {
 	// +kubebuilder:default="03:00:00"
 	LeaseDuration string `json:"leaseDuration,omitempty"`
 
+	// LeaseName is an existing Jumpstarter lease name to use instead of creating a new one
+	// Mutually exclusive with LeaseDuration
+	// +optional
+	LeaseName string `json:"leaseName,omitempty"`
+
 	// FlashCmd overrides the flash command from OperatorConfig target mappings
 	// +optional
 	FlashCmd string `json:"flashCmd,omitempty"`
@@ -456,4 +461,12 @@ func (s *ImageBuildSpec) GetFlashLeaseDuration() string {
 		return s.Flash.LeaseDuration
 	}
 	return DefaultFlashLeaseDuration
+}
+
+// GetFlashLeaseName returns the user-provided lease name, or empty string
+func (s *ImageBuildSpec) GetFlashLeaseName() string {
+	if s.Flash != nil {
+		return s.Flash.LeaseName
+	}
+	return ""
 }

@@ -62,6 +62,7 @@ type Options struct {
 	FlashAfterBuild        *bool
 	JumpstarterClient      *string
 	LeaseDuration          *string
+	LeaseName              *string
 	FlashCmd               *string
 	ExporterSelector       *string
 
@@ -411,6 +412,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		req.FlashEnabled = true
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
+		req.FlashLeaseName = *h.opts.LeaseName
 		req.FlashCmd = *h.opts.FlashCmd
 		req.FlashExporterSelector = *h.opts.ExporterSelector
 	}
@@ -530,6 +532,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		req.FlashEnabled = true
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
+		req.FlashLeaseName = *h.opts.LeaseName
 		req.FlashCmd = *h.opts.FlashCmd
 		req.FlashExporterSelector = *h.opts.ExporterSelector
 	}
@@ -667,6 +670,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		req.FlashEnabled = true
 		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
 		req.FlashLeaseDuration = *h.opts.LeaseDuration
+		req.FlashLeaseName = *h.opts.LeaseName
 		req.FlashCmd = *h.opts.FlashCmd
 		req.FlashExporterSelector = *h.opts.ExporterSelector
 	}
