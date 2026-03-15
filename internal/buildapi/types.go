@@ -136,7 +136,7 @@ type BuildRequest struct {
 	// Internal registry push configuration
 	UseInternalRegistry       bool   `json:"useInternalRegistry,omitempty"`       // Push to OpenShift internal registry
 	InternalRegistryImageName string `json:"internalRegistryImageName,omitempty"` // Override image name (default: build name)
-	InternalRegistryTag       string `json:"internalRegistryTag,omitempty"`       // Tag for internal registry image (default: build name)
+	InternalRegistryTag       string `json:"internalRegistryTag,omitempty"`       // Tag for internal registry image (default: "bootc" for bootc mode, "disk" for disk/traditional mode)
 
 	// Flash configuration for Jumpstarter device flashing after build
 	FlashEnabled          bool   `json:"flashEnabled,omitempty"`          // Enable flashing after build

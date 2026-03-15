@@ -31,6 +31,7 @@ import (
 	"time"
 
 	containersarchive "github.com/containers/storage/pkg/archive"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
@@ -150,7 +151,7 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 
 	if buildName == "" {
 		dirName := filepath.Base(absContextDir)
-		buildName = fmt.Sprintf("cb-%s-%s", sanitizeBuildName(dirName), time.Now().Format("20060102-150405"))
+		buildName = fmt.Sprintf("cb-%s-%s", sanitizeBuildName(dirName), uuid.New().String()[:5])
 		fmt.Printf("Auto-generated build name: %s\n", buildName)
 	} else {
 		validateBuildName(buildName)

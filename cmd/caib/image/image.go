@@ -148,7 +148,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// Internal registry options
 	buildCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
-	buildCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
+	buildCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: bootc)")
 
 	listCmd.Flags().StringVar(
 		opts.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
@@ -206,7 +206,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// Internal registry options
 	diskCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	diskCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
-	diskCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
+	diskCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: disk)")
 
 	// build-dev command flags (traditional ostree/package builds)
 	buildDevCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
@@ -246,7 +246,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// Internal registry options
 	buildDevCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildDevCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
-	buildDevCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: build name)")
+	buildDevCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: disk)")
 
 	// logs command flags
 	logsCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
