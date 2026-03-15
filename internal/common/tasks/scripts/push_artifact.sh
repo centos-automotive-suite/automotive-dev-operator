@@ -173,6 +173,9 @@ distro="$(params.distro)"
 target="$(params.target)"
 arch="$(params.arch)"
 builder_image_used="$(params.builder-image)"
+aib_version="$(params.aib-version)"
+aib_image="$(params.automotive-image-builder)"
+aib_command="$(params.aib-command)"
 
 config_file="/etc/target-defaults/target-defaults.yaml"
 default_partitions=""
@@ -187,20 +190,6 @@ if [ -f "$config_file" ]; then
   fi
 else
   echo "No partition configuration found, skipping default-partitions annotation"
-fi
-
-default_partitions_annotation=""
-if [ -n "$default_partitions" ]; then
-  default_partitions_escaped=$(json_escape "$default_partitions")
-  default_partitions_annotation=",
-    \"automotive.sdv.cloud.redhat.com/default-partitions\": \"${default_partitions_escaped}\""
-fi
-
-builder_image_annotation=""
-if [ -n "$builder_image_used" ]; then
-  builder_image_escaped=$(json_escape "$builder_image_used")
-  builder_image_annotation=",
-    \"automotive.sdv.cloud.redhat.com/builder-image\": \"${builder_image_escaped}\""
 fi
 
 cd /workspace/shared
@@ -294,19 +283,41 @@ if [ -d "${parts_dir}" ] && [ -n "$(ls -A "${parts_dir}" 2>/dev/null)" ]; then
     exit 1
   fi
 
+  # Add the aib manifest as a non-partition layer with its own media type
+  if [ -f "/workspace/shared/aib-manifest.yml" ]; then
+    cp "/workspace/shared/aib-manifest.yml" "aib-manifest.yml"
+    layer_args="${layer_args} aib-manifest.yml:application/vnd.automotive.aib-manifest+yaml"
+    layer_annotations_json="${layer_annotations_json},\"aib-manifest.yml\":{\"org.opencontainers.image.title\":\"aib-manifest.yml\"}"
+  fi
+
   # Get artifact type from first entry in filtered file_list
   first_filename=$(echo "$file_list" | cut -d',' -f1)
   artifact_type=$(get_artifact_type "$first_filename")
 
+  manifest_annotations_json=$(python3 - \
+      "$distro" "$target" "$arch" "$file_list" \
+      "$default_partitions" "$builder_image_used" "$aib_version" "$aib_image" "$aib_command" <<'PYEOF'
+import json, sys
+distro, target, arch, parts, default_parts, builder, aib_ver, aib_img, aib_cmd = sys.argv[1:10]
+a = {
+    "automotive.sdv.cloud.redhat.com/multi-layer": "true",
+    "automotive.sdv.cloud.redhat.com/parts":       parts,
+    "automotive.sdv.cloud.redhat.com/distro":      distro,
+    "automotive.sdv.cloud.redhat.com/target":      target,
+    "automotive.sdv.cloud.redhat.com/arch":        arch,
+}
+if default_parts: a["automotive.sdv.cloud.redhat.com/default-partitions"]      = default_parts
+if builder:       a["automotive.sdv.cloud.redhat.com/builder-image"]            = builder
+if aib_ver:       a["automotive.sdv.cloud.redhat.com/aib-version"]              = aib_ver
+if aib_img:       a["automotive.sdv.cloud.redhat.com/automotive-image-builder"] = aib_img
+if aib_cmd:       a["automotive.sdv.cloud.redhat.com/aib-command"]              = aib_cmd
+print(json.dumps(a))
+PYEOF
+)
+
   cat > "$annotations_file" <<EOF
 {
-  "\$manifest": {
-    "automotive.sdv.cloud.redhat.com/multi-layer": "true",
-    "automotive.sdv.cloud.redhat.com/parts": "${file_list}",
-    "automotive.sdv.cloud.redhat.com/distro": "${distro}",
-    "automotive.sdv.cloud.redhat.com/target": "${target}",
-    "automotive.sdv.cloud.redhat.com/arch": "${arch}"${default_partitions_annotation}${builder_image_annotation}
-  },
+  "\$manifest": ${manifest_annotations_json},
   ${layer_annotations_json}
 }
 EOF
@@ -348,19 +359,38 @@ else
 
   media_type=$(get_media_type "${exportFile}")
 
-  annotation_args=""
-
+  parts_list=""
   if echo "${exportFile}" | grep -q '\.tar'; then
     echo "Listing tar contents for annotation"
-    file_list=$(tar -tf "${exportFile}" 2>/dev/null | grep -v '/$' | xargs -I{} basename {} | sort | tr '\n' ',' | sed 's/,$//')
-    if [ -n "$file_list" ]; then
-      echo "  Contents: ${file_list}"
-      annotation_args="--annotation automotive.sdv.cloud.redhat.com/parts=${file_list}"
-    fi
+    parts_list=$(tar -tf "${exportFile}" 2>/dev/null | grep -v '/$' | xargs -I{} basename {} | sort | tr '\n' ',' | sed 's/,$//')
+    [ -n "$parts_list" ] && echo "  Contents: ${parts_list}"
   fi
 
-  if [ -n "$builder_image_used" ]; then
-    annotation_args="${annotation_args} --annotation automotive.sdv.cloud.redhat.com/builder-image=${builder_image_used}"
+  single_annotations_file="./oras-single-annotations.json"
+  trap 'rm -f "$single_annotations_file"' EXIT
+  python3 - "$single_annotations_file" \
+      "$distro" "$target" "$arch" \
+      "$parts_list" "$builder_image_used" "$aib_version" "$aib_image" "$aib_command" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+out_file, distro, target, arch, parts, builder, aib_ver, aib_img, aib_cmd = sys.argv[1:10]
+annotations = {
+    "automotive.sdv.cloud.redhat.com/distro":  distro,
+    "automotive.sdv.cloud.redhat.com/target":  target,
+    "automotive.sdv.cloud.redhat.com/arch":    arch,
+}
+if parts:    annotations["automotive.sdv.cloud.redhat.com/parts"]                    = parts
+if builder:  annotations["automotive.sdv.cloud.redhat.com/builder-image"]            = builder
+if aib_ver:  annotations["automotive.sdv.cloud.redhat.com/aib-version"]              = aib_ver
+if aib_img:  annotations["automotive.sdv.cloud.redhat.com/automotive-image-builder"] = aib_img
+if aib_cmd:  annotations["automotive.sdv.cloud.redhat.com/aib-command"]              = aib_cmd
+Path(out_file).write_text(json.dumps({"$manifest": annotations}))
+PYEOF
+
+  aib_manifest_layer=""
+  if [ -f "/workspace/shared/aib-manifest.yml" ]; then
+    aib_manifest_layer="aib-manifest.yml:application/vnd.automotive.aib-manifest+yaml"
   fi
 
   emit_progress "Pushing artifact" 0 1
@@ -370,15 +400,14 @@ else
   echo "  Media type: ${media_type}"
   echo "  Annotations: distro=${distro}, target=${target}, arch=${arch}"
 
+  # shellcheck disable=SC2086
   "$HOME/bin/oras" push --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${media_type}" \
-    --annotation "automotive.sdv.cloud.redhat.com/distro=${distro}" \
-    --annotation "automotive.sdv.cloud.redhat.com/target=${target}" \
-    --annotation "automotive.sdv.cloud.redhat.com/arch=${arch}" \
-    ${annotation_args} \
+    --annotation-file "$single_annotations_file" \
     "${repo_url}" \
-    "${exportFile}:${media_type}"
+    "${exportFile}:${media_type}" \
+    ${aib_manifest_layer}
 
   emit_progress "Pushing artifact" 1 1
 
