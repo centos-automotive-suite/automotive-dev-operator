@@ -378,7 +378,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		base = strings.TrimSuffix(base, ".aib.yml")
 		base = strings.TrimSuffix(base, ".mpp.yml")
 		sanitized := common.SanitizeBuildName(base)
-		*h.opts.BuildName = fmt.Sprintf("%s-%s", sanitized, time.Now().Format("20060102-150405"))
+		*h.opts.BuildName = sanitized
 		fmt.Printf("Auto-generated build name: %s\n", *h.opts.BuildName)
 	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
 		h.handleError(err)
@@ -493,7 +493,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		imagePart := parts[len(parts)-1]
 		imagePart = strings.Split(imagePart, ":")[0]
 		sanitized := common.SanitizeBuildName(imagePart)
-		*h.opts.BuildName = fmt.Sprintf("disk-%s-%s", sanitized, time.Now().Format("20060102-150405"))
+		*h.opts.BuildName = fmt.Sprintf("disk-%s", sanitized)
 		fmt.Printf("Auto-generated build name: %s\n", *h.opts.BuildName)
 	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
 		h.handleError(err)
@@ -593,7 +593,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		base = strings.TrimSuffix(base, ".aib.yml")
 		base = strings.TrimSuffix(base, ".mpp.yml")
 		sanitized := common.SanitizeBuildName(base)
-		*h.opts.BuildName = fmt.Sprintf("%s-%s", sanitized, time.Now().Format("20060102-150405"))
+		*h.opts.BuildName = sanitized
 		fmt.Printf("Auto-generated build name: %s\n", *h.opts.BuildName)
 	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
 		h.handleError(err)

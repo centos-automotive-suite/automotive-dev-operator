@@ -1406,9 +1406,6 @@ func (a *APIServer) setupInternalRegistryBuild(
 		imageName = req.Name
 	}
 	tag := req.InternalRegistryTag
-	if tag == "" {
-		tag = req.Name
-	}
 
 	// Set concrete URLs based on build mode.
 	// When ContainerPush is already set (hybrid: external container push),
@@ -1416,33 +1413,38 @@ func (a *APIServer) setupInternalRegistryBuild(
 	externalContainerPush := req.ContainerPush != ""
 	if req.Mode.IsBootc() {
 		if !externalContainerPush {
-			req.ContainerPush = generateRegistryImageRef(defaultInternalRegistryURL, namespace, imageName, tag)
+			bootcTag := tag
+			if bootcTag == "" {
+				bootcTag = "bootc"
+			}
+			req.ContainerPush = generateRegistryImageRef(defaultInternalRegistryURL, namespace, imageName, bootcTag)
 		}
 		// Flash requires a disk image
 		if req.FlashEnabled && !req.BuildDiskImage {
 			req.BuildDiskImage = true
 		}
 		if req.BuildDiskImage {
-			req.ExportOCI = generateRegistryImageRef(defaultInternalRegistryURL, namespace, imageName+"-disk", tag)
+			diskTag := tag
+			if diskTag == "" {
+				diskTag = "disk"
+			}
+			req.ExportOCI = generateRegistryImageRef(defaultInternalRegistryURL, namespace, imageName, diskTag)
 		}
 	} else {
 		// Traditional/disk modes: push disk image as OCI artifact
-		req.ExportOCI = generateRegistryImageRef(defaultInternalRegistryURL, namespace, imageName, tag)
+		diskTag := tag
+		if diskTag == "" {
+			diskTag = "disk"
+		}
+		req.ExportOCI = generateRegistryImageRef(defaultInternalRegistryURL, namespace, imageName, diskTag)
 	}
 
-	// Pre-create ImageStream(s) for internal registry pushes only
-	var imageStreams []string
-	if !externalContainerPush {
-		imageStreams = append(imageStreams, imageName)
-	}
-	if req.Mode.IsBootc() && req.BuildDiskImage {
-		imageStreams = append(imageStreams, imageName+"-disk")
-	}
-	if !req.Mode.IsBootc() {
-		imageStreams = append(imageStreams, imageName)
-	}
-	for _, isName := range imageStreams {
-		if _, err := ensureImageStream(ctx, k8sClient, namespace, isName); err != nil {
+	// Pre-create ImageStream for internal registry pushes.
+	// All images (bootc container and disk) share the same ImageStream,
+	// distinguished by tag (:bootc, :disk).
+	needsImageStream := !externalContainerPush || req.BuildDiskImage || !req.Mode.IsBootc()
+	if needsImageStream {
+		if _, err := ensureImageStream(ctx, k8sClient, namespace, imageName); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating ImageStream: %v", err)})
 			return "", "", err
 		}
@@ -2818,7 +2820,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 
 	// Auto-generate name if not provided
 	if req.Name == "" {
-		req.Name = fmt.Sprintf("flash-%s", time.Now().Format("20060102-150405"))
+		req.Name = fmt.Sprintf("flash-%s", uuid.New().String()[:5])
 	}
 
 	// Validate name
@@ -3260,7 +3262,7 @@ func validateSealedRequest(req *SealedRequest) ([]string, string) {
 		}
 	}
 	if req.Name == "" {
-		req.Name = fmt.Sprintf("%s-%s", stages[0], time.Now().Format("20060102-150405"))
+		req.Name = fmt.Sprintf("%s-%s", stages[0], uuid.New().String()[:5])
 	}
 	if err := validateBuildName(req.Name); err != nil {
 		return nil, err.Error()
