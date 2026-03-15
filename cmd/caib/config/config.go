@@ -59,15 +59,18 @@ func DefaultServerWithDerive() string {
 // JumpstarterEndpoint reads the default Jumpstarter client config files and returns
 // the gRPC endpoint, or "" if the config is absent or incomplete.
 func JumpstarterEndpoint() string {
-	xdgBase := os.Getenv("XDG_CONFIG_HOME")
-	if xdgBase == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
+	jmpDir := os.Getenv("JMP_CLIENT_CONFIG_HOME")
+	if jmpDir == "" {
+		xdgBase := os.Getenv("XDG_CONFIG_HOME")
+		if xdgBase == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return ""
+			}
+			xdgBase = filepath.Join(home, ".config")
 		}
-		xdgBase = filepath.Join(home, ".config")
+		jmpDir = filepath.Join(xdgBase, "jumpstarter")
 	}
-	jmpDir := filepath.Join(xdgBase, "jumpstarter")
 
 	data, err := os.ReadFile(filepath.Join(jmpDir, "config.yaml"))
 	if err != nil {

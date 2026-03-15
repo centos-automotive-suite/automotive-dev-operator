@@ -323,15 +323,13 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 	if *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
 		return fmt.Errorf("cannot enable --flash without exporting a disk image (%s)", pushRequiredFlag)
 	}
-	if *h.opts.JumpstarterClient == "" {
-		return fmt.Errorf("--flash requires --client to specify Jumpstarter client config file")
-	}
-	clientConfigBytes, err := os.ReadFile(*h.opts.JumpstarterClient)
+	clientInfo, err := common.ResolveJumpstarterClient(strings.TrimSpace(*h.opts.JumpstarterClient))
 	if err != nil {
-		return fmt.Errorf("failed to read Jumpstarter client config: %w", err)
+		return fmt.Errorf("--flash: %w", err)
 	}
+	fmt.Printf("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
 	req.FlashEnabled = true
-	req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
+	req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientInfo.Data)
 	req.FlashLeaseName = *h.opts.LeaseName
 	if req.FlashLeaseName == "" {
 		req.FlashLeaseDuration = *h.opts.LeaseDuration

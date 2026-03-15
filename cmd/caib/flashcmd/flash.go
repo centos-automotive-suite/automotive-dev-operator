@@ -89,10 +89,13 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if strings.TrimSpace(*h.opts.JumpstarterClient) == "" {
-		h.handleError(fmt.Errorf("--client is required"))
+	// Resolve Jumpstarter client config (explicit path or auto-detect)
+	clientInfo, err := common.ResolveJumpstarterClient(strings.TrimSpace(*h.opts.JumpstarterClient))
+	if err != nil {
+		h.handleError(err)
 		return
 	}
+	fmt.Printf("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
 
 	// Validate that either target or exporter is specified.
 	if strings.TrimSpace(*h.opts.Target) == "" && strings.TrimSpace(*h.opts.ExporterSelector) == "" {
@@ -112,12 +115,7 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	clientConfigBytes, err := os.ReadFile(*h.opts.JumpstarterClient)
-	if err != nil {
-		h.handleError(fmt.Errorf("failed to read client config file: %w", err))
-		return
-	}
-	clientConfigB64 := base64.StdEncoding.EncodeToString(clientConfigBytes)
+	clientConfigB64 := base64.StdEncoding.EncodeToString(clientInfo.Data)
 
 	req := buildapitypes.FlashRequest{
 		Name:             *h.opts.FlashName,
