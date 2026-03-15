@@ -141,27 +141,12 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 			}
 			if st.Phase == phaseFailed {
 				pb.Clear()
-				errPrefix := errPrefixBuild
-				isFlashFailure := false
+				isFlashFailure := strings.Contains(strings.ToLower(st.Message), errPrefixFlash) ||
+					lastPhase == phaseFlashing
 
-				if strings.Contains(strings.ToLower(st.Message), errPrefixFlash) {
-					errPrefix = errPrefixFlash
-					isFlashFailure = true
-				} else if strings.Contains(strings.ToLower(st.Message), errPrefixPush) {
-					errPrefix = errPrefixPush
-				} else if lastPhase == phaseFlashing {
-					errPrefix = errPrefixFlash
-					isFlashFailure = true
-				} else if lastPhase == "Pushing" {
-					errPrefix = errPrefixPush
-				} else if *h.opts.FlashAfterBuild &&
-					(lastPhase == phaseFlashing || strings.Contains(strings.ToLower(st.Message), errPrefixFlash)) {
-					errPrefix = errPrefixFlash
-					isFlashFailure = true
-				}
-
-				handleErr := fmt.Errorf("%s failed: %s", errPrefix, st.Message)
-				if isFlashFailure {
+				handleErr := fmt.Errorf("%s", st.Message)
+				if isFlashFailure || *h.opts.FlashAfterBuild {
+					h.displayBuildResults(ctx, api, name)
 					h.handleFlashError(handleErr, st)
 				} else {
 					h.handleError(handleErr)

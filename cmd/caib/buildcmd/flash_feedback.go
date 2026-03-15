@@ -45,37 +45,30 @@ func (h *Handler) displayFlashInstructions(st *buildapitypes.BuildResponse, isFa
 	}
 
 	colorsSupported := h.supportsColorOutput()
-	var headerColor, commandColor, infoColor func(...any) string
-	var headerPrefix, commandPrefix string
+	var commandColor, infoColor func(...any) string
+	var commandPrefix string
 
 	if isFailure {
 		if colorsSupported {
-			headerColor = color.New(color.FgHiRed, color.Bold).SprintFunc()
 			commandColor = color.New(color.FgHiYellow, color.Bold).SprintFunc()
 			infoColor = color.New(color.FgHiWhite).SprintFunc()
 		} else {
-			headerColor = func(a ...any) string { return fmt.Sprint(a...) }
 			commandColor = func(a ...any) string { return fmt.Sprint(a...) }
 			infoColor = func(a ...any) string { return fmt.Sprint(a...) }
-			headerPrefix = "[!] "
 			commandPrefix = ">> "
 		}
 	} else {
 		if colorsSupported {
-			headerColor = color.New(color.FgHiWhite, color.Bold).SprintFunc()
 			commandColor = color.New(color.FgHiGreen, color.Bold).SprintFunc()
 			infoColor = color.New(color.FgHiYellow).SprintFunc()
 		} else {
-			headerColor = func(a ...any) string { return fmt.Sprint(a...) }
 			commandColor = func(a ...any) string { return fmt.Sprint(a...) }
 			infoColor = func(a ...any) string { return fmt.Sprint(a...) }
-			headerPrefix = "[*] "
 			commandPrefix = ">> "
 		}
 	}
 
 	if isFailure {
-		fmt.Printf("\n%s%s\n", headerPrefix, headerColor("Manual Flash Required"))
 		fmt.Printf("%s\n", infoColor("Flash failed, but you can flash manually using Jumpstarter:"))
 	} else {
 		fmt.Printf("%s\n", infoColor("Jumpstarter is available for flashing:"))

@@ -374,7 +374,7 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 	// Build failed - cleanup transient secrets
 	r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
 
-	if err := r.updateStatus(ctx, imageBuild, phaseFailed, pipelineRunFailureMessage(pipelineRun)); err != nil {
+	if err := r.updateStatus(ctx, imageBuild, phaseFailed, r.pipelineRunFailureDetail(ctx, pipelineRun)); err != nil {
 		log.Error(err, "Failed to update status to Failed")
 		return ctrl.Result{}, err
 	}
@@ -1515,6 +1515,26 @@ func pipelineRunFailureMessage(pipelineRun *tektonv1.PipelineRun) string {
 		}
 	}
 	return "Build failed"
+}
+
+func (r *ImageBuildReconciler) pipelineRunFailureDetail(ctx context.Context, pipelineRun *tektonv1.PipelineRun) string {
+	for _, child := range pipelineRun.Status.ChildReferences {
+		if child.PipelineTaskName != "flash-image" {
+			continue
+		}
+		taskRun := &tektonv1.TaskRun{}
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      child.Name,
+			Namespace: pipelineRun.Namespace,
+		}, taskRun); err != nil {
+			break
+		}
+		if isTaskRunCompleted(taskRun) && !isTaskRunSuccessful(taskRun) {
+			return taskRunFailureMessage(taskRun, "Flash failed")
+		}
+		break
+	}
+	return pipelineRunFailureMessage(pipelineRun)
 }
 
 func taskRunFailureMessage(taskRun *tektonv1.TaskRun, fallback string) string {

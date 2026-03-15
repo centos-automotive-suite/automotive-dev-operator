@@ -26,9 +26,7 @@ const (
 	phaseRunning   = "Running"
 	phaseUploading = "Uploading"
 
-	errPrefixBuild = "build"
 	errPrefixFlash = "flash"
-	errPrefixPush  = "push"
 )
 
 // Options wires build handlers to caller-owned state and helper functions.
