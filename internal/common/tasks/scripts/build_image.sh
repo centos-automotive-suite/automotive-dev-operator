@@ -239,6 +239,24 @@ fi
 # Record the effective builder image used for annotation
 echo -n "${BUILDER_IMAGE:-}" > /tekton/results/builder-image
 
+# Capture AIB version and pinned image reference for disk artifact annotations
+AIB_VERSION=$(aib --version 2>&1 | head -1 | tr -d '\r\n' | sed 's/^aib //' || echo "")
+echo -n "${AIB_VERSION}" > /tekton/results/aib-version
+
+AIB_IMAGE_REF="$(params.automotive-image-builder)"
+AIB_IMAGE_DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://${AIB_IMAGE_REF}" 2>/dev/null || echo "")
+if [ -n "$AIB_IMAGE_DIGEST" ]; then
+    AIB_IMAGE_BASE=$(echo "$AIB_IMAGE_REF" | sed 's/:[^/]*$//')
+    AIB_IMAGE_PINNED="${AIB_IMAGE_BASE}@${AIB_IMAGE_DIGEST}"
+    echo "AIB image pinned reference: $AIB_IMAGE_PINNED"
+else
+    AIB_IMAGE_PINNED="$AIB_IMAGE_REF"
+    echo "Could not resolve AIB image digest, recording reference as-is"
+fi
+echo -n "${AIB_IMAGE_PINNED}" > /tekton/results/automotive-image-builder
+
+cp "$MANIFEST_FILE" "$WORKSPACE_PATH/aib-manifest.yml"
+
 # Set up builder image if needed (consolidated logic)
 declare -a BUILD_CONTAINER_ARGS=()
 if [ -n "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; }; then
@@ -287,20 +305,26 @@ case "$BUILD_MODE" in
         DISK_OUTPUT_ARGS=("/output/${exportFile}")
       fi
 
+      declare -a AIB_CMD=(
+        aib --verbose build
+        --distro "$(params.distro)"
+        --target "$(params.target)"
+        "--arch=${arch}"
+        "${COMMON_BUILD_ARGS[@]}"
+        "${FORMAT_ARGS[@]}"
+        "${BUILD_CONTAINER_ARGS[@]}"
+        "${CUSTOM_DEFS_ARGS[@]}"
+        "${AIB_EXTRA_ARGS[@]}"
+        "$MANIFEST_FILE"
+        "$BOOTC_CONTAINER_NAME"
+        "${DISK_OUTPUT_ARGS[@]}"
+      )
+      AIB_COMMAND=$(printf '%q ' "${AIB_CMD[@]}" | sed 's/ $//')
+      echo -n "$AIB_COMMAND" > /tekton/results/aib-command
+
       echo "Running bootc build"
       emit_progress "Building image" "$STEP_BUILD" "$PROGRESS_TOTAL"
-      aib --verbose build \
-        --distro "$(params.distro)" \
-        --target "$(params.target)" \
-        "--arch=${arch}" \
-        "${COMMON_BUILD_ARGS[@]}" \
-        "${FORMAT_ARGS[@]}" \
-        "${BUILD_CONTAINER_ARGS[@]}" \
-        "${CUSTOM_DEFS_ARGS[@]}" \
-        "${AIB_EXTRA_ARGS[@]}" \
-        "$MANIFEST_FILE" \
-        "$BOOTC_CONTAINER_NAME" \
-        "${DISK_OUTPUT_ARGS[@]}"
+      "${AIB_CMD[@]}"
 
       if [ -n "$CONTAINER_PUSH" ]; then
         emit_progress "Pushing container" "$((STEP_BUILD + 1))" "$PROGRESS_TOTAL"
@@ -317,8 +341,11 @@ case "$BUILD_MODE" in
         rm -rf "$OCI_DIR"
         skopeo copy "$PUSH_SRC" "oci:${OCI_DIR}:latest"
 
+        echo "AIB version for annotation: ${AIB_VERSION:-unknown}"
+        echo "AIB image for annotation: ${AIB_IMAGE_PINNED}"
+
         # Use inline Python for OCI annotation (extracted from original embedded code)
-        python3 - "$OCI_DIR" "$BUILDER_IMAGE" <<'PYEOF'
+        python3 - "$OCI_DIR" "$BUILDER_IMAGE" "$AIB_VERSION" "$AIB_IMAGE_PINNED" "$AIB_COMMAND" <<'PYEOF'
 import json, sys, hashlib, os
 from pathlib import Path
 
@@ -333,8 +360,11 @@ def update_blob(oci_dir, old_digest, data):
         old_path.unlink()
     return new_digest, len(content)
 
-oci_dir, builder_image = sys.argv[1], sys.argv[2]
-key = "automotive.sdv.cloud.redhat.com/builder-image"
+oci_dir, builder_image, aib_version, aib_image, aib_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+key_builder  = "automotive.sdv.cloud.redhat.com/builder-image"
+key_aib_version = "automotive.sdv.cloud.redhat.com/aib-version"
+key_aib_image   = "automotive.sdv.cloud.redhat.com/automotive-image-builder"
+key_aib_command = "automotive.sdv.cloud.redhat.com/aib-command"
 
 index_path = Path(oci_dir) / "index.json"
 index = json.loads(index_path.read_text())
@@ -346,9 +376,18 @@ manifest = json.loads(manifest_path.read_text())
 config_path = Path(oci_dir) / "blobs" / manifest["config"]["digest"].replace(":", "/")
 config = json.loads(config_path.read_text())
 
-config.setdefault("config", {}).setdefault("Labels", {})[key] = builder_image
+labels = config.setdefault("config", {}).setdefault("Labels", {})
+labels[key_builder] = builder_image
+if aib_version:   labels[key_aib_version]   = aib_version
+if aib_image:     labels[key_aib_image]      = aib_image
+if aib_command:   labels[key_aib_command]    = aib_command
 manifest["config"]["digest"], manifest["config"]["size"] = update_blob(oci_dir, manifest["config"]["digest"], config)
-manifest.setdefault("annotations", {})[key] = builder_image
+
+annotations = manifest.setdefault("annotations", {})
+annotations[key_builder] = builder_image
+if aib_version:   annotations[key_aib_version]   = aib_version
+if aib_image:     annotations[key_aib_image]      = aib_image
+if aib_command:   annotations[key_aib_command]    = aib_command
 manifest_entry["digest"], manifest_entry["size"] = update_blob(oci_dir, manifest_entry["digest"], manifest)
 
 index_path.write_text(json.dumps(index, indent=2))
@@ -367,18 +406,24 @@ PYEOF
       fi
       ;;
     image|package)
+      declare -a AIB_CMD=(
+        aib-dev --verbose build
+        "${CUSTOM_DEFS_ARGS[@]}"
+        --distro "$(params.distro)"
+        --target "$(params.target)"
+        "--arch=${arch}"
+        "${FORMAT_ARGS[@]}"
+        "${COMMON_BUILD_ARGS[@]}"
+        "${AIB_EXTRA_ARGS[@]}"
+        "$MANIFEST_FILE"
+        "/output/${exportFile}"
+      )
+      AIB_COMMAND=$(printf '%q ' "${AIB_CMD[@]}" | sed 's/ $//')
+      echo -n "$AIB_COMMAND" > /tekton/results/aib-command
+
       echo "Running $BUILD_MODE build"
       emit_progress "Building image" "$STEP_BUILD" "$PROGRESS_TOTAL"
-      aib-dev --verbose build \
-        "${CUSTOM_DEFS_ARGS[@]}" \
-        --distro "$(params.distro)" \
-        --target "$(params.target)" \
-        "--arch=${arch}" \
-        "${FORMAT_ARGS[@]}" \
-        "${COMMON_BUILD_ARGS[@]}" \
-        "${AIB_EXTRA_ARGS[@]}" \
-        "$MANIFEST_FILE" \
-        "/output/${exportFile}"
+      "${AIB_CMD[@]}"
       ;;
     disk)
       # Disk mode: create disk image from existing bootc container
@@ -399,14 +444,20 @@ PYEOF
           "containers-storage:$CONTAINER_REF"
       fi
 
+      declare -a AIB_CMD=(
+        aib --verbose to-disk-image
+        "${FORMAT_ARGS[@]}"
+        "${BUILD_CONTAINER_ARGS[@]}"
+        "${AIB_EXTRA_ARGS[@]}"
+        "$CONTAINER_REF"
+        "/output/${exportFile}"
+      )
+      AIB_COMMAND=$(printf '%q ' "${AIB_CMD[@]}" | sed 's/ $//')
+      echo -n "$AIB_COMMAND" > /tekton/results/aib-command
+
       echo "Running to-disk-image"
       emit_progress "Building image" "$STEP_BUILD" "$PROGRESS_TOTAL"
-      aib --verbose to-disk-image \
-        "${FORMAT_ARGS[@]}" \
-        "${BUILD_CONTAINER_ARGS[@]}" \
-        "${AIB_EXTRA_ARGS[@]}" \
-        "$CONTAINER_REF" \
-        "/output/${exportFile}"
+      "${AIB_CMD[@]}"
 
       # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
       ;;

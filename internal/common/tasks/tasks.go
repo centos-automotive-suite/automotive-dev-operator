@@ -175,6 +175,33 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 						StringVal: "",
 					},
 				},
+				{
+					Name:        "aib-version",
+					Type:        tektonv1.ParamTypeString,
+					Description: "The AIB version used for the build",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "automotive-image-builder",
+					Type:        tektonv1.ParamTypeString,
+					Description: "The AIB container image with pinned digest",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "aib-command",
+					Type:        tektonv1.ParamTypeString,
+					Description: "The exact AIB command used to build the image",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
 				{
@@ -379,6 +406,18 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 				{
 					Name:        "builder-image",
 					Description: "The builder image used for the build",
+				},
+				{
+					Name:        "aib-version",
+					Description: "The AIB version used for the build",
+				},
+				{
+					Name:        "automotive-image-builder",
+					Description: "The AIB container image with pinned digest",
+				},
+				{
+					Name:        "aib-command",
+					Description: "The exact AIB command used to build the image",
 				},
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
@@ -1017,6 +1056,27 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 							Value: tektonv1.ParamValue{
 								Type:      tektonv1.ParamTypeString,
 								StringVal: "$(tasks.build-image.results.builder-image)",
+							},
+						},
+						{
+							Name: "aib-version",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(tasks.build-image.results.aib-version)",
+							},
+						},
+						{
+							Name: "automotive-image-builder",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(tasks.build-image.results.automotive-image-builder)",
+							},
+						},
+						{
+							Name: "aib-command",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(tasks.build-image.results.aib-command)",
 							},
 						},
 					},
