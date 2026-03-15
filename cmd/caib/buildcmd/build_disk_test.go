@@ -84,6 +84,31 @@ func newTestDiskOpts() Options {
 	}
 }
 
+func TestRunDiskRejectsLeaseAndLeaseDuration(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.FlashAfterBuild = true
+	*opts.ExportOCI = "quay.io/org/disk:v1"
+	*opts.JumpstarterClient = "nonexistent"
+	*opts.LeaseName = "my-existing-lease"
+
+	var capturedErr error
+	opts.HandleError = func(err error) { capturedErr = err }
+
+	h := NewHandler(opts)
+	cmd := &cobra.Command{}
+	cmd.Flags().String("lease-duration", "03:00:00", "")
+	_ = cmd.Flags().Set("lease-duration", "01:00:00")
+
+	h.RunDisk(cmd, []string{"quay.io/test/image:latest"})
+
+	if capturedErr == nil {
+		t.Fatal("expected mutual exclusivity error, got nil")
+	}
+	if !strings.Contains(capturedErr.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutually exclusive error, got %q", capturedErr)
+	}
+}
+
 func TestRunDiskDefaultsToInternalRegistry(t *testing.T) {
 	tests := []struct {
 		name                string

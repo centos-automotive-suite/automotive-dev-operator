@@ -309,6 +309,40 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 	}
 }
 
+func (h *Handler) validateFlashLeaseFlags(cmd *cobra.Command) error {
+	if *h.opts.FlashAfterBuild && *h.opts.LeaseName != "" && cmd.Flags().Changed("lease-duration") {
+		return fmt.Errorf("--lease and --lease-duration are mutually exclusive")
+	}
+	return nil
+}
+
+// applyFlashOptions validates flash flags and populates flash fields on req.
+// The pushRequiredFlag is the flag name shown in the error message (e.g. "--push-disk" or "--push").
+func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequiredFlag string) error {
+	if !*h.opts.FlashAfterBuild {
+		return nil
+	}
+	if *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
+		return fmt.Errorf("cannot enable --flash without exporting a disk image (%s)", pushRequiredFlag)
+	}
+	if *h.opts.JumpstarterClient == "" {
+		return fmt.Errorf("--flash requires --client to specify Jumpstarter client config file")
+	}
+	clientConfigBytes, err := os.ReadFile(*h.opts.JumpstarterClient)
+	if err != nil {
+		return fmt.Errorf("failed to read Jumpstarter client config: %w", err)
+	}
+	req.FlashEnabled = true
+	req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
+	req.FlashLeaseName = *h.opts.LeaseName
+	if req.FlashLeaseName == "" {
+		req.FlashLeaseDuration = *h.opts.LeaseDuration
+	}
+	req.FlashCmd = *h.opts.FlashCmd
+	req.FlashExporterSelector = *h.opts.ExporterSelector
+	return nil
+}
+
 func (h *Handler) displayBuildLogsCommand(buildName string) {
 	labelColor := func(a ...any) string { return fmt.Sprint(a...) }
 	commandColor := func(a ...any) string { return fmt.Sprint(a...) }
@@ -333,6 +367,10 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 	if err := h.validateBootcBuildFlags(); err != nil {
+		h.handleError(err)
+		return
+	}
+	if err := h.validateFlashLeaseFlags(cmd); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -395,26 +433,9 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 	}
 	ApplyTargetDefaults(cmd, operatorConfig, &req)
 
-	if *h.opts.FlashAfterBuild {
-		if *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
-			h.handleError(fmt.Errorf("cannot enable --flash without exporting a disk image (--push-disk)"))
-			return
-		}
-		if *h.opts.JumpstarterClient == "" {
-			h.handleError(fmt.Errorf("--flash requires --client to specify Jumpstarter client config file"))
-			return
-		}
-		clientConfigBytes, clientErr := os.ReadFile(*h.opts.JumpstarterClient)
-		if clientErr != nil {
-			h.handleError(fmt.Errorf("failed to read Jumpstarter client config: %w", clientErr))
-			return
-		}
-		req.FlashEnabled = true
-		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
-		req.FlashLeaseDuration = *h.opts.LeaseDuration
-		req.FlashLeaseName = *h.opts.LeaseName
-		req.FlashCmd = *h.opts.FlashCmd
-		req.FlashExporterSelector = *h.opts.ExporterSelector
+	if err := h.applyFlashOptions(&req, "--push-disk"); err != nil {
+		h.handleError(err)
+		return
 	}
 
 	resp, err := api.CreateBuild(ctx, req)
@@ -480,6 +501,10 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
+	if err := h.validateFlashLeaseFlags(cmd); err != nil {
+		h.handleError(err)
+		return
+	}
 
 	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
 	if err != nil {
@@ -515,26 +540,9 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 	}
 	ApplyTargetDefaults(cmd, operatorConfig, &req)
 
-	if *h.opts.FlashAfterBuild {
-		if *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
-			h.handleError(fmt.Errorf("cannot enable --flash without exporting a disk image (--push)"))
-			return
-		}
-		if *h.opts.JumpstarterClient == "" {
-			h.handleError(fmt.Errorf("--flash requires --client to specify Jumpstarter client config file"))
-			return
-		}
-		clientConfigBytes, clientErr := os.ReadFile(*h.opts.JumpstarterClient)
-		if clientErr != nil {
-			h.handleError(fmt.Errorf("failed to read Jumpstarter client config: %w", clientErr))
-			return
-		}
-		req.FlashEnabled = true
-		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
-		req.FlashLeaseDuration = *h.opts.LeaseDuration
-		req.FlashLeaseName = *h.opts.LeaseName
-		req.FlashCmd = *h.opts.FlashCmd
-		req.FlashExporterSelector = *h.opts.ExporterSelector
+	if err := h.applyFlashOptions(&req, "--push"); err != nil {
+		h.handleError(err)
+		return
 	}
 
 	resp, err := api.CreateBuild(ctx, req)
@@ -590,6 +598,10 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		*h.opts.BuildName = fmt.Sprintf("%s-%s", sanitized, time.Now().Format("20060102-150405"))
 		fmt.Printf("Auto-generated build name: %s\n", *h.opts.BuildName)
 	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
+		h.handleError(err)
+		return
+	}
+	if err := h.validateFlashLeaseFlags(cmd); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -652,27 +664,9 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	}
 	ApplyTargetDefaults(cmd, operatorConfig, &req)
 
-	if *h.opts.FlashAfterBuild {
-		if *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
-			h.handleError(fmt.Errorf("cannot enable --flash without exporting a disk image (--push)"))
-			return
-		}
-		if *h.opts.JumpstarterClient == "" {
-			h.handleError(fmt.Errorf("--flash requires --client to specify Jumpstarter client config file"))
-			return
-		}
-
-		clientConfigBytes, clientErr := os.ReadFile(*h.opts.JumpstarterClient)
-		if clientErr != nil {
-			h.handleError(fmt.Errorf("failed to read Jumpstarter client config: %w", clientErr))
-			return
-		}
-		req.FlashEnabled = true
-		req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientConfigBytes)
-		req.FlashLeaseDuration = *h.opts.LeaseDuration
-		req.FlashLeaseName = *h.opts.LeaseName
-		req.FlashCmd = *h.opts.FlashCmd
-		req.FlashExporterSelector = *h.opts.ExporterSelector
+	if err := h.applyFlashOptions(&req, "--push"); err != nil {
+		h.handleError(err)
+		return
 	}
 
 	resp, err := api.CreateBuild(ctx, req)
