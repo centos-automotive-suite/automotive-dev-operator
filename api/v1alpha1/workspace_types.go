@@ -46,6 +46,14 @@ type WorkspaceSpec struct {
 	// Resources defines the CPU and memory requests/limits for the workspace container
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// NodeSelector is a set of key-value pairs that must match node labels for scheduling
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// TmpfsBuildDir adds a tmpfs-backed emptyDir at /tmp/build for fast compilation
+	// +optional
+	TmpfsBuildDir bool `json:"tmpfsBuildDir,omitempty"`
 }
 
 // WorkspaceStatus defines the observed state of a Workspace.

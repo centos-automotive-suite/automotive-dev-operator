@@ -28,6 +28,7 @@ var (
 	waitForBuild           bool
 	customDefs             []string
 	aibExtraArgs           []string
+	extraRepos             []string
 	followLogs             bool
 	version                string
 	compressionAlgo        string

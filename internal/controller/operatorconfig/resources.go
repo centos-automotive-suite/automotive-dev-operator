@@ -292,15 +292,21 @@ func (r *OperatorConfigReconciler) buildBuildAPIService(namespace string, isOpen
 }
 
 func (r *OperatorConfigReconciler) buildBuildAPIRoute(namespace string, config *automotivev1alpha1.OperatorConfig) *routev1.Route {
-	// Derive route timeout from the longest configured upload timeout + buffer
+	// Derive route timeout from the longest configured timeout + buffer.
+	// Must cover uploads, build log streaming, and workspace exec sessions.
 	routeTimeoutMinutes := int32(15)
 	if config.Spec.ContainerBuilds != nil && config.Spec.ContainerBuilds.UploadTimeoutMinutes > 0 {
 		if t := config.Spec.ContainerBuilds.UploadTimeoutMinutes + 2; t > routeTimeoutMinutes {
 			routeTimeoutMinutes = t
 		}
 	}
-	if config.Spec.OSBuilds != nil && config.Spec.OSBuilds.UploadTimeoutMinutes > 0 {
-		if t := config.Spec.OSBuilds.UploadTimeoutMinutes + 2; t > routeTimeoutMinutes {
+	if config.Spec.OSBuilds != nil {
+		if config.Spec.OSBuilds.UploadTimeoutMinutes > 0 {
+			if t := config.Spec.OSBuilds.UploadTimeoutMinutes + 2; t > routeTimeoutMinutes {
+				routeTimeoutMinutes = t
+			}
+		}
+		if t := config.Spec.OSBuilds.GetBuildTimeoutMinutes() + 5; t > routeTimeoutMinutes {
 			routeTimeoutMinutes = t
 		}
 	}

@@ -70,6 +70,12 @@ spec:
               leaseID:
                 description: LeaseID is the Jumpstarter lease ID for board access
                 type: string
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: NodeSelector is a set of key-value pairs that must match
+                  node labels for scheduling
+                type: object
               owner:
                 description: Owner is the authenticated user who created this workspace
                 type: string
@@ -138,6 +144,10 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              tmpfsBuildDir:
+                description: TmpfsBuildDir adds a tmpfs-backed emptyDir at /tmp/build
+                  for fast compilation
+                type: boolean
             required:
             - owner
             type: object

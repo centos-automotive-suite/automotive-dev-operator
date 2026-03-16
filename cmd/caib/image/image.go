@@ -42,6 +42,7 @@ type Options struct {
 	WaitForBuild           *bool
 	CustomDefs             *[]string
 	AIBExtraArgs           *[]string
+	ExtraRepos             *[]string
 	FollowLogs             *bool
 	CompressionAlgo        *string
 	ContainerPush          *string
@@ -134,6 +135,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringVar(opts.StorageClass, "storage-class", "", "Kubernetes storage class for build workspace")
 	buildCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
 	buildCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
+	buildCmd.Flags().StringArrayVar(opts.ExtraRepos, "extra-repo", []string{}, "serve RPMs from workspace as extra repo (workspace:path, can be repeated)")
 	buildCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
 	buildCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", true, "wait for build to complete")
 	buildCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
@@ -233,6 +235,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVar(opts.StorageClass, "storage-class", "", "Kubernetes storage class")
 	buildDevCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
 	buildDevCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
+	buildDevCmd.Flags().StringArrayVar(opts.ExtraRepos, "extra-repo", []string{}, "serve RPMs from workspace as extra repo (workspace:path, can be repeated)")
 	buildDevCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
 	buildDevCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", false, "wait for build to complete")
 	buildDevCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")

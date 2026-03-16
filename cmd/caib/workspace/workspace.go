@@ -42,6 +42,7 @@ var (
 	// resource flags
 	cpuRequest    string
 	memoryRequest string
+	tmpfsBuildDir bool
 
 	// deploy flags
 	artifactPath string
@@ -61,7 +62,7 @@ code and build artifacts. Use sync to upload source, exec to compile, and
 deploy to push binaries to a board via Jumpstarter.
 
 Examples:
-  # Create a workspace with a Jumpstarter lease from a previous flash
+  # Create a workspace with a Jumpstarter lease from a previous build
   caib workspace create my-app --from-build my-os-build
 
   # Sync source, build, and deploy
@@ -117,6 +118,7 @@ Examples:
 	cmd.Flags().StringVar(&clientConfigFile, "client", "", "path to Jumpstarter client config file")
 	cmd.Flags().StringVar(&cpuRequest, "cpu", "", "CPU request/limit (e.g., \"1\", \"500m\")")
 	cmd.Flags().StringVar(&memoryRequest, "memory", "", "memory request/limit (e.g., \"2Gi\", \"512Mi\")")
+	cmd.Flags().BoolVar(&tmpfsBuildDir, "tmpfs", false, "mount a tmpfs volume at /tmp/build for faster compilation (uses RAM)")
 
 	return cmd
 }
@@ -233,14 +235,15 @@ func runCreate(_ *cobra.Command, args []string) {
 	}
 
 	req := buildapitypes.WorkspaceRequest{
-		Name:         name,
-		FromBuild:    fromBuild,
-		Lease:        leaseID,
-		Arch:         architecture,
-		Image:        toolchainImage,
-		ClientConfig: clientConfigB64,
-		CPU:          cpuRequest,
-		Memory:       memoryRequest,
+		Name:          name,
+		FromBuild:     fromBuild,
+		Lease:         leaseID,
+		Arch:          architecture,
+		Image:         toolchainImage,
+		ClientConfig:  clientConfigB64,
+		CPU:           cpuRequest,
+		Memory:        memoryRequest,
+		TmpfsBuildDir: tmpfsBuildDir,
 	}
 
 	var resp *buildapitypes.WorkspaceResponse

@@ -123,6 +123,7 @@ type BuildRequest struct {
 	StorageClass           string               `json:"storageClass"`
 	CustomDefs             []string             `json:"customDefs"`
 	AIBExtraArgs           []string             `json:"aibExtraArgs"`
+	ExtraRepos             []string             `json:"extraRepos,omitempty"` // workspace-name:/path pairs
 	Compression            string               `json:"compression,omitempty"`
 	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`
 	PushRepository         string               `json:"pushRepository,omitempty"`

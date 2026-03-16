@@ -189,6 +189,20 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 		env = append(env, corev1.EnvVar{Name: "JMP_LEASE", Value: ws.Spec.LeaseID})
 	}
 
+	if ws.Spec.TmpfsBuildDir {
+		volumes = append(volumes, corev1.Volume{
+			Name: "tmpfs-build",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					Medium: corev1.StorageMediumMemory,
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name: "tmpfs-build", MountPath: "/tmp/build",
+		})
+	}
+
 	if ws.Spec.ClientConfigSecretRef != "" {
 		volumes = append(volumes, corev1.Volume{
 			Name: "jumpstarter-client",
@@ -253,6 +267,7 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 					},
 				},
 			},
+			NodeSelector:                  ws.Spec.NodeSelector,
 			TerminationGracePeriodSeconds: int64Ptr(5),
 			RestartPolicy:                 corev1.RestartPolicyNever,
 		},

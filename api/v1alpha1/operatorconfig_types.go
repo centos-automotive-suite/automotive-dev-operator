@@ -337,6 +337,11 @@ type WorkspacesConfig struct {
 	// Tolerations specifies tolerations to be added to workspace pods
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// TmpfsBuildDir allows users to mount a tmpfs-backed emptyDir at /tmp/build in workspace pods
+	// When enabled, users can opt-in per workspace via --tmpfs on create
+	// +optional
+	TmpfsBuildDir bool `json:"tmpfsBuildDir,omitempty"`
 }
 
 // GetToolchainImage returns the toolchain image, falling back to the default
@@ -361,6 +366,19 @@ func (c *WorkspacesConfig) GetPVCSize() string {
 		return c.PVCSize
 	}
 	return DefaultWorkspacePVCSize
+}
+
+// GetTmpfsBuildDir returns whether tmpfs build directories are allowed for workspaces
+func (c *WorkspacesConfig) GetTmpfsBuildDir() bool {
+	return c != nil && c.TmpfsBuildDir
+}
+
+// GetNodeSelector returns the workspace node selector labels, or nil if not configured
+func (c *WorkspacesConfig) GetNodeSelector() map[string]string {
+	if c != nil {
+		return c.NodeSelector
+	}
+	return nil
 }
 
 // OperatorConfigSpec defines the desired state of OperatorConfig

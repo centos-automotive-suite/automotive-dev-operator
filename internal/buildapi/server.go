@@ -1490,6 +1490,71 @@ func buildExportSpec(req *BuildRequest) *automotivev1alpha1.ExportSpec {
 	return export
 }
 
+// resolveExtraRepos processes --extra-repo flags (workspace:path pairs), starts HTTP
+// servers in the workspace pods, and injects extra_repos into the build's CustomDefs.
+func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, req *BuildRequest) error {
+	if len(req.ExtraRepos) == 0 {
+		return nil
+	}
+
+	namespace := resolveNamespace()
+	basePort := 8080
+
+	type repoEntry struct {
+		ID      string `json:"id"`
+		BaseURL string `json:"baseurl"`
+	}
+	repos := make([]repoEntry, 0, len(req.ExtraRepos))
+
+	for i, entry := range req.ExtraRepos {
+		parts := strings.SplitN(entry, ":", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("invalid --extra-repo %q: must be workspace-name:/path", entry)
+		}
+		wsName, repoPath := parts[0], parts[1]
+		port := basePort + i
+
+		// Look up the workspace pod
+		ws := &automotivev1alpha1.Workspace{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: wsName}, ws); err != nil {
+			return fmt.Errorf("workspace %q not found: %w", wsName, err)
+		}
+		if ws.Status.Phase != phaseRunning {
+			return fmt.Errorf("workspace %q is not running (phase: %s)", wsName, ws.Status.Phase)
+		}
+
+		pod := &corev1.Pod{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ws.Status.PodName}, pod); err != nil {
+			return fmt.Errorf("workspace pod %q not found: %w", ws.Status.PodName, err)
+		}
+		podIP := pod.Status.PodIP
+		if podIP == "" {
+			return fmt.Errorf("workspace pod %q has no IP", ws.Status.PodName)
+		}
+
+		// Start HTTP server in the workspace (background, fire-and-forget)
+		cmd := []string{"/bin/sh", "-c",
+			fmt.Sprintf("cd %s && python3 -m http.server %d > /dev/null 2>&1 &", repoPath, port)}
+		if err := podExec(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
+			return fmt.Errorf("starting HTTP server in workspace %q: %w", wsName, err)
+		}
+
+		repoURL := fmt.Sprintf("http://%s:%d", podIP, port)
+		repos = append(repos, repoEntry{
+			ID:      fmt.Sprintf("workspace-%s", wsName),
+			BaseURL: repoURL,
+		})
+		a.log.Info("Extra repo configured", "workspace", wsName, "url", repoURL)
+	}
+
+	reposJSON, err := json.Marshal(repos)
+	if err != nil {
+		return fmt.Errorf("marshaling extra_repos: %w", err)
+	}
+	req.CustomDefs = append(req.CustomDefs, fmt.Sprintf("extra_repos=%s", string(reposJSON)))
+	return nil
+}
+
 // buildAIBSpec creates AIBSpec configuration from build request
 func buildAIBSpec(req *BuildRequest, manifest, manifestFileName string, inputFilesServer bool) *automotivev1alpha1.AIBSpec {
 	return &automotivev1alpha1.AIBSpec{
@@ -1525,6 +1590,24 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	if err := applyBuildDefaults(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Resolve --extra-repo workspace:path pairs into extra_repos custom defines
+	if len(req.ExtraRepos) > 0 {
+		k8sClientForRepos, err := getClientFromRequest(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create kubernetes client"})
+			return
+		}
+		restCfgForRepos, err := getRESTConfigFromRequest(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
+			return
+		}
+		if err := a.resolveExtraRepos(c.Request.Context(), k8sClientForRepos, restCfgForRepos, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	// Append a short random suffix to ensure unique names for parallel builds

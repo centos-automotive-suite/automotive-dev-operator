@@ -952,6 +952,11 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  tmpfsBuildDir:
+                    description: |-
+                      TmpfsBuildDir allows users to mount a tmpfs-backed emptyDir at /tmp/build in workspace pods
+                      When enabled, users can opt-in per workspace via --tmpfs on create
+                    type: boolean
                   tolerations:
                     description: Tolerations specifies tolerations to be added to
                       workspace pods

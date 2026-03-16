@@ -30,14 +30,15 @@ const (
 
 // WorkspaceRequest is the payload to create a workspace.
 type WorkspaceRequest struct {
-	Name         string `json:"name"`
-	FromBuild    string `json:"fromBuild,omitempty"` // ImageBuild name to extract lease from
-	Lease        string `json:"lease,omitempty"`     // Direct lease ID
-	Arch         string `json:"architecture,omitempty"`
-	Image        string `json:"toolchainImage,omitempty"`
-	ClientConfig string `json:"clientConfig,omitempty"` // Base64-encoded Jumpstarter client config
-	CPU          string `json:"cpu,omitempty"`          // CPU request (e.g., "1", "500m")
-	Memory       string `json:"memory,omitempty"`       // Memory request (e.g., "2Gi", "512Mi")
+	Name          string `json:"name"`
+	FromBuild     string `json:"fromBuild,omitempty"` // ImageBuild name to extract lease from
+	Lease         string `json:"lease,omitempty"`     // Direct lease ID
+	Arch          string `json:"architecture,omitempty"`
+	Image         string `json:"toolchainImage,omitempty"`
+	ClientConfig  string `json:"clientConfig,omitempty"`  // Base64-encoded Jumpstarter client config
+	CPU           string `json:"cpu,omitempty"`           // CPU request (e.g., "1", "500m")
+	Memory        string `json:"memory,omitempty"`        // Memory request (e.g., "2Gi", "512Mi")
+	TmpfsBuildDir bool   `json:"tmpfsBuildDir,omitempty"` // Mount tmpfs at /tmp/build for fast compilation
 }
 
 // WorkspaceResponse is returned by workspace operations.
@@ -213,6 +214,12 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 		return
 	}
 
+	// Validate tmpfs: only allowed if enabled in OperatorConfig
+	if req.TmpfsBuildDir && !wsConfig.GetTmpfsBuildDir() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "--tmpfs requires workspaces.tmpfsBuildDir to be enabled in OperatorConfig"})
+		return
+	}
+
 	// Build resource requirements: user-requested → OperatorConfig default → controller default
 	resources, err := buildWorkspaceResources(req.CPU, req.Memory, wsConfig)
 	if err != nil {
@@ -234,6 +241,8 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 			ClientConfigSecretRef: jmpClientSecret,
 			PVCSize:               pvcSize,
 			Resources:             resources,
+			NodeSelector:          wsConfig.GetNodeSelector(),
+			TmpfsBuildDir:         req.TmpfsBuildDir,
 		},
 	}
 	if err := k8sClient.Create(c.Request.Context(), ws); err != nil {
@@ -698,7 +707,32 @@ func copyToPod(restCfg *rest.Config, namespace, podName, containerName string, b
 	return nil
 }
 
-func execInPod(restCfg *rest.Config, namespace, podName, containerName string, cmd []string, w http.ResponseWriter) error {
+// flushWriter wraps an http.ResponseWriter and flushes after every Write,
+// ensuring streamed data reaches the client (and intermediate proxies like
+// HAProxy) immediately instead of sitting in Go's response buffer.
+type flushWriter struct {
+	w       io.Writer
+	flusher http.Flusher
+}
+
+func newFlushWriter(w http.ResponseWriter) *flushWriter {
+	fw := &flushWriter{w: w}
+	if f, ok := w.(http.Flusher); ok {
+		fw.flusher = f
+	}
+	return fw
+}
+
+func (fw *flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if fw.flusher != nil {
+		fw.flusher.Flush()
+	}
+	return n, err
+}
+
+// podExec runs a command in a pod, streaming stdout/stderr to the provided writer.
+func podExec(ctx context.Context, restCfg *rest.Config, namespace, podName, containerName string, cmd []string, out io.Writer) error {
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return fmt.Errorf("creating clientset: %w", err)
@@ -720,9 +754,12 @@ func execInPod(restCfg *rest.Config, namespace, podName, containerName string, c
 		return fmt.Errorf("creating executor: %w", err)
 	}
 
-	streamOpts := remotecommand.StreamOptions{
-		Stdout: w,
-		Stderr: w,
-	}
-	return executor.StreamWithContext(context.Background(), streamOpts)
+	return executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: out,
+		Stderr: out,
+	})
+}
+
+func execInPod(restCfg *rest.Config, namespace, podName, containerName string, cmd []string, w http.ResponseWriter) error {
+	return podExec(context.Background(), restCfg, namespace, podName, containerName, cmd, newFlushWriter(w))
 }
