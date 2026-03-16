@@ -820,8 +820,8 @@ spec:
             description: OperatorConfigStatus defines the observed state of OperatorConfig
             properties:
               jumpstarterAvailable:
-                description: JumpstarterAvailable indicates if Jumpstarter CRDs are
-                  present in the cluster
+                description: JumpstarterAvailable indicates if Jumpstarter is available
+                  (explicitly configured or local CRDs detected)
                 type: boolean
               message:
                 description: Message provides detail about the current phase

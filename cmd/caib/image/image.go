@@ -140,7 +140,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// Note: --push is optional when --disk is used (disk image becomes the output)
 	// Jumpstarter flash options
 	buildCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
-	buildCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
+	buildCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
 	buildCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
 	buildCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	buildCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
@@ -198,7 +198,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	diskCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
 	// Jumpstarter flash options
 	diskCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
-	diskCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
+	diskCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
 	diskCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
 	diskCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	diskCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
@@ -238,7 +238,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
 	// Jumpstarter flash options
 	buildDevCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
-	buildDevCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required for --flash)")
+	buildDevCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
 	buildDevCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
 	buildDevCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	buildDevCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
@@ -261,7 +261,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// flash command flags
 	flashCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	flashCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
-	flashCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (required)")
+	flashCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
 	flashCmd.Flags().StringVarP(opts.FlashName, "name", "n", "", "name for the flash job (auto-generated if omitted)")
 	flashCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform for exporter lookup")
 	flashCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector (alternative to --target)")
@@ -276,8 +276,6 @@ func NewImageCmd(opts Options) *cobra.Command {
 	)
 	flashCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow flash logs (shows full log output instead of progress bar)")
 	flashCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", true, "wait for flash to complete")
-	_ = flashCmd.MarkFlagRequired("client")
-
 	// Sealed operation shared flags
 	addSealedFlags(prepareResealCmd, opts, defaultServer)
 	addSealedFlags(resealCmd, opts, defaultServer)
@@ -369,14 +367,18 @@ func newFlashCmd(opts Options) *cobra.Command {
 		Long: `Flash a disk image from an OCI registry to a hardware device using Jumpstarter.
 
 This command connects to a Jumpstarter exporter to flash the specified disk image
-onto physical hardware. Requires a Jumpstarter client configuration file.
+onto physical hardware. The Jumpstarter client config is auto-detected from
+~/.config/jumpstarter/ (or $JMP_CLIENT_CONFIG_HOME), or can be specified with --client.
 
 Examples:
-  # Flash using target platform lookup
+  # Flash using auto-detected client config
+  caib image flash quay.io/org/disk:v1 --target j784s4evm
+
+  # Flash with explicit client config
   caib image flash quay.io/org/disk:v1 --client ~/.jumpstarter/client.yaml --target j784s4evm
 
   # Flash with explicit exporter selector
-  caib image flash quay.io/org/disk:v1 --client ~/.jumpstarter/client.yaml --exporter "board-type=j784s4evm"`,
+  caib image flash quay.io/org/disk:v1 --exporter "board-type=j784s4evm"`,
 		Args: cobra.ExactArgs(1),
 		Run:  opts.RunFlash,
 	}
