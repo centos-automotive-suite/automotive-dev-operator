@@ -48,7 +48,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Ensure PVC exists
 	if err := r.ensurePVC(ctx, ws); err != nil {
-		return ctrl.Result{}, r.setStatus(ctx, ws, "Failed", fmt.Sprintf("PVC error: %v", err))
+		if statusErr := r.setStatus(ctx, ws, "Failed", fmt.Sprintf("PVC error: %v", err)); statusErr != nil {
+			log.Error(statusErr, "failed to update status after PVC error")
+		}
+		return ctrl.Result{}, err
 	}
 
 	// Ensure Pod exists (needs PVC name from status)
@@ -57,7 +60,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	pod, err := r.ensurePod(ctx, ws, log)
 	if err != nil {
-		return ctrl.Result{}, r.setStatus(ctx, ws, "Failed", fmt.Sprintf("Pod error: %v", err))
+		if statusErr := r.setStatus(ctx, ws, "Failed", fmt.Sprintf("Pod error: %v", err)); statusErr != nil {
+			log.Error(statusErr, "failed to update status after pod error")
+		}
+		return ctrl.Result{}, err
 	}
 
 	// Update status from pod phase
@@ -82,17 +88,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 func (r *Reconciler) ensurePVC(ctx context.Context, ws *automotivev1alpha1.Workspace) error {
-	// If we already created a PVC, check it still exists
-	if ws.Status.PVCName != "" {
-		existing := &corev1.PersistentVolumeClaim{}
-		err := r.Get(ctx, client.ObjectKey{Namespace: ws.Namespace, Name: ws.Status.PVCName}, existing)
-		if err == nil {
-			return nil // already exists
+	pvcName := ws.Name + pvcSuffix
+
+	// Check if the PVC already exists
+	existing := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: ws.Namespace, Name: pvcName}, existing)
+	if err == nil {
+		// PVC exists; ensure status is up to date
+		if ws.Status.PVCName != pvcName {
+			patch := client.MergeFrom(ws.DeepCopy())
+			ws.Status.PVCName = pvcName
+			return r.Status().Patch(ctx, ws, patch)
 		}
-		if !k8serrors.IsNotFound(err) {
-			return err
-		}
-		// PVC was deleted externally, fall through to recreate
+		return nil
+	}
+	if !k8serrors.IsNotFound(err) {
+		return err
 	}
 
 	pvcSize := ws.Spec.PVCSize
@@ -102,8 +113,8 @@ func (r *Reconciler) ensurePVC(ctx context.Context, ws *automotivev1alpha1.Works
 
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: ws.Name + pvcSuffix + "-",
-			Namespace:    ws.Namespace,
+			Name:      pvcName,
+			Namespace: ws.Namespace,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
@@ -114,6 +125,9 @@ func (r *Reconciler) ensurePVC(ctx context.Context, ws *automotivev1alpha1.Works
 			},
 		},
 	}
+	if ws.Spec.StorageClass != "" {
+		pvc.Spec.StorageClassName = &ws.Spec.StorageClass
+	}
 	if err := controllerutil.SetControllerReference(ws, pvc, r.Scheme); err != nil {
 		return err
 	}
@@ -121,9 +135,9 @@ func (r *Reconciler) ensurePVC(ctx context.Context, ws *automotivev1alpha1.Works
 		return err
 	}
 
-	// Store the generated PVC name in status
+	// Store the PVC name in status
 	patch := client.MergeFrom(ws.DeepCopy())
-	ws.Status.PVCName = pvc.Name
+	ws.Status.PVCName = pvcName
 	return r.Status().Patch(ctx, ws, patch)
 }
 
