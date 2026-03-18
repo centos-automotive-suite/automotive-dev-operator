@@ -330,6 +330,11 @@ type WorkspacesConfig struct {
 	// +optional
 	MaxResources *corev1.ResourceRequirements `json:"maxResources,omitempty"`
 
+	// StorageClass specifies the storage class for workspace PVCs
+	// If empty, the cluster default storage class is used
+	// +optional
+	StorageClass string `json:"storageClass,omitempty"`
+
 	// NodeSelector specifies node labels that workspace pods must match for scheduling
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
@@ -342,6 +347,10 @@ type WorkspacesConfig struct {
 	// When enabled, users can opt-in per workspace via --tmpfs on create
 	// +optional
 	TmpfsBuildDir bool `json:"tmpfsBuildDir,omitempty"`
+
+	// BuildCacheSize is the size of the PVC created for build cache persistence (default: "20Gi")
+	// +optional
+	BuildCacheSize string `json:"buildCacheSize,omitempty"`
 }
 
 // GetToolchainImage returns the toolchain image, falling back to the default
@@ -371,6 +380,14 @@ func (c *WorkspacesConfig) GetPVCSize() string {
 // GetTmpfsBuildDir returns whether tmpfs build directories are allowed for workspaces
 func (c *WorkspacesConfig) GetTmpfsBuildDir() bool {
 	return c != nil && c.TmpfsBuildDir
+}
+
+// GetStorageClass returns the workspace storage class, or empty string for cluster default
+func (c *WorkspacesConfig) GetStorageClass() string {
+	if c != nil {
+		return c.StorageClass
+	}
+	return ""
 }
 
 // GetNodeSelector returns the workspace node selector labels, or nil if not configured
@@ -430,6 +447,11 @@ type OSBuildsConfig struct {
 	// Default: "8Gi"
 	// +optional
 	PVCSize string `json:"pvcSize,omitempty"`
+
+	// StorageClass specifies the storage class for build PVCs
+	// If empty, the cluster default storage class is used
+	// +optional
+	StorageClass string `json:"storageClass,omitempty"`
 
 	// RuntimeClassName specifies the runtime class to use for the build pod
 	// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/

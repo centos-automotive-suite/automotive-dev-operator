@@ -110,6 +110,12 @@ spec:
                 description: Architecture specifies the target architecture (e.g.,
                   "amd64", "arm64")
                 type: string
+              buildCachePVC:
+                description: |-
+                  BuildCachePVC is the name of a PVC to mount as the osbuild build cache directory.
+                  When set, the build pod mounts this PVC and passes --build-dir to AIB,
+                  enabling osbuild checkpoint reuse and dnf cache persistence across builds.
+                type: string
               export:
                 description: Export contains configuration for exporting build artifacts
                 properties:

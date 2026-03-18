@@ -52,6 +52,12 @@ type ImageBuildSpec struct {
 
 	// Flash contains configuration for flashing the built image to hardware via Jumpstarter
 	Flash *FlashSpec `json:"flash,omitempty"`
+
+	// BuildCachePVC is the name of a PVC to mount as the osbuild build cache directory.
+	// When set, the build pod mounts this PVC and passes --build-dir to AIB,
+	// enabling osbuild checkpoint reuse and dnf cache persistence across builds.
+	// +optional
+	BuildCachePVC string `json:"buildCachePVC,omitempty"`
 }
 
 // FlashSpec defines configuration for flashing images to hardware via Jumpstarter

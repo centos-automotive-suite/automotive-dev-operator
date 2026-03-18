@@ -144,6 +144,11 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              storageClass:
+                description: |-
+                  StorageClass is the storage class for workspace PVCs
+                  If empty, the cluster default storage class is used
+                type: string
               tmpfsBuildDir:
                 description: TmpfsBuildDir adds a tmpfs-backed emptyDir at /tmp/build
                   for fast compilation
@@ -154,6 +159,11 @@ spec:
           status:
             description: WorkspaceStatus defines the observed state of a Workspace.
             properties:
+              buildCachePVCName:
+                description: |-
+                  BuildCachePVCName is the name of the PVC used for build cache storage.
+                  Created lazily on first build referencing this workspace.
+                type: string
               message:
                 description: Message provides additional detail about the current
                   phase

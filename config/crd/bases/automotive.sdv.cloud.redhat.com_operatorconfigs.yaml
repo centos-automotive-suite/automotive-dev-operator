@@ -757,6 +757,11 @@ spec:
                       RuntimeClassName specifies the runtime class to use for the build pod
                       More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
                     type: string
+                  storageClass:
+                    description: |-
+                      StorageClass specifies the storage class for build PVCs
+                      If empty, the cluster default storage class is used
+                    type: string
                   tolerations:
                     description: |-
                       Tolerations specifies tolerations to be added to build pods
@@ -818,6 +823,10 @@ spec:
               workspaces:
                 description: Workspaces defines configuration for developer workspaces
                 properties:
+                  buildCacheSize:
+                    description: 'BuildCacheSize is the size of the PVC created for
+                      build cache persistence (default: "20Gi")'
+                    type: string
                   defaultArchitecture:
                     description: DefaultArchitecture is the default target architecture
                       for workspaces
@@ -952,6 +961,11 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  storageClass:
+                    description: |-
+                      StorageClass specifies the storage class for workspace PVCs
+                      If empty, the cluster default storage class is used
+                    type: string
                   tmpfsBuildDir:
                     description: |-
                       TmpfsBuildDir allows users to mount a tmpfs-backed emptyDir at /tmp/build in workspace pods
