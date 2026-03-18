@@ -255,8 +255,6 @@ else
 fi
 echo -n "${AIB_IMAGE_PINNED}" > /tekton/results/automotive-image-builder
 
-cp "$MANIFEST_FILE" "$WORKSPACE_PATH/aib-manifest.yml"
-
 # Set up builder image if needed (consolidated logic)
 declare -a BUILD_CONTAINER_ARGS=()
 if [ -n "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; }; then
