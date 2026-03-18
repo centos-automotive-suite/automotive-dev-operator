@@ -283,13 +283,6 @@ if [ -d "${parts_dir}" ] && [ -n "$(ls -A "${parts_dir}" 2>/dev/null)" ]; then
     exit 1
   fi
 
-  # Add the aib manifest as a non-partition layer with its own media type
-  if [ -f "/workspace/shared/aib-manifest.yml" ]; then
-    cp "/workspace/shared/aib-manifest.yml" "aib-manifest.yml"
-    layer_args="${layer_args} aib-manifest.yml:application/vnd.automotive.aib-manifest+yaml"
-    layer_annotations_json="${layer_annotations_json},\"aib-manifest.yml\":{\"org.opencontainers.image.title\":\"aib-manifest.yml\"}"
-  fi
-
   # Get artifact type from first entry in filtered file_list
   first_filename=$(echo "$file_list" | cut -d',' -f1)
   artifact_type=$(get_artifact_type "$first_filename")
@@ -388,11 +381,6 @@ if aib_cmd:  annotations["automotive.sdv.cloud.redhat.com/aib-command"]         
 Path(out_file).write_text(json.dumps({"$manifest": annotations}))
 PYEOF
 
-  aib_manifest_layer=""
-  if [ -f "/workspace/shared/aib-manifest.yml" ]; then
-    aib_manifest_layer="aib-manifest.yml:application/vnd.automotive.aib-manifest+yaml"
-  fi
-
   emit_progress "Pushing artifact" 0 1
 
   echo "Pushing single-file artifact to ${repo_url}"
@@ -400,14 +388,12 @@ PYEOF
   echo "  Media type: ${media_type}"
   echo "  Annotations: distro=${distro}, target=${target}, arch=${arch}"
 
-  # shellcheck disable=SC2086
   "$HOME/bin/oras" push --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${media_type}" \
     --annotation-file "$single_annotations_file" \
     "${repo_url}" \
-    "${exportFile}:${media_type}" \
-    ${aib_manifest_layer}
+    "${exportFile}:${media_type}"
 
   emit_progress "Pushing artifact" 1 1
 
