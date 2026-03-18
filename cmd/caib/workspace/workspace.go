@@ -219,8 +219,6 @@ Examples:
 	return cmd
 }
 
-// --- Command implementations ---
-
 func runCreate(_ *cobra.Command, args []string) {
 	requireServer()
 	name := args[0]
@@ -420,36 +418,41 @@ func tarTrackedFiles(baseDir string, files []string, w io.Writer) error {
 
 	for _, relPath := range files {
 		absPath := filepath.Join(baseDir, relPath)
-		f, err := os.Open(absPath)
+		fi, err := os.Lstat(absPath)
 		if err != nil {
 			continue // file may have been deleted since ls-files
 		}
-		fi, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			continue
-		}
-		if !fi.Mode().IsRegular() {
-			_ = f.Close()
+
+		var linkTarget string
+		if fi.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err = os.Readlink(absPath)
+			if err != nil {
+				return fmt.Errorf("reading symlink %s: %w", relPath, err)
+			}
+		} else if !fi.Mode().IsRegular() {
 			continue
 		}
 
-		hdr, err := tar.FileInfoHeader(fi, "")
+		hdr, err := tar.FileInfoHeader(fi, linkTarget)
 		if err != nil {
-			_ = f.Close()
 			return fmt.Errorf("creating tar header for %s: %w", relPath, err)
 		}
 		hdr.Name = relPath
 
 		if err := tw.WriteHeader(hdr); err != nil {
-			_ = f.Close()
 			return fmt.Errorf("writing tar header for %s: %w", relPath, err)
 		}
 
-		_, err = io.Copy(tw, f)
-		_ = f.Close()
-		if err != nil {
-			return fmt.Errorf("writing %s to tar: %w", relPath, err)
+		if fi.Mode().IsRegular() {
+			f, err := os.Open(absPath)
+			if err != nil {
+				return fmt.Errorf("opening %s: %w", relPath, err)
+			}
+			_, err = io.Copy(tw, f)
+			_ = f.Close()
+			if err != nil {
+				return fmt.Errorf("writing %s to tar: %w", relPath, err)
+			}
 		}
 	}
 
@@ -593,8 +596,6 @@ func runDeploy(_ *cobra.Command, args []string) {
 
 	streamToStdout(body)
 }
-
-// --- Helpers ---
 
 func requireServer() {
 	if serverURL == "" {

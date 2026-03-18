@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -176,7 +177,9 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 		image = automotivev1alpha1.DefaultToolchainImage
 	}
 
-	annotations := map[string]string{}
+	annotations := map[string]string{
+		"io.kubernetes.cri-o.Devices": "/dev/fuse,/dev/net/tun",
+	}
 	if ws.Spec.LeaseID != "" {
 		annotations[leaseAnn] = ws.Spec.LeaseID
 	}
@@ -197,6 +200,7 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 
 	env := []corev1.EnvVar{
 		{Name: "HOME", Value: "/workspace"},
+		{Name: "BUILDAH_ISOLATION", Value: "chroot"},
 	}
 
 	if ws.Spec.LeaseID != "" {
@@ -239,26 +243,45 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName: workspaceServiceAccountName,
+			HostUsers:          ptr.To(false),
 			SecurityContext: &corev1.PodSecurityContext{
-				RunAsUser: int64Ptr(0),
+				RunAsUser: ptr.To[int64](0),
 			},
 			Containers: []corev1.Container{
 				{
 					Name:  containerName,
 					Image: image,
 					Command: []string{"/bin/sh", "-c",
-						"mkdir -p /workspace/src /workspace/cache /workspace/.ssh" +
+						// Create workspace user (UID 1000) for rootless podman support
+						"if ! id workspace &>/dev/null; then useradd -u 1000 -d /workspace -s /bin/bash workspace; fi" +
+							" && echo 'workspace:1001:64535' > /etc/subuid" +
+							" && echo 'workspace:1001:64535' > /etc/subgid" +
+							// Set up workspace directories owned by workspace user
+							" && mkdir -p /workspace/src /workspace/cache /workspace/.ssh /workspace/.config /workspace/.local/share/containers" +
+							" && chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.ssh /workspace/.config /workspace/.local" +
+							// Wrapper scripts: podman/buildah auto-switch to workspace user (UID 1000)
+							" && printf '#!/bin/sh\\nCMD=$(basename \"$0\")\\nif [ \"$(id -u)\" = \"0\" ]; then\\n  export HOME=/workspace\\n  exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- /usr/bin/$CMD \"$@\"\\nfi\\nexec /usr/bin/$CMD \"$@\"\\n' > /usr/local/bin/podman" +
+							" && chmod +x /usr/local/bin/podman && ln -f /usr/local/bin/podman /usr/local/bin/buildah" +
 							" && [ -f /workspace/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -f /workspace/.ssh/id_ed25519 -N '' -q" +
+							" && chown 1000:1000 /workspace/.ssh/id_ed25519 /workspace/.ssh/id_ed25519.pub 2>/dev/null || true" +
 							" && if [ -f /jumpstarter/client.yaml ]; then" +
 							" mkdir -p /workspace/.config/jumpstarter/clients" +
 							" && cp /jumpstarter/client.yaml /workspace/.config/jumpstarter/clients/workspace.yaml" +
-							" && jmp config client use workspace; fi" +
+							" && chown -R 1000:1000 /workspace/.config" +
+							" && setpriv --reuid=1000 --regid=1000 --init-groups -- jmp config client use workspace || true; fi" +
 							" && exec sleep infinity"},
 					WorkingDir: "/workspace",
 					Env:        env,
 					Resources:  resourcesOrDefaults(ws.Spec.Resources),
 					SecurityContext: &corev1.SecurityContext{
-						Privileged: boolPtr(true),
+						AllowPrivilegeEscalation: ptr.To(true),
+						ProcMount:                ptr.To(corev1.UnmaskedProcMount),
+						Capabilities: &corev1.Capabilities{
+							Add: []corev1.Capability{
+								"SETUID",
+								"SETGID",
+							},
+						},
 					},
 					VolumeMounts: volumeMounts,
 				},
@@ -282,7 +305,7 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 				},
 			},
 			NodeSelector:                  ws.Spec.NodeSelector,
-			TerminationGracePeriodSeconds: int64Ptr(5),
+			TerminationGracePeriodSeconds: ptr.To[int64](5),
 			RestartPolicy:                 corev1.RestartPolicyNever,
 		},
 	}
@@ -309,9 +332,6 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Complete(r)
 }
-
-func boolPtr(v bool) *bool    { return &v }
-func int64Ptr(v int64) *int64 { return &v }
 
 func resourcesOrDefaults(r *corev1.ResourceRequirements) corev1.ResourceRequirements {
 	if r != nil {
