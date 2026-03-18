@@ -523,6 +523,13 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				StringVal: imageBuild.Spec.SecretRef,
 			},
 		},
+		{
+			Name: "use-persistent-cache",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: fmt.Sprintf("%t", imageBuild.Spec.BuildCachePVC != ""),
+			},
+		},
 	}
 
 	clusterRegistryRoute := ""
@@ -745,10 +752,19 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 	}
 
 	// Determine the shared-workspace binding:
+	// - If BuildCachePVC is set, use it as the shared workspace for build cache persistence
 	// - If InputFilesServer is enabled and a PVC already exists (from upload phase), use it
 	// - Otherwise, use VolumeClaimTemplate to create a new PVC with proper zone affinity
 	var sharedWorkspaceBinding tektonv1.WorkspaceBinding
-	if imageBuild.Spec.GetInputFilesServer() && imageBuild.Status.PVCName != "" {
+	if imageBuild.Spec.BuildCachePVC != "" {
+		log.Info("Using build-cache PVC as shared workspace", "pvc", imageBuild.Spec.BuildCachePVC)
+		sharedWorkspaceBinding = tektonv1.WorkspaceBinding{
+			Name: "shared-workspace",
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: imageBuild.Spec.BuildCachePVC,
+			},
+		}
+	} else if imageBuild.Spec.GetInputFilesServer() && imageBuild.Status.PVCName != "" {
 		// Use existing PVC that contains uploaded files
 		log.Info("Using existing PVC with uploaded files", "pvc", imageBuild.Status.PVCName)
 		sharedWorkspaceBinding = tektonv1.WorkspaceBinding{
@@ -766,6 +782,8 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		var storageClassName *string
 		if imageBuild.Spec.StorageClass != "" {
 			storageClassName = &imageBuild.Spec.StorageClass
+		} else if operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.StorageClass != "" {
+			storageClassName = &operatorConfig.Spec.OSBuilds.StorageClass
 		}
 		sharedWorkspaceBinding = tektonv1.WorkspaceBinding{
 			Name: "shared-workspace",

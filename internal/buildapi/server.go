@@ -26,6 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1555,6 +1556,107 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 	return nil
 }
 
+// resolveWorkspaceForBuild resolves a workspace reference for a build:
+// - Finds the workspace or auto-creates it if it doesn't exist
+// - Creates/finds a build-cache PVC for osbuild checkpoint persistence
+// - Forwards the workspace's lease if the build has flash enabled but no explicit lease
+// Returns the build-cache PVC name.
+func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, namespace, wsName, requester string, req *BuildRequest) (string, error) {
+	operatorConfig, _ := loadOperatorConfigFn(ctx, k8sClient, namespace)
+	var wsConfig *automotivev1alpha1.WorkspacesConfig
+	if operatorConfig != nil {
+		wsConfig = operatorConfig.Spec.Workspaces
+	}
+
+	ws := &automotivev1alpha1.Workspace{}
+	err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: wsName}, ws)
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			return "", fmt.Errorf("checking workspace %q: %w", wsName, err)
+		}
+		// Auto-create workspace with defaults from OperatorConfig
+		ws = &automotivev1alpha1.Workspace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      wsName,
+				Namespace: namespace,
+			},
+			Spec: automotivev1alpha1.WorkspaceSpec{
+				Owner:        requester,
+				PVCSize:      wsConfig.GetPVCSize(),
+				StorageClass: wsConfig.GetStorageClass(),
+				NodeSelector: wsConfig.GetNodeSelector(),
+			},
+		}
+		if err := k8sClient.Create(ctx, ws); err != nil {
+			return "", fmt.Errorf("creating workspace %q: %w", wsName, err)
+		}
+		a.log.Info("Auto-created workspace for build", "workspace", wsName, "requester", requester)
+	} else {
+		if ws.Spec.Owner != requester {
+			return "", fmt.Errorf("workspace %q not found", wsName)
+		}
+	}
+
+	// Forward workspace lease if flash is enabled and no explicit lease was provided
+	if req.FlashEnabled && req.FlashLeaseName == "" && ws.Spec.LeaseID != "" {
+		req.FlashLeaseName = ws.Spec.LeaseID
+	}
+
+	// Create or find the build-cache PVC (deterministic name)
+	buildCachePVCName := wsName + "-build-cache"
+	existingPVC := &corev1.PersistentVolumeClaim{}
+	err = k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: buildCachePVCName}, existingPVC)
+	if err == nil {
+		// PVC already exists
+		return buildCachePVCName, nil
+	}
+	if !k8serrors.IsNotFound(err) {
+		return "", fmt.Errorf("checking build-cache PVC: %w", err)
+	}
+
+	// Determine cache PVC size and storage class from OperatorConfig
+	cacheSize := "20Gi"
+	var storageClassName *string
+	if wsConfig != nil {
+		if wsConfig.BuildCacheSize != "" {
+			cacheSize = wsConfig.BuildCacheSize
+		}
+		if sc := wsConfig.GetStorageClass(); sc != "" {
+			storageClassName = &sc
+		}
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      buildCachePVCName,
+			Namespace: namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: automotivev1alpha1.GroupVersion.String(),
+					Kind:       "Workspace",
+					Name:       ws.Name,
+					UID:        ws.UID,
+				},
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			StorageClassName: storageClassName,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(cacheSize),
+				},
+			},
+		},
+	}
+	if err := k8sClient.Create(ctx, pvc); err != nil {
+		return "", fmt.Errorf("creating build-cache PVC: %w", err)
+	}
+
+	a.log.Info("Created build-cache PVC", "workspace", wsName, "pvc", buildCachePVCName, "size", cacheSize)
+	return buildCachePVCName, nil
+}
+
 // buildAIBSpec creates AIBSpec configuration from build request
 func buildAIBSpec(req *BuildRequest, manifest, manifestFileName string, inputFilesServer bool) *automotivev1alpha1.AIBSpec {
 	return &automotivev1alpha1.AIBSpec{
@@ -1623,6 +1725,17 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	namespace := resolveNamespace()
 	requestedBy := a.resolveRequester(c)
 
+	// Resolve --workspace: create/find build-cache PVC and forward lease
+	var buildCachePVCName string
+	if req.Workspace != "" {
+		pvcName, wsErr := a.resolveWorkspaceForBuild(ctx, k8sClient, namespace, req.Workspace, requestedBy, &req)
+		if wsErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": wsErr.Error()})
+			return
+		}
+		buildCachePVCName = pvcName
+	}
+
 	existing := &automotivev1alpha1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: namespace}, existing); err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("ImageBuild %s already exists", req.Name)})
@@ -1684,6 +1797,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			AIB:           buildAIBSpec(&req, req.Manifest, req.ManifestFileName, needsUpload),
 			Export:        buildExportSpec(&req),
 			Flash:         flashSpec,
+			BuildCachePVC: buildCachePVCName,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {

@@ -27,6 +27,7 @@ type runtimeState struct {
 	CustomDefs             *[]string
 	AIBExtraArgs           *[]string
 	ExtraRepos             *[]string
+	Workspace              *string
 	FollowLogs             *bool
 	CompressionAlgo        *string
 	AuthToken              *string
@@ -84,6 +85,7 @@ func newRuntimeState() runtimeState {
 		CustomDefs:             &customDefs,
 		AIBExtraArgs:           &aibExtraArgs,
 		ExtraRepos:             &extraRepos,
+		Workspace:              &workspaceName,
 		FollowLogs:             &followLogs,
 		CompressionAlgo:        &compressionAlgo,
 		AuthToken:              &authToken,
@@ -150,6 +152,7 @@ func (s runtimeState) newHandlers() handlerSet {
 			CustomDefs:                s.CustomDefs,
 			AIBExtraArgs:              s.AIBExtraArgs,
 			ExtraRepos:                s.ExtraRepos,
+			Workspace:                 s.Workspace,
 			FollowLogs:                s.FollowLogs,
 			CompressionAlgo:           s.CompressionAlgo,
 			AuthToken:                 s.AuthToken,
@@ -260,6 +263,7 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		CustomDefs:             s.CustomDefs,
 		AIBExtraArgs:           s.AIBExtraArgs,
 		ExtraRepos:             s.ExtraRepos,
+		Workspace:              s.Workspace,
 		FollowLogs:             s.FollowLogs,
 		CompressionAlgo:        s.CompressionAlgo,
 		ContainerPush:          s.ContainerPush,
