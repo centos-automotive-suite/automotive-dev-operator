@@ -248,6 +248,15 @@ type BuildParameters struct {
 	UseServiceAccountAuth  bool   `json:"useServiceAccountAuth,omitempty"`
 }
 
+// TokenResponse is returned by the token endpoint for internal registry builds
+type TokenResponse struct {
+	Registry  string `json:"registry"`
+	Username  string `json:"username"`
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expiresAt"`
+	Image     string `json:"image"`
+}
+
 // BuildListItem represents a build in the list API
 type BuildListItem struct {
 	Name           string `json:"name"`

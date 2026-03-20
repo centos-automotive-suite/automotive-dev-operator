@@ -284,14 +284,14 @@ func deleteImageStream(ctx context.Context, k8sClient client.Client, namespace, 
 
 // mintRegistryToken creates a fresh short-lived token for the pipeline SA
 // so the caller can pull images from the internal registry.
-func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, namespace string) (string, error) {
+func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, namespace string) (string, metav1.Time, error) {
 	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
-		return "", fmt.Errorf("error getting REST config for token mint: %w", err)
+		return "", metav1.Time{}, fmt.Errorf("error getting REST config for token mint: %w", err)
 	}
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return "", fmt.Errorf("error creating clientset for token mint: %w", err)
+		return "", metav1.Time{}, fmt.Errorf("error creating clientset for token mint: %w", err)
 	}
 	expSeconds := int64(4 * 3600)
 	tokenReq := &authnv1.TokenRequest{
@@ -302,9 +302,9 @@ func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, names
 	tokenResp, err := clientset.CoreV1().ServiceAccounts(namespace).
 		CreateToken(ctx, "pipeline", tokenReq, metav1.CreateOptions{})
 	if err != nil {
-		return "", fmt.Errorf("error creating token for SA pipeline in %s: %w", namespace, err)
+		return "", metav1.Time{}, fmt.Errorf("error creating token for SA pipeline in %s: %w", namespace, err)
 	}
-	return tokenResp.Status.Token, nil
+	return tokenResp.Status.Token, tokenResp.Status.ExpirationTimestamp, nil
 }
 
 // APILimits holds configurable limits for the API server
@@ -518,6 +518,7 @@ func (a *APIServer) createRouter() *gin.Engine {
 			buildsGroup.GET("/:name/progress", a.handleGetProgress)
 			buildsGroup.GET("/:name/template", a.handleGetBuildTemplate)
 			buildsGroup.POST("/:name/uploads", a.handleUploadFiles)
+			buildsGroup.POST("/:name/token", a.handleCreateBuildToken)
 		}
 
 		flashGroup := v1.Group("/flash")
@@ -650,6 +651,81 @@ func (a *APIServer) handleGetBuild(c *gin.Context) {
 	name := c.Param("name")
 	a.log.Info("get build", "build", name, "reqID", c.GetString("reqID"))
 	a.getBuild(c, name)
+}
+
+func (a *APIServer) handleCreateBuildToken(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("token requested", "build", name, "reqID", c.GetString("reqID"))
+
+	namespace := resolveNamespace()
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	ctx := c.Request.Context()
+	build := &automotivev1alpha1.ImageBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "build not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
+		return
+	}
+
+	// Verify the requesting user owns this build
+	requester := a.resolveRequester(c)
+	owner := build.Annotations["automotive.sdv.cloud.redhat.com/requested-by"]
+	if owner != requester {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you can only request tokens for your own builds"})
+		return
+	}
+
+	if !build.Spec.GetUseServiceAccountAuth() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "build does not use the internal registry"})
+		return
+	}
+
+	if build.Status.Phase != phaseCompleted {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("build is not completed (current: %s)", build.Status.Phase)})
+		return
+	}
+
+	// Determine the image ref first — only mint tokens if there's an internal image
+	imageRef := build.Spec.GetExportOCI()
+	if imageRef == "" {
+		imageRef = build.Spec.GetContainerPush()
+	}
+	if imageRef == "" || !strings.HasPrefix(imageRef, defaultInternalRegistryURL+"/") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "build has no image in the internal registry"})
+		return
+	}
+
+	token, expiresAt, err := a.mintRegistryToken(ctx, c, namespace)
+	if err != nil {
+		a.log.Error(err, "failed to mint registry token", "build", name)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to mint registry token: %v", err)})
+		return
+	}
+
+	registryHost := ""
+	externalRoute, routeErr := getExternalRegistryRoute(ctx, k8sClient, namespace)
+	if routeErr == nil && externalRoute != "" {
+		imageRef = translateToExternalURL(imageRef, externalRoute)
+		registryHost = externalRoute
+	} else {
+		registryHost = strings.SplitN(imageRef, "/", 2)[0]
+	}
+
+	writeJSON(c, http.StatusOK, TokenResponse{
+		Registry:  registryHost,
+		Username:  "serviceaccount",
+		Token:     token,
+		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
+		Image:     imageRef,
+	})
 }
 
 func (a *APIServer) handleStreamLogs(c *gin.Context) {
@@ -1779,11 +1855,15 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 	}
 
 	// Mint a fresh registry token only for completed/failed internal registry builds
+	// that belong to the requesting user
 	var registryToken string
-	if build.Spec.GetUseServiceAccountAuth() &&
+	requester := a.resolveRequester(c)
+	buildOwner := build.Annotations["automotive.sdv.cloud.redhat.com/requested-by"]
+	if requester == buildOwner &&
+		build.Spec.GetUseServiceAccountAuth() &&
 		(build.Status.Phase == phaseCompleted || build.Status.Phase == phaseFailed) {
 		var tokenErr error
-		registryToken, tokenErr = a.mintRegistryToken(ctx, c, namespace)
+		registryToken, _, tokenErr = a.mintRegistryToken(ctx, c, namespace)
 		if tokenErr != nil {
 			a.log.Error(tokenErr, "failed to mint registry token", "build", name)
 			tokenWarning := fmt.Sprintf("failed to mint registry token: %v", tokenErr)
