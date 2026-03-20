@@ -236,6 +236,8 @@ func ApplyTargetDefaults(cmd *cobra.Command, config *buildapitypes.OperatorConfi
 }
 
 // displayBuildResults shows push locations after build completion.
+// It queries the server for actual build status so that messages are only
+// shown for steps that actually succeeded.
 func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.Client, buildName string) {
 	labelColor := func(a ...any) string { return fmt.Sprint(a...) }
 	valueColor := func(a ...any) string { return fmt.Sprint(a...) }
@@ -244,12 +246,13 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 		valueColor = color.New(color.FgHiGreen).SprintFunc()
 	}
 
+	st, err := api.GetBuild(ctx, buildName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to get build results for %s: %v\n", buildName, err)
+		return
+	}
+
 	if *h.opts.UseInternalRegistry {
-		st, err := api.GetBuild(ctx, buildName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to get build results for %s: %v\n", buildName, err)
-			return
-		}
 		if st.ContainerImage != "" {
 			fmt.Printf("%s %s\n", labelColor("Container image:"), valueColor(st.ContainerImage))
 		}
@@ -286,13 +289,14 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 		return
 	}
 
-	if *h.opts.ContainerPush != "" {
+	// Only show push confirmations when the server reports actual artifact locations.
+	if st.ContainerImage != "" && *h.opts.ContainerPush != "" {
 		fmt.Printf("%s %s\n", labelColor("Container image pushed to:"), valueColor(*h.opts.ContainerPush))
 	}
-	if *h.opts.ExportOCI != "" {
+	if st.DiskImage != "" && *h.opts.ExportOCI != "" {
 		fmt.Printf("%s %s\n", labelColor("Disk image pushed to:"), valueColor(*h.opts.ExportOCI))
 	}
-	if *h.opts.OutputDir != "" {
+	if *h.opts.OutputDir != "" && st.DiskImage != "" {
 		_, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(*h.opts.ContainerPush, *h.opts.ExportOCI)
 		if err := common.PullOCIArtifact(
 			*h.opts.ExportOCI,

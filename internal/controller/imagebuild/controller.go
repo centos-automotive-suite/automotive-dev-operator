@@ -1525,22 +1525,29 @@ func pipelineRunFailureMessage(pipelineRun *tektonv1.PipelineRun) string {
 	return "Build failed"
 }
 
+// pipelineTaskLabel maps pipeline task names to user-friendly labels for error messages.
+var pipelineTaskLabel = map[string]string{
+	"build-image":        "Image build failed",
+	"push-disk-artifact": "Disk image push failed",
+	"flash-image":        "Flash failed",
+}
+
 func (r *ImageBuildReconciler) pipelineRunFailureDetail(ctx context.Context, pipelineRun *tektonv1.PipelineRun) string {
 	for _, child := range pipelineRun.Status.ChildReferences {
-		if child.PipelineTaskName != "flash-image" {
-			continue
-		}
 		taskRun := &tektonv1.TaskRun{}
 		if err := r.Get(ctx, types.NamespacedName{
 			Name:      child.Name,
 			Namespace: pipelineRun.Namespace,
 		}, taskRun); err != nil {
-			break
+			continue
 		}
 		if isTaskRunCompleted(taskRun) && !isTaskRunSuccessful(taskRun) {
-			return taskRunFailureMessage(taskRun, "Flash failed")
+			label := pipelineTaskLabel[child.PipelineTaskName]
+			if label == "" {
+				label = fmt.Sprintf("Task %q failed", child.PipelineTaskName)
+			}
+			return taskRunFailureMessage(taskRun, label)
 		}
-		break
 	}
 	return pipelineRunFailureMessage(pipelineRun)
 }

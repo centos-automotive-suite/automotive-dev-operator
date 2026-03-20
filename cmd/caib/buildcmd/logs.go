@@ -145,7 +145,9 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 					lastPhase == phaseFlashing
 
 				handleErr := fmt.Errorf("%s", st.Message)
-				if isFlashFailure || *h.opts.FlashAfterBuild {
+				// Only show push/flash results when an image was actually produced.
+				hasImage := st.DiskImage != "" || st.ContainerImage != ""
+				if hasImage && (isFlashFailure || *h.opts.FlashAfterBuild) {
 					h.displayBuildResults(ctx, api, name)
 					h.handleFlashError(handleErr, st)
 				} else {

@@ -1,12 +1,19 @@
 package imagebuild
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	knativev1 "knative.dev/pkg/apis/duck/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestPipelineRunFailureMessage(t *testing.T) {
@@ -184,6 +191,163 @@ func TestTaskRunFailureMessage(t *testing.T) {
 			got := taskRunFailureMessage(tt.taskRun, tt.fallback)
 			if got != tt.want {
 				t.Errorf("taskRunFailureMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func newTestSchemeWithTekton() *runtime.Scheme {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(automotivev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(tektonv1.AddToScheme(scheme))
+	return scheme
+}
+
+func testTaskRun(name string, failed bool, message string) *tektonv1.TaskRun {
+	now := metav1.Now()
+	status := corev1.ConditionTrue
+	if failed {
+		status = corev1.ConditionFalse
+	}
+	return &tektonv1.TaskRun{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "test-ns"},
+		Status: tektonv1.TaskRunStatus{
+			Status: knativev1.Status{
+				Conditions: knativev1.Conditions{{
+					Type:    conditionSucceeded,
+					Status:  status,
+					Message: message,
+				}},
+			},
+			TaskRunStatusFields: tektonv1.TaskRunStatusFields{
+				CompletionTime: &now,
+			},
+		},
+	}
+}
+
+func TestPipelineRunFailureDetail(t *testing.T) {
+	const ns = "test-ns"
+
+	tests := []struct {
+		name        string
+		pipelineRun *tektonv1.PipelineRun
+		taskRuns    []runtime.Object
+		wantPrefix  string
+	}{
+		{
+			name: "build-image task failed",
+			pipelineRun: &tektonv1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{Name: "pr-1", Namespace: ns},
+				Status: tektonv1.PipelineRunStatus{
+					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+						ChildReferences: []tektonv1.ChildStatusReference{
+							{Name: "pr-1-build-run", PipelineTaskName: "build-image"},
+							{Name: "pr-1-push-run", PipelineTaskName: "push-disk-artifact"},
+						},
+					},
+				},
+			},
+			taskRuns: []runtime.Object{
+				testTaskRun("pr-1-build-run", true, "step build exited with code 1"),
+			},
+			wantPrefix: "Image build failed: step build exited with code 1",
+		},
+		{
+			name: "push-disk-artifact task failed",
+			pipelineRun: &tektonv1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{Name: "pr-2", Namespace: ns},
+				Status: tektonv1.PipelineRunStatus{
+					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+						ChildReferences: []tektonv1.ChildStatusReference{
+							{Name: "pr-2-build-run", PipelineTaskName: "build-image"},
+							{Name: "pr-2-push-run", PipelineTaskName: "push-disk-artifact"},
+						},
+					},
+				},
+			},
+			taskRuns: []runtime.Object{
+				testTaskRun("pr-2-build-run", false, ""),
+				testTaskRun("pr-2-push-run", true, "push to registry timed out"),
+			},
+			wantPrefix: "Disk image push failed: push to registry timed out",
+		},
+		{
+			name: "flash-image task failed",
+			pipelineRun: &tektonv1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{Name: "pr-3", Namespace: ns},
+				Status: tektonv1.PipelineRunStatus{
+					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+						ChildReferences: []tektonv1.ChildStatusReference{
+							{Name: "pr-3-build-run", PipelineTaskName: "build-image"},
+							{Name: "pr-3-push-run", PipelineTaskName: "push-disk-artifact"},
+							{Name: "pr-3-flash-run", PipelineTaskName: "flash-image"},
+						},
+					},
+				},
+			},
+			taskRuns: []runtime.Object{
+				testTaskRun("pr-3-build-run", false, ""),
+				testTaskRun("pr-3-push-run", false, ""),
+				testTaskRun("pr-3-flash-run", true, "timeout waiting for device"),
+			},
+			wantPrefix: "Flash failed: timeout waiting for device",
+		},
+		{
+			name: "unknown task name uses quoted fallback",
+			pipelineRun: &tektonv1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{Name: "pr-4", Namespace: ns},
+				Status: tektonv1.PipelineRunStatus{
+					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+						ChildReferences: []tektonv1.ChildStatusReference{
+							{Name: "pr-4-custom-run", PipelineTaskName: "custom-step"},
+						},
+					},
+				},
+			},
+			taskRuns: []runtime.Object{
+				testTaskRun("pr-4-custom-run", true, "something went wrong"),
+			},
+			wantPrefix: `Task "custom-step" failed: something went wrong`,
+		},
+		{
+			name: "no failed TaskRun found falls back to PipelineRun message",
+			pipelineRun: &tektonv1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{Name: "pr-5", Namespace: ns},
+				Status: tektonv1.PipelineRunStatus{
+					Status: knativev1.Status{
+						Conditions: knativev1.Conditions{{
+							Type:    conditionSucceeded,
+							Status:  corev1.ConditionFalse,
+							Message: "Tasks Completed: 1 (Failed: 1, Cancelled 0), Skipped: 2",
+						}},
+					},
+					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+						ChildReferences: []tektonv1.ChildStatusReference{
+							// TaskRun not in fake client — simulates missing/deleted pod
+							{Name: "pr-5-gone-run", PipelineTaskName: "build-image"},
+						},
+					},
+				},
+			},
+			taskRuns:   nil,
+			wantPrefix: "Build failed: Tasks Completed: 1 (Failed: 1, Cancelled 0), Skipped: 2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newTestSchemeWithTekton()
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			for _, obj := range tt.taskRuns {
+				builder = builder.WithRuntimeObjects(obj)
+			}
+			r := &ImageBuildReconciler{Client: builder.Build(), Scheme: scheme}
+
+			got := r.pipelineRunFailureDetail(context.Background(), tt.pipelineRun)
+			if got != tt.wantPrefix {
+				t.Errorf("pipelineRunFailureDetail() = %q, want %q", got, tt.wantPrefix)
 			}
 		})
 	}
