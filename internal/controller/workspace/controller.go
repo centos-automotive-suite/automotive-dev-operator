@@ -120,6 +120,10 @@ func (r *Reconciler) ensurePVC(ctx context.Context, ws *automotivev1alpha1.Works
 	if pvcSize == "" {
 		pvcSize = automotivev1alpha1.DefaultWorkspacePVCSize
 	}
+	storageQty, err := resource.ParseQuantity(pvcSize)
+	if err != nil {
+		return fmt.Errorf("invalid pvcSize %q: %w", pvcSize, err)
+	}
 
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -130,7 +134,7 @@ func (r *Reconciler) ensurePVC(ctx context.Context, ws *automotivev1alpha1.Works
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(pvcSize),
+					corev1.ResourceStorage: storageQty,
 				},
 			},
 		},

@@ -102,6 +102,7 @@ type ImageBuildReconciler struct {
 	RestConfig *rest.Config
 }
 
+// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=workspaces,verbs=get;update
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagebuilds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagebuilds/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagebuilds/finalizers,verbs=update
@@ -367,6 +368,11 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 
 		// Cleanup transient secrets
 		r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
+
+		// Write lease back to workspace for reuse by subsequent builds
+		if fresh.Spec.Workspace != "" && fresh.Status.LeaseID != "" {
+			r.updateWorkspaceLease(ctx, fresh, log)
+		}
 
 		return ctrl.Result{}, nil
 	}
@@ -1436,8 +1442,25 @@ func (r *ImageBuildReconciler) createFlashTaskRun(
 	return nil
 }
 
-// cleanupTransientSecrets deletes any transient secrets created for this build
-// Uses retry logic to handle transient API errors
+// updateWorkspaceLease writes the acquired lease back to the workspace so subsequent builds can reuse it.
+func (r *ImageBuildReconciler) updateWorkspaceLease(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild, log logr.Logger) {
+	ws := &automotivev1alpha1.Workspace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Spec.Workspace, Namespace: imageBuild.Namespace}, ws); err != nil {
+		log.Error(err, "Failed to get workspace for lease write-back", "workspace", imageBuild.Spec.Workspace)
+		return
+	}
+	if ws.Spec.LeaseID == imageBuild.Status.LeaseID {
+		return
+	}
+	patch := client.MergeFrom(ws.DeepCopy())
+	ws.Spec.LeaseID = imageBuild.Status.LeaseID
+	if err := r.Patch(ctx, ws, patch); err != nil {
+		log.Error(err, "Failed to write lease back to workspace", "workspace", ws.Name, "lease", imageBuild.Status.LeaseID)
+	} else {
+		log.Info("Wrote lease back to workspace", "workspace", ws.Name, "lease", imageBuild.Status.LeaseID)
+	}
+}
+
 func (r *ImageBuildReconciler) cleanupTransientSecrets(
 	ctx context.Context,
 	imageBuild *automotivev1alpha1.ImageBuild,
