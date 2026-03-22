@@ -74,11 +74,16 @@ type SyncPlanResponse struct {
 	Unchanged int      `json:"unchanged"` // count of files already up to date
 }
 
-// WorkspaceDeployRequest is the payload to deploy an artifact to a board.
+// ArtifactMapping maps a source path inside the workspace to a destination on the board.
+type ArtifactMapping struct {
+	Src  string `json:"src"`  // Path inside workspace (file or directory)
+	Dest string `json:"dest"` // Path on the board
+}
+
+// WorkspaceDeployRequest is the payload to deploy artifacts to a board.
 type WorkspaceDeployRequest struct {
-	ArtifactPath string `json:"artifactPath"`       // Path inside workspace
-	DestPath     string `json:"destPath"`           // Path on the board
-	Password     string `json:"password,omitempty"` // SSH password for key injection (default: "password")
+	Artifacts []ArtifactMapping `json:"artifacts"`
+	Password  string            `json:"password,omitempty"` // SSH password for key injection (default: "password")
 }
 
 // registerWorkspaceRoutes registers the workspace API routes on the v1 group.
@@ -683,13 +688,15 @@ func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	if strings.TrimSpace(req.ArtifactPath) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "artifactPath is required"})
+	if len(req.Artifacts) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one artifact mapping is required"})
 		return
 	}
-	if strings.TrimSpace(req.DestPath) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "destPath is required"})
-		return
+	for i, a := range req.Artifacts {
+		if strings.TrimSpace(a.Src) == "" || strings.TrimSpace(a.Dest) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("artifact[%d]: src and dest are required", i)})
+			return
+		}
 	}
 
 	ws, err := a.getOwnedWorkspace(c, name)
@@ -712,35 +719,84 @@ func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	setupLogStreamHeaders(c)
-
-	// Use jmp shell to get the board's TCP address, inject SSH key, then rsync.
-	// timeout is needed because jmp shell may hang if the lease/board is unavailable.
+	// Use jmp shell to forward a local TCP port to the board, then SSH/rsync through it.
+	// The board's IP is behind the Jumpstarter lab network and not directly routable
+	// from the workspace pod, so we must tunnel through Jumpstarter.
 	sshPassword := req.Password
 	if sshPassword == "" {
 		sshPassword = "password"
 	}
-	sshOpts := "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+
+	// Ensure a Jumpstarter tunnel is running. The tunnel is a long-lived background
+	// process that persists across deploys. On first deploy it takes ~8s to start
+	// (lease acquisition + TCP forwarding); subsequent deploys reuse it (~0s).
+	//
+	// The tunnel runs in a separate exec from the deploy to avoid SPDY fd inheritance:
+	// background processes inherit SPDY pipe fds (even with >/dev/null redirects),
+	// keeping the stream open until the process exits. By splitting into two execs,
+	// phase 2 has zero background processes so its SPDY stream closes immediately.
+	// PID is exchanged via /tmp/.tunnel.pid (not stdout) because SPDY has a race
+	// condition where the stream closes before output is delivered for fast execs.
+	tunnelScript := fmt.Sprintf(
+		`SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3"
+SSH_KEY="-i /workspace/.ssh/id_ed25519"
+
+# Reuse existing tunnel if it's alive and reachable
+if [ -f /tmp/.tunnel.pid ]; then
+  OLD_PID=$(cat /tmp/.tunnel.pid)
+  if kill -0 $OLD_PID 2>/dev/null && ssh -p 2222 $SSH_OPTS $SSH_KEY root@127.0.0.1 true 2>/dev/null; then
+    exit 0
+  fi
+  kill $OLD_PID 2>/dev/null; pkill -P $OLD_PID 2>/dev/null; sleep 1
+fi
+jmp shell --lease %s -- j tcp forward-tcp --address 0.0.0.0 2222 </dev/null >/dev/null 2>&1 &
+echo $! > /tmp/.tunnel.pid`,
+		shellQuote(ws.Spec.LeaseID))
+
+	tunnelCtx, tunnelCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer tunnelCancel()
+	_ = podExec(tunnelCtx, restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName,
+		[]string{"/bin/sh", "-c", tunnelScript}, io.Discard)
+
+	// Phase 2: Deploy artifacts (streaming, no background processes).
+	// Reads tunnel PID from /tmp/.tunnel.pid. The tunnel is left running for reuse.
+	setupLogStreamHeaders(c)
+
+	// Build rsync commands for each artifact mapping
+	var rsyncCmds strings.Builder
+	for _, a := range req.Artifacts {
+		fmt.Fprintf(&rsyncCmds, "echo \"Deploying %s -> %s\"\n", a.Src, a.Dest)
+		fmt.Fprintf(&rsyncCmds, "rsync -avz --chmod=+x -e \"ssh -p $LOCAL_PORT $SSH_OPTS $SSH_KEY\" %s root@127.0.0.1:%s\n",
+			shellQuote(a.Src), shellQuote(a.Dest))
+	}
+
 	deployScript := fmt.Sprintf(
 		`set -e
-SSH_PASS=%s
-ARTIFACT_PATH=%s
-DEST_PATH=%s
-echo "Resolving board address via Jumpstarter..."
-ADDR=$(timeout 30 jmp shell -- j tcp address < /dev/null 2>&1 | grep -E ':[0-9]+$' | tail -1 | tr -d '[:space:]')
-if [ -z "$ADDR" ]; then
-  echo "ERROR: failed to get board TCP address from Jumpstarter" >&2
-  exit 1
-fi
-HOST=${ADDR%%%%:*}
-PORT=${ADDR#*:}
-[ "$PORT" = "$HOST" ] && PORT=22
-echo "Board address: $HOST:$PORT"
-echo "Injecting SSH key..."
-cat /workspace/.ssh/id_ed25519.pub | sshpass -p "$SSH_PASS" ssh -p $PORT %s root@$HOST 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys'
-echo "Deploying artifact..."
-rsync -e "ssh -p $PORT -i /workspace/.ssh/id_ed25519 %s" -avz "$ARTIFACT_PATH" root@$HOST:"$DEST_PATH"`,
-		shellQuote(sshPassword), shellQuote(req.ArtifactPath), shellQuote(req.DestPath), sshOpts, sshOpts)
+LOCAL_PORT=2222
+CTL_PATH="/tmp/.ssh-mux-%%r@%%h:%%p"
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 -o ControlMaster=auto -o ControlPath=$CTL_PATH -o ControlPersist=60"
+SSH_CMD="ssh -p $LOCAL_PORT $SSH_OPTS"
+SSH_KEY="-i /workspace/.ssh/id_ed25519"
+TUNNEL_PID=$(cat /tmp/.tunnel.pid 2>/dev/null)
+if [ -z "$TUNNEL_PID" ]; then echo "Failed to start Jumpstarter tunnel"; exit 1; fi
+
+echo "Waiting for tunnel..."
+SSH_READY=false
+for i in $(seq 1 60); do
+  if ! kill -0 $TUNNEL_PID 2>/dev/null; then echo "Tunnel process died"; exit 1; fi
+  if $SSH_CMD $SSH_KEY root@127.0.0.1 true 2>/dev/null; then SSH_READY=true; break; fi
+  if cat /workspace/.ssh/id_ed25519.pub | sshpass -p %s $SSH_CMD root@127.0.0.1 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys' 2>/dev/null; then
+    echo "SSH key injected"; SSH_READY=true; break
+  fi
+  sleep 1
+done
+if [ "$SSH_READY" != "true" ]; then echo "Timed out waiting for SSH"; exit 1; fi
+echo "Tunnel ready"
+%s
+echo "Deploy complete: %d artifact(s)"
+ssh -p $LOCAL_PORT -o ControlPath=$CTL_PATH -O exit root@127.0.0.1 2>/dev/null; true`,
+		shellQuote(sshPassword), rsyncCmds.String(), len(req.Artifacts))
+
 	cmd := []string{"/bin/sh", "-c", deployScript}
 	if err := execInPod(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, c.Writer); err != nil {
 		_, _ = fmt.Fprintf(c.Writer, "\n[deploy failed: %v]\n", err)
