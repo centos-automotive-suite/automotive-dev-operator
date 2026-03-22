@@ -6,7 +6,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -458,26 +460,77 @@ func runSync(_ *cobra.Command, args []string) {
 		handleError(fmt.Errorf("no git-tracked files found in %s", absDir))
 	}
 
-	fmt.Printf("Syncing %d tracked files to workspace %q...\n", len(files), name)
+	// Phase 1: compute local manifest and ask server what changed
+	manifest := computeManifest(absDir, files)
+	planReq := buildapitypes.SyncPlanRequest{Files: manifest}
 
-	// Build tar into buffer so we know total size and get a clean EOF
+	var plan *buildapitypes.SyncPlanResponse
+	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		p, cerr := client.SyncPlan(context.Background(), name, planReq)
+		if cerr != nil {
+			return cerr
+		}
+		plan = p
+		return nil
+	})
+	if err != nil {
+		// Fall back to full sync — warn so users know why delta didn't work
+		fmt.Fprintf(os.Stderr, "Warning: sync plan unavailable (%v), uploading all files\n", err)
+		fmt.Printf("Syncing %d tracked files to workspace %q...\n", len(files), name)
+		uploadFiles(name, absDir, files)
+		return
+	}
+
+	if len(plan.Changed) == 0 {
+		fmt.Printf("Workspace %q is up to date (%d files)\n", name, plan.Unchanged)
+		return
+	}
+
+	// Phase 2: upload only changed files
+	fmt.Printf("Syncing %d changed files to workspace %q (%d unchanged)...\n",
+		len(plan.Changed), name, plan.Unchanged)
+	uploadFiles(name, absDir, plan.Changed)
+}
+
+func uploadFiles(name, absDir string, files []string) {
 	var buf bytes.Buffer
 	if err := tarTrackedFiles(absDir, files, &buf); err != nil {
 		handleError(fmt.Errorf("failed to create tar archive: %w", err))
 	}
 
 	totalBytes := int64(buf.Len())
-	pr := newProgressReader(&buf, totalBytes)
+	archive := buf.Bytes()
 
-	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
-		return client.SyncWorkspace(context.Background(), name, pr)
+	var pr *progressReader
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		pr = newProgressReader(bytes.NewReader(archive), totalBytes)
+		err := client.SyncWorkspace(context.Background(), name, pr)
+		pr.finish()
+		return err
 	})
-	pr.finish()
 	if err != nil {
 		handleError(fmt.Errorf("failed to sync workspace: %w", err))
 	}
-
 	fmt.Println("Files synced")
+}
+
+func computeManifest(baseDir string, files []string) map[string]string {
+	manifest := make(map[string]string, len(files))
+	for _, relPath := range files {
+		absPath := filepath.Join(baseDir, relPath)
+		f, err := os.Open(absPath)
+		if err != nil {
+			continue // file may have been deleted since ls-files
+		}
+		h := sha256.New()
+		_, err = io.Copy(h, f)
+		_ = f.Close()
+		if err != nil {
+			continue
+		}
+		manifest[relPath] = hex.EncodeToString(h.Sum(nil))
+	}
+	return manifest
 }
 
 // gitTrackedFiles returns the list of git-tracked files relative to dir.
