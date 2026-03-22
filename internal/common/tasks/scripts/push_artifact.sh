@@ -234,8 +234,8 @@ if [ -d "${parts_dir}" ] && [ -n "$(ls -A "${parts_dir}" 2>/dev/null)" ]; then
   layer_annotations_json=""
 
   for part_file in *; do
-    # Skip .size sidecar files
-    case "$part_file" in *.size) continue ;; esac
+    # Skip .size sidecar files and aib-manifest.yml (added separately below)
+    case "$part_file" in *.size|aib-manifest.yml) continue ;; esac
 
     if [ -f "$part_file" ]; then
       filename="$part_file"

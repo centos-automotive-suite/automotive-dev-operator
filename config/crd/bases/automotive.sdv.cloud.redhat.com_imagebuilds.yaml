@@ -203,6 +203,12 @@ spec:
                 description: StorageClass is the name of the storage class to use
                   for the build PVC
                 type: string
+              workspace:
+                description: |-
+                  Workspace is the name of the Workspace CR this build belongs to.
+                  When set, the controller writes the acquired lease back to the workspace
+                  on completion so subsequent builds can reuse it.
+                type: string
             type: object
           status:
             description: ImageBuildStatus defines the observed state of ImageBuild

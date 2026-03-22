@@ -58,6 +58,12 @@ type ImageBuildSpec struct {
 	// enabling osbuild checkpoint reuse and dnf cache persistence across builds.
 	// +optional
 	BuildCachePVC string `json:"buildCachePVC,omitempty"`
+
+	// Workspace is the name of the Workspace CR this build belongs to.
+	// When set, the controller writes the acquired lease back to the workspace
+	// on completion so subsequent builds can reuse it.
+	// +optional
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // FlashSpec defines configuration for flashing images to hardware via Jumpstarter

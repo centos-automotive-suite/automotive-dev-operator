@@ -372,9 +372,15 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 	}
 
 	// Buffer the tar stream so that EOF propagates cleanly to the SPDY executor.
-	tarData, err := io.ReadAll(c.Request.Body)
+	// Limit to 512MB to prevent OOM from oversized uploads.
+	const maxSyncSize = 512 << 20 // 512 MiB
+	tarData, err := io.ReadAll(io.LimitReader(c.Request.Body, maxSyncSize+1))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read upload: %v", err)})
+		return
+	}
+	if int64(len(tarData)) > maxSyncSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("upload exceeds maximum size of %d MiB", maxSyncSize>>20)})
 		return
 	}
 
