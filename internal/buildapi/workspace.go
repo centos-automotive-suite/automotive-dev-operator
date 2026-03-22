@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -869,7 +870,10 @@ func copyToPod(ctx context.Context, restCfg *rest.Config, namespace, podName, co
 // flushWriter wraps an http.ResponseWriter and flushes after every Write,
 // ensuring streamed data reaches the client (and intermediate proxies like
 // HAProxy) immediately instead of sitting in Go's response buffer.
+// A mutex serializes writes because the SPDY executor copies stdout and stderr
+// in separate goroutines — concurrent writes corrupt HTTP chunked encoding.
 type flushWriter struct {
+	mu      sync.Mutex
 	w       io.Writer
 	flusher http.Flusher
 }
@@ -883,6 +887,8 @@ func newFlushWriter(w http.ResponseWriter) *flushWriter {
 }
 
 func (fw *flushWriter) Write(p []byte) (int, error) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	n, err := fw.w.Write(p)
 	if fw.flusher != nil {
 		fw.flusher.Flush()
