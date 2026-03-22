@@ -43,6 +43,11 @@ type WorkspaceSpec struct {
 	// +kubebuilder:default="10Gi"
 	PVCSize string `json:"pvcSize,omitempty"`
 
+	// StorageClass is the storage class for workspace PVCs
+	// If empty, the cluster default storage class is used
+	// +optional
+	StorageClass string `json:"storageClass,omitempty"`
+
 	// Resources defines the CPU and memory requests/limits for the workspace container
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
@@ -62,6 +67,11 @@ type WorkspaceStatus struct {
 
 	// Message provides additional detail about the current phase
 	Message string `json:"message,omitempty"`
+
+	// BuildCachePVCName is the name of the PVC used for build cache storage.
+	// Created lazily on first build referencing this workspace.
+	// +optional
+	BuildCachePVCName string `json:"buildCachePVCName,omitempty"`
 }
 
 // +kubebuilder:object:root=true
