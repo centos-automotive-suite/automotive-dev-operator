@@ -166,7 +166,14 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 		return nil, err
 	}
 
-	pod := r.buildPod(ws)
+	// Load OperatorConfig only when creating a new pod
+	var operatorConfig *automotivev1alpha1.OperatorConfig
+	oc := &automotivev1alpha1.OperatorConfig{}
+	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: ws.Namespace}, oc); err == nil {
+		operatorConfig = oc
+	}
+
+	pod := r.buildPod(ws, operatorConfig)
 	if err := controllerutil.SetControllerReference(ws, pod, r.Scheme); err != nil {
 		return nil, err
 	}
@@ -177,7 +184,7 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 	return pod, nil
 }
 
-func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
+func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *automotivev1alpha1.OperatorConfig) *corev1.Pod {
 	podName := "workspace-" + ws.Name
 	pvcName := ws.Status.PVCName
 
@@ -187,7 +194,11 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 	}
 	image := ws.Spec.Image
 	if image == "" {
-		image = automotivev1alpha1.DefaultToolchainImage
+		var wsConfig *automotivev1alpha1.WorkspacesConfig
+		if operatorConfig != nil {
+			wsConfig = operatorConfig.Spec.Workspaces
+		}
+		image = wsConfig.GetToolchainImage()
 	}
 
 	annotations := map[string]string{
@@ -372,10 +383,6 @@ func resourcesOrDefaults(r *corev1.ResourceRequirements) corev1.ResourceRequirem
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("500m"),
 			corev1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("2"),
-			corev1.ResourceMemory: resource.MustParse("2Gi"),
 		},
 	}
 }
