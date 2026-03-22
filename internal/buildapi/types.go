@@ -269,8 +269,9 @@ type JumpstarterTarget struct {
 
 // TargetDefaults contains build defaults for a target (from ConfigMap)
 type TargetDefaults struct {
-	Architecture string   `json:"architecture,omitempty"`
-	ExtraArgs    []string `json:"extraArgs,omitempty"`
+	Architecture  string   `json:"architecture,omitempty"`
+	ExtraArgs     []string `json:"extraArgs,omitempty"`
+	DefaultFormat string   `json:"defaultFormat,omitempty"`
 }
 
 // OperatorConfigResponse returns relevant operator configuration for CLI validation
