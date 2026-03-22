@@ -817,6 +817,37 @@ func (c *Client) DeleteWorkspace(ctx context.Context, name string) error {
 	return nil
 }
 
+// SyncPlan sends a file manifest and returns which files need uploading.
+func (c *Client) SyncPlan(ctx context.Context, name string, req buildapi.SyncPlanRequest) (*buildapi.SyncPlanResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "sync", "plan"))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("sync plan failed: %s: %s", resp.Status, string(b))
+	}
+	var plan buildapi.SyncPlanResponse
+	if err := json.NewDecoder(resp.Body).Decode(&plan); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &plan, nil
+}
+
 // SyncWorkspace uploads a tar stream to a workspace.
 func (c *Client) SyncWorkspace(ctx context.Context, name string, body io.Reader) error {
 	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "sync"))
