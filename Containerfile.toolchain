@@ -65,9 +65,22 @@ RUN dnf install -y --setopt install_weak_deps=false --nodocs \
     flex bison bc perl \
     openssl openssl-devel elfutils-libelf-devel dwarves \
     diffutils findutils tar gzip xz cpio \
-    mock createrepo_c ccache \
+    rpm-build mock createrepo_c ccache \
     git rsync openssh-clients sshpass \
-    python3 python3-pip podman curl sudo \
+    python3 python3-pip python3-pyyaml podman curl sudo \
+    && dnf clean all
+
+# Kernel RPM build dependencies (BuildRequires from kernel-automotive SRPM)
+RUN dnf install -y --setopt install_weak_deps=false --nodocs \
+    binutils-devel clang llvm-devel \
+    elfutils-devel fuse-devel \
+    glibc-static zlib-devel zstd \
+    kernel-rpm-macros redhat-rpm-config \
+    libcap-devel libcap-ng-devel libmnl-devel libxml2-devel \
+    numactl-devel ncurses-devel \
+    hmaccalc net-tools which m4 hostname kmod \
+    perl-devel perl-generators perl-Carp \
+    python3-devel python3-docutils python3-jsonschema \
     && dnf clean all
 
 # Allow any UID to use sudo
