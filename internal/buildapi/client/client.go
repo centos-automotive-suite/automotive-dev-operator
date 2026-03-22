@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/gorilla/websocket"
 )
 
 // Client provides access to the build API server.
@@ -707,4 +708,198 @@ func (c *Client) GetOperatorConfig(ctx context.Context) (*buildapi.OperatorConfi
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 	return &config, nil
+}
+
+// CreateWorkspace creates a new developer workspace.
+func (c *Client) CreateWorkspace(ctx context.Context, req buildapi.WorkspaceRequest) (*buildapi.WorkspaceResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := c.resolve("/v1/workspaces")
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("create workspace failed: %s: %s", resp.Status, string(b))
+	}
+	var ws buildapi.WorkspaceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ws); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &ws, nil
+}
+
+// ListWorkspaces lists all workspaces.
+func (c *Client) ListWorkspaces(ctx context.Context) ([]buildapi.WorkspaceResponse, error) {
+	endpoint := c.resolve("/v1/workspaces")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("list workspaces failed: %s: %s", resp.Status, string(b))
+	}
+	var workspaces []buildapi.WorkspaceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&workspaces); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return workspaces, nil
+}
+
+// GetWorkspace gets a workspace by name.
+func (c *Client) GetWorkspace(ctx context.Context, name string) (*buildapi.WorkspaceResponse, error) {
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("get workspace failed: %s: %s", resp.Status, string(b))
+	}
+	var ws buildapi.WorkspaceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ws); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &ws, nil
+}
+
+// DeleteWorkspace deletes a workspace by name.
+func (c *Client) DeleteWorkspace(ctx context.Context, name string) error {
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("delete workspace failed: %s: %s", resp.Status, string(b))
+	}
+	return nil
+}
+
+// SyncWorkspace uploads a tar stream to a workspace.
+func (c *Client) SyncWorkspace(ctx context.Context, name string, body io.Reader) error {
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "sync"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("sync workspace failed: %s: %s", resp.Status, string(b))
+	}
+	return nil
+}
+
+// workspaceStreamRequest performs a POST with a JSON body and returns the streaming response body.
+func (c *Client) workspaceStreamRequest(ctx context.Context, name, action string, reqBody interface{}) (io.ReadCloser, error) {
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), action))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("%s workspace failed: %s: %s", action, resp.Status, string(b))
+	}
+	return resp.Body, nil
+}
+
+// ExecWorkspace executes a command in a workspace and returns the streaming output.
+func (c *Client) ExecWorkspace(ctx context.Context, name string, req buildapi.WorkspaceExecRequest) (io.ReadCloser, error) {
+	return c.workspaceStreamRequest(ctx, name, "exec", req)
+}
+
+// DeployWorkspace deploys an artifact from a workspace to a board and returns the streaming output.
+func (c *Client) DeployWorkspace(ctx context.Context, name string, req buildapi.WorkspaceDeployRequest) (io.ReadCloser, error) {
+	return c.workspaceStreamRequest(ctx, name, "deploy", req)
+}
+
+// ShellWorkspace opens an interactive shell via WebSocket.
+// Returns the raw WebSocket connection for the caller to read/write.
+func (c *Client) ShellWorkspace(ctx context.Context, name string) (*websocket.Conn, error) {
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "shell"))
+	// Convert http(s) to ws(s)
+	wsURL := strings.Replace(strings.Replace(endpoint, "https://", "wss://", 1), "http://", "ws://", 1)
+
+	header := http.Header{}
+	if c.authToken != "" {
+		header.Set("Authorization", "Bearer "+c.authToken)
+	}
+
+	dialer := websocket.Dialer{}
+	if t, ok := c.httpClient.Transport.(*http.Transport); ok && t.TLSClientConfig != nil {
+		dialer.TLSClientConfig = t.TLSClientConfig
+	}
+
+	conn, resp, err := dialer.DialContext(ctx, wsURL, header)
+	if err != nil {
+		if resp != nil {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("shell websocket failed (%s): %s", resp.Status, string(b))
+		}
+		return nil, fmt.Errorf("shell websocket failed: %w", err)
+	}
+	return conn, nil
 }

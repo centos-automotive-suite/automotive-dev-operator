@@ -559,6 +559,8 @@ func (a *APIServer) createRouter() *gin.Engine {
 			}
 		}
 
+		a.registerWorkspaceRoutes(v1)
+
 		// Register catalog routes with authentication
 		catalogClient, err := a.getCatalogClient()
 		if err != nil {
