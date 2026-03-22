@@ -75,10 +75,6 @@ type ImagesConfig struct {
 	// Operator is the operator container image (overridden by OPERATOR_IMAGE env var when set)
 	// +optional
 	Operator string `json:"operator,omitempty"`
-
-	// Toolchain is the container image for workspace toolchains
-	// +optional
-	Toolchain string `json:"toolchain,omitempty"`
 }
 
 // GetAutomotiveImageBuilderImage returns the AIB image, falling back to the default
@@ -111,14 +107,6 @@ func (c *ImagesConfig) GetOperatorImage() string {
 		return c.Operator
 	}
 	return DefaultOperatorImage
-}
-
-// GetToolchainImage returns the toolchain image, falling back to the default
-func (c *ImagesConfig) GetToolchainImage() string {
-	if c != nil && c.Toolchain != "" {
-		return c.Toolchain
-	}
-	return DefaultToolchainImage
 }
 
 // BuildAPIResourcesConfig defines resource requirements for Build API components
@@ -322,6 +310,10 @@ type ContainerBuildsConfig struct {
 
 // WorkspacesConfig defines configuration for developer workspaces
 type WorkspacesConfig struct {
+	// ToolchainImage is the container image for workspace toolchains
+	// +optional
+	ToolchainImage string `json:"toolchainImage,omitempty"`
+
 	// DefaultArchitecture is the default target architecture for workspaces
 	// +optional
 	DefaultArchitecture string `json:"defaultArchitecture,omitempty"`
@@ -345,6 +337,14 @@ type WorkspacesConfig struct {
 	// Tolerations specifies tolerations to be added to workspace pods
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
+// GetToolchainImage returns the toolchain image, falling back to the default
+func (c *WorkspacesConfig) GetToolchainImage() string {
+	if c != nil && c.ToolchainImage != "" {
+		return c.ToolchainImage
+	}
+	return DefaultToolchainImage
 }
 
 // GetDefaultArchitecture returns the default workspace architecture, falling back to the default

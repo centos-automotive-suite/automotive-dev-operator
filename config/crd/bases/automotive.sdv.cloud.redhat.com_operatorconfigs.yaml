@@ -638,9 +638,6 @@ spec:
                     description: Operator is the operator container image (overridden
                       by OPERATOR_IMAGE env var when set)
                     type: string
-                  toolchain:
-                    description: Toolchain is the container image for workspace toolchains
-                    type: string
                   yqHelper:
                     description: YQHelper is the yq helper image used in Tekton task
                       steps
@@ -995,6 +992,10 @@ spec:
                           type: string
                       type: object
                     type: array
+                  toolchainImage:
+                    description: ToolchainImage is the container image for workspace
+                      toolchains
+                    type: string
                 type: object
             type: object
           status:
