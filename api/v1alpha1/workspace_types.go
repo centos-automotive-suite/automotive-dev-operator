@@ -59,12 +59,17 @@ type WorkspaceSpec struct {
 	// TmpfsBuildDir adds a tmpfs-backed emptyDir at /tmp/build for fast compilation
 	// +optional
 	TmpfsBuildDir bool `json:"tmpfsBuildDir,omitempty"`
+
+	// Stopped indicates the workspace pod should not be running.
+	// When true, the controller deletes the pod but preserves the PVC.
+	// +optional
+	Stopped bool `json:"stopped,omitempty"`
 }
 
 // WorkspaceStatus defines the observed state of a Workspace.
 type WorkspaceStatus struct {
 	// Phase is the current phase of the workspace
-	// +kubebuilder:validation:Enum=Pending;Creating;Running;Failed;Terminating
+	// +kubebuilder:validation:Enum=Pending;Creating;Running;Failed;Terminating;Stopped
 	Phase string `json:"phase,omitempty"`
 
 	// PodName is the name of the workspace pod

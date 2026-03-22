@@ -759,6 +759,42 @@ func (c *Client) GetWorkspace(ctx context.Context, name string) (*buildapi.Works
 	return &ws, nil
 }
 
+// StartWorkspace starts a stopped workspace.
+func (c *Client) StartWorkspace(ctx context.Context, name string) (*buildapi.WorkspaceResponse, error) {
+	return c.workspaceAction(ctx, name, "start")
+}
+
+// StopWorkspace stops a running workspace, preserving its storage.
+func (c *Client) StopWorkspace(ctx context.Context, name string) (*buildapi.WorkspaceResponse, error) {
+	return c.workspaceAction(ctx, name, "stop")
+}
+
+// workspaceAction performs a POST to /v1/workspaces/:name/:action and decodes a WorkspaceResponse.
+func (c *Client) workspaceAction(ctx context.Context, name, action string) (*buildapi.WorkspaceResponse, error) {
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), action))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("%s workspace failed: %s: %s", action, resp.Status, string(b))
+	}
+	var ws buildapi.WorkspaceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ws); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &ws, nil
+}
+
 // DeleteWorkspace deletes a workspace by name.
 func (c *Client) DeleteWorkspace(ctx context.Context, name string) error {
 	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name)))

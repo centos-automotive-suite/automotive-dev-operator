@@ -144,6 +144,11 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              stopped:
+                description: |-
+                  Stopped indicates the workspace pod should not be running.
+                  When true, the controller deletes the pod but preserves the PVC.
+                type: boolean
               storageClass:
                 description: |-
                   StorageClass is the storage class for workspace PVCs
@@ -176,6 +181,7 @@ spec:
                 - Running
                 - Failed
                 - Terminating
+                - Stopped
                 type: string
               podName:
                 description: PodName is the name of the workspace pod

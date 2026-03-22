@@ -78,7 +78,10 @@ func (a *APIServer) registerWorkspaceRoutes(v1 *gin.RouterGroup) {
 		workspaceGroup.GET("", a.handleListWorkspaces)
 		workspaceGroup.GET("/:name", a.handleGetWorkspace)
 		workspaceGroup.DELETE("/:name", a.handleDeleteWorkspace)
+		workspaceGroup.POST("/:name/start", a.handleStartWorkspace)
+		workspaceGroup.POST("/:name/stop", a.handleStopWorkspace)
 		workspaceGroup.POST("/:name/sync", a.handleSyncWorkspace)
+		workspaceGroup.POST("/:name/sync/plan", a.handleSyncPlanWorkspace)
 		workspaceGroup.POST("/:name/exec", a.handleExecWorkspace)
 		workspaceGroup.GET("/:name/shell", a.handleShellWorkspace)
 		workspaceGroup.POST("/:name/deploy", a.handleDeployWorkspace)
@@ -123,6 +126,18 @@ func (a *APIServer) handleShellWorkspace(c *gin.Context) {
 	name := c.Param("name")
 	a.log.Info("shell workspace", "name", name, "reqID", c.GetString("reqID"))
 	a.shellWorkspace(c, name)
+}
+
+func (a *APIServer) handleStartWorkspace(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("start workspace", "name", name, "reqID", c.GetString("reqID"))
+	a.setWorkspaceStopped(c, name, false)
+}
+
+func (a *APIServer) handleStopWorkspace(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("stop workspace", "name", name, "reqID", c.GetString("reqID"))
+	a.setWorkspaceStopped(c, name, true)
 }
 
 func (a *APIServer) handleDeployWorkspace(c *gin.Context) {
@@ -323,6 +338,33 @@ func (a *APIServer) deleteWorkspace(c *gin.Context, name string) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("workspace %q deleted", name)})
+}
+
+func (a *APIServer) setWorkspaceStopped(c *gin.Context, name string, stopped bool) {
+	ws, err := a.getOwnedWorkspace(c, name)
+	if err != nil {
+		return
+	}
+
+	if ws.Spec.Stopped == stopped {
+		c.JSON(http.StatusOK, workspaceResponseFromCR(ws))
+		return
+	}
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create kubernetes client"})
+		return
+	}
+
+	patch := client.MergeFrom(ws.DeepCopy())
+	ws.Spec.Stopped = stopped
+	if err := k8sClient.Patch(c.Request.Context(), ws, patch); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update workspace: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, workspaceResponseFromCR(ws))
 }
 
 func (a *APIServer) getOwnedWorkspace(c *gin.Context, name string) (*automotivev1alpha1.Workspace, error) {
@@ -660,6 +702,12 @@ func workspaceResponseFromCR(ws *automotivev1alpha1.Workspace) WorkspaceResponse
 	phase := ws.Status.Phase
 	if phase == "" {
 		phase = "Pending"
+	}
+	// Reflect spec intent when status hasn't caught up yet
+	if ws.Spec.Stopped && phase != "Stopped" {
+		phase = "Stopping"
+	} else if !ws.Spec.Stopped && phase == "Stopped" {
+		phase = "Starting"
 	}
 	age := ""
 	if !ws.CreationTimestamp.IsZero() {

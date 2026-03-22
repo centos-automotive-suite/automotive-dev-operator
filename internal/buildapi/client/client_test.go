@@ -1,10 +1,14 @@
 package client
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 )
@@ -125,5 +129,124 @@ hkjOPQIBBggqhkjOPQMBBwNCAATestExample123456789012345678901234
 		// Should not fail, just skip CA cert configuration
 
 		_ = os.Remove(invalidFile.Name())
+	})
+})
+
+var _ = Describe("Workspace Start/Stop", func() {
+	var (
+		mockServer *httptest.Server
+		apiClient  *Client
+	)
+
+	AfterEach(func() {
+		if mockServer != nil {
+			mockServer.Close()
+		}
+	})
+
+	Context("StartWorkspace", func() {
+		It("should POST to the correct endpoint and decode response", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodPost))
+				Expect(r.URL.Path).To(Equal("/v1/workspaces/my-app/start"))
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
+
+				w.Header().Set("Content-Type", "application/json")
+				resp := buildapi.WorkspaceResponse{
+					Name:  "my-app",
+					Phase: "Pending",
+					Arch:  "amd64",
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL, WithAuthToken("test-token"))
+			Expect(err).NotTo(HaveOccurred())
+
+			resp, err := apiClient.StartWorkspace(context.Background(), "my-app")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.Name).To(Equal("my-app"))
+			Expect(resp.Phase).To(Equal("Pending"))
+			Expect(resp.Arch).To(Equal("amd64"))
+		})
+
+		It("should return error on non-200 response", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error": "workspace not found"}`))
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL, WithAuthToken("test-token"))
+			Expect(err).NotTo(HaveOccurred())
+
+			resp, err := apiClient.StartWorkspace(context.Background(), "nonexistent")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("workspace not found"))
+			Expect(resp).To(BeNil())
+		})
+	})
+
+	Context("StopWorkspace", func() {
+		It("should POST to the correct endpoint and decode response", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodPost))
+				Expect(r.URL.Path).To(Equal("/v1/workspaces/my-app/stop"))
+
+				w.Header().Set("Content-Type", "application/json")
+				resp := buildapi.WorkspaceResponse{
+					Name:  "my-app",
+					Phase: "Running",
+					Arch:  "arm64",
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL, WithAuthToken("test-token"))
+			Expect(err).NotTo(HaveOccurred())
+
+			resp, err := apiClient.StopWorkspace(context.Background(), "my-app")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.Name).To(Equal("my-app"))
+			Expect(resp.Phase).To(Equal("Running"))
+		})
+
+		It("should return error on server error", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error": "internal error"}`))
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL, WithAuthToken("test-token"))
+			Expect(err).NotTo(HaveOccurred())
+
+			resp, err := apiClient.StopWorkspace(context.Background(), "my-app")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("internal error"))
+			Expect(resp).To(BeNil())
+		})
+	})
+
+	Context("workspaceAction with URL-unsafe names", func() {
+		It("should properly escape workspace names in the URL path", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// The name "my app" should be escaped to "my%20app"
+				Expect(r.URL.Path).To(Equal("/v1/workspaces/my%20app/start"))
+
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(buildapi.WorkspaceResponse{Name: "my app"})
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL)
+			Expect(err).NotTo(HaveOccurred())
+
+			resp, err := apiClient.StartWorkspace(context.Background(), "my app")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.Name).To(Equal("my app"))
+		})
 	})
 })
