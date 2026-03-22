@@ -275,31 +275,7 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 				{
 					Name:  containerName,
 					Image: image,
-					Command: []string{"/bin/sh", "-c",
-						// Create workspace user (UID 1000) for rootless podman support
-						"if ! id workspace &>/dev/null; then useradd -u 1000 -d /workspace -s /bin/bash workspace; fi" +
-							" && echo 'workspace:1001:64535' > /etc/subuid" +
-							" && echo 'workspace:1001:64535' > /etc/subgid" +
-							// Persist dnf-installed packages across pod restarts via overlayfs on PVC (best-effort)
-							" && mkdir -p /workspace/.pkg-overlay/{usr-upper,usr-work,rpm-upper,rpm-work,dnf-upper,dnf-work}" +
-							" && { mount -t overlay overlay -o lowerdir=/usr,upperdir=/workspace/.pkg-overlay/usr-upper,workdir=/workspace/.pkg-overlay/usr-work /usr" +
-							" && mount -t overlay overlay -o lowerdir=/var/lib/rpm,upperdir=/workspace/.pkg-overlay/rpm-upper,workdir=/workspace/.pkg-overlay/rpm-work /var/lib/rpm" +
-							" && mount -t overlay overlay -o lowerdir=/var/lib/dnf,upperdir=/workspace/.pkg-overlay/dnf-upper,workdir=/workspace/.pkg-overlay/dnf-work /var/lib/dnf" +
-							" ; } 2>/dev/null || true" +
-							// Set up workspace directories owned by workspace user
-							" && mkdir -p /workspace/src /workspace/cache /workspace/.ssh /workspace/.config /workspace/.local/share/containers" +
-							" && chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.ssh /workspace/.config /workspace/.local" +
-							// Wrapper scripts: podman/buildah auto-switch to workspace user (UID 1000)
-							" && printf '#!/bin/sh\\nCMD=$(basename \"$0\")\\nif [ \"$(id -u)\" = \"0\" ]; then\\n  export HOME=/workspace\\n  exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- /usr/bin/$CMD \"$@\"\\nfi\\nexec /usr/bin/$CMD \"$@\"\\n' > /usr/local/bin/podman" +
-							" && chmod +x /usr/local/bin/podman && ln -f /usr/local/bin/podman /usr/local/bin/buildah" +
-							" && [ -f /workspace/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -f /workspace/.ssh/id_ed25519 -N '' -q" +
-							" && chown 1000:1000 /workspace/.ssh/id_ed25519 /workspace/.ssh/id_ed25519.pub 2>/dev/null || true" +
-							" && if [ -f /jumpstarter/client.yaml ]; then" +
-							" mkdir -p /workspace/.config/jumpstarter/clients" +
-							" && cp /jumpstarter/client.yaml /workspace/.config/jumpstarter/clients/workspace.yaml" +
-							" && chown -R 1000:1000 /workspace/.config" +
-							" && setpriv --reuid=1000 --regid=1000 --init-groups -- jmp config client use workspace || true; fi" +
-							" && exec sleep infinity"},
+					Command: []string{"/usr/local/bin/workspace-entrypoint.sh"},
 					WorkingDir: "/workspace",
 					Env:        env,
 					Resources:  resourcesOrDefaults(ws.Spec.Resources),
