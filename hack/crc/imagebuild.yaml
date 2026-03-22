@@ -1,0 +1,39 @@
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: ImageBuild
+metadata:
+  name: my-automotive-image-000001
+spec:
+  # architecture: amd64
+  architecture: arm64
+  aib:
+    image: "quay.io/centos-sig-automotive/automotive-image-builder:latest"
+    distro: autosd
+    target: qemu
+    mode: image
+    manifest: |
+      name: container
+
+      content:
+        rpms:
+          - openssh-server
+        systemd:
+          enabled_services:
+            - sshd.service
+        add_files:
+           - path: /usr/share/hello.txt
+             text: |
+               hello!
+      image:
+        image_size: 8 GiB
+
+      auth:
+        # "password"
+        root_password: $6$xoLqEUz0cGGJRx01$H3H/bFm0myJPULNMtbSsOFd/2BnHqHkMD92Sfxd.EKM9hXTWSmELG8cf205l6dktomuTcgKGGtGDgtvHVXSWU.
+        sshd_config:
+          PermitRootLogin: true
+          PasswordAuthentication: true
+    manifestFileName: "simple.aib.yml"
+  export:
+    format: qcow2
+    compression: gzip
+    # container: "image-registry.openshift-image-registry.svc:5000/automotive-dev-operator-system/my-automotive-image:latest"
