@@ -398,6 +398,14 @@ func (c *WorkspacesConfig) GetNodeSelector() map[string]string {
 	return nil
 }
 
+// GetTolerations returns the workspace tolerations, or nil if not configured
+func (c *WorkspacesConfig) GetTolerations() []corev1.Toleration {
+	if c != nil {
+		return c.Tolerations
+	}
+	return nil
+}
+
 // OperatorConfigSpec defines the desired state of OperatorConfig
 type OperatorConfigSpec struct {
 	// OSBuilds defines the configuration for OS build operations

@@ -108,4 +108,12 @@ RUN ln -s /usr/bin/ccache /usr/local/bin/gcc && \
 RUN mkdir -p /workspace/src /workspace/cache && chmod 777 /workspace /workspace/src /workspace/cache
 WORKDIR /workspace/src
 
-CMD ["sleep", "infinity"]
+# Container wrapper: podman/buildah auto-switch to workspace user
+COPY hack/container-wrapper.sh /usr/local/bin/podman
+RUN chmod +x /usr/local/bin/podman && ln -f /usr/local/bin/podman /usr/local/bin/buildah
+
+# Entrypoint: sets up user, overlayfs, SSH, Jumpstarter on pod start
+COPY hack/workspace-entrypoint.sh /usr/local/bin/workspace-entrypoint.sh
+RUN chmod +x /usr/local/bin/workspace-entrypoint.sh
+
+CMD ["/usr/local/bin/workspace-entrypoint.sh"]

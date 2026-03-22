@@ -93,6 +93,7 @@ func (a *APIServer) registerWorkspaceRoutes(v1 *gin.RouterGroup) {
 		workspaceGroup.POST("/:name/start", a.handleStartWorkspace)
 		workspaceGroup.POST("/:name/stop", a.handleStopWorkspace)
 		workspaceGroup.POST("/:name/sync", a.handleSyncWorkspace)
+		workspaceGroup.POST("/:name/sync/plan", a.handleSyncPlanWorkspace)
 		workspaceGroup.POST("/:name/exec", a.handleExecWorkspace)
 		workspaceGroup.GET("/:name/shell", a.handleShellWorkspace)
 		workspaceGroup.POST("/:name/deploy", a.handleDeployWorkspace)
@@ -253,6 +254,12 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 	}
 	if !k8serrors.IsNotFound(err) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check existing workspace"})
+		return
+	}
+
+	// Validate tmpfs: only allowed if enabled in OperatorConfig
+	if req.TmpfsBuildDir && !wsConfig.GetTmpfsBuildDir() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "--tmpfs requires workspaces.tmpfsBuildDir to be enabled in OperatorConfig"})
 		return
 	}
 

@@ -68,7 +68,7 @@ code and build artifacts. Use sync to upload source, exec to compile, and
 deploy to push binaries to a board via Jumpstarter.
 
 Examples:
-  # Create a workspace with a Jumpstarter lease from a previous flash
+  # Create a workspace with a Jumpstarter lease from a previous build
   caib workspace create my-app --from-build my-os-build
 
   # Sync source, build, and deploy
@@ -273,14 +273,15 @@ func runCreate(_ *cobra.Command, args []string) {
 	}
 
 	req := buildapitypes.WorkspaceRequest{
-		Name:         name,
-		FromBuild:    fromBuild,
-		Lease:        leaseID,
-		Arch:         architecture,
-		Image:        toolchainImage,
-		ClientConfig: clientConfigB64,
-		CPU:          cpuRequest,
-		Memory:       memoryRequest,
+		Name:          name,
+		FromBuild:     fromBuild,
+		Lease:         leaseID,
+		Arch:          architecture,
+		Image:         toolchainImage,
+		ClientConfig:  clientConfigB64,
+		CPU:           cpuRequest,
+		Memory:        memoryRequest,
+		TmpfsBuildDir: tmpfsBuildDir,
 	}
 
 	var resp *buildapitypes.WorkspaceResponse

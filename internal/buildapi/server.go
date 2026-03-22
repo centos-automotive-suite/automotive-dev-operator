@@ -1802,6 +1802,24 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
+	// Resolve --extra-repo workspace:path pairs into extra_repos custom defines
+	if len(req.ExtraRepos) > 0 {
+		k8sClientForRepos, err := getClientFromRequest(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create kubernetes client"})
+			return
+		}
+		restCfgForRepos, err := getRESTConfigFromRequest(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
+			return
+		}
+		if err := a.resolveExtraRepos(c.Request.Context(), k8sClientForRepos, restCfgForRepos, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	// Append a short random suffix to ensure unique names for parallel builds
 	req.Name = fmt.Sprintf("%s-%s", req.Name, uuid.New().String()[:5])
 

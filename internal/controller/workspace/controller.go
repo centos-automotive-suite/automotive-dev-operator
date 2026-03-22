@@ -166,7 +166,14 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 		return nil, err
 	}
 
-	pod := r.buildPod(ws)
+	// Load OperatorConfig only when creating a new pod
+	var operatorConfig *automotivev1alpha1.OperatorConfig
+	oc := &automotivev1alpha1.OperatorConfig{}
+	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: ws.Namespace}, oc); err == nil {
+		operatorConfig = oc
+	}
+
+	pod := r.buildPod(ws, operatorConfig)
 	if err := controllerutil.SetControllerReference(ws, pod, r.Scheme); err != nil {
 		return nil, err
 	}
@@ -177,7 +184,7 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 	return pod, nil
 }
 
-func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
+func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *automotivev1alpha1.OperatorConfig) *corev1.Pod {
 	podName := "workspace-" + ws.Name
 	pvcName := ws.Status.PVCName
 
@@ -185,10 +192,19 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 	if arch == "" {
 		arch = automotivev1alpha1.DefaultWorkspaceArch
 	}
+	var wsConfig *automotivev1alpha1.WorkspacesConfig
+	if operatorConfig != nil {
+		wsConfig = operatorConfig.Spec.Workspaces
+	}
+
+	configuredImage := wsConfig.GetToolchainImage()
 	image := ws.Spec.Image
 	if image == "" {
-		image = automotivev1alpha1.DefaultToolchainImage
+		image = configuredImage
 	}
+	// Only grant privileged to the configured toolchain image (which we control).
+	// User-supplied images run unprivileged to prevent cluster compromise.
+	isConfiguredImage := image == configuredImage
 
 	annotations := map[string]string{
 		"io.kubernetes.cri-o.Devices": "/dev/fuse,/dev/net/tun",
@@ -220,6 +236,20 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 		env = append(env, corev1.EnvVar{Name: "JMP_LEASE", Value: ws.Spec.LeaseID})
 	}
 
+	if ws.Spec.TmpfsBuildDir {
+		volumes = append(volumes, corev1.Volume{
+			Name: "tmpfs-build",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					Medium: corev1.StorageMediumMemory,
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name: "tmpfs-build", MountPath: "/tmp/build",
+		})
+	}
+
 	if ws.Spec.ClientConfigSecretRef != "" {
 		volumes = append(volumes, corev1.Volume{
 			Name: "jumpstarter-client",
@@ -248,39 +278,16 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 			},
 			Containers: []corev1.Container{
 				{
-					Name:  containerName,
-					Image: image,
-					Command: []string{"/bin/sh", "-c",
-						// Create workspace user (UID 1000) for rootless podman support
-						"if ! id workspace &>/dev/null; then useradd -u 1000 -d /workspace -s /bin/bash workspace; fi" +
-							" && echo 'workspace:1001:64535' > /etc/subuid" +
-							" && echo 'workspace:1001:64535' > /etc/subgid" +
-							// Set up workspace directories owned by workspace user
-							" && mkdir -p /workspace/src /workspace/cache /workspace/.ssh /workspace/.config /workspace/.local/share/containers" +
-							" && chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.ssh /workspace/.config /workspace/.local" +
-							// Wrapper scripts: podman/buildah auto-switch to workspace user (UID 1000)
-							" && printf '#!/bin/sh\\nCMD=$(basename \"$0\")\\nif [ \"$(id -u)\" = \"0\" ]; then\\n  export HOME=/workspace\\n  exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- /usr/bin/$CMD \"$@\"\\nfi\\nexec /usr/bin/$CMD \"$@\"\\n' > /usr/local/bin/podman" +
-							" && chmod +x /usr/local/bin/podman && ln -f /usr/local/bin/podman /usr/local/bin/buildah" +
-							" && [ -f /workspace/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -f /workspace/.ssh/id_ed25519 -N '' -q" +
-							" && chown 1000:1000 /workspace/.ssh/id_ed25519 /workspace/.ssh/id_ed25519.pub 2>/dev/null || true" +
-							" && if [ -f /jumpstarter/client.yaml ]; then" +
-							" mkdir -p /workspace/.config/jumpstarter/clients" +
-							" && cp /jumpstarter/client.yaml /workspace/.config/jumpstarter/clients/workspace.yaml" +
-							" && chown -R 1000:1000 /workspace/.config" +
-							" && setpriv --reuid=1000 --regid=1000 --init-groups -- jmp config client use workspace || true; fi" +
-							" && exec sleep infinity"},
+					Name:       containerName,
+					Image:      image,
+					Command:    []string{"/usr/local/bin/workspace-entrypoint.sh"},
 					WorkingDir: "/workspace",
 					Env:        env,
 					Resources:  resourcesOrDefaults(ws.Spec.Resources),
 					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: ptr.To(true),
+						Privileged:               ptr.To(isConfiguredImage),
+						AllowPrivilegeEscalation: ptr.To(isConfiguredImage),
 						ProcMount:                ptr.To(corev1.UnmaskedProcMount),
-						Capabilities: &corev1.Capabilities{
-							Add: []corev1.Capability{
-								"SETUID",
-								"SETGID",
-							},
-						},
 					},
 					VolumeMounts: volumeMounts,
 				},
@@ -304,6 +311,7 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 				},
 			},
 			NodeSelector:                  ws.Spec.NodeSelector,
+			Tolerations:                   wsConfig.GetTolerations(),
 			TerminationGracePeriodSeconds: ptr.To[int64](5),
 			RestartPolicy:                 corev1.RestartPolicyNever,
 		},
@@ -357,10 +365,6 @@ func resourcesOrDefaults(r *corev1.ResourceRequirements) corev1.ResourceRequirem
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("500m"),
 			corev1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("2"),
-			corev1.ResourceMemory: resource.MustParse("2Gi"),
 		},
 	}
 }
