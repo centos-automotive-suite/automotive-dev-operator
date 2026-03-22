@@ -640,6 +640,10 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 
 	// On OpenShift, bind the pipeline SA to the privileged SCC for build pods
 	if r.detectOpenShift(ctx, config.Namespace) {
+		pipelineClusterRole := r.buildPipelineSCCClusterRole()
+		if err := r.createOrUpdate(ctx, pipelineClusterRole, config); err != nil {
+			return fmt.Errorf("failed to create/update pipeline SCC cluster role: %w", err)
+		}
 		pipelineBinding := r.buildPipelineSCCRoleBinding(config.Namespace)
 		if err := r.createOrUpdate(ctx, pipelineBinding, config); err != nil {
 			return fmt.Errorf("failed to create/update pipeline SCC role binding: %w", err)
@@ -838,7 +842,12 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 		return fmt.Errorf("failed to cleanup build controller: %w", err)
 	}
 
-	// Cleanup pipeline SCC binding
+	// Cleanup pipeline SCC cluster role and binding
+	pipelineClusterRole := &rbacv1.ClusterRole{}
+	pipelineClusterRole.Name = sccPrivilegedRoleName
+	if err := r.Delete(ctx, pipelineClusterRole); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete pipeline SCC cluster role: %w", err)
+	}
 	pipelineBinding := &rbacv1.RoleBinding{}
 	pipelineBinding.Name = pipelineSCCBindingName
 	pipelineBinding.Namespace = config.Namespace

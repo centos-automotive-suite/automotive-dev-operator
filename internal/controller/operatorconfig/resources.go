@@ -906,6 +906,27 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCCRoleBinding(namespace string
 	}
 }
 
+func (r *OperatorConfigReconciler) buildPipelineSCCClusterRole() *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: sccPrivilegedRoleName,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "pipeline",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups:     []string{"security.openshift.io"},
+				Resources:     []string{"securitycontextconstraints"},
+				ResourceNames: []string{"privileged"},
+				Verbs:         []string{"use"},
+			},
+		},
+	}
+}
+
 func (r *OperatorConfigReconciler) buildPipelineSCCRoleBinding(namespace string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
@@ -948,8 +969,8 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCC() *securityv1.SecurityConte
 		AllowHostPID:             false,
 		AllowHostPorts:           false,
 		AllowPrivilegeEscalation: ptr.To(true),
-		AllowPrivilegedContainer: false,
-		AllowedCapabilities:      []corev1.Capability{"SETUID", "SETGID"},
+		AllowPrivilegedContainer: true,
+		AllowedCapabilities:      []corev1.Capability{"ALL"},
 		FSGroup: securityv1.FSGroupStrategyOptions{
 			Type:   securityv1.FSGroupStrategyMustRunAs,
 			Ranges: []securityv1.IDRange{{Min: 0, Max: 65534}},

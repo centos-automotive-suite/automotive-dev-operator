@@ -265,6 +265,12 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 						"if ! id workspace &>/dev/null; then useradd -u 1000 -d /workspace -s /bin/bash workspace; fi" +
 							" && echo 'workspace:1001:64535' > /etc/subuid" +
 							" && echo 'workspace:1001:64535' > /etc/subgid" +
+							// Persist dnf-installed packages across pod restarts via overlayfs on PVC (best-effort)
+							" && mkdir -p /workspace/.pkg-overlay/{usr-upper,usr-work,rpm-upper,rpm-work,dnf-upper,dnf-work}" +
+							" && { mount -t overlay overlay -o lowerdir=/usr,upperdir=/workspace/.pkg-overlay/usr-upper,workdir=/workspace/.pkg-overlay/usr-work /usr" +
+							" && mount -t overlay overlay -o lowerdir=/var/lib/rpm,upperdir=/workspace/.pkg-overlay/rpm-upper,workdir=/workspace/.pkg-overlay/rpm-work /var/lib/rpm" +
+							" && mount -t overlay overlay -o lowerdir=/var/lib/dnf,upperdir=/workspace/.pkg-overlay/dnf-upper,workdir=/workspace/.pkg-overlay/dnf-work /var/lib/dnf" +
+							" ; } 2>/dev/null || true" +
 							// Set up workspace directories owned by workspace user
 							" && mkdir -p /workspace/src /workspace/cache /workspace/.ssh /workspace/.config /workspace/.local/share/containers" +
 							" && chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.ssh /workspace/.config /workspace/.local" +
@@ -283,14 +289,9 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 					Env:        env,
 					Resources:  resourcesOrDefaults(ws.Spec.Resources),
 					SecurityContext: &corev1.SecurityContext{
+						Privileged:               ptr.To(true),
 						AllowPrivilegeEscalation: ptr.To(true),
 						ProcMount:                ptr.To(corev1.UnmaskedProcMount),
-						Capabilities: &corev1.Capabilities{
-							Add: []corev1.Capability{
-								"SETUID",
-								"SETGID",
-							},
-						},
 					},
 					VolumeMounts: volumeMounts,
 				},
