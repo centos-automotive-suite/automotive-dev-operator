@@ -51,8 +51,7 @@ var (
 	waitForRunningFlag bool
 
 	// deploy flags
-	artifactPath string
-	destPath     string
+	artifactMappings []string
 )
 
 // NewWorkspaceCmd creates the workspace command with subcommands.
@@ -241,20 +240,30 @@ Examples:
 func newDeployCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy <name>",
-		Short: "Deploy an artifact from a workspace to a board via Jumpstarter",
-		Long: `Deploy copies a built artifact from the workspace to the target board
+		Short: "Deploy artifacts from a workspace to a board via Jumpstarter",
+		Long: `Deploy copies built artifacts from the workspace to the target board
 using the Jumpstarter lease associated with the workspace.
 
+Each --artifact flag takes a src:dest mapping. Both files and directories
+are supported (uses rsync under the hood).
+
 Examples:
-  caib workspace deploy my-app --artifact /workspace/src/build/app --dest /usr/local/bin/app`,
+  # Single file
+  caib workspace deploy my-app --artifact /workspace/src/build/app:/usr/local/bin/app
+
+  # Multiple files
+  caib workspace deploy my-app \
+    --artifact /workspace/src/engine-service:/usr/local/bin/engine-service \
+    --artifact /workspace/src/radio-service:/usr/local/bin/radio-service
+
+  # Directory (trailing slash = copy contents)
+  caib workspace deploy my-app --artifact /workspace/src/build/:/usr/local/bin/`,
 		Args: cobra.ExactArgs(1),
 		Run:  runDeploy,
 	}
 
-	cmd.Flags().StringVar(&artifactPath, "artifact", "", "path to artifact inside the workspace (required)")
-	cmd.Flags().StringVar(&destPath, "dest", "", "destination path on the board (required)")
+	cmd.Flags().StringArrayVar(&artifactMappings, "artifact", nil, "artifact mapping src:dest (repeatable, required)")
 	_ = cmd.MarkFlagRequired("artifact")
-	_ = cmd.MarkFlagRequired("dest")
 
 	return cmd
 }
@@ -264,12 +273,10 @@ func runCreate(_ *cobra.Command, args []string) {
 	name := args[0]
 
 	var clientConfigB64 string
-	if clientConfigFile != "" {
-		data, err := os.ReadFile(clientConfigFile)
-		if err != nil {
-			handleError(fmt.Errorf("failed to read client config file: %w", err))
-		}
-		clientConfigB64 = base64.StdEncoding.EncodeToString(data)
+	clientInfo, err := caibcommon.ResolveJumpstarterClient(strings.TrimSpace(clientConfigFile))
+	if err == nil {
+		fmt.Printf("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
+		clientConfigB64 = base64.StdEncoding.EncodeToString(clientInfo.Data)
 	}
 
 	req := buildapitypes.WorkspaceRequest{
@@ -285,7 +292,7 @@ func runCreate(_ *cobra.Command, args []string) {
 	}
 
 	var resp *buildapitypes.WorkspaceResponse
-	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		r, cerr := client.CreateWorkspace(context.Background(), req)
 		if cerr != nil {
 			return cerr
@@ -461,7 +468,6 @@ func runSync(_ *cobra.Command, args []string) {
 		handleError(fmt.Errorf("no git-tracked files found in %s", absDir))
 	}
 
-	// Phase 1: compute local manifest and ask server what changed
 	manifest := computeManifest(absDir, files)
 	planReq := buildapitypes.SyncPlanRequest{Files: manifest}
 
@@ -487,7 +493,6 @@ func runSync(_ *cobra.Command, args []string) {
 		return
 	}
 
-	// Phase 2: upload only changed files
 	fmt.Printf("Syncing %d changed files to workspace %q (%d unchanged)...\n",
 		len(plan.Changed), name, plan.Unchanged)
 	uploadFiles(name, absDir, plan.Changed)
@@ -671,7 +676,6 @@ func runShell(_ *cobra.Command, args []string) {
 	}
 	defer func() { _ = ws.Close() }()
 
-	// stdin -> WebSocket
 	go func() {
 		buf := make([]byte, 1024)
 		for {
@@ -689,7 +693,6 @@ func runShell(_ *cobra.Command, args []string) {
 		}
 	}()
 
-	// WebSocket -> stdout
 	for {
 		_, msg, rerr := ws.ReadMessage()
 		if rerr != nil {
@@ -710,12 +713,24 @@ func runDeploy(_ *cobra.Command, args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	req := buildapitypes.WorkspaceDeployRequest{
-		ArtifactPath: artifactPath,
-		DestPath:     destPath,
+	artifacts := make([]buildapitypes.ArtifactMapping, 0, len(artifactMappings))
+	for _, m := range artifactMappings {
+		parts := strings.SplitN(m, ":", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			handleError(fmt.Errorf("invalid artifact mapping %q: expected src:dest", m))
+		}
+		artifacts = append(artifacts, buildapitypes.ArtifactMapping{Src: parts[0], Dest: parts[1]})
 	}
 
-	fmt.Printf("Deploying %s to board at %s...\n", artifactPath, destPath)
+	req := buildapitypes.WorkspaceDeployRequest{
+		Artifacts: artifacts,
+	}
+
+	if len(artifacts) == 1 {
+		fmt.Printf("Deploying %s -> %s\n", artifacts[0].Src, artifacts[0].Dest)
+	} else {
+		fmt.Printf("Deploying %d artifacts to board...\n", len(artifacts))
+	}
 
 	var body io.ReadCloser
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
