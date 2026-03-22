@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -28,16 +29,23 @@ const (
 	workspaceContainerName = "toolchain"
 )
 
+// shellQuote returns s wrapped in POSIX single quotes with embedded single
+// quotes escaped, safe for interpolation into a /bin/sh -c script.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // WorkspaceRequest is the payload to create a workspace.
 type WorkspaceRequest struct {
-	Name         string `json:"name"`
-	FromBuild    string `json:"fromBuild,omitempty"` // ImageBuild name to extract lease from
-	Lease        string `json:"lease,omitempty"`     // Direct lease ID
-	Arch         string `json:"architecture,omitempty"`
-	Image        string `json:"toolchainImage,omitempty"`
-	ClientConfig string `json:"clientConfig,omitempty"` // Base64-encoded Jumpstarter client config
-	CPU          string `json:"cpu,omitempty"`          // CPU request (e.g., "1", "500m")
-	Memory       string `json:"memory,omitempty"`       // Memory request (e.g., "2Gi", "512Mi")
+	Name          string `json:"name"`
+	FromBuild     string `json:"fromBuild,omitempty"` // ImageBuild name to extract lease from
+	Lease         string `json:"lease,omitempty"`     // Direct lease ID
+	Arch          string `json:"architecture,omitempty"`
+	Image         string `json:"toolchainImage,omitempty"`
+	ClientConfig  string `json:"clientConfig,omitempty"`  // Base64-encoded Jumpstarter client config
+	CPU           string `json:"cpu,omitempty"`           // CPU request (e.g., "1", "500m")
+	Memory        string `json:"memory,omitempty"`        // Memory request (e.g., "2Gi", "512Mi")
+	TmpfsBuildDir bool   `json:"tmpfsBuildDir,omitempty"` // Mount tmpfs at /tmp/build for fast compilation
 }
 
 // WorkspaceResponse is returned by workspace operations.
@@ -169,7 +177,7 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 	// Resolve lease from ImageBuild if --from-build was used
 	leaseID := req.Lease
 	if leaseID == "" && req.FromBuild != "" {
-		leaseID, err = a.resolveLeaseFromBuild(c.Request.Context(), k8sClient, namespace, req.FromBuild)
+		leaseID, err = a.resolveLeaseFromBuild(c.Request.Context(), k8sClient, namespace, req.FromBuild, requester)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("failed to resolve lease from build %q: %v", req.FromBuild, err)})
 			return
@@ -238,6 +246,9 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 			ClientConfigSecretRef: jmpClientSecret,
 			PVCSize:               pvcSize,
 			Resources:             resources,
+			StorageClass:          wsConfig.GetStorageClass(),
+			NodeSelector:          wsConfig.GetNodeSelector(),
+			TmpfsBuildDir:         req.TmpfsBuildDir,
 		},
 	}
 	if err := k8sClient.Create(c.Request.Context(), ws); err != nil {
@@ -290,7 +301,11 @@ func (a *APIServer) deleteWorkspace(c *gin.Context, name string) {
 		return // response already sent
 	}
 
-	k8sClient, _ := getClientFromRequest(c)
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create kubernetes client"})
+		return
+	}
 
 	// Delete client config secret
 	if ws.Spec.ClientConfigSecretRef != "" {
@@ -363,7 +378,7 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	if err := copyToPod(restCfg, namespace, podName, workspaceContainerName, bytes.NewReader(tarData), "/workspace/src/"); err != nil {
+	if err := copyToPod(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, bytes.NewReader(tarData), "/workspace/src/"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to sync files: %v", err)})
 		return
 	}
@@ -401,7 +416,7 @@ func (a *APIServer) execWorkspace(c *gin.Context, name string) {
 	setupLogStreamHeaders(c)
 
 	cmd := []string{"/bin/sh", "-c", "cd /workspace/src && " + req.Command}
-	if err := execInPod(restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, c.Writer); err != nil {
+	if err := execInPod(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, c.Writer); err != nil {
 		_, _ = fmt.Fprintf(c.Writer, "\n[exec failed: %v]\n", err)
 	}
 }
@@ -566,6 +581,9 @@ func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 	sshOpts := "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 	deployScript := fmt.Sprintf(
 		`set -e
+SSH_PASS=%s
+ARTIFACT_PATH=%s
+DEST_PATH=%s
 echo "Resolving board address via Jumpstarter..."
 ADDR=$(timeout 30 jmp shell -- j tcp address < /dev/null 2>&1 | grep -E ':[0-9]+$' | tail -1 | tr -d '[:space:]')
 if [ -z "$ADDR" ]; then
@@ -577,12 +595,12 @@ PORT=${ADDR#*:}
 [ "$PORT" = "$HOST" ] && PORT=22
 echo "Board address: $HOST:$PORT"
 echo "Injecting SSH key..."
-cat /workspace/.ssh/id_ed25519.pub | sshpass -p %s ssh -p $PORT %s root@$HOST 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys'
+cat /workspace/.ssh/id_ed25519.pub | sshpass -p "$SSH_PASS" ssh -p $PORT %s root@$HOST 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys'
 echo "Deploying artifact..."
-rsync -e "ssh -p $PORT -i /workspace/.ssh/id_ed25519 %s" -avz %s root@$HOST:%s`,
-		sshPassword, sshOpts, sshOpts, req.ArtifactPath, req.DestPath)
+rsync -e "ssh -p $PORT -i /workspace/.ssh/id_ed25519 %s" -avz "$ARTIFACT_PATH" root@$HOST:"$DEST_PATH"`,
+		shellQuote(sshPassword), shellQuote(req.ArtifactPath), shellQuote(req.DestPath), sshOpts, sshOpts)
 	cmd := []string{"/bin/sh", "-c", deployScript}
-	if err := execInPod(restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, c.Writer); err != nil {
+	if err := execInPod(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, c.Writer); err != nil {
 		_, _ = fmt.Fprintf(c.Writer, "\n[deploy failed: %v]\n", err)
 	}
 }
@@ -666,10 +684,13 @@ func workspaceResponseFromCR(ws *automotivev1alpha1.Workspace) WorkspaceResponse
 }
 
 // buildFlashInfo holds lease and client config extracted from an ImageBuild.
-func (a *APIServer) resolveLeaseFromBuild(ctx context.Context, k8sClient client.Client, namespace, buildName string) (string, error) {
+func (a *APIServer) resolveLeaseFromBuild(ctx context.Context, k8sClient client.Client, namespace, buildName, requester string) (string, error) {
 	build := &automotivev1alpha1.ImageBuild{}
 	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: buildName}, build); err != nil {
 		return "", fmt.Errorf("ImageBuild %q not found: %w", buildName, err)
+	}
+	if owner := build.Annotations["automotive.sdv.cloud.redhat.com/requested-by"]; owner != requester {
+		return "", fmt.Errorf("ImageBuild %q is owned by a different user", buildName)
 	}
 	if build.Status.LeaseID == "" {
 		return "", fmt.Errorf("ImageBuild %q has no lease ID (was --flash used?)", buildName)
@@ -677,7 +698,7 @@ func (a *APIServer) resolveLeaseFromBuild(ctx context.Context, k8sClient client.
 	return build.Status.LeaseID, nil
 }
 
-func copyToPod(restCfg *rest.Config, namespace, podName, containerName string, body io.Reader, destDir string) error {
+func copyToPod(ctx context.Context, restCfg *rest.Config, namespace, podName, containerName string, body io.Reader, destDir string) error {
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return fmt.Errorf("creating clientset: %w", err)
@@ -702,7 +723,7 @@ func copyToPod(restCfg *rest.Config, namespace, podName, containerName string, b
 
 	var stdout, stderr bytes.Buffer
 	streamOpts := remotecommand.StreamOptions{Stdin: body, Stdout: &stdout, Stderr: &stderr}
-	if err := executor.StreamWithContext(context.Background(), streamOpts); err != nil {
+	if err := executor.StreamWithContext(ctx, streamOpts); err != nil {
 		if stderr.Len() > 0 {
 			return fmt.Errorf("%w: %s", err, stderr.String())
 		}
@@ -711,7 +732,37 @@ func copyToPod(restCfg *rest.Config, namespace, podName, containerName string, b
 	return nil
 }
 
-func execInPod(restCfg *rest.Config, namespace, podName, containerName string, cmd []string, w http.ResponseWriter) error {
+// flushWriter wraps an http.ResponseWriter and flushes after every Write,
+// ensuring streamed data reaches the client (and intermediate proxies like
+// HAProxy) immediately instead of sitting in Go's response buffer.
+// A mutex serializes writes because the SPDY executor copies stdout and stderr
+// in separate goroutines — concurrent writes corrupt HTTP chunked encoding.
+type flushWriter struct {
+	mu      sync.Mutex
+	w       io.Writer
+	flusher http.Flusher
+}
+
+func newFlushWriter(w http.ResponseWriter) *flushWriter {
+	fw := &flushWriter{w: w}
+	if f, ok := w.(http.Flusher); ok {
+		fw.flusher = f
+	}
+	return fw
+}
+
+func (fw *flushWriter) Write(p []byte) (int, error) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	n, err := fw.w.Write(p)
+	if fw.flusher != nil {
+		fw.flusher.Flush()
+	}
+	return n, err
+}
+
+// podExec runs a command in a pod, streaming stdout/stderr to the provided writer.
+func podExec(ctx context.Context, restCfg *rest.Config, namespace, podName, containerName string, cmd []string, out io.Writer) error {
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return fmt.Errorf("creating clientset: %w", err)
@@ -733,9 +784,12 @@ func execInPod(restCfg *rest.Config, namespace, podName, containerName string, c
 		return fmt.Errorf("creating executor: %w", err)
 	}
 
-	streamOpts := remotecommand.StreamOptions{
-		Stdout: w,
-		Stderr: w,
-	}
-	return executor.StreamWithContext(context.Background(), streamOpts)
+	return executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: out,
+		Stderr: out,
+	})
+}
+
+func execInPod(ctx context.Context, restCfg *rest.Config, namespace, podName, containerName string, cmd []string, w http.ResponseWriter) error {
+	return podExec(ctx, restCfg, namespace, podName, containerName, cmd, newFlushWriter(w))
 }

@@ -70,6 +70,12 @@ spec:
               leaseID:
                 description: LeaseID is the Jumpstarter lease ID for board access
                 type: string
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: NodeSelector is a set of key-value pairs that must match
+                  node labels for scheduling
+                type: object
               owner:
                 description: Owner is the authenticated user who created this workspace
                 type: string
