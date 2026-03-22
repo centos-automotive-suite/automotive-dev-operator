@@ -143,7 +143,7 @@ var _ = Describe("OperatorConfig Resources", func() {
 			Expect(parsed.Targets).NotTo(BeEmpty(), "should have at least one target")
 		})
 
-		It("should have a valid architecture for every target", func() {
+		It("should have a valid architecture for every target that specifies one", func() {
 			var parsed struct {
 				Targets map[string]struct {
 					Architecture string `yaml:"architecture"`
@@ -153,7 +153,9 @@ var _ = Describe("OperatorConfig Resources", func() {
 
 			validArchitectures := map[string]bool{"arm64": true, "amd64": true}
 			for name, t := range parsed.Targets {
-				Expect(t.Architecture).NotTo(BeEmpty(), "target %q should have an architecture", name)
+				if t.Architecture == "" {
+					continue
+				}
 				Expect(validArchitectures).To(HaveKey(t.Architecture),
 					"target %q has unexpected architecture %q", name, t.Architecture)
 			}

@@ -233,6 +233,11 @@ func ApplyTargetDefaults(cmd *cobra.Command, config *buildapitypes.OperatorConfi
 		req.AIBExtraArgs = append(defaults.ExtraArgs, req.AIBExtraArgs...)
 		fmt.Printf("Prepending extra args %v from target defaults for %q\n", defaults.ExtraArgs, req.Target)
 	}
+
+	if defaults.DefaultFormat != "" && !cmd.Flags().Changed("format") {
+		req.ExportFormat = buildapitypes.ExportFormat(defaults.DefaultFormat)
+		fmt.Printf("Using format %q from target defaults for %q\n", defaults.DefaultFormat, req.Target)
+	}
 }
 
 // displayBuildResults shows push locations after build completion.

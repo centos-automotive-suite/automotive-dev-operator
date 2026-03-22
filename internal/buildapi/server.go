@@ -118,8 +118,9 @@ var loadTargetDefaultsFn = func(
 
 	var parsed struct {
 		Targets map[string]struct {
-			Architecture string   `yaml:"architecture"`
-			ExtraArgs    []string `yaml:"extraArgs"`
+			Architecture  string   `yaml:"architecture"`
+			ExtraArgs     []string `yaml:"extraArgs"`
+			DefaultFormat string   `yaml:"defaultFormat"`
 		} `yaml:"targets"`
 	}
 	if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
@@ -129,8 +130,9 @@ var loadTargetDefaultsFn = func(
 	result := make(map[string]TargetDefaults, len(parsed.Targets))
 	for name, t := range parsed.Targets {
 		result[name] = TargetDefaults{
-			Architecture: t.Architecture,
-			ExtraArgs:    t.ExtraArgs,
+			Architecture:  t.Architecture,
+			ExtraArgs:     t.ExtraArgs,
+			DefaultFormat: t.DefaultFormat,
 		}
 	}
 	return result, nil
