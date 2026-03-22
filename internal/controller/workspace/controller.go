@@ -59,6 +59,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if ws.Status.PVCName == "" {
 		return ctrl.Result{Requeue: true}, nil
 	}
+
+	// Handle stopped state: delete pod but keep PVC
+	if ws.Spec.Stopped {
+		if err := r.deleteWorkspacePod(ctx, ws, log); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, r.setStatus(ctx, ws, "Stopped", "")
+	}
+
 	pod, err := r.ensurePod(ctx, ws, log)
 	if err != nil {
 		if statusErr := r.setStatus(ctx, ws, "Failed", fmt.Sprintf("Pod error: %v", err)); statusErr != nil {
@@ -303,14 +312,31 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace) *corev1.Pod {
 	return pod
 }
 
+func (r *Reconciler) deleteWorkspacePod(ctx context.Context, ws *automotivev1alpha1.Workspace, log logr.Logger) error {
+	podName := "workspace-" + ws.Name
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ws.Namespace,
+		},
+	}
+	log.Info("Deleting workspace pod for stop", "pod", podName)
+	err := r.Delete(ctx, pod)
+	return client.IgnoreNotFound(err)
+}
+
 func (r *Reconciler) setStatus(ctx context.Context, ws *automotivev1alpha1.Workspace, phase, message string) error {
-	if ws.Status.Phase == phase && ws.Status.Message == message && ws.Status.PodName != "" {
+	podName := "workspace-" + ws.Name
+	if phase == "Stopped" {
+		podName = ""
+	}
+	if ws.Status.Phase == phase && ws.Status.Message == message && ws.Status.PodName == podName {
 		return nil // no change
 	}
 	patch := client.MergeFrom(ws.DeepCopy())
 	ws.Status.Phase = phase
 	ws.Status.Message = message
-	ws.Status.PodName = "workspace-" + ws.Name
+	ws.Status.PodName = podName
 	return r.Status().Patch(ctx, ws, patch)
 }
 

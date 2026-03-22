@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
@@ -42,6 +43,10 @@ var (
 	// resource flags
 	cpuRequest    string
 	memoryRequest string
+	tmpfsBuildDir bool
+
+	// wait flag (shared by create and start)
+	waitForRunningFlag bool
 
 	// deploy flags
 	artifactPath string
@@ -79,6 +84,8 @@ Examples:
 		newListCmd(),
 		newShowCmd(),
 		newDeleteCmd(),
+		newStartCmd(),
+		newStopCmd(),
 		newSyncCmd(),
 		newExecCmd(),
 		newShellCmd(),
@@ -117,6 +124,8 @@ Examples:
 	cmd.Flags().StringVar(&clientConfigFile, "client", "", "path to Jumpstarter client config file")
 	cmd.Flags().StringVar(&cpuRequest, "cpu", "", "CPU request/limit (e.g., \"1\", \"500m\")")
 	cmd.Flags().StringVar(&memoryRequest, "memory", "", "memory request/limit (e.g., \"2Gi\", \"512Mi\")")
+	cmd.Flags().BoolVar(&tmpfsBuildDir, "tmpfs", false, "mount a tmpfs volume at /tmp/build for faster compilation (uses RAM)")
+	cmd.Flags().BoolVarP(&waitForRunningFlag, "wait", "w", true, "wait for workspace to be running")
 
 	return cmd
 }
@@ -144,6 +153,37 @@ func newDeleteCmd() *cobra.Command {
 		Short: "Delete a workspace and its storage",
 		Args:  cobra.ExactArgs(1),
 		Run:   runDelete,
+	}
+}
+
+func newStartCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "start <name>",
+		Short: "Start a stopped workspace",
+		Long: `Start a previously stopped workspace by recreating its pod.
+The workspace's persistent storage (source code, build cache, SSH keys) is preserved.
+
+Examples:
+  caib workspace start my-app`,
+		Args: cobra.ExactArgs(1),
+		Run:  runStart,
+	}
+	cmd.Flags().BoolVarP(&waitForRunningFlag, "wait", "w", true, "wait for workspace to be running")
+	return cmd
+}
+
+func newStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <name>",
+		Short: "Stop a workspace without deleting its storage",
+		Long: `Stop a running workspace by removing its pod while preserving the PVC.
+This frees cluster CPU/memory resources while keeping all workspace data intact.
+Use 'caib workspace start' to resume the workspace later.
+
+Examples:
+  caib workspace stop my-app`,
+		Args: cobra.ExactArgs(1),
+		Run:  runStop,
 	}
 }
 
@@ -256,11 +296,15 @@ func runCreate(_ *cobra.Command, args []string) {
 
 	fmt.Printf("Workspace %q created\n", resp.Name)
 	fmt.Printf("  Architecture: %s\n", resp.Arch)
-	fmt.Printf("  Pod:          %s\n", resp.PodName)
 	if resp.Lease != "" {
 		fmt.Printf("  Lease:        %s\n", resp.Lease)
 	}
-	fmt.Printf("  Phase:        %s\n", resp.Phase)
+
+	if waitForRunningFlag {
+		waitForRunning(resp.Name)
+	} else {
+		fmt.Printf("  Phase:        %s\n", resp.Phase)
+	}
 }
 
 func runList(_ *cobra.Command, _ []string) {
@@ -341,6 +385,51 @@ func runDelete(_ *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("Workspace %q deleted\n", name)
+}
+
+func runStart(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	var resp *buildapitypes.WorkspaceResponse
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		r, cerr := client.StartWorkspace(context.Background(), name)
+		if cerr != nil {
+			return cerr
+		}
+		resp = r
+		return nil
+	})
+	if err != nil {
+		handleError(fmt.Errorf("failed to start workspace: %w", err))
+	}
+
+	if waitForRunningFlag {
+		fmt.Printf("Workspace %q starting...\n", resp.Name)
+		waitForRunning(resp.Name)
+	} else {
+		fmt.Printf("Workspace %q starting (phase: %s)\n", resp.Name, resp.Phase)
+	}
+}
+
+func runStop(_ *cobra.Command, args []string) {
+	requireServer()
+	name := args[0]
+
+	var resp *buildapitypes.WorkspaceResponse
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		r, cerr := client.StopWorkspace(context.Background(), name)
+		if cerr != nil {
+			return cerr
+		}
+		resp = r
+		return nil
+	})
+	if err != nil {
+		handleError(fmt.Errorf("failed to stop workspace: %w", err))
+	}
+
+	fmt.Printf("Workspace %q stopped (storage preserved)\n", resp.Name)
 }
 
 func runSync(_ *cobra.Command, args []string) {
@@ -592,6 +681,64 @@ func runDeploy(_ *cobra.Command, args []string) {
 	defer func() { _ = body.Close() }()
 
 	streamToStdout(body)
+}
+
+func waitForRunning(name string) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	timeout := time.After(5 * time.Minute)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	lastPhase := ""
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println()
+			return
+		case <-timeout:
+			fmt.Println()
+			handleError(fmt.Errorf("timed out waiting for workspace %q to be running", name))
+		case <-ticker.C:
+			var ws *buildapitypes.WorkspaceResponse
+			err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+				r, cerr := client.GetWorkspace(ctx, name)
+				if cerr != nil {
+					return cerr
+				}
+				ws = r
+				return nil
+			})
+			if err != nil {
+				continue // transient error, retry
+			}
+
+			if ws.Phase != lastPhase {
+				lastPhase = ws.Phase
+				if isTTY {
+					fmt.Printf("\r  Phase:        %-20s", ws.Phase)
+				} else {
+					fmt.Printf("  Phase: %s\n", ws.Phase)
+				}
+			}
+
+			switch ws.Phase {
+			case "Running":
+				if isTTY {
+					fmt.Println()
+				}
+				return
+			case "Failed":
+				if isTTY {
+					fmt.Println()
+				}
+				handleError(fmt.Errorf("workspace %q failed", name))
+			}
+		}
+	}
 }
 
 func requireServer() {
