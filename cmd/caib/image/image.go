@@ -23,6 +23,7 @@ type Options struct {
 	RunReseal            func(*cobra.Command, []string)
 	RunExtractForSigning func(*cobra.Command, []string)
 	RunInjectSigned      func(*cobra.Command, []string)
+	RunToken             func(*cobra.Command, []string)
 
 	GetDefaultArch func() string
 
@@ -98,6 +99,8 @@ func NewImageCmd(opts Options) *cobra.Command {
 	downloadCmd := newDownloadCmd(opts)
 	logsCmd := newLogsCmd(opts)
 	flashCmd := newFlashCmd(opts)
+
+	tokenCmd := newTokenCmd(opts)
 
 	prepareResealCmd := newPrepareResealCmd(opts)
 	resealCmd := newResealCmd(opts)
@@ -258,6 +261,10 @@ func NewImageCmd(opts Options) *cobra.Command {
 	downloadCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	downloadCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "destination file or directory for the artifact")
 
+	// token command flags
+	tokenCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
+	tokenCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+
 	// flash command flags
 	flashCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	flashCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
@@ -291,6 +298,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 		showCmd,
 		downloadCmd,
 		logsCmd,
+		tokenCmd,
 		flashCmd,
 		prepareResealCmd,
 		resealCmd,
@@ -448,6 +456,30 @@ Examples:
   caib image logs <build-name>`,
 		Args: cobra.ExactArgs(1),
 		Run:  opts.RunLogs,
+	}
+}
+
+func newTokenCmd(opts Options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "token <build-name>",
+		Short: "Request a fresh registry token for an internal-registry build",
+		Long: `Request a fresh, short-lived registry token for a completed build that
+used the internal OpenShift registry (--internal-registry).
+
+The token is valid for 4 hours and can be used with podman, skopeo, or
+any OCI-compatible tool to pull images from the internal registry.
+
+Examples:
+  # Get a token for a completed build
+  caib image token my-build
+
+  # Use the printed podman login command to authenticate
+  echo '<token>' | podman login <registry> --username serviceaccount --password-stdin
+
+  # Then pull the image
+  podman pull <image-ref>`,
+		Args: cobra.ExactArgs(1),
+		Run:  opts.RunToken,
 	}
 }
 

@@ -167,6 +167,38 @@ func (c *Client) GetBuild(ctx context.Context, name string) (*buildapi.BuildResp
 	return &out, nil
 }
 
+// CreateBuildToken requests a fresh registry token for an internal-registry build.
+//
+//nolint:dupl // HTTP client methods share structural boilerplate by design
+func (c *Client) CreateBuildToken(ctx context.Context, name string) (*buildapi.TokenResponse, error) {
+	endpoint := c.resolve(path.Join("/v1/builds", url.PathEscape(name), "token"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("create build token failed: %s: %s", resp.Status, string(b))
+	}
+	var out buildapi.TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // GetBuildProgress retrieves the current progress of a build.
 // Returns nil, nil (no error) on 404 to handle older servers gracefully.
 func (c *Client) GetBuildProgress(ctx context.Context, name string) (*buildapi.BuildProgress, error) {
@@ -202,6 +234,8 @@ func (c *Client) GetBuildProgress(ctx context.Context, name string) (*buildapi.B
 }
 
 // GetBuildTemplate retrieves a build template reconstructed from ImageBuild inputs.
+//
+//nolint:dupl // HTTP client methods share structural boilerplate by design
 func (c *Client) GetBuildTemplate(ctx context.Context, name string) (*buildapi.BuildTemplateResponse, error) {
 	endpoint := c.resolve(path.Join("/v1/builds", url.PathEscape(name), "template"))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

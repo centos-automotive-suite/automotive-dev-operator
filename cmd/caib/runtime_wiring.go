@@ -7,6 +7,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/image"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/querycmd"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/sealedcmd"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/tokencmd"
 )
 
 type runtimeState struct {
@@ -127,6 +128,7 @@ type handlerSet struct {
 	download *downloadcmd.Handler
 	flash    *flashcmd.Handler
 	sealed   *sealedcmd.Handler
+	token    *tokencmd.Handler
 }
 
 func (s runtimeState) newHandlers() handlerSet {
@@ -221,6 +223,12 @@ func (s runtimeState) newHandlers() handlerSet {
 			InsecureSkipTLS:         s.InsecureSkipTLS,
 			HandleError:             handleError,
 		}),
+		token: tokencmd.NewHandler(tokencmd.Options{
+			ServerURL:       s.ServerURL,
+			AuthToken:       s.AuthToken,
+			InsecureSkipTLS: s.InsecureSkipTLS,
+			HandleError:     handleError,
+		}),
 	}
 }
 
@@ -238,6 +246,7 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		RunReseal:            h.sealed.RunReseal,
 		RunExtractForSigning: h.sealed.RunExtractForSigning,
 		RunInjectSigned:      h.sealed.RunInjectSigned,
+		RunToken:             h.token.RunToken,
 		GetDefaultArch:       getDefaultArch,
 
 		ServerURL:              s.ServerURL,
