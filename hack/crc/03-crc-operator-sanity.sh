@@ -75,7 +75,7 @@ check "Build API route exists" oc get route ado-build-api -n "$NAMESPACE"
 
 BUILD_API_URL=$(oc get route ado-build-api -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null)
 if [ -n "$BUILD_API_URL" ]; then
-    check "Build API endpoint responds" curl -fsSk --max-time 10 "https://${BUILD_API_URL}/healthz"
+    check "Build API endpoint responds" curl -fsSk --max-time 10 "https://${BUILD_API_URL}/v1/healthz"
 fi
 
 echo ""
