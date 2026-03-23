@@ -115,6 +115,15 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 						leaseID = streamState.LeaseID
 					}
 					if leaseID != "" {
+						// Update workspace lease if --workspace was specified
+						if h.opts.Workspace != nil && *h.opts.Workspace != "" {
+							leaseCtx, cancelLease := context.WithTimeout(ctx, 10*time.Second)
+							leaseErr := api.SetWorkspaceLease(leaseCtx, *h.opts.Workspace, leaseID)
+							cancelLease()
+							if leaseErr != nil {
+								fmt.Printf("\nWarning: failed to update workspace lease: %v\n", leaseErr)
+							}
+						}
 						fmt.Printf("\n%s %s\n", infoColor("Lease ID:"), commandColor(leaseID))
 						fmt.Printf("\n%s\n", infoColor("To access the device:"))
 						fmt.Printf("  %s\n", commandColor(fmt.Sprintf("jmp shell --lease %s", leaseID)))

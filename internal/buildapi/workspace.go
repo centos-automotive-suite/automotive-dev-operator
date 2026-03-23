@@ -102,6 +102,7 @@ func (a *APIServer) registerWorkspaceRoutes(v1 *gin.RouterGroup) {
 		workspaceGroup.POST("/:name/exec", a.handleExecWorkspace)
 		workspaceGroup.GET("/:name/shell", a.handleShellWorkspace)
 		workspaceGroup.POST("/:name/deploy", a.handleDeployWorkspace)
+		workspaceGroup.PUT("/:name/lease", a.handleSetWorkspaceLease)
 	}
 }
 
@@ -388,6 +389,42 @@ func (a *APIServer) setWorkspaceStopped(c *gin.Context, name string, stopped boo
 	ws.Spec.Stopped = stopped
 	if err := k8sClient.Patch(c.Request.Context(), ws, patch); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update workspace: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, workspaceResponseFromCR(ws))
+}
+
+func (a *APIServer) handleSetWorkspaceLease(c *gin.Context) {
+	name := c.Param("name")
+	var req struct {
+		LeaseID string `json:"leaseID"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "leaseID required"})
+		return
+	}
+
+	ws, err := a.getOwnedWorkspace(c, name)
+	if err != nil {
+		return
+	}
+
+	if ws.Spec.LeaseID == req.LeaseID {
+		c.JSON(http.StatusOK, workspaceResponseFromCR(ws))
+		return
+	}
+
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create kubernetes client"})
+		return
+	}
+
+	patch := client.MergeFrom(ws.DeepCopy())
+	ws.Spec.LeaseID = req.LeaseID
+	if err := k8sClient.Patch(c.Request.Context(), ws, patch); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update workspace lease: %v", err)})
 		return
 	}
 

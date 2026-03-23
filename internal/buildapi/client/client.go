@@ -803,6 +803,33 @@ func (c *Client) StopWorkspace(ctx context.Context, name string) (*buildapi.Work
 	return c.workspaceAction(ctx, name, "stop")
 }
 
+// SetWorkspaceLease updates the lease ID on a workspace.
+func (c *Client) SetWorkspaceLease(ctx context.Context, name, leaseID string) error {
+	body := fmt.Sprintf(`{"leaseID":%q}`, leaseID)
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "lease"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("failed to set workspace lease: %s", resp.Status)
+	}
+	return nil
+}
+
 // workspaceAction performs a POST to /v1/workspaces/:name/:action and decodes a WorkspaceResponse.
 func (c *Client) workspaceAction(ctx context.Context, name, action string) (*buildapi.WorkspaceResponse, error) {
 	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), action))
