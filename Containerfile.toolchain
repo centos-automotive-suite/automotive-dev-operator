@@ -1,0 +1,119 @@
+ARG ROOTFS=/mnt/rootfs
+ARG DISTRO="AutoSD"
+
+FROM registry.access.redhat.com/ubi10:latest AS builder
+
+ARG ROOTFS
+ARG DISTRO
+ARG BASE_URL="https://autosd.sig.centos.org/AutoSD-10/nightly"
+ARG RELEASE_PKG="centos-release-autosd"
+ARG GPG_KEY="RPM-GPG-KEY-CentOS-SIG-Automotive"
+
+ARG PACKAGES=" \
+bash \
+coreutils-single \
+dnf \
+rpm \
+"
+
+RUN dnf --noplugins remove -y -q subscription-manager dnf-plugin-subscription-manager
+RUN mkdir -p ${ROOTFS}
+
+RUN cat <<EOF > /etc/yum.repos.d/${DISTRO}.repo
+[${DISTRO}]
+name=${DISTRO}
+baseurl=${BASE_URL}/repos/${DISTRO}/compose/${DISTRO}/\$basearch/os/
+gpgcheck=0
+enabled=1
+skip_if_unavailable=1
+EOF
+
+RUN dnf install \
+    --installroot ${ROOTFS} \
+    --setopt=reposdir=/etc/yum.repos.d --repo ${DISTRO} --releasever 10 \
+    --setopt install_weak_deps=false --nodocs --nogpgcheck -y \
+    ${RELEASE_PKG} ${PACKAGES} \
+    && dnf --installroot ${ROOTFS} clean all
+
+RUN rpm --root=${ROOTFS} --import ${ROOTFS}/etc/pki/rpm-gpg/${GPG_KEY} 2>/dev/null || true
+
+RUN rm -f ${ROOTFS}/usr/share/gnupg/help*.txt && \
+    rm -rfv ${ROOTFS}/var/cache/* ${ROOTFS}/var/log/dnf* ${ROOTFS}/var/log/yum.* ${ROOTFS}/var/lib/rhsm && \
+    rm -fv ${ROOTFS}/etc/sysconfig/network-scripts/ifcfg-* && \
+    echo -n > ${ROOTFS}/etc/machine-id && \
+    install -d ${ROOTFS}/run/lock -m 0755 -o root -g root
+
+FROM scratch AS autosd-base
+ENV container=oci
+ARG ROOTFS
+ARG DISTRO
+COPY --from=builder ${ROOTFS} /
+COPY --from=builder /etc/yum.repos.d/${DISTRO}.repo /etc/yum.repos.d/
+CMD ["/bin/bash"]
+
+FROM autosd-base
+
+# Enable GPG verification on AutoSD repo (key was imported during base build)
+RUN sed -i -e 's/gpgcheck=0/gpgcheck=1/' \
+           -e '/gpgcheck=1/a gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-SIG-Automotive' \
+           /etc/yum.repos.d/AutoSD.repo
+
+# Enable EPEL for mock
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+
+# C/C++, Rust, and build utilities
+RUN dnf install -y --setopt install_weak_deps=false --nodocs \
+    gcc gcc-c++ make cmake meson \
+    autoconf automake libtool pkgconf-pkg-config \
+    rust cargo \
+    glibc-devel kernel-headers \
+    flex bison bc perl \
+    openssl openssl-devel elfutils-libelf-devel dwarves \
+    diffutils findutils tar gzip xz cpio \
+    rpm-build mock createrepo_c ccache \
+    git rsync openssh-clients sshpass \
+    python3 python3-pip python3-pyyaml podman curl sudo vim \
+    && dnf clean all
+
+# Kernel RPM build dependencies (BuildRequires from kernel-automotive SRPM)
+RUN dnf install -y --setopt install_weak_deps=false --nodocs \
+    binutils-devel clang llvm-devel \
+    elfutils-devel fuse-devel \
+    glibc-static zlib-devel zstd \
+    kernel-rpm-macros redhat-rpm-config \
+    libcap-devel libcap-ng-devel libmnl-devel libxml2-devel \
+    numactl-devel ncurses-devel \
+    hmaccalc net-tools which m4 hostname kmod \
+    perl-devel perl-generators perl-Carp \
+    python3-devel python3-docutils python3-jsonschema \
+    && dnf clean all
+
+# Allow any UID to use sudo
+RUN echo 'ALL ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
+# Jumpstarter CLI for deploy-to-board
+RUN curl -fsSL https://raw.githubusercontent.com/jumpstarter-dev/jumpstarter/main/python/install.sh | bash -s -- --source main
+ENV PATH="/root/.local/jumpstarter/bin:${PATH}"
+
+# Use vfs storage driver for podman (overlay doesn't work on overlay-backed PVCs)
+RUN mkdir -p /etc/containers && printf '[storage]\ndriver = "vfs"\n' > /etc/containers/storage.conf
+
+# ccache: store cache on persistent volume, symlink compilers
+ENV CCACHE_DIR=/workspace/cache/ccache CCACHE_MAXSIZE=5G
+RUN ln -s /usr/bin/ccache /usr/local/bin/gcc && \
+    ln -s /usr/bin/ccache /usr/local/bin/g++ && \
+    ln -s /usr/bin/ccache /usr/local/bin/cc
+
+# Workspace layout
+RUN mkdir -p /workspace/src /workspace/cache && chmod 777 /workspace /workspace/src /workspace/cache
+WORKDIR /workspace/src
+
+# Container wrapper: podman/buildah auto-switch to workspace user
+COPY hack/container-wrapper.sh /usr/local/bin/podman
+RUN chmod +x /usr/local/bin/podman && ln -f /usr/local/bin/podman /usr/local/bin/buildah
+
+# Entrypoint: sets up user, overlayfs, SSH, Jumpstarter on pod start
+COPY hack/workspace-entrypoint.sh /usr/local/bin/workspace-entrypoint.sh
+RUN chmod +x /usr/local/bin/workspace-entrypoint.sh
+
+CMD ["/usr/local/bin/workspace-entrypoint.sh"]

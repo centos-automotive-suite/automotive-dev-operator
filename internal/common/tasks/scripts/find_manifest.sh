@@ -25,7 +25,14 @@ echo "created working copy of manifest at $workspace_manifest"
 SHARED_WS="$(workspaces.shared-workspace.path)"
 if [ -d "$SHARED_WS" ] && [ "$(ls -A "$SHARED_WS" 2>/dev/null)" ]; then
   echo "Copying uploaded files from $SHARED_WS to /manifest-work/"
-  cp -rv "$SHARED_WS"/* /manifest-work/ 2>/dev/null || true
+  for item in "$SHARED_WS"/*; do
+    base="$(basename "$item")"
+    # Skip build-cache (osbuild store) and known build artifacts from previous runs
+    case "$base" in
+      build-cache|aib-manifest.yml|image.json|disk.img|*-parts) continue ;;
+    esac
+    cp -rv "$item" /manifest-work/ 2>/dev/null || true
+  done
   echo "Files copied to /manifest-work/:"
   find /manifest-work -type f | head -20
 fi

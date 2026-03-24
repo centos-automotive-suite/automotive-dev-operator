@@ -10,15 +10,24 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/golang-jwt/jwt/v5"
 	routev1 "github.com/openshift/api/route/v1"
+	securityv1 "github.com/openshift/api/security/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
-const buildControllerName = "ado-build-controller"
+const (
+	buildControllerName         = "ado-build-controller"
+	pipelineServiceAccountName  = "pipeline"
+	pipelineSCCBindingName      = "ado-pipeline-privileged"
+	sccPrivilegedRoleName       = "ado-pipeline-privileged"
+	workspaceServiceAccountName = "ado-workspace"
+	workspaceSCCName            = "ado-workspace-scc"
+)
 
 // getOperatorImage returns the operator image from env var, then config, then default constant
 func getOperatorImage(images *automotivev1alpha1.ImagesConfig) string {
@@ -126,7 +135,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isO
 			},
 			// No volume mounts needed - Build API reads directly from OperatorConfig CRD
 			SecurityContext: &corev1.SecurityContext{
-				AllowPrivilegeEscalation: boolPtr(false),
+				AllowPrivilegeEscalation: ptr.To(false),
 			},
 		},
 	}
@@ -177,7 +186,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isO
 			},
 			Resources: resourcesCfg.GetOAuthProxyResources(),
 			SecurityContext: &corev1.SecurityContext{
-				AllowPrivilegeEscalation: boolPtr(false),
+				AllowPrivilegeEscalation: ptr.To(false),
 			},
 		})
 	}
@@ -197,7 +206,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, isO
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: int32Ptr(1),
+			Replicas: ptr.To[int32](1),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app.kubernetes.io/name":      "automotive-dev-operator",
@@ -229,7 +238,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, isO
 								},
 							},
 							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: boolPtr(false),
+								AllowPrivilegeEscalation: ptr.To(false),
 							},
 						},
 					},
@@ -283,15 +292,21 @@ func (r *OperatorConfigReconciler) buildBuildAPIService(namespace string, isOpen
 }
 
 func (r *OperatorConfigReconciler) buildBuildAPIRoute(namespace string, config *automotivev1alpha1.OperatorConfig) *routev1.Route {
-	// Derive route timeout from the longest configured upload timeout + buffer
+	// Derive route timeout from the longest configured timeout + buffer.
+	// Must cover uploads, build log streaming, and workspace exec sessions.
 	routeTimeoutMinutes := int32(15)
 	if config.Spec.ContainerBuilds != nil && config.Spec.ContainerBuilds.UploadTimeoutMinutes > 0 {
 		if t := config.Spec.ContainerBuilds.UploadTimeoutMinutes + 2; t > routeTimeoutMinutes {
 			routeTimeoutMinutes = t
 		}
 	}
-	if config.Spec.OSBuilds != nil && config.Spec.OSBuilds.UploadTimeoutMinutes > 0 {
-		if t := config.Spec.OSBuilds.UploadTimeoutMinutes + 2; t > routeTimeoutMinutes {
+	if config.Spec.OSBuilds != nil {
+		if config.Spec.OSBuilds.UploadTimeoutMinutes > 0 {
+			if t := config.Spec.OSBuilds.UploadTimeoutMinutes + 2; t > routeTimeoutMinutes {
+				routeTimeoutMinutes = t
+			}
+		}
+		if t := config.Spec.OSBuilds.GetBuildTimeoutMinutes() + 5; t > routeTimeoutMinutes {
 			routeTimeoutMinutes = t
 		}
 	}
@@ -315,7 +330,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIRoute(namespace string, config *
 				Name: "ado-build-api",
 			},
 			Port: &routev1.RoutePort{
-				TargetPort: intstr.FromString("proxy"),
+				TargetPort: intstr.FromString("http"),
 			},
 			TLS: &routev1.TLSConfig{
 				Termination:                   routev1.TLSTerminationEdge,
@@ -466,7 +481,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: int32Ptr(1),
+			Replicas: ptr.To[int32](1),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app.kubernetes.io/name":      "automotive-dev-operator",
@@ -483,7 +498,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 				Spec: corev1.PodSpec{
 					ServiceAccountName: buildControllerName,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: boolPtr(true),
+						RunAsNonRoot: ptr.To(true),
 					},
 					Containers: []corev1.Container{
 						{
@@ -541,7 +556,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 								return resourcesCfg.GetBuildControllerResources()
 							}(),
 							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: boolPtr(false),
+								AllowPrivilegeEscalation: ptr.To(false),
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
 								},
@@ -627,6 +642,22 @@ func (r *OperatorConfigReconciler) buildBuildControllerClusterRole() *rbacv1.Clu
 				Resources: []string{"catalogimages/finalizers"},
 				Verbs:     []string{"update"},
 			},
+			// Workspace controller RBAC
+			{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"workspaces"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+			},
+			{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"workspaces/status"},
+				Verbs:     []string{"get", "update", "patch"},
+			},
+			{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"workspaces/finalizers"},
+				Verbs:     []string{"update"},
+			},
 			// Read-only access to OperatorConfig (for build config)
 			{
 				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
@@ -652,7 +683,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerClusterRole() *rbacv1.Clu
 			{
 				APIGroups: []string{""},
 				Resources: []string{"secrets"},
-				Verbs:     []string{"get", "list", "watch", "delete"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 			},
 			{
 				APIGroups: []string{""},
@@ -814,10 +845,160 @@ func (r *OperatorConfigReconciler) buildBuildControllerLeaderElectionRoleBinding
 	}
 }
 
-func boolPtr(b bool) *bool {
-	return &b
+func (r *OperatorConfigReconciler) buildWorkspaceServiceAccount(namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      workspaceServiceAccountName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "workspace",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+	}
 }
 
-func int32Ptr(i int32) *int32 {
-	return &i
+func (r *OperatorConfigReconciler) buildWorkspaceSCCClusterRole() *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: workspaceServiceAccountName + "-privileged",
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "workspace",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups:     []string{"security.openshift.io"},
+				Resources:     []string{"securitycontextconstraints"},
+				ResourceNames: []string{workspaceSCCName},
+				Verbs:         []string{"use"},
+			},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildWorkspaceSCCRoleBinding(namespace string) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      workspaceServiceAccountName + "-privileged",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "workspace",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     workspaceServiceAccountName + "-privileged",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      workspaceServiceAccountName,
+				Namespace: namespace,
+			},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildPipelineSCCClusterRole() *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: sccPrivilegedRoleName,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "pipeline",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups:     []string{"security.openshift.io"},
+				Resources:     []string{"securitycontextconstraints"},
+				ResourceNames: []string{"privileged"},
+				Verbs:         []string{"use"},
+			},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildPipelineSCCRoleBinding(namespace string) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pipelineSCCBindingName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "pipeline",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     sccPrivilegedRoleName,
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      pipelineServiceAccountName,
+				Namespace: namespace,
+			},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildWorkspaceSCC() *securityv1.SecurityContextConstraints {
+	return &securityv1.SecurityContextConstraints{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: workspaceSCCName,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "workspace",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		AllowHostDirVolumePlugin: false,
+		AllowHostIPC:             false,
+		AllowHostNetwork:         false,
+		AllowHostPID:             false,
+		AllowHostPorts:           false,
+		AllowPrivilegeEscalation: ptr.To(true),
+		AllowPrivilegedContainer: true,
+		AllowedCapabilities:      []corev1.Capability{"ALL"},
+		FSGroup: securityv1.FSGroupStrategyOptions{
+			Type:   securityv1.FSGroupStrategyMustRunAs,
+			Ranges: []securityv1.IDRange{{Min: 0, Max: 65534}},
+		},
+		RunAsUser: securityv1.RunAsUserStrategyOptions{
+			Type: securityv1.RunAsUserStrategyRunAsAny,
+		},
+		SELinuxContext: securityv1.SELinuxContextStrategyOptions{
+			Type: securityv1.SELinuxStrategyMustRunAs,
+			SELinuxOptions: &corev1.SELinuxOptions{
+				Type: "container_engine_t",
+			},
+		},
+		SeccompProfiles: []string{"*"},
+		SupplementalGroups: securityv1.SupplementalGroupsStrategyOptions{
+			Type:   securityv1.SupplementalGroupsStrategyMustRunAs,
+			Ranges: []securityv1.IDRange{{Min: 0, Max: 65534}},
+		},
+		UserNamespaceLevel: securityv1.NamespaceLevelRequirePod,
+		Volumes: []securityv1.FSType{
+			securityv1.FSTypeConfigMap,
+			securityv1.FSTypeCSI,
+			securityv1.FSTypeDownwardAPI,
+			securityv1.FSTypeEmptyDir,
+			securityv1.FSTypeEphemeral,
+			securityv1.FSProjected,
+			securityv1.FSTypePersistentVolumeClaim,
+			securityv1.FSTypeSecret,
+		},
+	}
 }
