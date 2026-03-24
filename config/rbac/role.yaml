@@ -177,6 +177,7 @@ rules:
   - list
   - patch
   - update
+  - use
   - watch
 - apiGroups:
   - shipwright.io
