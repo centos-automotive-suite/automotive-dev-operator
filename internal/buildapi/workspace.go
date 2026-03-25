@@ -37,25 +37,28 @@ func shellQuote(s string) string {
 
 // WorkspaceRequest is the payload to create a workspace.
 type WorkspaceRequest struct {
-	Name          string `json:"name"`
-	FromBuild     string `json:"fromBuild,omitempty"` // ImageBuild name to extract lease from
-	Lease         string `json:"lease,omitempty"`     // Direct lease ID
-	Arch          string `json:"architecture,omitempty"`
-	Image         string `json:"toolchainImage,omitempty"`
-	ClientConfig  string `json:"clientConfig,omitempty"`  // Base64-encoded Jumpstarter client config
-	CPU           string `json:"cpu,omitempty"`           // CPU request (e.g., "1", "500m")
-	Memory        string `json:"memory,omitempty"`        // Memory request (e.g., "2Gi", "512Mi")
-	TmpfsBuildDir bool   `json:"tmpfsBuildDir,omitempty"` // Mount tmpfs at /tmp/build for fast compilation
+	Name                    string `json:"name"`
+	FromBuild               string `json:"fromBuild,omitempty"` // ImageBuild name to extract lease from
+	Lease                   string `json:"lease,omitempty"`     // Direct lease ID
+	Arch                    string `json:"architecture,omitempty"`
+	Image                   string `json:"toolchainImage,omitempty"`
+	ClientConfig            string `json:"clientConfig,omitempty"`            // Base64-encoded Jumpstarter client config
+	CPU                     string `json:"cpu,omitempty"`                     // CPU request (e.g., "1", "500m")
+	Memory                  string `json:"memory,omitempty"`                  // Memory request (e.g., "2Gi", "512Mi")
+	TmpfsBuildDir           bool   `json:"tmpfsBuildDir,omitempty"`           // Mount tmpfs at /tmp/build for fast compilation
+	AutoPauseTimeoutMinutes *int32 `json:"autoPauseTimeoutMinutes,omitempty"` // nil = use global default, 0 = disable
 }
 
 // WorkspaceResponse is returned by workspace operations.
 type WorkspaceResponse struct {
-	Name    string `json:"name"`
-	Phase   string `json:"phase"`
-	Lease   string `json:"lease,omitempty"`
-	Arch    string `json:"architecture"`
-	PodName string `json:"podName,omitempty"`
-	Age     string `json:"age,omitempty"`
+	Name             string `json:"name"`
+	Phase            string `json:"phase"`
+	Lease            string `json:"lease,omitempty"`
+	Arch             string `json:"architecture"`
+	PodName          string `json:"podName,omitempty"`
+	Age              string `json:"age,omitempty"`
+	AutoPauseTimeout string `json:"autoPauseTimeout,omitempty"` // e.g., "30m", "disabled"
+	LastActivity     string `json:"lastActivity,omitempty"`     // e.g., "2m ago", "just now"
 }
 
 // WorkspaceExecRequest is the payload to execute a command in a workspace.
@@ -283,16 +286,17 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 			Namespace: namespace,
 		},
 		Spec: automotivev1alpha1.WorkspaceSpec{
-			Architecture:          arch,
-			Image:                 image,
-			LeaseID:               leaseID,
-			Owner:                 requester,
-			ClientConfigSecretRef: jmpClientSecret,
-			PVCSize:               pvcSize,
-			Resources:             resources,
-			StorageClass:          wsConfig.GetStorageClass(),
-			NodeSelector:          wsConfig.GetNodeSelector(),
-			TmpfsBuildDir:         req.TmpfsBuildDir,
+			Architecture:            arch,
+			Image:                   image,
+			LeaseID:                 leaseID,
+			Owner:                   requester,
+			ClientConfigSecretRef:   jmpClientSecret,
+			PVCSize:                 pvcSize,
+			Resources:               resources,
+			StorageClass:            wsConfig.GetStorageClass(),
+			NodeSelector:            wsConfig.GetNodeSelector(),
+			TmpfsBuildDir:           req.TmpfsBuildDir,
+			AutoPauseTimeoutMinutes: req.AutoPauseTimeoutMinutes,
 		},
 	}
 	if err := k8sClient.Create(c.Request.Context(), ws); err != nil {
@@ -459,6 +463,24 @@ func (a *APIServer) getOwnedWorkspace(c *gin.Context, name string) (*automotivev
 	return ws, nil
 }
 
+// touchWorkspaceActivity updates LastActivityTime on the workspace status.
+// Called from handlers that represent actual workspace usage (exec, shell, sync, deploy)
+// so the auto-pause controller knows the workspace is in use.
+func (a *APIServer) touchWorkspaceActivity(c *gin.Context, ws *automotivev1alpha1.Workspace) {
+	if ws.Spec.Stopped {
+		return
+	}
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		return // best-effort, don't fail the operation
+	}
+
+	now := metav1.Now()
+	patch := client.MergeFrom(ws.DeepCopy())
+	ws.Status.LastActivityTime = &now
+	_ = k8sClient.Status().Patch(c.Request.Context(), ws, patch)
+}
+
 func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 	ws, err := a.getOwnedWorkspace(c, name)
 	if err != nil {
@@ -468,6 +490,7 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
 		return
 	}
+	a.touchWorkspaceActivity(c, ws)
 
 	namespace := ws.Namespace
 	podName := ws.Status.PodName
@@ -590,6 +613,7 @@ func (a *APIServer) execWorkspace(c *gin.Context, name string) {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
 		return
 	}
+	a.touchWorkspaceActivity(c, ws)
 
 	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
@@ -618,6 +642,7 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
 		return
 	}
+	a.touchWorkspaceActivity(c, ws)
 
 	namespace := ws.Namespace
 	podName := ws.Status.PodName
@@ -744,6 +769,7 @@ func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
 		return
 	}
+	a.touchWorkspaceActivity(c, ws)
 
 	if ws.Spec.LeaseID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no Jumpstarter lease associated with this workspace"})
@@ -914,13 +940,35 @@ func workspaceResponseFromCR(ws *automotivev1alpha1.Workspace) WorkspaceResponse
 	if !ws.CreationTimestamp.IsZero() {
 		age = time.Since(ws.CreationTimestamp.Time).Truncate(time.Second).String()
 	}
+	var autoPauseTimeout string
+	switch {
+	case ws.Spec.AutoPauseTimeoutMinutes == nil:
+		autoPauseTimeout = "default"
+	case *ws.Spec.AutoPauseTimeoutMinutes == 0:
+		autoPauseTimeout = "disabled"
+	default:
+		autoPauseTimeout = fmt.Sprintf("%dm", *ws.Spec.AutoPauseTimeoutMinutes)
+	}
+
+	lastActivity := ""
+	if ws.Status.LastActivityTime != nil {
+		elapsed := time.Since(ws.Status.LastActivityTime.Time)
+		if elapsed < time.Minute {
+			lastActivity = "just now"
+		} else {
+			lastActivity = elapsed.Truncate(time.Minute).String() + " ago"
+		}
+	}
+
 	return WorkspaceResponse{
-		Name:    ws.Name,
-		Phase:   phase,
-		Lease:   ws.Spec.LeaseID,
-		Arch:    ws.Spec.Architecture,
-		PodName: ws.Status.PodName,
-		Age:     age,
+		Name:             ws.Name,
+		Phase:            phase,
+		Lease:            ws.Spec.LeaseID,
+		Arch:             ws.Spec.Architecture,
+		PodName:          ws.Status.PodName,
+		Age:              age,
+		AutoPauseTimeout: autoPauseTimeout,
+		LastActivity:     lastActivity,
 	}
 }
 

@@ -2,8 +2,13 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -12,6 +17,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	kscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,14 +37,20 @@ const (
 // Reconciler reconciles a Workspace object.
 type Reconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Log    logr.Logger
+	Scheme     *runtime.Scheme
+	Log        logr.Logger
+	RestConfig *rest.Config
+
+	clientset     kubernetes.Interface
+	clientsetErr  error
+	clientsetOnce sync.Once
 }
 
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=workspaces/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=workspaces/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
 
 // Reconcile handles Workspace CR changes.
@@ -65,7 +80,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.deleteWorkspacePod(ctx, ws, log); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, r.setStatus(ctx, ws, "Stopped", "")
+		// Preserve existing message (e.g., auto-pause reason) if already Stopped
+		msg := ws.Status.Message
+		return ctrl.Result{}, r.setStatus(ctx, ws, "Stopped", msg)
 	}
 
 	pod, err := r.ensurePod(ctx, ws, log)
@@ -94,7 +111,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	return ctrl.Result{}, r.setStatus(ctx, ws, phase, msg)
+	if err := r.setStatus(ctx, ws, phase, msg); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Auto-pause check: only for Running workspaces
+	if phase == "Running" {
+		return r.checkAutoPause(ctx, ws, log)
+	}
+
+	return ctrl.Result{}, nil
 }
 
 func (r *Reconciler) ensurePVC(ctx context.Context, ws *automotivev1alpha1.Workspace) error {
@@ -345,7 +371,152 @@ func (r *Reconciler) setStatus(ctx context.Context, ws *automotivev1alpha1.Works
 	ws.Status.Phase = phase
 	ws.Status.Message = message
 	ws.Status.PodName = podName
+	if phase == "Stopped" || phase == "Pending" || phase == "Creating" {
+		ws.Status.LastActivityTime = nil
+	}
 	return r.Status().Patch(ctx, ws, patch)
+}
+
+// getAutoPauseTimeout returns the effective auto-pause timeout for a workspace.
+// Returns 0 if auto-pause is disabled.
+func (r *Reconciler) getAutoPauseTimeout(ctx context.Context, ws *automotivev1alpha1.Workspace) time.Duration {
+	if ws.Spec.AutoPauseTimeoutMinutes != nil {
+		mins := *ws.Spec.AutoPauseTimeoutMinutes
+		if mins <= 0 {
+			return 0
+		}
+		return time.Duration(mins) * time.Minute
+	}
+
+	oc := &automotivev1alpha1.OperatorConfig{}
+	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: ws.Namespace}, oc); err == nil {
+		if oc.Spec.Workspaces != nil {
+			return time.Duration(oc.Spec.Workspaces.GetAutoPauseTimeoutMinutes()) * time.Minute
+		}
+	}
+
+	return time.Duration(automotivev1alpha1.DefaultAutoPauseTimeoutMinutes) * time.Minute
+}
+
+// checkAutoPause checks if a Running workspace should be auto-paused due to inactivity.
+func (r *Reconciler) checkAutoPause(ctx context.Context, ws *automotivev1alpha1.Workspace, log logr.Logger) (ctrl.Result, error) {
+	timeout := r.getAutoPauseTimeout(ctx, ws)
+	if timeout == 0 {
+		return ctrl.Result{}, nil
+	}
+
+	checkInterval := timeout / 3
+	if maxInterval := 5 * time.Minute; checkInterval > maxInterval {
+		checkInterval = maxInterval
+	}
+
+	active, err := r.isWorkspaceActive(ctx, ws)
+	if err != nil {
+		log.V(1).Info("Failed to check workspace activity, will retry", "error", err)
+		return ctrl.Result{RequeueAfter: checkInterval}, nil
+	}
+
+	// Active or first idle check: update the activity timestamp and requeue.
+	// Only patch when the timestamp is unset or stale (older than checkInterval)
+	// to avoid unnecessary API writes on every check.
+	if active || ws.Status.LastActivityTime == nil {
+		stale := ws.Status.LastActivityTime == nil ||
+			(active && time.Since(ws.Status.LastActivityTime.Time) > checkInterval)
+		if stale {
+			now := metav1.Now()
+			patch := client.MergeFrom(ws.DeepCopy())
+			ws.Status.LastActivityTime = &now
+			if err := r.Status().Patch(ctx, ws, patch); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{RequeueAfter: checkInterval}, nil
+	}
+
+	// Workspace is idle — check if timeout has expired
+	idleDuration := time.Since(ws.Status.LastActivityTime.Time)
+	if idleDuration >= timeout {
+		log.Info("Auto-pausing idle workspace",
+			"workspace", ws.Name,
+			"idleDuration", idleDuration.Truncate(time.Second),
+			"timeout", timeout)
+
+		specPatch := client.MergeFrom(ws.DeepCopy())
+		ws.Spec.Stopped = true
+		if err := r.Patch(ctx, ws, specPatch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to auto-pause workspace: %w", err)
+		}
+
+		msg := fmt.Sprintf("Auto-paused after %s of inactivity", idleDuration.Truncate(time.Minute))
+		return ctrl.Result{}, r.setStatus(ctx, ws, "Stopped", msg)
+	}
+
+	remaining := timeout - idleDuration
+	return ctrl.Result{RequeueAfter: remaining}, nil
+}
+
+// getClientset returns the cached Kubernetes clientset, creating it on first use.
+func (r *Reconciler) getClientset() (kubernetes.Interface, error) {
+	r.clientsetOnce.Do(func() {
+		r.clientset, r.clientsetErr = kubernetes.NewForConfig(r.RestConfig)
+	})
+	if r.clientsetErr != nil {
+		return nil, fmt.Errorf("creating clientset: %w", r.clientsetErr)
+	}
+	return r.clientset, nil
+}
+
+// isWorkspaceActive execs into the workspace pod to check for user activity.
+// Returns true if active sessions or build processes are detected.
+func (r *Reconciler) isWorkspaceActive(ctx context.Context, ws *automotivev1alpha1.Workspace) (bool, error) {
+	podName := "workspace-" + ws.Name
+
+	clientset, err := r.getClientset()
+	if err != nil {
+		return false, err
+	}
+
+	// Detect user activity via two signals:
+	// 1. Active pts sessions (caib workspace shell connections)
+	// 2. Exec'd processes: in Kubernetes, exec'd processes have PPID=0 inside the
+	//    container PID namespace (their real parent is outside). PID 1 is the
+	//    entrypoint. Any other PPID=0 process (besides this check) is user activity.
+	cmd := []string{"/bin/sh", "-c",
+		`pts=$(ls /dev/pts/ 2>/dev/null | grep -cE '^[0-9]+$'); ` +
+			`if [ "$pts" -gt 0 ]; then echo active; exit 0; fi; ` +
+			`extra=$(ps -eo pid,ppid --no-headers | awk '$1 != 1 && $2 == 0 {c++} END {print c+0}'); ` +
+			`if [ "$extra" -gt 1 ]; then echo active; exit 0; fi; ` +
+			`echo idle`,
+	}
+
+	execReq := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").Name(podName).Namespace(ws.Namespace).SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: containerName,
+			Command:   cmd,
+			Stdin:     false,
+			Stdout:    true,
+			Stderr:    true,
+			TTY:       false,
+		}, kscheme.ParameterCodec)
+
+	executor, err := remotecommand.NewSPDYExecutor(r.RestConfig, http.MethodPost, execReq.URL())
+	if err != nil {
+		return false, fmt.Errorf("creating executor: %w", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	execCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if err := executor.StreamWithContext(execCtx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}); err != nil {
+		return false, fmt.Errorf("exec failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	return strings.TrimSpace(stdout.String()) == "active", nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

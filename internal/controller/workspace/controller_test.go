@@ -18,7 +18,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-const phaseStopped = "Stopped"
+const (
+	phaseRunning = "Running"
+	phaseStopped = "Stopped"
+)
 
 func newTestScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
@@ -55,7 +58,7 @@ func runningWorkspace(name, namespace string) (*automotivev1alpha1.Workspace, *c
 			Architecture: "amd64",
 		},
 		Status: automotivev1alpha1.WorkspaceStatus{
-			Phase:   "Running",
+			Phase:   phaseRunning,
 			PVCName: name + pvcSuffix,
 			PodName: "workspace-" + name,
 		},
@@ -276,7 +279,7 @@ func TestSetStatus_StoppedClearsPodName(t *testing.T) {
 			Namespace: "default",
 		},
 		Status: automotivev1alpha1.WorkspaceStatus{
-			Phase:   "Running",
+			Phase:   phaseRunning,
 			PodName: "workspace-test-ws",
 		},
 	}
@@ -316,7 +319,7 @@ func TestSetStatus_RunningSetsPodName(t *testing.T) {
 	r, fc := newTestReconciler(ws)
 	ctx := context.Background()
 
-	err := r.setStatus(ctx, ws, "Running", "")
+	err := r.setStatus(ctx, ws, phaseRunning, "")
 	if err != nil {
 		t.Fatalf("setStatus() error = %v", err)
 	}
@@ -328,8 +331,8 @@ func TestSetStatus_RunningSetsPodName(t *testing.T) {
 	if updated.Status.PodName != "workspace-test-ws" {
 		t.Errorf("expected PodName %q, got %q", "workspace-test-ws", updated.Status.PodName)
 	}
-	if updated.Status.Phase != "Running" {
-		t.Errorf("expected phase %q, got %q", "Running", updated.Status.Phase)
+	if updated.Status.Phase != phaseRunning {
+		t.Errorf("expected phase %q, got %q", phaseRunning, updated.Status.Phase)
 	}
 }
 

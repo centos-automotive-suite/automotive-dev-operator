@@ -64,6 +64,14 @@ type WorkspaceSpec struct {
 	// When true, the controller deletes the pod but preserves the PVC.
 	// +optional
 	Stopped bool `json:"stopped,omitempty"`
+
+	// AutoPauseTimeoutMinutes overrides the global auto-pause timeout for this workspace.
+	// nil = use global default from OperatorConfig (default: 30 minutes)
+	// 0 = disable auto-pause for this workspace
+	// >0 = custom timeout in minutes
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	AutoPauseTimeoutMinutes *int32 `json:"autoPauseTimeoutMinutes,omitempty"`
 }
 
 // WorkspaceStatus defines the observed state of a Workspace.
@@ -85,6 +93,11 @@ type WorkspaceStatus struct {
 	// Created lazily on first build referencing this workspace.
 	// +optional
 	BuildCachePVCName string `json:"buildCachePVCName,omitempty"`
+
+	// LastActivityTime is the last time activity was detected in the workspace pod.
+	// Used by the auto-pause controller to determine idle duration.
+	// +optional
+	LastActivityTime *metav1.Time `json:"lastActivityTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true
