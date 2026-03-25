@@ -56,6 +56,9 @@ const (
 
 	// DefaultWorkspacePVCSize is the default PVC size for workspace storage
 	DefaultWorkspacePVCSize = "10Gi"
+
+	// DefaultAutoPauseTimeoutMinutes is the default idle timeout in minutes before a workspace is auto-paused
+	DefaultAutoPauseTimeoutMinutes int32 = 30
 )
 
 // ImagesConfig defines container image references used by the operator
@@ -351,6 +354,14 @@ type WorkspacesConfig struct {
 	// BuildCacheSize is the size of the PVC created for build cache persistence (default: "20Gi")
 	// +optional
 	BuildCacheSize string `json:"buildCacheSize,omitempty"`
+
+	// AutoPauseTimeoutMinutes is the cluster-wide default idle timeout in minutes before
+	// a workspace is automatically paused. Overridden per-workspace via spec.autoPauseTimeoutMinutes.
+	// Must be > 0. To disable auto-pause for a specific workspace, set its
+	// spec.autoPauseTimeoutMinutes to 0.
+	// Default: 30
+	// +optional
+	AutoPauseTimeoutMinutes int32 `json:"autoPauseTimeoutMinutes,omitempty"`
 }
 
 // GetToolchainImage returns the toolchain image, falling back to the default
@@ -404,6 +415,15 @@ func (c *WorkspacesConfig) GetTolerations() []corev1.Toleration {
 		return c.Tolerations
 	}
 	return nil
+}
+
+// GetAutoPauseTimeoutMinutes returns the global auto-pause timeout in minutes.
+// Returns DefaultAutoPauseTimeoutMinutes (30) when not configured.
+func (c *WorkspacesConfig) GetAutoPauseTimeoutMinutes() int32 {
+	if c != nil && c.AutoPauseTimeoutMinutes > 0 {
+		return c.AutoPauseTimeoutMinutes
+	}
+	return DefaultAutoPauseTimeoutMinutes
 }
 
 // OperatorConfigSpec defines the desired state of OperatorConfig

@@ -823,6 +823,15 @@ spec:
               workspaces:
                 description: Workspaces defines configuration for developer workspaces
                 properties:
+                  autoPauseTimeoutMinutes:
+                    description: |-
+                      AutoPauseTimeoutMinutes is the cluster-wide default idle timeout in minutes before
+                      a workspace is automatically paused. Overridden per-workspace via spec.autoPauseTimeoutMinutes.
+                      Must be > 0. To disable auto-pause for a specific workspace, set its
+                      spec.autoPauseTimeoutMinutes to 0.
+                      Default: 30
+                    format: int32
+                    type: integer
                   buildCacheSize:
                     description: 'BuildCacheSize is the size of the PVC created for
                       build cache persistence (default: "20Gi")'

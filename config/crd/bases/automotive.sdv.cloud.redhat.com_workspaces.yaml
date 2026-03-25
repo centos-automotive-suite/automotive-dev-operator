@@ -59,6 +59,15 @@ spec:
                 description: Architecture is the target architecture (e.g., "arm64",
                   "amd64")
                 type: string
+              autoPauseTimeoutMinutes:
+                description: |-
+                  AutoPauseTimeoutMinutes overrides the global auto-pause timeout for this workspace.
+                  nil = use global default from OperatorConfig (default: 30 minutes)
+                  0 = disable auto-pause for this workspace
+                  >0 = custom timeout in minutes
+                format: int32
+                minimum: 0
+                type: integer
               clientConfigSecretRef:
                 description: |-
                   ClientConfigSecretRef is the name of the Secret containing the Jumpstarter client config
@@ -168,6 +177,12 @@ spec:
                 description: |-
                   BuildCachePVCName is the name of the PVC used for build cache storage.
                   Created lazily on first build referencing this workspace.
+                type: string
+              lastActivityTime:
+                description: |-
+                  LastActivityTime is the last time activity was detected in the workspace pod.
+                  Used by the auto-pause controller to determine idle duration.
+                format: date-time
                 type: string
               message:
                 description: Message provides additional detail about the current

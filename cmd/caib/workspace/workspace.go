@@ -50,6 +50,9 @@ var (
 	// wait flag (shared by create and start)
 	waitForRunningFlag bool
 
+	// auto-pause flag
+	autoPauseTimeout int
+
 	// deploy flags
 	artifactMappings []string
 )
@@ -126,6 +129,7 @@ Examples:
 	cmd.Flags().StringVar(&cpuRequest, "cpu", "", "CPU request/limit (e.g., \"1\", \"500m\")")
 	cmd.Flags().StringVar(&memoryRequest, "memory", "", "memory request/limit (e.g., \"2Gi\", \"512Mi\")")
 	cmd.Flags().BoolVar(&tmpfsBuildDir, "tmpfs", false, "mount a tmpfs volume at /tmp/build for faster compilation (uses RAM)")
+	cmd.Flags().IntVar(&autoPauseTimeout, "auto-pause-timeout", -1, "auto-pause timeout in minutes (0=disable, -1=use global default)")
 	cmd.Flags().BoolVarP(&waitForRunningFlag, "wait", "w", true, "wait for workspace to be running")
 
 	return cmd
@@ -290,6 +294,13 @@ func runCreate(_ *cobra.Command, args []string) {
 		Memory:        memoryRequest,
 		TmpfsBuildDir: tmpfsBuildDir,
 	}
+	if autoPauseTimeout < -1 {
+		handleError(fmt.Errorf("--auto-pause-timeout must be >= -1"))
+	}
+	if autoPauseTimeout >= 0 {
+		v := int32(autoPauseTimeout)
+		req.AutoPauseTimeoutMinutes = &v
+	}
 
 	var resp *buildapitypes.WorkspaceResponse
 	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
@@ -380,6 +391,10 @@ func runShow(_ *cobra.Command, args []string) {
 	}
 	if ws.Age != "" {
 		fmt.Printf("Age:          %s\n", ws.Age)
+	}
+	fmt.Printf("Auto-pause:   %s\n", ws.AutoPauseTimeout)
+	if ws.LastActivity != "" {
+		fmt.Printf("Last active:  %s\n", ws.LastActivity)
 	}
 }
 
