@@ -1794,7 +1794,7 @@ func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string)
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:      corev1.RestartPolicyNever,
-			ServiceAccountName: "pipeline",
+			ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
 			Containers: []corev1.Container{
 				{
 					Name:  "build-helper",

@@ -59,6 +59,10 @@ const (
 
 	// DefaultAutoPauseTimeoutMinutes is the default idle timeout in minutes before a workspace is auto-paused
 	DefaultAutoPauseTimeoutMinutes int32 = 30
+
+	// BuildServiceAccountName is the dedicated SA used by build pods and token minting.
+	// Using a dedicated SA avoids collisions with the shared "pipeline" SA.
+	BuildServiceAccountName = "ado-build"
 )
 
 // ImagesConfig defines container image references used by the operator

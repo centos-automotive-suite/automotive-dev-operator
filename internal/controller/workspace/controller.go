@@ -228,9 +228,15 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 	if image == "" {
 		image = configuredImage
 	}
-	// Only grant privileged to the configured toolchain image (which we control).
-	// User-supplied images run unprivileged to prevent cluster compromise.
-	isConfiguredImage := image == configuredImage
+
+	// Configured toolchain image gets SYS_ADMIN (for overlay mounts that persist
+	// dnf-installed packages) plus SETUID/SETGID (for rootless podman/buildah).
+	// User-supplied images get only SETUID/SETGID — no overlay persistence but
+	// podman/buildah still work.
+	caps := []corev1.Capability{"SETUID", "SETGID"}
+	if image == configuredImage {
+		caps = append(caps, "SYS_ADMIN")
+	}
 
 	annotations := map[string]string{
 		"io.kubernetes.cri-o.Devices": "/dev/fuse,/dev/net/tun",
@@ -311,9 +317,12 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 					Env:        env,
 					Resources:  resourcesOrDefaults(ws.Spec.Resources),
 					SecurityContext: &corev1.SecurityContext{
-						Privileged:               ptr.To(isConfiguredImage),
-						AllowPrivilegeEscalation: ptr.To(isConfiguredImage),
+						AllowPrivilegeEscalation: ptr.To(true),
 						ProcMount:                ptr.To(corev1.UnmaskedProcMount),
+						Capabilities: &corev1.Capabilities{
+							Drop: []corev1.Capability{"ALL"},
+							Add:  caps,
+						},
 					},
 					VolumeMounts: volumeMounts,
 				},

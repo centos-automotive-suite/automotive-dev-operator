@@ -631,7 +631,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				},
 			}
 			tokenResp, err := clientset.CoreV1().ServiceAccounts(imageBuild.Namespace).
-				CreateToken(ctx, "pipeline", tokenReq, metav1.CreateOptions{})
+				CreateToken(ctx, automotivev1alpha1.BuildServiceAccountName, tokenReq, metav1.CreateOptions{})
 			if err != nil {
 				return fmt.Errorf("failed to create SA token for flash OCI credentials: %w", err)
 			}
@@ -909,7 +909,8 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			Params:     params,
 			Workspaces: pipelineWorkspaces,
 			TaskRunTemplate: tektonv1.PipelineTaskRunTemplate{
-				PodTemplate: podTemplate,
+				PodTemplate:        podTemplate,
+				ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
 			},
 		},
 	}
