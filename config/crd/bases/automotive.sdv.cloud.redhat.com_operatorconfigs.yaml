@@ -1049,6 +1049,11 @@ spec:
                 description: Phase represents the current phase (Ready, Reconciling,
                   Failed)
                 type: string
+              userNamespacesSupported:
+                description: |-
+                  UserNamespacesSupported indicates if the cluster supports user namespaces in pods
+                  (SCC userNamespaceLevel field). When false, workspace pods use privileged mode.
+                type: boolean
             type: object
         type: object
     served: true

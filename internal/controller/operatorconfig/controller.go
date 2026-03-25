@@ -885,11 +885,27 @@ func (r *OperatorConfigReconciler) deployWorkspaceInfra(ctx context.Context, con
 		return fmt.Errorf("failed to create/update workspace service account: %w", err)
 	}
 
-	// On OpenShift, create a custom SCC for workspace pods with user namespace support
+	// On OpenShift, create a custom SCC for workspace pods
 	if r.detectOpenShift(ctx, config.Namespace) {
 		scc := r.buildWorkspaceSCC()
 		if err := r.createOrUpdate(ctx, scc, config); err != nil {
 			return fmt.Errorf("failed to create/update workspace SCC: %w", err)
+		}
+
+		// Check if the cluster accepted userNamespaceLevel by reading the SCC back.
+		// OCP < 4.19 silently strips this field.
+		actual := &securityv1.SecurityContextConstraints{}
+		if err := r.Get(ctx, client.ObjectKey{Name: workspaceSCCName}, actual); err != nil {
+			return fmt.Errorf("failed to read back workspace SCC: %w", err)
+		}
+		config.Status.UserNamespacesSupported = actual.UserNamespaceLevel != ""
+		if !config.Status.UserNamespacesSupported {
+			r.Log.Info("Cluster does not support user namespaces, workspace pods will use privileged mode")
+			// Re-create the SCC in privileged mode
+			scc = r.buildWorkspaceSCCPrivileged()
+			if err := r.createOrUpdate(ctx, scc, config); err != nil {
+				return fmt.Errorf("failed to create/update workspace SCC (privileged): %w", err)
+			}
 		}
 
 		clusterRole := r.buildWorkspaceSCCClusterRole()
