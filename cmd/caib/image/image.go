@@ -24,6 +24,7 @@ type Options struct {
 	RunExtractForSigning func(*cobra.Command, []string)
 	RunInjectSigned      func(*cobra.Command, []string)
 	RunToken             func(*cobra.Command, []string)
+	RunDelete            func(*cobra.Command, []string)
 
 	GetDefaultArch func() string
 
@@ -103,6 +104,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	flashCmd := newFlashCmd(opts)
 
 	tokenCmd := newTokenCmd(opts)
+	deleteCmd := newDeleteCmd(opts)
 
 	prepareResealCmd := newPrepareResealCmd(opts)
 	resealCmd := newResealCmd(opts)
@@ -271,6 +273,10 @@ func NewImageCmd(opts Options) *cobra.Command {
 	tokenCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	tokenCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 
+	// delete command flags
+	deleteCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
+	deleteCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+
 	// flash command flags
 	flashCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	flashCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
@@ -305,6 +311,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 		downloadCmd,
 		logsCmd,
 		tokenCmd,
+		deleteCmd,
 		flashCmd,
 		prepareResealCmd,
 		resealCmd,
@@ -486,6 +493,28 @@ Examples:
   podman pull <image-ref>`,
 		Args: cobra.ExactArgs(1),
 		Run:  opts.RunToken,
+	}
+}
+
+func newDeleteCmd(opts Options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <build-name>",
+		Short: "Delete an ImageBuild and its associated resources",
+		Long: `Delete removes an ImageBuild and all its associated Kubernetes resources
+(PipelineRuns, TaskRuns, PVCs, Secrets). If the build used the internal
+registry (--internal-registry), the build's ImageStream tags are removed.
+The ImageStream itself is deleted only if no other tags remain in it.
+
+You can only delete builds that you created.
+
+Examples:
+  # Delete a completed build
+  caib image delete my-build
+
+  # Delete a build (including internal registry images)
+  caib image delete my-internal-build`,
+		Args: cobra.ExactArgs(1),
+		Run:  opts.RunDelete,
 	}
 }
 

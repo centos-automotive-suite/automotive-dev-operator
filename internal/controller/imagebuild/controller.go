@@ -112,7 +112,8 @@ type ImageBuildReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
-// +kubebuilder:rbac:groups=image.openshift.io,resources=imagestreams,verbs=get;create
+// +kubebuilder:rbac:groups=image.openshift.io,resources=imagestreams,verbs=get;create;delete
+// +kubebuilder:rbac:groups=image.openshift.io,resources=imagestreamtags,verbs=delete
 // +kubebuilder:rbac:groups=tekton.dev,resources=tasks;pipelines;pipelineruns;taskruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create;get

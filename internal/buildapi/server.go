@@ -285,6 +285,33 @@ func deleteImageStream(ctx context.Context, k8sClient client.Client, namespace, 
 	return k8sClient.Delete(ctx, is)
 }
 
+func deleteImageStreamTag(ctx context.Context, k8sClient client.Client, namespace, stream, tag string) error {
+	ist := &unstructured.Unstructured{}
+	ist.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "image.openshift.io",
+		Version: "v1",
+		Kind:    "ImageStreamTag",
+	})
+	ist.SetName(stream + ":" + tag)
+	ist.SetNamespace(namespace)
+	return k8sClient.Delete(ctx, ist)
+}
+
+// imageStreamHasTags checks whether an ImageStream still has any tags.
+func imageStreamHasTags(ctx context.Context, k8sClient client.Client, namespace, name string) (bool, error) {
+	is := &unstructured.Unstructured{}
+	is.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "image.openshift.io",
+		Version: "v1",
+		Kind:    "ImageStream",
+	})
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, is); err != nil {
+		return false, err
+	}
+	tags, _, _ := unstructured.NestedSlice(is.Object, "status", "tags")
+	return len(tags) > 0, nil
+}
+
 // mintRegistryToken creates a fresh short-lived token for the pipeline SA
 // so the caller can pull images from the internal registry.
 func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, namespace string) (string, metav1.Time, error) {
@@ -522,6 +549,7 @@ func (a *APIServer) createRouter() *gin.Engine {
 			buildsGroup.GET("/:name/template", a.handleGetBuildTemplate)
 			buildsGroup.POST("/:name/uploads", a.handleUploadFiles)
 			buildsGroup.POST("/:name/token", a.handleCreateBuildToken)
+			buildsGroup.DELETE("/:name", a.handleDeleteBuild)
 		}
 
 		flashGroup := v1.Group("/flash")
@@ -731,6 +759,110 @@ func (a *APIServer) handleCreateBuildToken(c *gin.Context) {
 		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
 		Image:     imageRef,
 	})
+}
+
+func (a *APIServer) handleDeleteBuild(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("delete build", "name", name, "reqID", c.GetString("reqID"))
+	a.deleteBuild(c, name)
+}
+
+func (a *APIServer) deleteBuild(c *gin.Context, name string) {
+	k8sClient, err := getClientFromRequestFn(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create kubernetes client"})
+		return
+	}
+
+	namespace := resolveNamespace()
+	ctx := c.Request.Context()
+
+	build := &automotivev1alpha1.ImageBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "build not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
+		return
+	}
+
+	// Verify the requesting user owns this build
+	requester := a.resolveRequester(c)
+	owner := build.Annotations["automotive.sdv.cloud.redhat.com/requested-by"]
+	if owner != requester {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you can only delete your own builds"})
+		return
+	}
+
+	// If the build used the internal registry, clean up its ImageStream tags.
+	// Only delete the specific tags this build created; if the stream becomes
+	// empty afterwards, delete the whole ImageStream.
+	if build.Spec.GetUseServiceAccountAuth() {
+		streamName, tags := resolveImageStreamRefs(build)
+		if streamName != "" {
+			for _, tag := range tags {
+				if delErr := deleteImageStreamTag(ctx, k8sClient, namespace, streamName, tag); delErr != nil {
+					if !k8serrors.IsNotFound(delErr) {
+						a.log.Error(delErr, "failed to delete ImageStreamTag", "imageStreamTag", streamName+":"+tag)
+					}
+				}
+			}
+			// If no tags remain, clean up the empty ImageStream
+			hasTags, err := imageStreamHasTags(ctx, k8sClient, namespace, streamName)
+			if err != nil {
+				if !k8serrors.IsNotFound(err) {
+					a.log.Error(err, "failed to check ImageStream tags", "imageStream", streamName)
+				}
+			} else if !hasTags {
+				if delErr := deleteImageStream(ctx, k8sClient, namespace, streamName); delErr != nil {
+					if !k8serrors.IsNotFound(delErr) {
+						a.log.Error(delErr, "failed to delete empty ImageStream", "imageStream", streamName)
+					}
+				}
+			}
+		}
+	}
+
+	// Delete the ImageBuild CR — Kubernetes cascading delete handles owned resources
+	// (PipelineRuns, TaskRuns, PVCs, Secrets, Pods, Services, ConfigMaps)
+	if err := k8sClient.Delete(ctx, build); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to delete build: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("build %q deleted", name)})
+}
+
+// resolveImageStreamRefs extracts the ImageStream name and the set of tags
+// this build pushed to from its internal registry URLs.
+// URL pattern: image-registry.openshift-image-registry.svc:5000/{namespace}/{stream}:{tag}
+func resolveImageStreamRefs(build *automotivev1alpha1.ImageBuild) (string, []string) {
+	prefix := defaultInternalRegistryURL + "/"
+	var streamName string
+	var tags []string
+	for _, ref := range []string{build.Spec.GetContainerPush(), build.Spec.GetExportOCI()} {
+		after, ok := strings.CutPrefix(ref, prefix)
+		if !ok {
+			continue
+		}
+		// "ns/name:tag" -> ["ns", "name:tag"]
+		parts := strings.SplitN(after, "/", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		// "name:tag" -> name, tag
+		nameTag := strings.SplitN(parts[1], ":", 2)
+		name := nameTag[0]
+		if name == "" {
+			continue
+		}
+		streamName = name
+		if len(nameTag) == 2 && nameTag[1] != "" {
+			tags = append(tags, nameTag[1])
+		}
+	}
+	return streamName, tags
 }
 
 func (a *APIServer) handleStreamLogs(c *gin.Context) {

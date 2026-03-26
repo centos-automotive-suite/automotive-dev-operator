@@ -785,3 +785,27 @@ func (h *Handler) handleFileUploads(
 	fmt.Println("Local files uploaded. Build will proceed.")
 	return nil
 }
+
+// RunDelete handles `caib image delete`.
+func (h *Handler) RunDelete(_ *cobra.Command, args []string) {
+	ctx := context.Background()
+	buildName := args[0]
+
+	if strings.TrimSpace(*h.opts.ServerURL) == "" {
+		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
+		return
+	}
+
+	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
+	if err := api.DeleteBuild(ctx, buildName); err != nil {
+		h.handleError(err)
+		return
+	}
+
+	fmt.Printf("Build %q deleted\n", buildName)
+}
