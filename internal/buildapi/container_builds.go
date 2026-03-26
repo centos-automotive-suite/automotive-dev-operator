@@ -451,9 +451,13 @@ func (a *APIServer) getContainerBuild(c *gin.Context, name string) {
 	}
 
 	// Mint a fresh registry token for completed/failed internal registry builds
-	if cb.Spec.UseServiceAccountAuth &&
+	// that belong to the requesting user
+	requester := a.resolveRequester(c)
+	buildOwner := cb.Annotations["automotive.sdv.cloud.redhat.com/requested-by"]
+	if requester == buildOwner &&
+		cb.Spec.UseServiceAccountAuth &&
 		(cb.Status.Phase == phaseCompleted || cb.Status.Phase == phaseFailed) {
-		token, tokenErr := a.mintRegistryToken(ctx, c, namespace)
+		token, _, tokenErr := a.mintRegistryToken(ctx, c, namespace)
 		if tokenErr != nil {
 			a.log.Error(tokenErr, "failed to mint registry token for container build", "build", name)
 		} else {

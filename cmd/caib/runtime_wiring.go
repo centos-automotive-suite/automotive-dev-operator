@@ -7,6 +7,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/image"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/querycmd"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/sealedcmd"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/tokencmd"
 )
 
 type runtimeState struct {
@@ -26,6 +27,8 @@ type runtimeState struct {
 	WaitForBuild           *bool
 	CustomDefs             *[]string
 	AIBExtraArgs           *[]string
+	ExtraRepos             *[]string
+	Workspace              *string
 	FollowLogs             *bool
 	CompressionAlgo        *string
 	AuthToken              *string
@@ -82,6 +85,8 @@ func newRuntimeState() runtimeState {
 		WaitForBuild:           &waitForBuild,
 		CustomDefs:             &customDefs,
 		AIBExtraArgs:           &aibExtraArgs,
+		ExtraRepos:             &extraRepos,
+		Workspace:              &workspaceName,
 		FollowLogs:             &followLogs,
 		CompressionAlgo:        &compressionAlgo,
 		AuthToken:              &authToken,
@@ -127,6 +132,7 @@ type handlerSet struct {
 	download *downloadcmd.Handler
 	flash    *flashcmd.Handler
 	sealed   *sealedcmd.Handler
+	token    *tokencmd.Handler
 }
 
 func (s runtimeState) newHandlers() handlerSet {
@@ -147,6 +153,8 @@ func (s runtimeState) newHandlers() handlerSet {
 			WaitForBuild:              s.WaitForBuild,
 			CustomDefs:                s.CustomDefs,
 			AIBExtraArgs:              s.AIBExtraArgs,
+			ExtraRepos:                s.ExtraRepos,
+			Workspace:                 s.Workspace,
 			FollowLogs:                s.FollowLogs,
 			CompressionAlgo:           s.CompressionAlgo,
 			AuthToken:                 s.AuthToken,
@@ -221,6 +229,12 @@ func (s runtimeState) newHandlers() handlerSet {
 			InsecureSkipTLS:         s.InsecureSkipTLS,
 			HandleError:             handleError,
 		}),
+		token: tokencmd.NewHandler(tokencmd.Options{
+			ServerURL:       s.ServerURL,
+			AuthToken:       s.AuthToken,
+			InsecureSkipTLS: s.InsecureSkipTLS,
+			HandleError:     handleError,
+		}),
 	}
 }
 
@@ -238,6 +252,7 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		RunReseal:            h.sealed.RunReseal,
 		RunExtractForSigning: h.sealed.RunExtractForSigning,
 		RunInjectSigned:      h.sealed.RunInjectSigned,
+		RunToken:             h.token.RunToken,
 		GetDefaultArch:       getDefaultArch,
 
 		ServerURL:              s.ServerURL,
@@ -256,6 +271,8 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		WaitForBuild:           s.WaitForBuild,
 		CustomDefs:             s.CustomDefs,
 		AIBExtraArgs:           s.AIBExtraArgs,
+		ExtraRepos:             s.ExtraRepos,
+		Workspace:              s.Workspace,
 		FollowLogs:             s.FollowLogs,
 		CompressionAlgo:        s.CompressionAlgo,
 		ContainerPush:          s.ContainerPush,

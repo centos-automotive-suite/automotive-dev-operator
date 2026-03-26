@@ -464,6 +464,7 @@ func (r *ContainerBuildReconciler) buildShipwrightBuildRun(
 		output.PushSecret = &pushSecret
 	}
 
+	saName := automotivev1alpha1.BuildServiceAccountName
 	buildRun := &shipwrightv1beta1.BuildRun{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      buildRunName,
@@ -475,6 +476,7 @@ func (r *ContainerBuildReconciler) buildShipwrightBuildRun(
 			},
 		},
 		Spec: shipwrightv1beta1.BuildRunSpec{
+			ServiceAccount: &saName,
 			Build: shipwrightv1beta1.ReferencedBuild{
 				Spec: &shipwrightv1beta1.BuildSpec{
 					Source: &shipwrightv1beta1.Source{

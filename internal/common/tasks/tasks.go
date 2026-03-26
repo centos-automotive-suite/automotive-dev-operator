@@ -393,6 +393,15 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 						StringVal: "false",
 					},
 				},
+				{
+					Name:        "use-persistent-cache",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Use persistent build cache on the shared workspace PVC (true/false)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "false",
+					},
+				},
 			},
 			Results: []tektonv1.TaskResult{
 				{
@@ -814,6 +823,15 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 						StringVal: automotivev1alpha1.DefaultJumpstarterImage,
 					},
 				},
+				{
+					Name:        "use-persistent-cache",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Use persistent build cache on the shared workspace PVC (true/false)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "false",
+					},
+				},
 			},
 			Workspaces: []tektonv1.PipelineWorkspaceDeclaration{
 				{Name: "shared-workspace"},
@@ -970,6 +988,13 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 							Value: tektonv1.ParamValue{
 								Type:      tektonv1.ParamTypeString,
 								StringVal: "$(params.rebuild-builder)",
+							},
+						},
+						{
+							Name: "use-persistent-cache",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.use-persistent-cache)",
 							},
 						},
 					},
@@ -1769,7 +1794,7 @@ func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string)
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:      corev1.RestartPolicyNever,
-			ServiceAccountName: "pipeline",
+			ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
 			Containers: []corev1.Container{
 				{
 					Name:  "build-helper",

@@ -102,6 +102,7 @@ type ImageBuildReconciler struct {
 	RestConfig *rest.Config
 }
 
+// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=workspaces,verbs=get;update
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagebuilds,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagebuilds/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=imagebuilds/finalizers,verbs=update
@@ -114,7 +115,7 @@ type ImageBuildReconciler struct {
 // +kubebuilder:rbac:groups=image.openshift.io,resources=imagestreams,verbs=get;create
 // +kubebuilder:rbac:groups=tekton.dev,resources=tasks;pipelines;pipelineruns;taskruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create
+// +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create;get
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
@@ -368,6 +369,11 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 		// Cleanup transient secrets
 		r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
 
+		// Write lease back to workspace for reuse by subsequent builds
+		if fresh.Spec.Workspace != "" && fresh.Status.LeaseID != "" {
+			r.updateWorkspaceLease(ctx, fresh, log)
+		}
+
 		return ctrl.Result{}, nil
 	}
 
@@ -523,6 +529,13 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				StringVal: imageBuild.Spec.SecretRef,
 			},
 		},
+		{
+			Name: "use-persistent-cache",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: fmt.Sprintf("%t", imageBuild.Spec.BuildCachePVC != ""),
+			},
+		},
 	}
 
 	clusterRegistryRoute := ""
@@ -618,7 +631,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				},
 			}
 			tokenResp, err := clientset.CoreV1().ServiceAccounts(imageBuild.Namespace).
-				CreateToken(ctx, "pipeline", tokenReq, metav1.CreateOptions{})
+				CreateToken(ctx, automotivev1alpha1.BuildServiceAccountName, tokenReq, metav1.CreateOptions{})
 			if err != nil {
 				return fmt.Errorf("failed to create SA token for flash OCI credentials: %w", err)
 			}
@@ -745,10 +758,19 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 	}
 
 	// Determine the shared-workspace binding:
+	// - If BuildCachePVC is set, use it as the shared workspace for build cache persistence
 	// - If InputFilesServer is enabled and a PVC already exists (from upload phase), use it
 	// - Otherwise, use VolumeClaimTemplate to create a new PVC with proper zone affinity
 	var sharedWorkspaceBinding tektonv1.WorkspaceBinding
-	if imageBuild.Spec.GetInputFilesServer() && imageBuild.Status.PVCName != "" {
+	if imageBuild.Spec.BuildCachePVC != "" {
+		log.Info("Using build-cache PVC as shared workspace", "pvc", imageBuild.Spec.BuildCachePVC)
+		sharedWorkspaceBinding = tektonv1.WorkspaceBinding{
+			Name: "shared-workspace",
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: imageBuild.Spec.BuildCachePVC,
+			},
+		}
+	} else if imageBuild.Spec.GetInputFilesServer() && imageBuild.Status.PVCName != "" {
 		// Use existing PVC that contains uploaded files
 		log.Info("Using existing PVC with uploaded files", "pvc", imageBuild.Status.PVCName)
 		sharedWorkspaceBinding = tektonv1.WorkspaceBinding{
@@ -766,6 +788,8 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		var storageClassName *string
 		if imageBuild.Spec.StorageClass != "" {
 			storageClassName = &imageBuild.Spec.StorageClass
+		} else if operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.StorageClass != "" {
+			storageClassName = &operatorConfig.Spec.OSBuilds.StorageClass
 		}
 		sharedWorkspaceBinding = tektonv1.WorkspaceBinding{
 			Name: "shared-workspace",
@@ -885,7 +909,8 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			Params:     params,
 			Workspaces: pipelineWorkspaces,
 			TaskRunTemplate: tektonv1.PipelineTaskRunTemplate{
-				PodTemplate: podTemplate,
+				PodTemplate:        podTemplate,
+				ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
 			},
 		},
 	}
@@ -1418,8 +1443,25 @@ func (r *ImageBuildReconciler) createFlashTaskRun(
 	return nil
 }
 
-// cleanupTransientSecrets deletes any transient secrets created for this build
-// Uses retry logic to handle transient API errors
+// updateWorkspaceLease writes the acquired lease back to the workspace so subsequent builds can reuse it.
+func (r *ImageBuildReconciler) updateWorkspaceLease(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild, log logr.Logger) {
+	ws := &automotivev1alpha1.Workspace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Spec.Workspace, Namespace: imageBuild.Namespace}, ws); err != nil {
+		log.Error(err, "Failed to get workspace for lease write-back", "workspace", imageBuild.Spec.Workspace)
+		return
+	}
+	if ws.Spec.LeaseID == imageBuild.Status.LeaseID {
+		return
+	}
+	patch := client.MergeFrom(ws.DeepCopy())
+	ws.Spec.LeaseID = imageBuild.Status.LeaseID
+	if err := r.Patch(ctx, ws, patch); err != nil {
+		log.Error(err, "Failed to write lease back to workspace", "workspace", ws.Name, "lease", imageBuild.Status.LeaseID)
+	} else {
+		log.Info("Wrote lease back to workspace", "workspace", ws.Name, "lease", imageBuild.Status.LeaseID)
+	}
+}
+
 func (r *ImageBuildReconciler) cleanupTransientSecrets(
 	ctx context.Context,
 	imageBuild *automotivev1alpha1.ImageBuild,

@@ -9,5 +9,4 @@ roleRef:
   name: registry-editor
 subjects:
 - kind: ServiceAccount
-  name: pipeline
-  namespace: system
+  name: ado-build

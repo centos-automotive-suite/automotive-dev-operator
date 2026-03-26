@@ -26,6 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -195,7 +196,7 @@ func createInternalRegistrySecret(ctx context.Context, restCfg *rest.Config, nam
 		},
 	}
 	tokenResp, err := clientset.CoreV1().ServiceAccounts(namespace).
-		CreateToken(ctx, "pipeline", tokenReq, metav1.CreateOptions{})
+		CreateToken(ctx, automotivev1alpha1.BuildServiceAccountName, tokenReq, metav1.CreateOptions{})
 	if err != nil {
 		return "", fmt.Errorf("error creating SA token: %w", err)
 	}
@@ -286,14 +287,14 @@ func deleteImageStream(ctx context.Context, k8sClient client.Client, namespace, 
 
 // mintRegistryToken creates a fresh short-lived token for the pipeline SA
 // so the caller can pull images from the internal registry.
-func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, namespace string) (string, error) {
+func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, namespace string) (string, metav1.Time, error) {
 	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
-		return "", fmt.Errorf("error getting REST config for token mint: %w", err)
+		return "", metav1.Time{}, fmt.Errorf("error getting REST config for token mint: %w", err)
 	}
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return "", fmt.Errorf("error creating clientset for token mint: %w", err)
+		return "", metav1.Time{}, fmt.Errorf("error creating clientset for token mint: %w", err)
 	}
 	expSeconds := int64(4 * 3600)
 	tokenReq := &authnv1.TokenRequest{
@@ -302,11 +303,11 @@ func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, names
 		},
 	}
 	tokenResp, err := clientset.CoreV1().ServiceAccounts(namespace).
-		CreateToken(ctx, "pipeline", tokenReq, metav1.CreateOptions{})
+		CreateToken(ctx, automotivev1alpha1.BuildServiceAccountName, tokenReq, metav1.CreateOptions{})
 	if err != nil {
-		return "", fmt.Errorf("error creating token for SA pipeline in %s: %w", namespace, err)
+		return "", metav1.Time{}, fmt.Errorf("error creating token for SA %s in %s: %w", automotivev1alpha1.BuildServiceAccountName, namespace, err)
 	}
-	return tokenResp.Status.Token, nil
+	return tokenResp.Status.Token, tokenResp.Status.ExpirationTimestamp, nil
 }
 
 // APILimits holds configurable limits for the API server
@@ -520,6 +521,7 @@ func (a *APIServer) createRouter() *gin.Engine {
 			buildsGroup.GET("/:name/progress", a.handleGetProgress)
 			buildsGroup.GET("/:name/template", a.handleGetBuildTemplate)
 			buildsGroup.POST("/:name/uploads", a.handleUploadFiles)
+			buildsGroup.POST("/:name/token", a.handleCreateBuildToken)
 		}
 
 		flashGroup := v1.Group("/flash")
@@ -557,6 +559,8 @@ func (a *APIServer) createRouter() *gin.Engine {
 				grp.GET("/:name/logs", a.handleSealedLogs)
 			}
 		}
+
+		a.registerWorkspaceRoutes(v1)
 
 		// Register catalog routes with authentication
 		catalogClient, err := a.getCatalogClient()
@@ -652,6 +656,81 @@ func (a *APIServer) handleGetBuild(c *gin.Context) {
 	name := c.Param("name")
 	a.log.Info("get build", "build", name, "reqID", c.GetString("reqID"))
 	a.getBuild(c, name)
+}
+
+func (a *APIServer) handleCreateBuildToken(c *gin.Context) {
+	name := c.Param("name")
+	a.log.Info("token requested", "build", name, "reqID", c.GetString("reqID"))
+
+	namespace := resolveNamespace()
+	k8sClient, err := getClientFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
+		return
+	}
+
+	ctx := c.Request.Context()
+	build := &automotivev1alpha1.ImageBuild{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, build); err != nil {
+		if k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "build not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching build: %v", err)})
+		return
+	}
+
+	// Verify the requesting user owns this build
+	requester := a.resolveRequester(c)
+	owner := build.Annotations["automotive.sdv.cloud.redhat.com/requested-by"]
+	if owner != requester {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you can only request tokens for your own builds"})
+		return
+	}
+
+	if !build.Spec.GetUseServiceAccountAuth() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "build does not use the internal registry"})
+		return
+	}
+
+	if build.Status.Phase != phaseCompleted {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("build is not completed (current: %s)", build.Status.Phase)})
+		return
+	}
+
+	// Determine the image ref first — only mint tokens if there's an internal image
+	imageRef := build.Spec.GetExportOCI()
+	if imageRef == "" {
+		imageRef = build.Spec.GetContainerPush()
+	}
+	if imageRef == "" || !strings.HasPrefix(imageRef, defaultInternalRegistryURL+"/") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "build has no image in the internal registry"})
+		return
+	}
+
+	token, expiresAt, err := a.mintRegistryToken(ctx, c, namespace)
+	if err != nil {
+		a.log.Error(err, "failed to mint registry token", "build", name)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to mint registry token: %v", err)})
+		return
+	}
+
+	registryHost := ""
+	externalRoute, routeErr := getExternalRegistryRoute(ctx, k8sClient, namespace)
+	if routeErr == nil && externalRoute != "" {
+		imageRef = translateToExternalURL(imageRef, externalRoute)
+		registryHost = externalRoute
+	} else {
+		registryHost = strings.SplitN(imageRef, "/", 2)[0]
+	}
+
+	writeJSON(c, http.StatusOK, TokenResponse{
+		Registry:  registryHost,
+		Username:  "serviceaccount",
+		Token:     token,
+		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
+		Image:     imageRef,
+	})
 }
 
 func (a *APIServer) handleStreamLogs(c *gin.Context) {
@@ -1488,6 +1567,204 @@ func buildExportSpec(req *BuildRequest) *automotivev1alpha1.ExportSpec {
 	return export
 }
 
+// resolveExtraRepos processes --extra-repo flags (workspace:path pairs), starts HTTP
+// servers in the workspace pods, and injects extra_repos into the build's CustomDefs.
+func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, req *BuildRequest) error {
+	if len(req.ExtraRepos) == 0 {
+		return nil
+	}
+
+	namespace := resolveNamespace()
+	basePort := 8080
+
+	type repoEntry struct {
+		ID      string `json:"id"`
+		BaseURL string `json:"baseurl"`
+	}
+	repos := make([]repoEntry, 0, len(req.ExtraRepos))
+
+	for i, entry := range req.ExtraRepos {
+		parts := strings.SplitN(entry, ":", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("invalid --extra-repo %q: must be workspace-name:/path", entry)
+		}
+		wsName, repoPath := parts[0], parts[1]
+		port := basePort + i
+
+		// Look up the workspace pod
+		ws := &automotivev1alpha1.Workspace{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: wsName}, ws); err != nil {
+			return fmt.Errorf("workspace %q not found: %w", wsName, err)
+		}
+		if ws.Status.Phase != phaseRunning {
+			return fmt.Errorf("workspace %q is not running (phase: %s)", wsName, ws.Status.Phase)
+		}
+
+		pod := &corev1.Pod{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ws.Status.PodName}, pod); err != nil {
+			return fmt.Errorf("workspace pod %q not found: %w", ws.Status.PodName, err)
+		}
+		podIP := pod.Status.PodIP
+		if podIP == "" {
+			return fmt.Errorf("workspace pod %q has no IP", ws.Status.PodName)
+		}
+
+		// Start HTTP server in the workspace (background, fire-and-forget).
+		// Redirect shell's own FDs first so runc exec doesn't block waiting for SPDY pipes.
+		cmd := []string{"/bin/sh", "-c",
+			fmt.Sprintf("exec 0</dev/null 1>/dev/null 2>/dev/null; cd %s && python3 -m http.server %d &", shellQuote(repoPath), port)}
+		if err := podExec(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
+			return fmt.Errorf("starting HTTP server in workspace %q: %w", wsName, err)
+		}
+
+		repoURL := fmt.Sprintf("http://%s:%d", podIP, port)
+		repos = append(repos, repoEntry{
+			ID:      fmt.Sprintf("workspace-%s", wsName),
+			BaseURL: repoURL,
+		})
+		a.log.Info("Extra repo configured", "workspace", wsName, "url", repoURL)
+	}
+
+	reposJSON, err := json.Marshal(repos)
+	if err != nil {
+		return fmt.Errorf("marshaling extra_repos: %w", err)
+	}
+	req.CustomDefs = append(req.CustomDefs, fmt.Sprintf("extra_repos=%s", string(reposJSON)))
+	return nil
+}
+
+// resolveWorkspaceForBuild resolves a workspace reference for a build:
+// - Finds the workspace or auto-creates it if it doesn't exist
+// - Creates/finds a build-cache PVC for osbuild checkpoint persistence
+// - Forwards the workspace's lease if the build has flash enabled but no explicit lease
+// - Starts an HTTP file server in the workspace pod and injects workspace_url as a custom define
+// Returns the build-cache PVC name.
+func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *BuildRequest) (string, error) {
+	operatorConfig, _ := loadOperatorConfigFn(ctx, k8sClient, namespace)
+	var wsConfig *automotivev1alpha1.WorkspacesConfig
+	if operatorConfig != nil {
+		wsConfig = operatorConfig.Spec.Workspaces
+	}
+
+	ws := &automotivev1alpha1.Workspace{}
+	err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: wsName}, ws)
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			return "", fmt.Errorf("checking workspace %q: %w", wsName, err)
+		}
+		// Auto-create workspace with defaults from OperatorConfig
+		ws = &automotivev1alpha1.Workspace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      wsName,
+				Namespace: namespace,
+			},
+			Spec: automotivev1alpha1.WorkspaceSpec{
+				Owner:        requester,
+				PVCSize:      wsConfig.GetPVCSize(),
+				StorageClass: wsConfig.GetStorageClass(),
+				NodeSelector: wsConfig.GetNodeSelector(),
+			},
+		}
+		if err := k8sClient.Create(ctx, ws); err != nil {
+			return "", fmt.Errorf("creating workspace %q: %w", wsName, err)
+		}
+		a.log.Info("Auto-created workspace for build", "workspace", wsName, "requester", requester)
+	} else {
+		if ws.Spec.Owner != requester {
+			return "", fmt.Errorf("workspace %q not found", wsName)
+		}
+	}
+
+	// Forward workspace lease if flash is enabled and no explicit lease was provided
+	if req.FlashEnabled && req.FlashLeaseName == "" && ws.Spec.LeaseID != "" {
+		req.FlashLeaseName = ws.Spec.LeaseID
+	}
+
+	// Start file server in workspace pod and inject workspace_url for manifest use
+	// (e.g. add_files: [{path: /usr/bin/foo, url: $workspace_url/my-binary}])
+	if ws.Status.Phase == phaseRunning && ws.Status.PodName != "" && restCfg != nil {
+		pod := &corev1.Pod{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ws.Status.PodName}, pod); err == nil && pod.Status.PodIP != "" {
+			const wsFileServerPort = 9090
+			// Redirect shell's own FDs first so runc exec doesn't block waiting for SPDY pipes.
+			cmd := []string{"/bin/sh", "-c",
+				fmt.Sprintf("exec 0</dev/null 1>/dev/null 2>/dev/null; python3 -m http.server %d -d /workspace &", wsFileServerPort)}
+			if err := podExec(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
+				a.log.Error(err, "Failed to start workspace file server", "workspace", wsName)
+			} else {
+				wsURL := fmt.Sprintf("http://%s:%d", pod.Status.PodIP, wsFileServerPort)
+				req.CustomDefs = append(req.CustomDefs, fmt.Sprintf("workspace_url=%s", wsURL))
+				a.log.Info("Workspace file server started", "workspace", wsName, "url", wsURL)
+			}
+		}
+	}
+
+	// Find existing build-cache PVC via labels, or create a new one
+	buildCacheLabels := map[string]string{
+		"automotive.sdv.cloud.redhat.com/workspace": wsName,
+		"app.kubernetes.io/component":               "build-cache",
+	}
+	pvcList := &corev1.PersistentVolumeClaimList{}
+	if err := k8sClient.List(ctx, pvcList,
+		client.InNamespace(namespace),
+		client.MatchingLabels(buildCacheLabels),
+	); err != nil {
+		return "", fmt.Errorf("listing build-cache PVCs: %w", err)
+	}
+	for i := range pvcList.Items {
+		if pvcList.Items[i].DeletionTimestamp == nil {
+			return pvcList.Items[i].Name, nil
+		}
+	}
+
+	// Determine cache PVC size and storage class from OperatorConfig
+	cacheSize := "20Gi"
+	var storageClassName *string
+	if wsConfig != nil {
+		if wsConfig.BuildCacheSize != "" {
+			cacheSize = wsConfig.BuildCacheSize
+		}
+		if sc := wsConfig.GetStorageClass(); sc != "" {
+			storageClassName = &sc
+		}
+	}
+	cacheSizeQty, err := resource.ParseQuantity(cacheSize)
+	if err != nil {
+		return "", fmt.Errorf("invalid buildCacheSize %q: %w", cacheSize, err)
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: wsName + "-build-cache-",
+			Namespace:    namespace,
+			Labels:       buildCacheLabels,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: automotivev1alpha1.GroupVersion.String(),
+					Kind:       "Workspace",
+					Name:       ws.Name,
+					UID:        ws.UID,
+				},
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			StorageClassName: storageClassName,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: cacheSizeQty,
+				},
+			},
+		},
+	}
+	if err := k8sClient.Create(ctx, pvc); err != nil {
+		return "", fmt.Errorf("creating build-cache PVC: %w", err)
+	}
+
+	a.log.Info("Created build-cache PVC", "workspace", wsName, "pvc", pvc.Name, "size", cacheSize)
+	return pvc.Name, nil
+}
+
 // buildAIBSpec creates AIBSpec configuration from build request
 func buildAIBSpec(req *BuildRequest, manifest, manifestFileName string, inputFilesServer bool) *automotivev1alpha1.AIBSpec {
 	return &automotivev1alpha1.AIBSpec{
@@ -1525,6 +1802,24 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
+	// Resolve --extra-repo workspace:path pairs into extra_repos custom defines
+	if len(req.ExtraRepos) > 0 {
+		k8sClientForRepos, err := getClientFromRequest(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create kubernetes client"})
+			return
+		}
+		restCfgForRepos, err := getRESTConfigFromRequest(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
+			return
+		}
+		if err := a.resolveExtraRepos(c.Request.Context(), k8sClientForRepos, restCfgForRepos, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	// Append a short random suffix to ensure unique names for parallel builds
 	req.Name = fmt.Sprintf("%s-%s", req.Name, uuid.New().String()[:5])
 
@@ -1537,6 +1832,22 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	ctx := c.Request.Context()
 	namespace := resolveNamespace()
 	requestedBy := a.resolveRequester(c)
+
+	// Resolve --workspace: create/find build-cache PVC, forward lease, start file server
+	var buildCachePVCName string
+	if req.Workspace != "" {
+		restCfg, restErr := getRESTConfigFromRequest(c)
+		if restErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
+			return
+		}
+		pvcName, wsErr := a.resolveWorkspaceForBuild(ctx, k8sClient, restCfg, namespace, req.Workspace, requestedBy, &req)
+		if wsErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": wsErr.Error()})
+			return
+		}
+		buildCachePVCName = pvcName
+	}
 
 	existing := &automotivev1alpha1.ImageBuild{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: namespace}, existing); err == nil {
@@ -1599,6 +1910,8 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			AIB:           buildAIBSpec(&req, req.Manifest, req.ManifestFileName, needsUpload),
 			Export:        buildExportSpec(&req),
 			Flash:         flashSpec,
+			BuildCachePVC: buildCachePVCName,
+			Workspace:     req.Workspace,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
@@ -1781,11 +2094,15 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 	}
 
 	// Mint a fresh registry token only for completed/failed internal registry builds
+	// that belong to the requesting user
 	var registryToken string
-	if build.Spec.GetUseServiceAccountAuth() &&
+	requester := a.resolveRequester(c)
+	buildOwner := build.Annotations["automotive.sdv.cloud.redhat.com/requested-by"]
+	if requester == buildOwner &&
+		build.Spec.GetUseServiceAccountAuth() &&
 		(build.Status.Phase == phaseCompleted || build.Status.Phase == phaseFailed) {
 		var tokenErr error
-		registryToken, tokenErr = a.mintRegistryToken(ctx, c, namespace)
+		registryToken, _, tokenErr = a.mintRegistryToken(ctx, c, namespace)
 		if tokenErr != nil {
 			a.log.Error(tokenErr, "failed to mint registry token", "build", name)
 			tokenWarning := fmt.Sprintf("failed to mint registry token: %v", tokenErr)
@@ -2954,7 +3271,8 @@ func (a *APIServer) createFlash(c *gin.Context) {
 			},
 		},
 		Spec: tektonv1.TaskRunSpec{
-			TaskSpec: &flashTask.Spec,
+			ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
+			TaskSpec:           &flashTask.Spec,
 			Params: []tektonv1.Param{
 				{Name: "image-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: req.ImageRef}},
 				{Name: "exporter-selector", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: exporterSelector}},

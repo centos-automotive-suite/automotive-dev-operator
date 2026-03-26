@@ -47,6 +47,22 @@ const (
 
 	// DefaultFlashLeaseDuration is the default Jumpstarter lease duration in HH:MM:SS format
 	DefaultFlashLeaseDuration = "03:00:00"
+
+	// DefaultToolchainImage is the default container image for workspace toolchains
+	DefaultToolchainImage = "quay.io/centos-sig-automotive/autosd-toolchain:latest"
+
+	// DefaultWorkspaceArch is the default target architecture for workspaces
+	DefaultWorkspaceArch = "arm64"
+
+	// DefaultWorkspacePVCSize is the default PVC size for workspace storage
+	DefaultWorkspacePVCSize = "10Gi"
+
+	// DefaultAutoPauseTimeoutMinutes is the default idle timeout in minutes before a workspace is auto-paused
+	DefaultAutoPauseTimeoutMinutes int32 = 30
+
+	// BuildServiceAccountName is the dedicated SA used by build pods and token minting.
+	// Using a dedicated SA avoids collisions with the shared "pipeline" SA.
+	BuildServiceAccountName = "ado-build"
 )
 
 // ImagesConfig defines container image references used by the operator
@@ -299,6 +315,121 @@ type ContainerBuildsConfig struct {
 	UploadTimeoutMinutes int32 `json:"uploadTimeoutMinutes,omitempty"`
 }
 
+// WorkspacesConfig defines configuration for developer workspaces
+type WorkspacesConfig struct {
+	// ToolchainImage is the container image for workspace toolchains
+	// +optional
+	ToolchainImage string `json:"toolchainImage,omitempty"`
+
+	// DefaultArchitecture is the default target architecture for workspaces
+	// +optional
+	DefaultArchitecture string `json:"defaultArchitecture,omitempty"`
+
+	// PVCSize is the size for persistent volume claims created for workspace storage
+	// +optional
+	PVCSize string `json:"pvcSize,omitempty"`
+
+	// Resources defines the default CPU and memory requests/limits for workspace containers
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// MaxResources defines the maximum CPU and memory that users can request for workspace containers
+	// +optional
+	MaxResources *corev1.ResourceRequirements `json:"maxResources,omitempty"`
+
+	// StorageClass specifies the storage class for workspace PVCs
+	// If empty, the cluster default storage class is used
+	// +optional
+	StorageClass string `json:"storageClass,omitempty"`
+
+	// NodeSelector specifies node labels that workspace pods must match for scheduling
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations specifies tolerations to be added to workspace pods
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// TmpfsBuildDir allows users to mount a tmpfs-backed emptyDir at /tmp/build in workspace pods
+	// When enabled, users can opt-in per workspace via --tmpfs on create
+	// +optional
+	TmpfsBuildDir bool `json:"tmpfsBuildDir,omitempty"`
+
+	// BuildCacheSize is the size of the PVC created for build cache persistence (default: "20Gi")
+	// +optional
+	BuildCacheSize string `json:"buildCacheSize,omitempty"`
+
+	// AutoPauseTimeoutMinutes is the cluster-wide default idle timeout in minutes before
+	// a workspace is automatically paused. Overridden per-workspace via spec.autoPauseTimeoutMinutes.
+	// Must be > 0. To disable auto-pause for a specific workspace, set its
+	// spec.autoPauseTimeoutMinutes to 0.
+	// Default: 30
+	// +optional
+	AutoPauseTimeoutMinutes int32 `json:"autoPauseTimeoutMinutes,omitempty"`
+}
+
+// GetToolchainImage returns the toolchain image, falling back to the default
+func (c *WorkspacesConfig) GetToolchainImage() string {
+	if c != nil && c.ToolchainImage != "" {
+		return c.ToolchainImage
+	}
+	return DefaultToolchainImage
+}
+
+// GetDefaultArchitecture returns the default workspace architecture, falling back to the default
+func (c *WorkspacesConfig) GetDefaultArchitecture() string {
+	if c != nil && c.DefaultArchitecture != "" {
+		return c.DefaultArchitecture
+	}
+	return DefaultWorkspaceArch
+}
+
+// GetPVCSize returns the workspace PVC size, falling back to the default
+func (c *WorkspacesConfig) GetPVCSize() string {
+	if c != nil && c.PVCSize != "" {
+		return c.PVCSize
+	}
+	return DefaultWorkspacePVCSize
+}
+
+// GetTmpfsBuildDir returns whether tmpfs build directories are allowed for workspaces
+func (c *WorkspacesConfig) GetTmpfsBuildDir() bool {
+	return c != nil && c.TmpfsBuildDir
+}
+
+// GetStorageClass returns the workspace storage class, or empty string for cluster default
+func (c *WorkspacesConfig) GetStorageClass() string {
+	if c != nil {
+		return c.StorageClass
+	}
+	return ""
+}
+
+// GetNodeSelector returns the workspace node selector labels, or nil if not configured
+func (c *WorkspacesConfig) GetNodeSelector() map[string]string {
+	if c != nil {
+		return c.NodeSelector
+	}
+	return nil
+}
+
+// GetTolerations returns the workspace tolerations, or nil if not configured
+func (c *WorkspacesConfig) GetTolerations() []corev1.Toleration {
+	if c != nil {
+		return c.Tolerations
+	}
+	return nil
+}
+
+// GetAutoPauseTimeoutMinutes returns the global auto-pause timeout in minutes.
+// Returns DefaultAutoPauseTimeoutMinutes (30) when not configured.
+func (c *WorkspacesConfig) GetAutoPauseTimeoutMinutes() int32 {
+	if c != nil && c.AutoPauseTimeoutMinutes > 0 {
+		return c.AutoPauseTimeoutMinutes
+	}
+	return DefaultAutoPauseTimeoutMinutes
+}
+
 // OperatorConfigSpec defines the desired state of OperatorConfig
 type OperatorConfigSpec struct {
 	// OSBuilds defines the configuration for OS build operations
@@ -320,6 +451,10 @@ type OperatorConfigSpec struct {
 	// Jumpstarter defines configuration for Jumpstarter device flashing integration
 	// +optional
 	Jumpstarter *JumpstarterConfig `json:"jumpstarter,omitempty"`
+
+	// Workspaces defines configuration for developer workspaces
+	// +optional
+	Workspaces *WorkspacesConfig `json:"workspaces,omitempty"`
 }
 
 // OSBuildsConfig defines configuration for OS build operations
@@ -344,6 +479,11 @@ type OSBuildsConfig struct {
 	// Default: "8Gi"
 	// +optional
 	PVCSize string `json:"pvcSize,omitempty"`
+
+	// StorageClass specifies the storage class for build PVCs
+	// If empty, the cluster default storage class is used
+	// +optional
+	StorageClass string `json:"storageClass,omitempty"`
 
 	// RuntimeClassName specifies the runtime class to use for the build pod
 	// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
@@ -439,6 +579,10 @@ type OperatorConfigStatus struct {
 
 	// JumpstarterAvailable indicates if Jumpstarter is available (explicitly configured or local CRDs detected)
 	JumpstarterAvailable bool `json:"jumpstarterAvailable,omitempty"`
+
+	// UserNamespacesSupported indicates if the cluster supports user namespaces in pods
+	// (SCC userNamespaceLevel field). When false, workspace pods use privileged mode.
+	UserNamespacesSupported bool `json:"userNamespacesSupported,omitempty"`
 }
 
 // +kubebuilder:object:root=true

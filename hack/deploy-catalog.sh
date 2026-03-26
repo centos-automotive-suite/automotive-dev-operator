@@ -251,11 +251,11 @@ echo "=========================================="
 
 echo ""
 echo "Saving originals of git-tracked files modified during build..."
-ORIG_CATALOGSOURCE=$(mktemp /tmp/catalogsource-orig.XXXXXX.yaml)
+ORIG_CATALOGSOURCE=$(mktemp /tmp/catalogsource-orig.XXXXXX)
 if ! cp catalogsource.yaml "$ORIG_CATALOGSOURCE"; then
     rm -f "$ORIG_CATALOGSOURCE"; ORIG_CATALOGSOURCE=""; exit 1
 fi
-ORIG_KUSTOMIZATION=$(mktemp /tmp/kustomization-orig.XXXXXX.yaml)
+ORIG_KUSTOMIZATION=$(mktemp /tmp/kustomization-orig.XXXXXX)
 if ! cp config/manager/kustomization.yaml "$ORIG_KUSTOMIZATION"; then
     rm -f "$ORIG_KUSTOMIZATION"; ORIG_KUSTOMIZATION=""; exit 1
 fi

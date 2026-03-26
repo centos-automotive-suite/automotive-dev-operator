@@ -46,6 +46,8 @@ type Options struct {
 	WaitForBuild           *bool
 	CustomDefs             *[]string
 	AIBExtraArgs           *[]string
+	ExtraRepos             *[]string
+	Workspace              *string
 	FollowLogs             *bool
 	CompressionAlgo        *string
 	AuthToken              *string
@@ -417,6 +419,8 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		StorageClass:           *h.opts.StorageClass,
 		CustomDefs:             *h.opts.CustomDefs,
 		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		ExtraRepos:             *h.opts.ExtraRepos,
+		Workspace:              *h.opts.Workspace,
 		Compression:            *h.opts.CompressionAlgo,
 		ContainerPush:          *h.opts.ContainerPush,
 		BuildDiskImage:         *h.opts.BuildDiskImage,
@@ -652,6 +656,8 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		StorageClass:           *h.opts.StorageClass,
 		CustomDefs:             *h.opts.CustomDefs,
 		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		ExtraRepos:             *h.opts.ExtraRepos,
+		Workspace:              *h.opts.Workspace,
 		Compression:            *h.opts.CompressionAlgo,
 		ExportOCI:              *h.opts.ExportOCI,
 	}

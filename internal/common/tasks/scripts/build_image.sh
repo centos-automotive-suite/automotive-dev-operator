@@ -1,40 +1,26 @@
 # NOTE: common.sh is prepended to this script at embed time.
 
 # Initialize optimizations
-echo "DEBUG: Starting build script"
 WORKSPACE_PATH="$(workspaces.shared-workspace.path)"
-echo "DEBUG: WORKSPACE_PATH=$WORKSPACE_PATH"
 detect_stat_command
-echo "DEBUG: Stat command detected"
 
 # Make the internal registry trusted
 # TODO think about whether this is really the right approach
 setup_container_config
-echo "DEBUG: Container config set up"
 setup_var_tmp
-echo "DEBUG: /var/tmp set up"
 
 umask 0077
-echo "DEBUG: umask set"
 
 setup_cluster_auth
-echo "DEBUG: Cluster auth set up"
-echo "DEBUG: About to read registry credentials"
 
 # Read registry credentials from workspace and set up auth
 read_registry_creds "/workspace/registry-auth"
-echo "DEBUG: Registry credentials read, setting up auth"
 setup_registry_auth || echo "No custom registry auth found, using cluster auth only"
-echo "DEBUG: Registry auth setup completed"
 
 # Use REGISTRY_AUTH_FILE for buildah if available
-echo "DEBUG: Setting up buildah registry auth"
 [ -n "$REGISTRY_AUTH_FILE" ] && export BUILDAH_REGISTRY_AUTH_FILE="$REGISTRY_AUTH_FILE"
-echo "DEBUG: Buildah auth set up"
 
-echo "DEBUG: Reading manifest file path"
 MANIFEST_FILE=$(cat /tekton/results/manifest-file-path)
-echo "DEBUG: MANIFEST_FILE=$MANIFEST_FILE"
 if [ -z "$MANIFEST_FILE" ]; then
     echo "Error: No manifest file path provided"
     exit 1
@@ -49,6 +35,40 @@ fi
 
 if mountpoint -q "$OSBUILD_PATH"; then
     exit 0
+fi
+
+if [ "$(params.use-persistent-cache)" = "true" ]; then
+  BUILD_DIR="$WORKSPACE_PATH/build-cache"
+
+  # OpenShift applies setgid + namespace GID on the PVC mount point every time
+  # a new pod mounts it. Clear setgid BEFORE creating any directories.
+  chmod g-s "$WORKSPACE_PATH" 2>/dev/null || true
+
+  mkdir -p "$BUILD_DIR"
+  echo "Using persistent build cache at $BUILD_DIR"
+
+  # OpenShift re-applies setgid + namespace GID on PVC directories each pod
+  # mount. Clear setgid so NEW files get root GID (0) going forward.
+  find "$BUILD_DIR" -type d -perm /2000 -exec chmod g-s {} + 2>/dev/null || true
+
+  # Kubernetes also changes GIDs on ALL existing files to the namespace
+  # supplemental GID at mount time. Reset to root GID so osbuild's cp -a
+  # doesn't try to preserve namespace GIDs on FAT (EFI) partitions.
+  chown -R :0 "$BUILD_DIR" 2>/dev/null || true
+
+  echo "Cleaning up stale artifacts from persistent workspace..."
+  for item in "$WORKSPACE_PATH"/*; do
+    [ "$(basename "$item")" = "build-cache" ] && continue
+    rm -rf "$item"
+  done
+
+  for orphan in "$BUILD_DIR"/image_output--*; do
+    [ -e "$orphan" ] || break
+    echo "Removing orphaned build output: $(basename "$orphan")"
+    rm -rf "$orphan"
+  done
+else
+  BUILD_DIR="/_build"
 fi
 
 install_custom_ca_certs
@@ -221,8 +241,8 @@ with open(f, 'w') as fh: json.dump(d, fh)
 
   if [ "$BUILDER_CACHED" = "false" ]; then
     echo "Builder image not found, building..."
-    echo "Running: aib build-builder --distro $(params.distro) --build-dir /_build --cache /_build/dnf-cache ${CUSTOM_DEFS_ARGS[*]} $LOCAL_BUILDER_IMAGE"
-    aib --verbose build-builder --build-dir /_build --cache /_build/dnf-cache --distro "$(params.distro)" "${CUSTOM_DEFS_ARGS[@]}" "$LOCAL_BUILDER_IMAGE"
+    echo "Running: aib build-builder --distro $(params.distro) --build-dir $BUILD_DIR --cache $BUILD_DIR/dnf-cache ${CUSTOM_DEFS_ARGS[*]} $LOCAL_BUILDER_IMAGE"
+    aib --verbose build-builder --build-dir "$BUILD_DIR" --cache "$BUILD_DIR/dnf-cache" --distro "$(params.distro)" "${CUSTOM_DEFS_ARGS[@]}" "$LOCAL_BUILDER_IMAGE"
 
     echo "Built local image: $LOCAL_BUILDER_IMAGE"
     echo "Pushing to cluster registry: $TARGET_BUILDER_IMAGE"
@@ -289,10 +309,15 @@ fi
 
 # Common build arguments used across all modes
 declare -a COMMON_BUILD_ARGS=(
-  --build-dir=/_build
-  --cache=/_build/dnf-cache
-  --osbuild-manifest=/_build/image.json
+  --build-dir="$BUILD_DIR"
+  --cache="$BUILD_DIR/dnf-cache"
+  --osbuild-manifest="$BUILD_DIR/image.json"
 )
+
+if [ "$(params.use-persistent-cache)" = "true" ]; then
+  COMMON_BUILD_ARGS+=(--define "reproducible_image=true")
+  COMMON_BUILD_ARGS+=(--cache-max-size=unlimited)
+fi
 
 case "$BUILD_MODE" in
     bootc)
@@ -500,7 +525,7 @@ else
     echo "No disk image created (container-only build)"
 fi
 
-cp -v /_build/image.json "$WORKSPACE_PATH/image.json" || echo "Failed to copy image.json"
+cp -v "$BUILD_DIR/image.json" "$WORKSPACE_PATH/image.json" || echo "Failed to copy image.json"
 
 echo "Contents of shared workspace:"
 ls -la "$WORKSPACE_PATH/"

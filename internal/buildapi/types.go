@@ -123,6 +123,8 @@ type BuildRequest struct {
 	StorageClass           string               `json:"storageClass"`
 	CustomDefs             []string             `json:"customDefs"`
 	AIBExtraArgs           []string             `json:"aibExtraArgs"`
+	ExtraRepos             []string             `json:"extraRepos,omitempty"` // workspace-name:/path pairs
+	Workspace              string               `json:"workspace,omitempty"`  // workspace name for build caching and lease forwarding
 	Compression            string               `json:"compression,omitempty"`
 	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`
 	PushRepository         string               `json:"pushRepository,omitempty"`
@@ -246,6 +248,15 @@ type BuildParameters struct {
 	FlashLeaseDuration     string `json:"flashLeaseDuration,omitempty"`
 	FlashLeaseName         string `json:"flashLeaseName,omitempty"`
 	UseServiceAccountAuth  bool   `json:"useServiceAccountAuth,omitempty"`
+}
+
+// TokenResponse is returned by the token endpoint for internal registry builds
+type TokenResponse struct {
+	Registry  string `json:"registry"`
+	Username  string `json:"username"`
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expiresAt"`
+	Image     string `json:"image"`
 }
 
 // BuildListItem represents a build in the list API

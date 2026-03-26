@@ -464,12 +464,13 @@ func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automo
 			Tasks:      pipelineTasks,
 		},
 		Workspaces: workspaces,
+		TaskRunTemplate: tektonv1.PipelineTaskRunTemplate{
+			ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
+		},
 	}
 	if nodeArch := archToNodeArch(sealed.Spec.Architecture); nodeArch != "" {
-		prSpec.TaskRunTemplate = tektonv1.PipelineTaskRunTemplate{
-			PodTemplate: &pod.Template{
-				NodeSelector: map[string]string{corev1.LabelArchStable: nodeArch},
-			},
+		prSpec.TaskRunTemplate.PodTemplate = &pod.Template{
+			NodeSelector: map[string]string{corev1.LabelArchStable: nodeArch},
 		}
 	}
 	pr := &tektonv1.PipelineRun{
