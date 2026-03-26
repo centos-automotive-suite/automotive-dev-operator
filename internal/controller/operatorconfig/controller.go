@@ -638,15 +638,21 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		return fmt.Errorf("failed to create/update pipeline: %w", err)
 	}
 
-	// On OpenShift, bind the pipeline SA to the privileged SCC for build pods
+	// Create the dedicated build SA (used by Tekton pods and token minting)
+	buildSA := r.buildBuildServiceAccount(config.Namespace)
+	if err := r.createOrUpdate(ctx, buildSA, config); err != nil {
+		return fmt.Errorf("failed to create/update build service account: %w", err)
+	}
+
+	// On OpenShift, bind the build SA to the privileged SCC for build pods
 	if r.detectOpenShift(ctx, config.Namespace) {
-		pipelineClusterRole := r.buildPipelineSCCClusterRole()
-		if err := r.createOrUpdate(ctx, pipelineClusterRole, config); err != nil {
-			return fmt.Errorf("failed to create/update pipeline SCC cluster role: %w", err)
+		buildClusterRole := r.buildBuildSCCClusterRole()
+		if err := r.createOrUpdate(ctx, buildClusterRole, config); err != nil {
+			return fmt.Errorf("failed to create/update build SCC cluster role: %w", err)
 		}
-		pipelineBinding := r.buildPipelineSCCRoleBinding(config.Namespace)
-		if err := r.createOrUpdate(ctx, pipelineBinding, config); err != nil {
-			return fmt.Errorf("failed to create/update pipeline SCC role binding: %w", err)
+		buildBinding := r.buildBuildSCCRoleBinding(config.Namespace)
+		if err := r.createOrUpdate(ctx, buildBinding, config); err != nil {
+			return fmt.Errorf("failed to create/update build SCC role binding: %w", err)
 		}
 	}
 
@@ -842,17 +848,23 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 		return fmt.Errorf("failed to cleanup build controller: %w", err)
 	}
 
-	// Cleanup pipeline SCC cluster role and binding
-	pipelineClusterRole := &rbacv1.ClusterRole{}
-	pipelineClusterRole.Name = sccPrivilegedRoleName
-	if err := r.Delete(ctx, pipelineClusterRole); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete pipeline SCC cluster role: %w", err)
+	// Cleanup build SA and SCC bindings
+	buildSA := &corev1.ServiceAccount{}
+	buildSA.Name = automotivev1alpha1.BuildServiceAccountName
+	buildSA.Namespace = config.Namespace
+	if err := r.Delete(ctx, buildSA); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete build service account: %w", err)
 	}
-	pipelineBinding := &rbacv1.RoleBinding{}
-	pipelineBinding.Name = pipelineSCCBindingName
-	pipelineBinding.Namespace = config.Namespace
-	if err := r.Delete(ctx, pipelineBinding); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete pipeline SCC role binding: %w", err)
+	buildClusterRole := &rbacv1.ClusterRole{}
+	buildClusterRole.Name = sccPrivilegedRoleName
+	if err := r.Delete(ctx, buildClusterRole); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete build SCC cluster role: %w", err)
+	}
+	buildBinding := &rbacv1.RoleBinding{}
+	buildBinding.Name = pipelineSCCBindingName
+	buildBinding.Namespace = config.Namespace
+	if err := r.Delete(ctx, buildBinding); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete build SCC role binding: %w", err)
 	}
 
 	// Cleanup workspace infrastructure
@@ -873,11 +885,27 @@ func (r *OperatorConfigReconciler) deployWorkspaceInfra(ctx context.Context, con
 		return fmt.Errorf("failed to create/update workspace service account: %w", err)
 	}
 
-	// On OpenShift, create a custom SCC for workspace pods with user namespace support
+	// On OpenShift, create a custom SCC for workspace pods
 	if r.detectOpenShift(ctx, config.Namespace) {
 		scc := r.buildWorkspaceSCC()
 		if err := r.createOrUpdate(ctx, scc, config); err != nil {
 			return fmt.Errorf("failed to create/update workspace SCC: %w", err)
+		}
+
+		// Check if the cluster accepted userNamespaceLevel by reading the SCC back.
+		// OCP < 4.19 silently strips this field.
+		actual := &securityv1.SecurityContextConstraints{}
+		if err := r.Get(ctx, client.ObjectKey{Name: workspaceSCCName}, actual); err != nil {
+			return fmt.Errorf("failed to read back workspace SCC: %w", err)
+		}
+		config.Status.UserNamespacesSupported = actual.UserNamespaceLevel != ""
+		if !config.Status.UserNamespacesSupported {
+			r.Log.Info("Cluster does not support user namespaces, workspace pods will use privileged mode")
+			// Re-create the SCC in privileged mode
+			scc = r.buildWorkspaceSCCPrivileged()
+			if err := r.createOrUpdate(ctx, scc, config); err != nil {
+				return fmt.Errorf("failed to create/update workspace SCC (privileged): %w", err)
+			}
 		}
 
 		clusterRole := r.buildWorkspaceSCCClusterRole()

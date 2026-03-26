@@ -228,9 +228,40 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 	if image == "" {
 		image = configuredImage
 	}
-	// Only grant privileged to the configured toolchain image (which we control).
-	// User-supplied images run unprivileged to prevent cluster compromise.
-	isConfiguredImage := image == configuredImage
+
+	// Determine if the cluster supports user namespaces.
+	// With user namespaces: hostUsers=false, drop ALL caps + add specific ones, procMount=Unmasked
+	// Without (OCP < 4.19): privileged=true for nested podman/buildah
+	userNamespaces := operatorConfig != nil && operatorConfig.Status.UserNamespacesSupported
+
+	var secCtx *corev1.SecurityContext
+	if userNamespaces {
+		caps := []corev1.Capability{"SETUID", "SETGID", "DAC_OVERRIDE", "CHOWN", "FOWNER"}
+		if image == configuredImage {
+			caps = append(caps, "SYS_ADMIN")
+		}
+		secCtx = &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptr.To(true),
+			ProcMount:                ptr.To(corev1.UnmaskedProcMount),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+				Add:  caps,
+			},
+		}
+	} else if image == configuredImage {
+		secCtx = &corev1.SecurityContext{
+			Privileged:               ptr.To(true),
+			AllowPrivilegeEscalation: ptr.To(true),
+		}
+	} else {
+		secCtx = &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptr.To(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+				Add:  []corev1.Capability{"SETUID", "SETGID", "DAC_OVERRIDE", "CHOWN", "FOWNER"},
+			},
+		}
+	}
 
 	annotations := map[string]string{
 		"io.kubernetes.cri-o.Devices": "/dev/fuse,/dev/net/tun",
@@ -290,57 +321,57 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 		})
 	}
 
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        podName,
-			Namespace:   ws.Namespace,
-			Annotations: annotations,
+	podSpec := corev1.PodSpec{
+		ServiceAccountName: workspaceServiceAccountName,
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsUser: ptr.To[int64](0),
 		},
-		Spec: corev1.PodSpec{
-			ServiceAccountName: workspaceServiceAccountName,
-			HostUsers:          ptr.To(false),
-			SecurityContext: &corev1.PodSecurityContext{
-				RunAsUser: ptr.To[int64](0),
+		Containers: []corev1.Container{
+			{
+				Name:            containerName,
+				Image:           image,
+				Command:         []string{"/usr/local/bin/workspace-entrypoint.sh"},
+				WorkingDir:      "/workspace",
+				Env:             env,
+				Resources:       resourcesOrDefaults(ws.Spec.Resources),
+				SecurityContext: secCtx,
+				VolumeMounts:    volumeMounts,
 			},
-			Containers: []corev1.Container{
-				{
-					Name:       containerName,
-					Image:      image,
-					Command:    []string{"/usr/local/bin/workspace-entrypoint.sh"},
-					WorkingDir: "/workspace",
-					Env:        env,
-					Resources:  resourcesOrDefaults(ws.Spec.Resources),
-					SecurityContext: &corev1.SecurityContext{
-						Privileged:               ptr.To(isConfiguredImage),
-						AllowPrivilegeEscalation: ptr.To(isConfiguredImage),
-						ProcMount:                ptr.To(corev1.UnmaskedProcMount),
-					},
-					VolumeMounts: volumeMounts,
-				},
-			},
-			Volumes: volumes,
-			Affinity: &corev1.Affinity{
-				NodeAffinity: &corev1.NodeAffinity{
-					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-						NodeSelectorTerms: []corev1.NodeSelectorTerm{
-							{
-								MatchExpressions: []corev1.NodeSelectorRequirement{
-									{
-										Key:      "kubernetes.io/arch",
-										Operator: corev1.NodeSelectorOpIn,
-										Values:   []string{arch},
-									},
+		},
+		Volumes: volumes,
+		Affinity: &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      "kubernetes.io/arch",
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{arch},
 								},
 							},
 						},
 					},
 				},
 			},
-			NodeSelector:                  ws.Spec.NodeSelector,
-			Tolerations:                   wsConfig.GetTolerations(),
-			TerminationGracePeriodSeconds: ptr.To[int64](5),
-			RestartPolicy:                 corev1.RestartPolicyNever,
 		},
+		NodeSelector:                  ws.Spec.NodeSelector,
+		Tolerations:                   wsConfig.GetTolerations(),
+		TerminationGracePeriodSeconds: ptr.To[int64](5),
+		RestartPolicy:                 corev1.RestartPolicyNever,
+	}
+	if userNamespaces {
+		podSpec.HostUsers = ptr.To(false)
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        podName,
+			Namespace:   ws.Namespace,
+			Annotations: annotations,
+		},
+		Spec: podSpec,
 	}
 
 	return pod

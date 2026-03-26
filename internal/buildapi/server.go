@@ -196,7 +196,7 @@ func createInternalRegistrySecret(ctx context.Context, restCfg *rest.Config, nam
 		},
 	}
 	tokenResp, err := clientset.CoreV1().ServiceAccounts(namespace).
-		CreateToken(ctx, "pipeline", tokenReq, metav1.CreateOptions{})
+		CreateToken(ctx, automotivev1alpha1.BuildServiceAccountName, tokenReq, metav1.CreateOptions{})
 	if err != nil {
 		return "", fmt.Errorf("error creating SA token: %w", err)
 	}
@@ -303,9 +303,9 @@ func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, names
 		},
 	}
 	tokenResp, err := clientset.CoreV1().ServiceAccounts(namespace).
-		CreateToken(ctx, "pipeline", tokenReq, metav1.CreateOptions{})
+		CreateToken(ctx, automotivev1alpha1.BuildServiceAccountName, tokenReq, metav1.CreateOptions{})
 	if err != nil {
-		return "", metav1.Time{}, fmt.Errorf("error creating token for SA pipeline in %s: %w", namespace, err)
+		return "", metav1.Time{}, fmt.Errorf("error creating token for SA %s in %s: %w", automotivev1alpha1.BuildServiceAccountName, namespace, err)
 	}
 	return tokenResp.Status.Token, tokenResp.Status.ExpirationTimestamp, nil
 }
@@ -3271,7 +3271,8 @@ func (a *APIServer) createFlash(c *gin.Context) {
 			},
 		},
 		Spec: tektonv1.TaskRunSpec{
-			TaskSpec: &flashTask.Spec,
+			ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
+			TaskSpec:           &flashTask.Spec,
 			Params: []tektonv1.Param{
 				{Name: "image-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: req.ImageRef}},
 				{Name: "exporter-selector", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: exporterSelector}},

@@ -9,5 +9,4 @@ roleRef:
   name: pipeline-pod-annotator
 subjects:
 - kind: ServiceAccount
-  name: pipeline
-  namespace: system
+  name: ado-build

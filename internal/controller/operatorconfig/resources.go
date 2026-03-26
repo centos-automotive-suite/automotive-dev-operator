@@ -22,9 +22,8 @@ import (
 
 const (
 	buildControllerName         = "ado-build-controller"
-	pipelineServiceAccountName  = "pipeline"
-	pipelineSCCBindingName      = "ado-pipeline-privileged"
-	sccPrivilegedRoleName       = "ado-pipeline-privileged"
+	pipelineSCCBindingName      = "ado-build-privileged"
+	sccPrivilegedRoleName       = "ado-build-privileged"
 	workspaceServiceAccountName = "ado-workspace"
 	workspaceSCCName            = "ado-workspace-scc"
 )
@@ -906,13 +905,27 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCCRoleBinding(namespace string
 	}
 }
 
-func (r *OperatorConfigReconciler) buildPipelineSCCClusterRole() *rbacv1.ClusterRole {
+func (r *OperatorConfigReconciler) buildBuildServiceAccount(namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      automotivev1alpha1.BuildServiceAccountName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "build",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildBuildSCCClusterRole() *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: sccPrivilegedRoleName,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "pipeline",
+				"app.kubernetes.io/component": "build",
 				"app.kubernetes.io/part-of":   "automotive-dev-operator",
 			},
 		},
@@ -920,21 +933,21 @@ func (r *OperatorConfigReconciler) buildPipelineSCCClusterRole() *rbacv1.Cluster
 			{
 				APIGroups:     []string{"security.openshift.io"},
 				Resources:     []string{"securitycontextconstraints"},
-				ResourceNames: []string{"privileged"},
+				ResourceNames: []string{"privileged", "pipelines-scc"},
 				Verbs:         []string{"use"},
 			},
 		},
 	}
 }
 
-func (r *OperatorConfigReconciler) buildPipelineSCCRoleBinding(namespace string) *rbacv1.RoleBinding {
+func (r *OperatorConfigReconciler) buildBuildSCCRoleBinding(namespace string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pipelineSCCBindingName,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "pipeline",
+				"app.kubernetes.io/component": "build",
 				"app.kubernetes.io/part-of":   "automotive-dev-operator",
 			},
 		},
@@ -946,7 +959,7 @@ func (r *OperatorConfigReconciler) buildPipelineSCCRoleBinding(namespace string)
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      pipelineServiceAccountName,
+				Name:      automotivev1alpha1.BuildServiceAccountName,
 				Namespace: namespace,
 			},
 		},
@@ -969,8 +982,8 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCC() *securityv1.SecurityConte
 		AllowHostPID:             false,
 		AllowHostPorts:           false,
 		AllowPrivilegeEscalation: ptr.To(true),
-		AllowPrivilegedContainer: true,
-		AllowedCapabilities:      []corev1.Capability{"ALL"},
+		AllowPrivilegedContainer: false,
+		AllowedCapabilities:      []corev1.Capability{"SETUID", "SETGID", "SYS_ADMIN", "DAC_OVERRIDE", "CHOWN", "FOWNER"},
 		FSGroup: securityv1.FSGroupStrategyOptions{
 			Type:   securityv1.FSGroupStrategyMustRunAs,
 			Ranges: []securityv1.IDRange{{Min: 0, Max: 65534}},
@@ -999,6 +1012,48 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCC() *securityv1.SecurityConte
 			securityv1.FSProjected,
 			securityv1.FSTypePersistentVolumeClaim,
 			securityv1.FSTypeSecret,
+		},
+	}
+}
+
+// buildWorkspaceSCCPrivileged creates a privileged SCC for clusters that don't
+// support user namespaces (OCP < 4.19). This allows nested podman/buildah.
+func (r *OperatorConfigReconciler) buildWorkspaceSCCPrivileged() *securityv1.SecurityContextConstraints {
+	return &securityv1.SecurityContextConstraints{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: workspaceSCCName,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "workspace",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		AllowHostDirVolumePlugin: false,
+		AllowHostIPC:             false,
+		AllowHostNetwork:         false,
+		AllowHostPID:             false,
+		AllowHostPorts:           false,
+		AllowPrivilegeEscalation: ptr.To(true),
+		AllowPrivilegedContainer: true,
+		AllowedCapabilities:      []corev1.Capability{"*"},
+		FSGroup: securityv1.FSGroupStrategyOptions{
+			Type: securityv1.FSGroupStrategyRunAsAny,
+		},
+		RunAsUser: securityv1.RunAsUserStrategyOptions{
+			Type: securityv1.RunAsUserStrategyRunAsAny,
+		},
+		SELinuxContext: securityv1.SELinuxContextStrategyOptions{
+			Type: securityv1.SELinuxStrategyMustRunAs,
+			SELinuxOptions: &corev1.SELinuxOptions{
+				Type: "container_engine_t",
+			},
+		},
+		SeccompProfiles: []string{"*"},
+		SupplementalGroups: securityv1.SupplementalGroupsStrategyOptions{
+			Type: securityv1.SupplementalGroupsStrategyRunAsAny,
+		},
+		Volumes: []securityv1.FSType{
+			securityv1.FSTypeAll,
 		},
 	}
 }

@@ -59,6 +59,10 @@ const (
 
 	// DefaultAutoPauseTimeoutMinutes is the default idle timeout in minutes before a workspace is auto-paused
 	DefaultAutoPauseTimeoutMinutes int32 = 30
+
+	// BuildServiceAccountName is the dedicated SA used by build pods and token minting.
+	// Using a dedicated SA avoids collisions with the shared "pipeline" SA.
+	BuildServiceAccountName = "ado-build"
 )
 
 // ImagesConfig defines container image references used by the operator
@@ -575,6 +579,10 @@ type OperatorConfigStatus struct {
 
 	// JumpstarterAvailable indicates if Jumpstarter is available (explicitly configured or local CRDs detected)
 	JumpstarterAvailable bool `json:"jumpstarterAvailable,omitempty"`
+
+	// UserNamespacesSupported indicates if the cluster supports user namespaces in pods
+	// (SCC userNamespaceLevel field). When false, workspace pods use privileged mode.
+	UserNamespacesSupported bool `json:"userNamespacesSupported,omitempty"`
 }
 
 // +kubebuilder:object:root=true
