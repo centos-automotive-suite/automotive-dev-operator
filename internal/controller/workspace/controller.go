@@ -321,16 +321,53 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 		})
 	}
 
+	// Init container: sets up PVC directories, SSH keys, and Jumpstarter config
+	// using the toolchain image (which has ssh-keygen, etc.). Runs before the main
+	// container regardless of image, so arbitrary images get a prepared workspace.
+	initMounts := []corev1.VolumeMount{
+		{Name: "workspace", MountPath: "/workspace"},
+	}
+	if ws.Spec.ClientConfigSecretRef != "" {
+		initMounts = append(initMounts, corev1.VolumeMount{
+			Name: "jumpstarter-client", MountPath: "/jumpstarter", ReadOnly: true,
+		})
+	}
+	initScript := `set -e
+mkdir -p /workspace/src /workspace/cache /workspace/.cache /workspace/.ssh \
+         /workspace/.config /workspace/.local/share/containers \
+         /workspace/.pkg-overlay/{usr,etc,var-lib,opt}-{upper,work}
+[ -f /workspace/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -f /workspace/.ssh/id_ed25519 -N '' -q
+if [ -f /jumpstarter/client.yaml ]; then
+  mkdir -p /workspace/.config/jumpstarter/clients
+  cp /jumpstarter/client.yaml /workspace/.config/jumpstarter/clients/workspace.yaml
+fi
+chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.cache /workspace/.ssh \
+                   /workspace/.config /workspace/.local`
+
+	// If the toolchain entrypoint exists, run it (handles user creation, overlayfs,
+	// subuid/subgid). Otherwise fall back to sleep — the init container already
+	// prepared the PVC.
+	command := []string{"/bin/sh", "-c",
+		"test -x /usr/local/bin/workspace-entrypoint.sh && exec /usr/local/bin/workspace-entrypoint.sh; exec sleep infinity"}
+
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: workspaceServiceAccountName,
 		SecurityContext: &corev1.PodSecurityContext{
 			RunAsUser: ptr.To[int64](0),
 		},
+		InitContainers: []corev1.Container{
+			{
+				Name:         "workspace-init",
+				Image:        configuredImage,
+				Command:      []string{"/bin/sh", "-c", initScript},
+				VolumeMounts: initMounts,
+			},
+		},
 		Containers: []corev1.Container{
 			{
 				Name:            containerName,
 				Image:           image,
-				Command:         []string{"/usr/local/bin/workspace-entrypoint.sh"},
+				Command:         command,
 				WorkingDir:      "/workspace",
 				Env:             env,
 				Resources:       resourcesOrDefaults(ws.Spec.Resources),
