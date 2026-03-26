@@ -904,7 +904,7 @@ func (r *OperatorConfigReconciler) deployWorkspaceInfra(ctx context.Context, con
 			// Re-create the SCC in privileged mode
 			scc = r.buildWorkspaceSCCPrivileged()
 			if err := r.createOrUpdate(ctx, scc, config); err != nil {
-				return fmt.Errorf("failed to create/update workspace SCC (privileged): %w", err)
+				return fmt.Errorf("failed to create/update workspace SCC (no user namespaces): %w", err)
 			}
 		}
 

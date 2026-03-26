@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -409,5 +410,143 @@ func TestBuildPod_PreservesWorkspaceConfig(t *testing.T) {
 	}
 	if !foundTmpfs {
 		t.Error("expected tmpfs-build volume")
+	}
+}
+
+func TestBuildPod_SecurityContext(t *testing.T) {
+	toolchainImage := automotivev1alpha1.DefaultToolchainImage
+	customImage := "quay.io/example/custom:latest"
+
+	makeWorkspace := func(image string) *automotivev1alpha1.Workspace {
+		return &automotivev1alpha1.Workspace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-ws",
+				Namespace: "default",
+			},
+			Spec: automotivev1alpha1.WorkspaceSpec{
+				Architecture: "amd64",
+				Image:        image,
+			},
+			Status: automotivev1alpha1.WorkspaceStatus{
+				PVCName: "test-ws-workspace",
+			},
+		}
+	}
+
+	tests := []struct {
+		name           string
+		image          string
+		userNamespaces bool
+		wantPrivileged bool
+		wantSysAdmin   bool
+		wantProcMount  *corev1.ProcMountType
+	}{
+		{
+			name:           "no userns + toolchain image → privileged",
+			image:          "", // defaults to toolchain
+			userNamespaces: false,
+			wantPrivileged: true,
+			wantSysAdmin:   false, // privileged implies all caps
+		},
+		{
+			name:           "no userns + custom image → not privileged, no SYS_ADMIN",
+			image:          customImage,
+			userNamespaces: false,
+			wantPrivileged: false,
+			wantSysAdmin:   false,
+		},
+		{
+			name:           "userns + toolchain image → not privileged, has SYS_ADMIN",
+			image:          "", // defaults to toolchain
+			userNamespaces: true,
+			wantPrivileged: false,
+			wantSysAdmin:   true,
+			wantProcMount:  ptr.To(corev1.UnmaskedProcMount),
+		},
+		{
+			name:           "userns + custom image → not privileged, has SYS_ADMIN (scoped to userns)",
+			image:          customImage,
+			userNamespaces: true,
+			wantPrivileged: false,
+			wantSysAdmin:   true,
+			wantProcMount:  ptr.To(corev1.UnmaskedProcMount),
+		},
+		{
+			name:           "userns + explicit toolchain image → not privileged, has SYS_ADMIN",
+			image:          toolchainImage,
+			userNamespaces: true,
+			wantPrivileged: false,
+			wantSysAdmin:   true,
+			wantProcMount:  ptr.To(corev1.UnmaskedProcMount),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := makeWorkspace(tt.image)
+
+			var operatorConfig *automotivev1alpha1.OperatorConfig
+			if tt.userNamespaces {
+				operatorConfig = &automotivev1alpha1.OperatorConfig{
+					Status: automotivev1alpha1.OperatorConfigStatus{
+						UserNamespacesSupported: true,
+					},
+				}
+			}
+
+			r := &Reconciler{Scheme: newTestScheme()}
+			pod := r.buildPod(ws, operatorConfig)
+
+			secCtx := pod.Spec.Containers[0].SecurityContext
+			if secCtx == nil {
+				t.Fatal("expected SecurityContext to be set")
+			}
+
+			// Check Privileged
+			isPrivileged := secCtx.Privileged != nil && *secCtx.Privileged
+			if isPrivileged != tt.wantPrivileged {
+				t.Errorf("Privileged = %v, want %v", isPrivileged, tt.wantPrivileged)
+			}
+
+			// Check SYS_ADMIN capability
+			hasSysAdmin := false
+			if secCtx.Capabilities != nil {
+				for _, cap := range secCtx.Capabilities.Add {
+					if cap == "SYS_ADMIN" {
+						hasSysAdmin = true
+					}
+				}
+			}
+			if hasSysAdmin != tt.wantSysAdmin {
+				t.Errorf("SYS_ADMIN capability = %v, want %v", hasSysAdmin, tt.wantSysAdmin)
+			}
+
+			// Check ProcMount
+			if tt.wantProcMount != nil {
+				if secCtx.ProcMount == nil {
+					t.Errorf("ProcMount = nil, want %v", *tt.wantProcMount)
+				} else if *secCtx.ProcMount != *tt.wantProcMount {
+					t.Errorf("ProcMount = %v, want %v", *secCtx.ProcMount, *tt.wantProcMount)
+				}
+			} else if secCtx.ProcMount != nil {
+				t.Errorf("ProcMount = %v, want nil", *secCtx.ProcMount)
+			}
+
+			// Non-privileged containers must drop ALL caps
+			if !tt.wantPrivileged {
+				if secCtx.Capabilities == nil {
+					t.Fatal("expected Capabilities to be set for non-privileged container")
+				}
+				dropsAll := false
+				for _, cap := range secCtx.Capabilities.Drop {
+					if cap == "ALL" {
+						dropsAll = true
+					}
+				}
+				if !dropsAll {
+					t.Error("non-privileged container must drop ALL capabilities")
+				}
+			}
+		})
 	}
 }
