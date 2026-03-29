@@ -2,6 +2,7 @@
 
 # Initialize optimizations
 WORKSPACE_PATH="$(workspaces.shared-workspace.path)"
+BUILD_START_TIME=$(date +%s)
 detect_stat_command
 
 # Make the internal registry trusted
@@ -259,21 +260,22 @@ fi
 # Record the effective builder image used for annotation
 echo -n "${BUILDER_IMAGE:-}" > /tekton/results/builder-image
 
-# Capture AIB version and pinned image reference for disk artifact annotations
-AIB_VERSION=$(aib --version 2>&1 | head -1 | tr -d '\r\n' | sed 's/^aib //' || echo "")
-echo -n "${AIB_VERSION}" > /tekton/results/aib-version
-
+# Start AIB metadata capture in the background (runs in parallel with the build)
 AIB_IMAGE_REF="$(params.automotive-image-builder)"
-AIB_IMAGE_DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://${AIB_IMAGE_REF}" 2>/dev/null || echo "")
-if [ -n "$AIB_IMAGE_DIGEST" ]; then
-    AIB_IMAGE_BASE=$(echo "$AIB_IMAGE_REF" | sed 's/:[^/]*$//')
-    AIB_IMAGE_PINNED="${AIB_IMAGE_BASE}@${AIB_IMAGE_DIGEST}"
-    echo "AIB image pinned reference: $AIB_IMAGE_PINNED"
-else
-    AIB_IMAGE_PINNED="$AIB_IMAGE_REF"
-    echo "Could not resolve AIB image digest, recording reference as-is"
-fi
-echo -n "${AIB_IMAGE_PINNED}" > /tekton/results/automotive-image-builder
+(
+  aib --version 2>&1 | head -1 | tr -d '\r\n' | sed 's/^aib //' > /tmp/aib-version.txt 2>/dev/null || true
+  AIB_DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://${AIB_IMAGE_REF}" 2>/dev/null || echo "")
+  if [ -n "$AIB_DIGEST" ]; then
+    case "$AIB_IMAGE_REF" in
+      *@*) echo -n "$AIB_IMAGE_REF" > /tmp/aib-pinned.txt ;;
+      *)   AIB_BASE=$(echo "$AIB_IMAGE_REF" | sed 's/:[^/]*$//')
+           echo -n "${AIB_BASE}@${AIB_DIGEST}" > /tmp/aib-pinned.txt ;;
+    esac
+  else
+    echo -n "$AIB_IMAGE_REF" > /tmp/aib-pinned.txt
+  fi
+) &
+AIB_METADATA_PID=$!
 
 # Set up builder image if needed (consolidated logic)
 declare -a BUILD_CONTAINER_ARGS=()
@@ -319,29 +321,57 @@ if [ "$(params.use-persistent-cache)" = "true" ]; then
   COMMON_BUILD_ARGS+=(--cache-max-size=unlimited)
 fi
 
+AIB_INVOKE_TIME=$(date +%s)
+echo "⏱ Setup phase: $((AIB_INVOKE_TIME - BUILD_START_TIME))s"
+
 case "$BUILD_MODE" in
     bootc)
-      # Build bootc container and optionally disk image in a single command
-      # aib build takes: manifest out [disk] where disk is optional
-      declare -a DISK_OUTPUT_ARGS=()
-      if [ "$BUILD_DISK_IMAGE" = "true" ]; then
-        DISK_OUTPUT_ARGS=("/output/${exportFile}")
+      # When both container push and disk build are needed, split into two phases
+      # so container push can overlap with disk creation:
+      #   Phase 1: aib build (container only, no disk)
+      #   Phase 2: container push (background) + aib to-disk-image (foreground, parallel)
+      # When only one is needed, use the single aib build command.
+      SPLIT_BUILD="false"
+      if [ -n "$CONTAINER_PUSH" ] && [ "$BUILD_DISK_IMAGE" = "true" ]; then
+        SPLIT_BUILD="true"
       fi
 
-      declare -a AIB_CMD=(
-        aib --verbose build
-        --distro "$(params.distro)"
-        --target "$(params.target)"
-        "--arch=${arch}"
-        "${COMMON_BUILD_ARGS[@]}"
-        "${FORMAT_ARGS[@]}"
-        "${BUILD_CONTAINER_ARGS[@]}"
-        "${CUSTOM_DEFS_ARGS[@]}"
-        "${AIB_EXTRA_ARGS[@]}"
-        "$MANIFEST_FILE"
-        "$BOOTC_CONTAINER_NAME"
-        "${DISK_OUTPUT_ARGS[@]}"
-      )
+      if [ "$SPLIT_BUILD" = "true" ]; then
+        # Phase 1: Build container only (no disk output)
+        declare -a AIB_CMD=(
+          aib --verbose build
+          --distro "$(params.distro)"
+          --target "$(params.target)"
+          "--arch=${arch}"
+          "${COMMON_BUILD_ARGS[@]}"
+          "${BUILD_CONTAINER_ARGS[@]}"
+          "${CUSTOM_DEFS_ARGS[@]}"
+          "${AIB_EXTRA_ARGS[@]}"
+          "$MANIFEST_FILE"
+          "$BOOTC_CONTAINER_NAME"
+        )
+      else
+        declare -a DISK_OUTPUT_ARGS=()
+        if [ "$BUILD_DISK_IMAGE" = "true" ]; then
+          DISK_OUTPUT_ARGS=("/output/${exportFile}")
+        fi
+
+        declare -a AIB_CMD=(
+          aib --verbose build
+          --distro "$(params.distro)"
+          --target "$(params.target)"
+          "--arch=${arch}"
+          "${COMMON_BUILD_ARGS[@]}"
+          "${FORMAT_ARGS[@]}"
+          "${BUILD_CONTAINER_ARGS[@]}"
+          "${CUSTOM_DEFS_ARGS[@]}"
+          "${AIB_EXTRA_ARGS[@]}"
+          "$MANIFEST_FILE"
+          "$BOOTC_CONTAINER_NAME"
+          "${DISK_OUTPUT_ARGS[@]}"
+        )
+      fi
+
       AIB_COMMAND=$(printf '%q ' "${AIB_CMD[@]}" | sed 's/ $//')
       echo -n "$AIB_COMMAND" > /tekton/results/aib-command
 
@@ -349,26 +379,34 @@ case "$BUILD_MODE" in
       emit_progress "Building image" "$STEP_BUILD" "$PROGRESS_TOTAL"
       "${AIB_CMD[@]}"
 
+      CONTAINER_PUSH_PID=""
       if [ -n "$CONTAINER_PUSH" ]; then
         emit_progress "Pushing container" "$((STEP_BUILD + 1))" "$PROGRESS_TOTAL"
-        PUSH_SRC="containers-storage:$BOOTC_CONTAINER_NAME"
 
         if [ -z "$BUILDER_IMAGE" ]; then
           echo "Error: BUILDER_IMAGE is empty; cannot annotate bootc container"
           exit 1
         fi
 
-        # Add builder-image as manifest annotation + config label.
-        echo "Annotating bootc container with builder image: $BUILDER_IMAGE"
-        OCI_DIR="/tmp/bootc-oci"
-        rm -rf "$OCI_DIR"
-        skopeo copy "$PUSH_SRC" "oci:${OCI_DIR}:latest"
+        # Annotate + push container to registry in the background.
+        # This overlaps with disk compression, saving wall-clock time.
+        (
+          PUSH_START=$(date +%s)
+          PUSH_SRC="containers-storage:$BOOTC_CONTAINER_NAME"
+          OCI_DIR="/tmp/bootc-oci"
+          rm -rf "$OCI_DIR"
+          skopeo copy "$PUSH_SRC" "oci:${OCI_DIR}:latest"
+          COPY_DONE=$(date +%s)
+          echo "⏱ Container copy to OCI: $((COPY_DONE - PUSH_START))s"
 
-        echo "AIB version for annotation: ${AIB_VERSION:-unknown}"
-        echo "AIB image for annotation: ${AIB_IMAGE_PINNED}"
+          # Wait for AIB metadata to be available for annotations
+          # (can't use `wait` here — AIB_METADATA_PID is a sibling, not a child of this subshell)
+          while kill -0 "$AIB_METADATA_PID" 2>/dev/null; do sleep 1; done
+          _AIB_VERSION=$(cat /tmp/aib-version.txt 2>/dev/null || echo "")
+          _AIB_IMAGE_PINNED=$(cat /tmp/aib-pinned.txt 2>/dev/null || echo "$AIB_IMAGE_REF")
 
-        # Use inline Python for OCI annotation (extracted from original embedded code)
-        python3 - "$OCI_DIR" "$BUILDER_IMAGE" "$AIB_VERSION" "$AIB_IMAGE_PINNED" "$AIB_COMMAND" <<'PYEOF'
+          echo "Annotating bootc container with builder image: $BUILDER_IMAGE"
+          python3 - "$OCI_DIR" "$BUILDER_IMAGE" "$_AIB_VERSION" "$_AIB_IMAGE_PINNED" "$AIB_COMMAND" <<'PYEOF'
 import json, sys, hashlib, os
 from pathlib import Path
 
@@ -415,18 +453,37 @@ manifest_entry["digest"], manifest_entry["size"] = update_blob(oci_dir, manifest
 
 index_path.write_text(json.dumps(index, indent=2))
 PYEOF
-        PUSH_SRC="oci:${OCI_DIR}:latest"
+          ANNOTATE_DONE=$(date +%s)
+          echo "⏱ Container annotate: $((ANNOTATE_DONE - COPY_DONE))s"
 
-        echo "Pushing container to registry: $CONTAINER_PUSH"
-        skopeo copy --authfile="$REGISTRY_AUTH_FILE" "$PUSH_SRC" "docker://$CONTAINER_PUSH"
-        rm -rf "${OCI_DIR:-/tmp/nonexistent}" 2>/dev/null || true
-        echo "Container pushed successfully to $CONTAINER_PUSH"
+          echo "Pushing container to registry: $CONTAINER_PUSH"
+          skopeo copy --authfile="$REGISTRY_AUTH_FILE" "oci:${OCI_DIR}:latest" "docker://$CONTAINER_PUSH"
+          rm -rf "${OCI_DIR:-/tmp/nonexistent}" 2>/dev/null || true
+          PUSH_DONE=$(date +%s)
+          echo "⏱ Container registry push: $((PUSH_DONE - ANNOTATE_DONE))s"
+          echo "⏱ Container push total: $((PUSH_DONE - PUSH_START))s"
+          echo "Container pushed successfully to $CONTAINER_PUSH"
+        ) &
+        CONTAINER_PUSH_PID=$!
       fi
 
-      if [ "$BUILD_DISK_IMAGE" = "true" ]; then
+      if [ "$SPLIT_BUILD" = "true" ]; then
+        # Phase 2b: Create disk image in foreground (runs in parallel with container push)
+        echo "Creating disk image from container (parallel with push)..."
+        DISK_START=$(date +%s)
+        aib --verbose to-disk-image \
+          "${FORMAT_ARGS[@]}" \
+          "${BUILD_CONTAINER_ARGS[@]}" \
+          "${AIB_EXTRA_ARGS[@]}" \
+          "$BOOTC_CONTAINER_NAME" \
+          "/output/${exportFile}"
+        DISK_DONE=$(date +%s)
+        echo "⏱ Disk creation: $((DISK_DONE - DISK_START))s"
         echo "Disk image created: /output/${exportFile}"
-        # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
+      elif [ "$BUILD_DISK_IMAGE" = "true" ]; then
+        echo "Disk image created: /output/${exportFile}"
       fi
+      # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
       ;;
     image|package)
       declare -a AIB_CMD=(
@@ -490,45 +547,37 @@ PYEOF
       ;;
   esac
 
-echo "Build completed. Contents of output directory:"
-ls -la /output/ || true
+AIB_END_TIME=$(date +%s)
+echo "⏱ AIB build phase: $((AIB_END_TIME - BUILD_START_TIME))s"
+
+# Wait for background AIB metadata capture to finish
+wait $AIB_METADATA_PID 2>/dev/null || true
+AIB_VERSION=$(cat /tmp/aib-version.txt 2>/dev/null || echo "")
+echo -n "${AIB_VERSION}" > /tekton/results/aib-version
+AIB_IMAGE_PINNED=$(cat /tmp/aib-pinned.txt 2>/dev/null || echo "$AIB_IMAGE_REF")
+echo "AIB image pinned reference: $AIB_IMAGE_PINNED"
+echo -n "${AIB_IMAGE_PINNED}" > /tekton/results/automotive-image-builder
 
 pushd /output
 mkdir -p "$WORKSPACE_PATH"
 
 # Check if disk image was created (only exists when BUILD_DISK_IMAGE=true or non-bootc mode)
 DISK_IMAGE_EXISTS=false
+DISK_IMAGE_SOURCE="/output"
 if [ -e "/output/${exportFile}" ]; then
     DISK_IMAGE_EXISTS=true
-    ln -sf ./${exportFile} ./disk.img
-
-    echo "copying build artifacts to shared workspace..."
 
     if [ -d "/output/${exportFile}" ]; then
-        echo "${exportFile} is a directory, copying recursively..."
+        echo "${exportFile} is a directory, copying recursively to workspace..."
         cp -rv "/output/${exportFile}" "$WORKSPACE_PATH/" || echo "Failed to copy ${exportFile}"
-    else
-        echo "${exportFile} is a regular file, copying..."
-        cp -v "/output/${exportFile}" "$WORKSPACE_PATH/" || echo "Failed to copy ${exportFile}"
+        DISK_IMAGE_SOURCE="$WORKSPACE_PATH"
     fi
-
-    pushd "$WORKSPACE_PATH"
-    if [ -d "${exportFile}" ]; then
-        echo "Creating symlink to directory ${exportFile}"
-        ln -sf ${exportFile} disk.img
-    elif [ -f "${exportFile}" ]; then
-        echo "Creating symlink to file ${exportFile}"
-        ln -sf ${exportFile} disk.img
-    fi
-    popd
+    # For regular files, skip copy — compress directly from /output later
 else
     echo "No disk image created (container-only build)"
 fi
 
-cp -v "$BUILD_DIR/image.json" "$WORKSPACE_PATH/image.json" || echo "Failed to copy image.json"
-
-echo "Contents of shared workspace:"
-ls -la "$WORKSPACE_PATH/"
+cp "$BUILD_DIR/image.json" "$WORKSPACE_PATH/image.json" || echo "Failed to copy image.json"
 
 COMPRESSION="$(params.compression)"
 if [ "$BUILD_DISK_IMAGE" = "true" ] || [ "$BUILD_MODE" = "image" ] || [ "$BUILD_MODE" = "package" ] || [ "$BUILD_MODE" = "disk" ]; then
@@ -647,9 +696,9 @@ elif [ -d "$WORKSPACE_PATH/${exportFile}" ]; then
       ls -la "$WORKSPACE_PATH/${final_compressed_name}-parts/" || true
     fi
   fi
-elif [ -f "$WORKSPACE_PATH/${exportFile}" ]; then
-  echo "Creating compressed file ${exportFile}${EXT_FILE} in shared workspace..."
-  compress_file "$WORKSPACE_PATH/${exportFile}" "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" || echo "Failed to create ${exportFile}${EXT_FILE}"
+elif [ -f "${DISK_IMAGE_SOURCE}/${exportFile}" ]; then
+  echo "Compressing ${exportFile} directly to workspace..."
+  compress_file "${DISK_IMAGE_SOURCE}/${exportFile}" "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" || { echo "Error: Failed to compress ${exportFile}"; exit 1; }
   echo "Compressed file size:" && ls -lah "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" || true
   if [ -f "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" ]; then
     pushd "$WORKSPACE_PATH"
@@ -681,14 +730,22 @@ fi
 emit_progress "Finalizing build" "$PROGRESS_TOTAL" "$PROGRESS_TOTAL"
 
 if [ -n "$final_name" ]; then
-  echo "Writing artifact filename to Tekton result: $final_name"
   echo "$final_name" > /tekton/results/artifact-filename || echo "Failed to write Tekton result"
-  echo "Verifying Tekton result file:"
-  cat /tekton/results/artifact-filename || echo "Failed to read Tekton result"
 else
   echo "Warning: final_name is empty, no artifact filename will be recorded"
 fi
 
-echo "Syncing filesystem to ensure all artifacts are written..."
-sync
-echo "Filesystem sync completed"
+# Wait for background container push to complete (bootc mode only)
+if [ -n "${CONTAINER_PUSH_PID:-}" ]; then
+  echo "Waiting for container push to complete..."
+  wait "$CONTAINER_PUSH_PID" || { echo "Error: Container push failed"; exit 1; }
+fi
+
+BUILD_END_TIME=$(date +%s)
+echo "⏱ Post-build phase: $((BUILD_END_TIME - AIB_END_TIME))s"
+echo "⏱ Total build-image step: $((BUILD_END_TIME - BUILD_START_TIME))s"
+
+# Write structured timing data as a Tekton result for Prometheus metrics
+cat > /tekton/results/build-timing <<TIMING_EOF
+{"setup_s":$((AIB_INVOKE_TIME - BUILD_START_TIME)),"build_s":$((AIB_END_TIME - AIB_INVOKE_TIME)),"post_build_s":$((BUILD_END_TIME - AIB_END_TIME)),"total_s":$((BUILD_END_TIME - BUILD_START_TIME))}
+TIMING_EOF

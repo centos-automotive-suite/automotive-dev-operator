@@ -354,6 +354,8 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 			log.Error(err, "Failed to patch status to Completed")
 			return ctrl.Result{}, err
 		}
+		recordBuildMetrics(fresh, pipelineRun, buildStatusSuccess)
+
 		r.emitEventf(
 			fresh,
 			corev1.EventTypeNormal,
@@ -384,6 +386,7 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 		log.Error(err, "Failed to update status to Failed")
 		return ctrl.Result{}, err
 	}
+	recordBuildMetrics(imageBuild, pipelineRun, buildStatusFailure)
 	return ctrl.Result{}, nil
 }
 
@@ -1604,6 +1607,49 @@ func taskRunFailureMessage(taskRun *tektonv1.TaskRun, fallback string) string {
 }
 
 // extractProvenance extracts build provenance information from PipelineRun results
+// buildTiming holds the timing breakdown written by build_image.sh.
+type buildTiming struct {
+	SetupS     float64 `json:"setup_s"`
+	BuildS     float64 `json:"build_s"`
+	PostBuildS float64 `json:"post_build_s"`
+}
+
+// recordBuildMetrics records Prometheus metrics from a completed build.
+func recordBuildMetrics(imageBuild *automotivev1alpha1.ImageBuild, pipelineRun *tektonv1.PipelineRun, status string) {
+	mode := imageBuild.Spec.GetMode()
+	distro := imageBuild.Spec.GetDistro()
+	target := imageBuild.Spec.GetTarget()
+	format := imageBuild.Spec.GetExportFormat()
+	arch := imageBuild.Spec.Architecture
+
+	BuildTotal.WithLabelValues(mode, distro, target, format, arch, status).Inc()
+
+	// Record wall-clock duration from CR timestamps
+	if imageBuild.Status.StartTime != nil && imageBuild.Status.CompletionTime != nil {
+		duration := imageBuild.Status.CompletionTime.Sub(imageBuild.Status.StartTime.Time).Seconds()
+		BuildDuration.WithLabelValues(mode, distro, target, format, arch, status).Observe(duration)
+	}
+
+	// Record phase-level timing from the build-timing Tekton result
+	if status != buildStatusSuccess || pipelineRun == nil {
+		return
+	}
+	for _, result := range pipelineRun.Status.Results {
+		if result.Name != "build-timing" {
+			continue
+		}
+		var timing buildTiming
+		if err := json.Unmarshal([]byte(result.Value.StringVal), &timing); err != nil {
+			break
+		}
+		labels := []string{mode, distro, target}
+		BuildPhaseDuration.WithLabelValues(append(labels, "setup")...).Observe(timing.SetupS)
+		BuildPhaseDuration.WithLabelValues(append(labels, "build")...).Observe(timing.BuildS)
+		BuildPhaseDuration.WithLabelValues(append(labels, "post_build")...).Observe(timing.PostBuildS)
+		break
+	}
+}
+
 func extractProvenance(pipelineRun *tektonv1.PipelineRun, aibImage string) (aibImageUsed, builderImageUsed string) {
 	aibImageUsed = aibImage // Always record the AIB image that was requested
 
