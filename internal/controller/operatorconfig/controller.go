@@ -3,6 +3,9 @@ package operatorconfig
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -531,11 +534,31 @@ func (r *OperatorConfigReconciler) regenerateInternalJWTSecret(ctx context.Conte
 	return nil
 }
 
+// specHashAnnotation stores a hash of the desired object state to skip
+// no-op updates that would otherwise trigger watch events and unnecessary
+// re-reconciliation (reconciliation amplification storm).
+const specHashAnnotation = "automotive.sdv.cloud.redhat.com/spec-hash"
+
+// computeSpecHash returns a hex-encoded SHA-256 of the JSON representation
+// of obj. Because the object is always constructed deterministically by the
+// operator, the hash is stable across reconciliation cycles.
+func computeSpecHash(obj client.Object) string {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
 func (r *OperatorConfigReconciler) createOrUpdate(
 	ctx context.Context,
 	obj client.Object,
 	_ *automotivev1alpha1.OperatorConfig,
 ) error {
+	// Compute hash of the desired state before modifying annotations.
+	desiredHash := computeSpecHash(obj)
+
 	// Try to get the existing resource
 	key := client.ObjectKeyFromObject(obj)
 	existing := obj.DeepCopyObject().(client.Object)
@@ -543,7 +566,10 @@ func (r *OperatorConfigReconciler) createOrUpdate(
 	err := r.Get(ctx, key, existing)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			// Create new resource
+			// Stamp hash annotation before creating
+			if desiredHash != "" {
+				setSpecHashAnnotation(obj, desiredHash)
+			}
 			return r.Create(ctx, obj)
 		}
 		return err
@@ -555,9 +581,30 @@ func (r *OperatorConfigReconciler) createOrUpdate(
 		return nil
 	}
 
-	// Resource exists, update it
+	// Skip update if the desired state hasn't changed
+	if desiredHash != "" {
+		if existingAnnotations := existing.GetAnnotations(); existingAnnotations != nil {
+			if existingAnnotations[specHashAnnotation] == desiredHash {
+				return nil
+			}
+		}
+	}
+
+	// Content changed — stamp the new hash and update
+	if desiredHash != "" {
+		setSpecHashAnnotation(obj, desiredHash)
+	}
 	obj.SetResourceVersion(existing.GetResourceVersion())
 	return r.Update(ctx, obj)
+}
+
+func setSpecHashAnnotation(obj client.Object, hash string) {
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[specHashAnnotation] = hash
+	obj.SetAnnotations(annotations)
 }
 
 func (r *OperatorConfigReconciler) deployOSBuilds(
@@ -957,43 +1004,11 @@ func (r *OperatorConfigReconciler) cleanupWorkspaceInfra(ctx context.Context, co
 }
 
 func (r *OperatorConfigReconciler) createOrUpdateTask(ctx context.Context, task *tektonv1.Task) error {
-	existingTask := &tektonv1.Task{}
-	err := r.Get(ctx, client.ObjectKey{Name: task.Name, Namespace: task.Namespace}, existingTask)
-	if err != nil {
-		if !errors.IsNotFound(err) {
-			return fmt.Errorf("failed to get Task: %w", err)
-		}
-		return r.Create(ctx, task)
-	}
-
-	// Skip update if task is marked as unmanaged
-	if existingTask.Annotations != nil && existingTask.Annotations[unmanagedAnnotationKey] == unmanagedAnnotationTrue {
-		r.Log.Info("Skipping update for unmanaged task", "name", task.Name)
-		return nil
-	}
-
-	task.ResourceVersion = existingTask.ResourceVersion
-	return r.Update(ctx, task)
+	return r.createOrUpdate(ctx, task, nil)
 }
 
 func (r *OperatorConfigReconciler) createOrUpdatePipeline(ctx context.Context, pipeline *tektonv1.Pipeline) error {
-	existingPipeline := &tektonv1.Pipeline{}
-	err := r.Get(ctx, client.ObjectKey{Name: pipeline.Name, Namespace: pipeline.Namespace}, existingPipeline)
-	if err != nil {
-		if !errors.IsNotFound(err) {
-			return fmt.Errorf("failed to get Pipeline: %w", err)
-		}
-		return r.Create(ctx, pipeline)
-	}
-
-	// Skip update if pipeline is marked as unmanaged
-	if existingPipeline.Annotations != nil && existingPipeline.Annotations[unmanagedAnnotationKey] == unmanagedAnnotationTrue {
-		r.Log.Info("Skipping update for unmanaged pipeline", "name", pipeline.Name)
-		return nil
-	}
-
-	pipeline.ResourceVersion = existingPipeline.ResourceVersion
-	return r.Update(ctx, pipeline)
+	return r.createOrUpdate(ctx, pipeline, nil)
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -90,10 +90,6 @@ func (r *ImageReconciler) handleVerifyingState(
 		if err := r.updateStatus(ctx, image, phaseAvailable, "Image location verified and accessible"); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 		}
-		// Set LastVerified timestamp
-		if err := r.updateLastVerified(ctx, image); err != nil {
-			log.Error(err, "Failed to update LastVerified timestamp")
-		}
 		return ctrl.Result{RequeueAfter: time.Hour * 1}, nil // Recheck every hour
 	}
 
@@ -116,9 +112,12 @@ func (r *ImageReconciler) handleAvailableState(
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Update LastVerified timestamp
-	if err := r.updateLastVerified(ctx, image); err != nil {
-		r.Log.Error(err, "Failed to update LastVerified timestamp")
+	// Already Available — only update LastVerified, and only if stale (>30 min)
+	// to avoid a status-patch → watch-event → re-reconcile amplification loop.
+	if image.Status.LastVerified == nil || time.Since(image.Status.LastVerified.Time) > 30*time.Minute {
+		if err := r.updateLastVerified(ctx, image); err != nil {
+			r.Log.Error(err, "Failed to update LastVerified timestamp")
+		}
 	}
 
 	return ctrl.Result{RequeueAfter: time.Hour * 1}, nil // Recheck every hour
@@ -164,6 +163,11 @@ func (r *ImageReconciler) updateStatus(
 	image *automotivev1alpha1.Image,
 	phase, message string,
 ) error {
+	// Skip the patch when nothing actually changed
+	if image.Status.Phase == phase && image.Status.Message == message {
+		return nil
+	}
+
 	fresh := &automotivev1alpha1.Image{}
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      image.Name,
@@ -177,8 +181,14 @@ func (r *ImageReconciler) updateStatus(
 	fresh.Status.Phase = phase
 	fresh.Status.Message = message
 
-	// Update conditions
+	// When transitioning to Available, stamp LastVerified in the same patch
+	// so we don't need a second GET+Patch round-trip.
 	now := metav1.Now()
+	if phase == phaseAvailable {
+		fresh.Status.LastVerified = &now
+	}
+
+	// Update conditions
 	condition := metav1.Condition{
 		Type:               phaseAvailable,
 		Status:             metav1.ConditionFalse,

@@ -148,6 +148,10 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	case phaseCompleted:
 		return r.handleCompletedState(ctx, imageBuild)
 	case phaseFailed:
+		// Retry cleanup of any transient secrets that failed to delete.
+		if err := r.cleanupTransientSecrets(ctx, imageBuild, r.Log); err != nil {
+			return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
+		}
 		return ctrl.Result{}, nil
 	default:
 		log.Info("Unknown phase", "phase", imageBuild.Status.Phase)
@@ -201,7 +205,7 @@ func (r *ImageBuildReconciler) handleUploadingState(
 	}
 	if time.Since(imageBuild.CreationTimestamp.Time) > uploadTimeout {
 		log.Info("Upload timed out", "age", time.Since(imageBuild.CreationTimestamp.Time), "timeout", uploadTimeout)
-		r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
+		cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
 		if err := r.shutdownUploadPod(ctx, imageBuild); err != nil {
 			log.Error(err, "Failed to shutdown upload pod during timeout cleanup")
 		}
@@ -210,6 +214,9 @@ func (r *ImageBuildReconciler) handleUploadingState(
 			fmt.Sprintf("Upload timed out: file uploads were not completed within %d minutes", timeoutMinutes)); err != nil {
 			log.Error(err, "Failed to update status to Failed")
 			return ctrl.Result{}, err
+		}
+		if cleanupErr != nil {
+			return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
 		}
 		return ctrl.Result{}, nil
 	}
@@ -286,10 +293,19 @@ func (r *ImageBuildReconciler) handleBuildingState(
 	return r.startNewBuild(ctx, imageBuild)
 }
 
+// secretCleanupRequeue is the interval for retrying transient secret deletion
+// in terminal state handlers.
+const secretCleanupRequeue = 30 * time.Second
+
 func (r *ImageBuildReconciler) handleCompletedState(
-	_ context.Context,
-	_ *automotivev1alpha1.ImageBuild,
+	ctx context.Context,
+	imageBuild *automotivev1alpha1.ImageBuild,
 ) (ctrl.Result, error) {
+	// Retry cleanup of any transient secrets that failed to delete when
+	// the build first reached terminal state.
+	if err := r.cleanupTransientSecrets(ctx, imageBuild, r.Log); err != nil {
+		return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -370,24 +386,30 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 		)
 
 		// Cleanup transient secrets
-		r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
+		cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
 
 		// Write lease back to workspace for reuse by subsequent builds
 		if fresh.Spec.Workspace != "" && fresh.Status.LeaseID != "" {
 			r.updateWorkspaceLease(ctx, fresh, log)
 		}
 
+		if cleanupErr != nil {
+			return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
+		}
 		return ctrl.Result{}, nil
 	}
 
 	// Build failed - cleanup transient secrets
-	r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
+	cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
 
 	if err := r.updateStatus(ctx, imageBuild, phaseFailed, r.pipelineRunFailureDetail(ctx, pipelineRun)); err != nil {
 		log.Error(err, "Failed to update status to Failed")
 		return ctrl.Result{}, err
 	}
 	recordBuildMetrics(imageBuild, pipelineRun, buildStatusFailure)
+	if cleanupErr != nil {
+		return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -1200,7 +1222,7 @@ func (r *ImageBuildReconciler) handlePushingState(
 	}
 
 	// Push completed - cleanup transient secrets and update status
-	r.cleanupTransientSecrets(ctx, imageBuild, log)
+	cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, log)
 
 	fresh := &automotivev1alpha1.ImageBuild{}
 	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
@@ -1238,6 +1260,9 @@ func (r *ImageBuildReconciler) handlePushingState(
 		return ctrl.Result{}, err
 	}
 
+	if cleanupErr != nil {
+		return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -1286,7 +1311,7 @@ func (r *ImageBuildReconciler) handleFlashingState(
 	}
 
 	// Flash completed - cleanup and update status
-	r.cleanupTransientSecrets(ctx, imageBuild, log)
+	cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, log)
 
 	fresh := &automotivev1alpha1.ImageBuild{}
 	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
@@ -1313,6 +1338,9 @@ func (r *ImageBuildReconciler) handleFlashingState(
 		return ctrl.Result{}, err
 	}
 
+	if cleanupErr != nil {
+		return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -1466,63 +1494,57 @@ func (r *ImageBuildReconciler) updateWorkspaceLease(ctx context.Context, imageBu
 	}
 }
 
+// cleanupTransientSecrets attempts to delete all transient secrets for a
+// build. It tries every secret (does not short-circuit) and returns an error
+// if any deletion failed, so the caller can schedule a retry.
 func (r *ImageBuildReconciler) cleanupTransientSecrets(
 	ctx context.Context,
 	imageBuild *automotivev1alpha1.ImageBuild,
 	log logr.Logger,
-) {
-	// Cleanup registry auth secret (SecretRef)
+) error {
+	var firstErr error
+	collect := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	if imageBuild.Spec.SecretRef != "" {
-		r.deleteSecretWithRetry(ctx, imageBuild.Namespace, imageBuild.Spec.SecretRef, "registry auth", log)
+		collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Spec.SecretRef, "registry auth", log))
 	}
-	// Cleanup push secret (PushSecretRef)
 	if imageBuild.Spec.PushSecretRef != "" {
-		r.deleteSecretWithRetry(ctx, imageBuild.Namespace, imageBuild.Spec.PushSecretRef, "push auth", log)
+		collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Spec.PushSecretRef, "push auth", log))
 	}
-	// Cleanup flash client config secret
 	if flashSecretRef := imageBuild.Spec.GetFlashClientConfigSecretRef(); flashSecretRef != "" {
-		r.deleteSecretWithRetry(ctx, imageBuild.Namespace, flashSecretRef, "flash client config", log)
+		collect(r.deleteSecret(ctx, imageBuild.Namespace, flashSecretRef, "flash client config", log))
 	}
-	// Cleanup flash OCI auth secret
-	r.deleteSecretWithRetry(ctx, imageBuild.Namespace, imageBuild.Name+"-flash-oci-auth", "flash OCI auth", log)
+	collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Name+"-flash-oci-auth", "flash OCI auth", log))
+	return firstErr
 }
 
-// deleteSecretWithRetry attempts to delete a secret with exponential backoff retry
-func (r *ImageBuildReconciler) deleteSecretWithRetry(
+// deleteSecret attempts to delete a secret. Returns nil on success or if
+// the secret is already gone (NotFound). Returns the error on transient
+// failure so the caller can schedule a retry.
+func (r *ImageBuildReconciler) deleteSecret(
 	ctx context.Context,
 	namespace, secretName, secretType string,
 	log logr.Logger,
-) {
-	maxRetries := 3
-	backoff := 100 * time.Millisecond
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: namespace,
-			},
-		}
-		err := r.Delete(ctx, secret)
-		if err == nil {
-			log.Info("Deleted "+secretType+" secret", "secret", secretName)
-			return
-		}
-		if errors.IsNotFound(err) {
-			// Already deleted, nothing to do
-			return
-		}
-
-		// Transient error - retry with backoff
-		if attempt < maxRetries {
-			log.V(1).Info("Retrying secret deletion", "secret", secretName, "attempt", attempt, "error", err.Error())
-			time.Sleep(backoff)
-			backoff *= 2 // Exponential backoff
-		} else {
-			errMsg := "Failed to delete " + secretType + " secret after retries (manual cleanup may be required)"
-			log.Error(err, errMsg, "secret", secretName, "attempts", maxRetries)
-		}
+) error {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+		},
 	}
+	err := r.Delete(ctx, secret)
+	if err == nil {
+		log.Info("Deleted "+secretType+" secret", "secret", secretName)
+		return nil
+	}
+	if errors.IsNotFound(err) {
+		return nil
+	}
+	log.Error(err, "Failed to delete "+secretType+" secret (will retry)", "secret", secretName)
+	return err
 }
 
 // SetupWithManager sets up the controller with the Manager.
