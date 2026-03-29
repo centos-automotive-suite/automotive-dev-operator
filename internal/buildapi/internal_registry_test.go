@@ -196,6 +196,69 @@ var _ = Describe("Internal Registry", func() {
 		})
 	})
 
+	Describe("resolveImageStreamRefs", func() {
+		It("should extract name and tag from bootc container push URL", func() {
+			build := &automotivev1alpha1.ImageBuild{}
+			build.Spec.Export = &automotivev1alpha1.ExportSpec{
+				UseServiceAccountAuth: true,
+				Container:             defaultInternalRegistryURL + "/my-ns/my-image:bootc",
+			}
+			name, tags := resolveImageStreamRefs(build)
+			Expect(name).To(Equal("my-image"))
+			Expect(tags).To(ConsistOf("bootc"))
+		})
+
+		It("should extract name and tag from disk OCI export URL", func() {
+			build := &automotivev1alpha1.ImageBuild{}
+			build.Spec.Export = &automotivev1alpha1.ExportSpec{
+				UseServiceAccountAuth: true,
+				Disk:                  &automotivev1alpha1.DiskExport{OCI: defaultInternalRegistryURL + "/ns/disk-img:disk"},
+			}
+			name, tags := resolveImageStreamRefs(build)
+			Expect(name).To(Equal("disk-img"))
+			Expect(tags).To(ConsistOf("disk"))
+		})
+
+		It("should collect tags from both container push and disk URLs", func() {
+			build := &automotivev1alpha1.ImageBuild{}
+			build.Spec.Export = &automotivev1alpha1.ExportSpec{
+				UseServiceAccountAuth: true,
+				Container:             defaultInternalRegistryURL + "/ns/my-build:bootc",
+				Disk:                  &automotivev1alpha1.DiskExport{OCI: defaultInternalRegistryURL + "/ns/my-build:disk"},
+			}
+			name, tags := resolveImageStreamRefs(build)
+			Expect(name).To(Equal("my-build"))
+			Expect(tags).To(ConsistOf("bootc", "disk"))
+		})
+
+		It("should return empty for external registry URLs", func() {
+			build := &automotivev1alpha1.ImageBuild{}
+			build.Spec.Export = &automotivev1alpha1.ExportSpec{
+				Container: "quay.io/org/image:latest",
+			}
+			name, tags := resolveImageStreamRefs(build)
+			Expect(name).To(BeEmpty())
+			Expect(tags).To(BeEmpty())
+		})
+
+		It("should return empty when export is nil", func() {
+			build := &automotivev1alpha1.ImageBuild{}
+			name, tags := resolveImageStreamRefs(build)
+			Expect(name).To(BeEmpty())
+			Expect(tags).To(BeEmpty())
+		})
+
+		It("should handle URL without tag", func() {
+			build := &automotivev1alpha1.ImageBuild{}
+			build.Spec.Export = &automotivev1alpha1.ExportSpec{
+				Container: defaultInternalRegistryURL + "/ns/notag",
+			}
+			name, tags := resolveImageStreamRefs(build)
+			Expect(name).To(Equal("notag"))
+			Expect(tags).To(BeEmpty())
+		})
+	})
+
 	Describe("Internal registry URL generation per mode", func() {
 		It("should set ContainerPush for bootc mode", func() {
 			req := &BuildRequest{

@@ -10,8 +10,12 @@ import (
 	"time"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/gin-gonic/gin"
@@ -84,6 +88,7 @@ var _ = Describe("APIServer", func() {
 			{"GET", "/v1/builds/test-build/logs"},
 			{"GET", "/v1/builds/test-build/template"},
 			{"POST", "/v1/builds/test-build/uploads"},
+			{"DELETE", "/v1/builds/test-build"},
 		}
 
 		It("should require authentication for all builds endpoints", func() {
@@ -98,6 +103,193 @@ var _ = Describe("APIServer", func() {
 
 				Expect(w.Code).To(Equal(http.StatusUnauthorized))
 			}
+		})
+	})
+
+	Context("Delete Build", func() {
+		var (
+			originalGetClientFromRequestFn func(*gin.Context) (ctrlclient.Client, error)
+			originalNamespace              string
+			hasOriginalNamespace           bool
+		)
+
+		BeforeEach(func() {
+			originalGetClientFromRequestFn = getClientFromRequestFn
+			originalNamespace, hasOriginalNamespace = os.LookupEnv("BUILD_API_NAMESPACE")
+			Expect(os.Setenv("BUILD_API_NAMESPACE", "test-ns")).To(Succeed())
+		})
+
+		AfterEach(func() {
+			getClientFromRequestFn = originalGetClientFromRequestFn
+			if hasOriginalNamespace {
+				Expect(os.Setenv("BUILD_API_NAMESPACE", originalNamespace)).To(Succeed())
+			} else {
+				Expect(os.Unsetenv("BUILD_API_NAMESPACE")).To(Succeed())
+			}
+		})
+
+		newTestBuild := func(name, owner string, useServiceAccountAuth bool, containerPush, exportOCI string) *automotivev1alpha1.ImageBuild {
+			build := &automotivev1alpha1.ImageBuild{}
+			build.Name = name
+			build.Namespace = "test-ns"
+			build.Annotations = map[string]string{
+				"automotive.sdv.cloud.redhat.com/requested-by": owner,
+			}
+			if useServiceAccountAuth || containerPush != "" || exportOCI != "" {
+				build.Spec.Export = &automotivev1alpha1.ExportSpec{
+					UseServiceAccountAuth: useServiceAccountAuth,
+					Container:             containerPush,
+				}
+				if exportOCI != "" {
+					build.Spec.Export.Disk = &automotivev1alpha1.DiskExport{OCI: exportOCI}
+				}
+			}
+			return build
+		}
+
+		newFakeClient := func(objs ...ctrlclient.Object) ctrlclient.Client {
+			scheme := runtime.NewScheme()
+			Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			for _, obj := range objs {
+				builder = builder.WithObjects(obj)
+			}
+			return builder.Build()
+		}
+
+		It("should return 404 when build does not exist", func() {
+			fakeClient := newFakeClient()
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodDelete, "/v1/builds/nonexistent", nil)
+			c.Set("requester", "alice")
+
+			server.deleteBuild(c, "nonexistent")
+
+			Expect(w.Code).To(Equal(http.StatusNotFound))
+			Expect(w.Body.String()).To(ContainSubstring("build not found"))
+		})
+
+		It("should return 403 when user does not own the build", func() {
+			build := newTestBuild("my-build", "alice", false, "", "")
+			fakeClient := newFakeClient(build)
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodDelete, "/v1/builds/my-build", nil)
+			c.Set("requester", "bob")
+
+			server.deleteBuild(c, "my-build")
+
+			Expect(w.Code).To(Equal(http.StatusForbidden))
+			Expect(w.Body.String()).To(ContainSubstring("you can only delete your own builds"))
+		})
+
+		It("should delete a build owned by the requester", func() {
+			build := newTestBuild("my-build", "alice", false, "", "")
+			fakeClient := newFakeClient(build)
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodDelete, "/v1/builds/my-build", nil)
+			c.Set("requester", "alice")
+
+			server.deleteBuild(c, "my-build")
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var resp map[string]string
+			Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
+			Expect(resp["message"]).To(ContainSubstring("my-build"))
+			Expect(resp["message"]).To(ContainSubstring("deleted"))
+
+			// Verify build was actually deleted
+			err := fakeClient.Get(context.Background(), types.NamespacedName{
+				Name: "my-build", Namespace: "test-ns",
+			}, &automotivev1alpha1.ImageBuild{})
+			Expect(k8serrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("should delete ImageStreamTags and empty ImageStream when build used internal registry", func() {
+			containerPush := defaultInternalRegistryURL + "/test-ns/my-ir-build:bootc"
+			build := newTestBuild("my-ir-build", "alice", true, containerPush, "")
+
+			// Pre-create ImageStream (with no status tags — simulates empty after tag deletion)
+			is := &unstructured.Unstructured{}
+			is.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: "image.openshift.io", Version: "v1", Kind: "ImageStream",
+			})
+			is.SetName("my-ir-build")
+			is.SetNamespace("test-ns")
+
+			// Pre-create ImageStreamTag
+			ist := &unstructured.Unstructured{}
+			ist.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: "image.openshift.io", Version: "v1", Kind: "ImageStreamTag",
+			})
+			ist.SetName("my-ir-build:bootc")
+			ist.SetNamespace("test-ns")
+
+			scheme := runtime.NewScheme()
+			Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
+			for _, gvk := range []schema.GroupVersionKind{
+				{Group: "image.openshift.io", Version: "v1", Kind: "ImageStream"},
+				{Group: "image.openshift.io", Version: "v1", Kind: "ImageStreamList"},
+				{Group: "image.openshift.io", Version: "v1", Kind: "ImageStreamTag"},
+				{Group: "image.openshift.io", Version: "v1", Kind: "ImageStreamTagList"},
+			} {
+				if gvk.Kind == "ImageStreamList" || gvk.Kind == "ImageStreamTagList" {
+					scheme.AddKnownTypeWithName(gvk, &unstructured.UnstructuredList{})
+				} else {
+					scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+				}
+			}
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(build, is, ist).
+				Build()
+
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodDelete, "/v1/builds/my-ir-build", nil)
+			c.Set("requester", "alice")
+
+			server.deleteBuild(c, "my-ir-build")
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+
+			// Verify ImageStreamTag was deleted
+			istCheck := &unstructured.Unstructured{}
+			istCheck.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: "image.openshift.io", Version: "v1", Kind: "ImageStreamTag",
+			})
+			err := fakeClient.Get(context.Background(), types.NamespacedName{
+				Name: "my-ir-build:bootc", Namespace: "test-ns",
+			}, istCheck)
+			Expect(k8serrors.IsNotFound(err)).To(BeTrue())
+
+			// Verify empty ImageStream was also deleted
+			isCheck := &unstructured.Unstructured{}
+			isCheck.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: "image.openshift.io", Version: "v1", Kind: "ImageStream",
+			})
+			err = fakeClient.Get(context.Background(), types.NamespacedName{
+				Name: "my-ir-build", Namespace: "test-ns",
+			}, isCheck)
+			Expect(k8serrors.IsNotFound(err)).To(BeTrue())
 		})
 	})
 

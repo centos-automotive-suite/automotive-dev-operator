@@ -168,6 +168,28 @@ func (c *Client) GetBuild(ctx context.Context, name string) (*buildapi.BuildResp
 	return &out, nil
 }
 
+// DeleteBuild deletes an image build by name.
+func (c *Client) DeleteBuild(ctx context.Context, name string) error {
+	endpoint := c.resolve(path.Join("/v1/builds", url.PathEscape(name)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("delete build failed: %s: %s", resp.Status, string(b))
+	}
+	return nil
+}
+
 // CreateBuildToken requests a fresh registry token for an internal-registry build.
 //
 //nolint:dupl // HTTP client methods share structural boilerplate by design

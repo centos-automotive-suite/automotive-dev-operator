@@ -253,6 +253,7 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		RunExtractForSigning: h.sealed.RunExtractForSigning,
 		RunInjectSigned:      h.sealed.RunInjectSigned,
 		RunToken:             h.token.RunToken,
+		RunDelete:            h.build.RunDelete,
 		GetDefaultArch:       getDefaultArch,
 
 		ServerURL:              s.ServerURL,

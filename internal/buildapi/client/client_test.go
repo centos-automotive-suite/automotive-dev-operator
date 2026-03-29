@@ -230,6 +230,71 @@ var _ = Describe("Workspace Start/Stop", func() {
 		})
 	})
 
+	Context("DeleteBuild", func() {
+		It("should DELETE to the correct endpoint", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodDelete))
+				Expect(r.URL.Path).To(Equal("/v1/builds/my-build"))
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
+
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"message": "build \"my-build\" deleted"}`))
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL, WithAuthToken("test-token"))
+			Expect(err).NotTo(HaveOccurred())
+
+			err = apiClient.DeleteBuild(context.Background(), "my-build")
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should return error on 403 Forbidden", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error": "you can only delete your own builds"}`))
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL, WithAuthToken("test-token"))
+			Expect(err).NotTo(HaveOccurred())
+
+			err = apiClient.DeleteBuild(context.Background(), "other-build")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("you can only delete your own builds"))
+		})
+
+		It("should return error on 404 Not Found", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error": "build not found"}`))
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL, WithAuthToken("test-token"))
+			Expect(err).NotTo(HaveOccurred())
+
+			err = apiClient.DeleteBuild(context.Background(), "nonexistent")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("build not found"))
+		})
+
+		It("should properly escape build names in the URL path", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.URL.Path).To(Equal("/v1/builds/my%20build"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"message": "deleted"}`))
+			}))
+
+			var err error
+			apiClient, err = New(mockServer.URL)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = apiClient.DeleteBuild(context.Background(), "my build")
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
 	Context("workspaceAction with URL-unsafe names", func() {
 		It("should properly escape workspace names in the URL path", func() {
 			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

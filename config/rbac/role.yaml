@@ -126,7 +126,14 @@ rules:
   - imagestreams
   verbs:
   - create
+  - delete
   - get
+- apiGroups:
+  - image.openshift.io
+  resources:
+  - imagestreamtags
+  verbs:
+  - delete
 - apiGroups:
   - networking.k8s.io
   resources:
