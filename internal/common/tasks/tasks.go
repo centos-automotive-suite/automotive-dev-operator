@@ -428,6 +428,10 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					Name:        "aib-command",
 					Description: "The exact AIB command used to build the image",
 				},
+				{
+					Name:        "build-timing",
+					Description: "JSON timing breakdown of build phases in seconds",
+				},
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
 				{
@@ -583,7 +587,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 		for i := range task.Spec.Volumes {
 			vol := &task.Spec.Volumes[i]
 
-			if vol.Name == "build-dir" || vol.Name == "run-dir" || vol.Name == "container-storage" {
+			if vol.Name == "build-dir" || vol.Name == "run-dir" || vol.Name == "container-storage" || vol.Name == "output-dir" {
 				vol.EmptyDir = &corev1.EmptyDirVolumeSource{
 					Medium: corev1.StorageMediumMemory,
 				}
@@ -855,6 +859,11 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					Name:        "lease-id",
 					Description: "The Jumpstarter lease ID acquired during flash (empty if flash not enabled)",
 					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.flash-image.results.lease-id)"},
+				},
+				{
+					Name:        "build-timing",
+					Description: "JSON timing breakdown of build phases in seconds",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.build-image.results.build-timing)"},
 				},
 			},
 			Tasks: []tektonv1.PipelineTask{
