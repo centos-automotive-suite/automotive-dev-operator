@@ -508,7 +508,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 								"--mode=build",
 								"--leader-elect",
 								"--health-probe-bind-address=:8081",
-								"--metrics-bind-address=0",
+								"--metrics-bind-address=:8443",
 							},
 							Env: []corev1.EnvVar{
 								{
@@ -524,6 +524,11 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 								{
 									Name:          "health",
 									ContainerPort: 8081,
+									Protocol:      corev1.ProtocolTCP,
+								},
+								{
+									Name:          "https",
+									ContainerPort: 8443,
 									Protocol:      corev1.ProtocolTCP,
 								},
 							},
