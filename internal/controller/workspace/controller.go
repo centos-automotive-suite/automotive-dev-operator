@@ -230,22 +230,18 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 	}
 
 	// Determine if the cluster supports user namespaces.
-	// With user namespaces: hostUsers=false, drop ALL caps + add specific ones, procMount=Unmasked
+	// With user namespaces: drop ALL caps + add specific ones, procMount=Unmasked
 	// Without (OCP < 4.19): privileged=true for nested podman/buildah
 	userNamespaces := operatorConfig != nil && operatorConfig.Status.UserNamespacesSupported
 
 	var secCtx *corev1.SecurityContext
 	if userNamespaces {
-		caps := []corev1.Capability{"SETUID", "SETGID", "DAC_OVERRIDE", "CHOWN", "FOWNER"}
-		if image == configuredImage {
-			caps = append(caps, "SYS_ADMIN")
-		}
 		secCtx = &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr.To(true),
 			ProcMount:                ptr.To(corev1.UnmaskedProcMount),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
-				Add:  caps,
+				Add:  []corev1.Capability{"SETUID", "SETGID", "SYS_ADMIN", "DAC_OVERRIDE", "CHOWN", "FOWNER"},
 			},
 		}
 	} else if image == configuredImage {
@@ -321,17 +317,66 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 		})
 	}
 
+	// Init container: sets up PVC directories, SSH keys, and Jumpstarter config
+	// using the toolchain image (which has ssh-keygen, etc.). Runs before the main
+	// container regardless of image, so arbitrary images get a prepared workspace.
+	initMounts := []corev1.VolumeMount{
+		{Name: "workspace", MountPath: "/workspace"},
+	}
+	if ws.Spec.ClientConfigSecretRef != "" {
+		initMounts = append(initMounts, corev1.VolumeMount{
+			Name: "jumpstarter-client", MountPath: "/jumpstarter", ReadOnly: true,
+		})
+	}
+	initScript := `set -e
+mkdir -p /workspace/src /workspace/cache /workspace/.cache /workspace/.ssh \
+         /workspace/.config /workspace/.local/share/containers \
+         /workspace/.pkg-overlay/{usr,etc,var-lib,opt}-{upper,work}
+[ -f /workspace/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -f /workspace/.ssh/id_ed25519 -N '' -q
+if [ -f /jumpstarter/client.yaml ]; then
+  mkdir -p /workspace/.config/jumpstarter/clients
+  cp /jumpstarter/client.yaml /workspace/.config/jumpstarter/clients/workspace.yaml
+  HOME=/workspace jmp config client use workspace || true
+fi
+chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.cache /workspace/.ssh \
+                   /workspace/.config /workspace/.local`
+
+	// For the toolchain image, run the entrypoint (handles user creation, overlayfs,
+	// subuid/subgid setup). For custom images, don't override Command so the
+	// image's own ENTRYPOINT/CMD runs — the init container already prepared the PVC.
+	var command []string
+	var workingDir string
+	if image == configuredImage {
+		command = []string{"/usr/local/bin/workspace-entrypoint.sh"}
+		workingDir = "/workspace"
+	}
+
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: workspaceServiceAccountName,
 		SecurityContext: &corev1.PodSecurityContext{
 			RunAsUser: ptr.To[int64](0),
 		},
+		InitContainers: []corev1.Container{
+			{
+				Name:         "workspace-init",
+				Image:        configuredImage,
+				Command:      []string{"/bin/sh", "-c", initScript},
+				VolumeMounts: initMounts,
+				SecurityContext: &corev1.SecurityContext{
+					AllowPrivilegeEscalation: ptr.To(false),
+					Capabilities: &corev1.Capabilities{
+						Drop: []corev1.Capability{"ALL"},
+						Add:  []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER"},
+					},
+				},
+			},
+		},
 		Containers: []corev1.Container{
 			{
 				Name:            containerName,
 				Image:           image,
-				Command:         []string{"/usr/local/bin/workspace-entrypoint.sh"},
-				WorkingDir:      "/workspace",
+				Command:         command,
+				WorkingDir:      workingDir,
 				Env:             env,
 				Resources:       resourcesOrDefaults(ws.Spec.Resources),
 				SecurityContext: secCtx,
