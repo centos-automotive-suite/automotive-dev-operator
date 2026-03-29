@@ -87,6 +87,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	case phaseRunning:
 		return r.handleRunning(ctx, sealed)
 	case phaseCompleted, phaseFailed:
+		// Retry cleanup of any transient secrets that failed to delete.
+		if err := r.cleanupTransientSecrets(ctx, sealed, log.FromContext(ctx)); err != nil {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
 		return ctrl.Result{}, nil
 	default:
 		logger.Info("Unknown phase", "phase", sealed.Status.Phase)
@@ -203,8 +207,12 @@ func (r *Reconciler) handleRunningTaskRun(ctx context.Context, sealed *automotiv
 	tr := &tektonv1.TaskRun{}
 	if err := r.Get(ctx, client.ObjectKey{Name: sealed.Status.TaskRunName, Namespace: sealed.Namespace}, tr); err != nil {
 		if k8serrors.IsNotFound(err) {
-			r.cleanupTransientSecrets(ctx, sealed, logger)
-			return r.updateStatus(ctx, sealed, phaseFailed, "TaskRun not found")
+			cleanupErr := r.cleanupTransientSecrets(ctx, sealed, logger)
+			result, err := r.updateStatus(ctx, sealed, phaseFailed, "TaskRun not found")
+			if err == nil && cleanupErr != nil {
+				result.RequeueAfter = 30 * time.Second
+			}
+			return result, err
 		}
 		return ctrl.Result{}, err
 	}
@@ -224,9 +232,13 @@ func (r *Reconciler) handleRunningTaskRun(ctx context.Context, sealed *automotiv
 		message = fmt.Sprintf("Operation %s completed successfully", action)
 		sealed.Status.OutputRef = sealed.Spec.OutputRef
 	}
-	r.cleanupTransientSecrets(ctx, sealed, logger)
+	cleanupErr := r.cleanupTransientSecrets(ctx, sealed, logger)
 	sealed.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	return r.updateStatus(ctx, sealed, phase, message)
+	result, err := r.updateStatus(ctx, sealed, phase, message)
+	if err == nil && cleanupErr != nil {
+		result.RequeueAfter = 30 * time.Second
+	}
+	return result, err
 }
 
 func (r *Reconciler) handleRunningPipelineRun(ctx context.Context, sealed *automotivev1alpha1.ImageReseal) (ctrl.Result, error) {
@@ -234,8 +246,12 @@ func (r *Reconciler) handleRunningPipelineRun(ctx context.Context, sealed *autom
 	pr := &tektonv1.PipelineRun{}
 	if err := r.Get(ctx, client.ObjectKey{Name: sealed.Status.PipelineRunName, Namespace: sealed.Namespace}, pr); err != nil {
 		if k8serrors.IsNotFound(err) {
-			r.cleanupTransientSecrets(ctx, sealed, logger)
-			return r.updateStatus(ctx, sealed, phaseFailed, "PipelineRun not found")
+			cleanupErr := r.cleanupTransientSecrets(ctx, sealed, logger)
+			result, err := r.updateStatus(ctx, sealed, phaseFailed, "PipelineRun not found")
+			if err == nil && cleanupErr != nil {
+				result.RequeueAfter = 30 * time.Second
+			}
+			return result, err
 		}
 		return ctrl.Result{}, err
 	}
@@ -260,9 +276,13 @@ func (r *Reconciler) handleRunningPipelineRun(ctx context.Context, sealed *autom
 		message = fmt.Sprintf("Pipeline completed successfully (stages=%s)", strings.Join(sealed.Spec.GetStages(), ","))
 		sealed.Status.OutputRef = sealed.Spec.OutputRef
 	}
-	r.cleanupTransientSecrets(ctx, sealed, logger)
+	cleanupErr := r.cleanupTransientSecrets(ctx, sealed, logger)
 	sealed.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	return r.updateStatus(ctx, sealed, phase, message)
+	result, err := r.updateStatus(ctx, sealed, phase, message)
+	if err == nil && cleanupErr != nil {
+		result.RequeueAfter = 30 * time.Second
+	}
+	return result, err
 }
 
 const sealedManagedByLabel = "app.kubernetes.io/managed-by"
@@ -676,7 +696,11 @@ func (r *Reconciler) emitEventf(
 // and should be cleaned up after the sealed operation completes.
 const transientLabel = "automotive.sdv.cloud.redhat.com/transient"
 
-func (r *Reconciler) cleanupTransientSecrets(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, log logr.Logger) {
+// cleanupTransientSecrets attempts to delete all transient secrets for a
+// sealed operation. Returns an error if any deletion failed so the caller
+// can schedule a retry.
+func (r *Reconciler) cleanupTransientSecrets(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, log logr.Logger) error {
+	var firstErr error
 	for _, ref := range []struct {
 		name       string
 		secretType string
@@ -689,11 +713,14 @@ func (r *Reconciler) cleanupTransientSecrets(ctx context.Context, sealed *automo
 			continue
 		}
 		if r.isTransientSecret(ctx, sealed.Namespace, ref.name) {
-			r.deleteSecretWithRetry(ctx, sealed.Namespace, ref.name, ref.secretType, log)
+			if err := r.deleteSecret(ctx, sealed.Namespace, ref.name, ref.secretType, log); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		} else {
 			log.V(1).Info("Skipping deletion of user-provided secret", "secret", ref.name, "type", ref.secretType)
 		}
 	}
+	return firstErr
 }
 
 func (r *Reconciler) isTransientSecret(ctx context.Context, namespace, name string) bool {
@@ -721,35 +748,26 @@ func (r *Reconciler) resolveBuildConfig(ctx context.Context) (*tasks.BuildConfig
 	return bc, nil
 }
 
-// deleteSecretWithRetry attempts to delete a secret with exponential backoff retry
-func (r *Reconciler) deleteSecretWithRetry(ctx context.Context, namespace, secretName, secretType string, log logr.Logger) {
-	maxRetries := 3
-	backoff := 100 * time.Millisecond
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: namespace,
-			},
-		}
-		err := r.Delete(ctx, secret)
-		if err == nil {
-			log.Info("Deleted "+secretType+" secret", "secret", secretName)
-			return
-		}
-		if k8serrors.IsNotFound(err) {
-			return
-		}
-
-		if attempt < maxRetries {
-			log.V(1).Info("Retrying secret deletion", "secret", secretName, "attempt", attempt, "error", err.Error())
-			time.Sleep(backoff)
-			backoff *= 2
-		} else {
-			log.Error(err, "Failed to delete "+secretType+" secret after retries", "secret", secretName, "attempts", maxRetries)
-		}
+// deleteSecret attempts to delete a secret. Returns nil on success or if
+// the secret is already gone (NotFound). Returns the error on transient
+// failure so the caller can schedule a retry.
+func (r *Reconciler) deleteSecret(ctx context.Context, namespace, secretName, secretType string, log logr.Logger) error {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+		},
 	}
+	err := r.Delete(ctx, secret)
+	if err == nil {
+		log.Info("Deleted "+secretType+" secret", "secret", secretName)
+		return nil
+	}
+	if k8serrors.IsNotFound(err) {
+		return nil
+	}
+	log.Error(err, "Failed to delete "+secretType+" secret (will retry)", "secret", secretName)
+	return err
 }
 
 func ptr(b bool) *bool {

@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2092,6 +2093,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 
 func listBuilds(c *gin.Context) {
 	namespace := resolveNamespace()
+	limit, offset := parsePagination(c)
 
 	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
@@ -2111,11 +2113,14 @@ func listBuilds(c *gin.Context) {
 		return list.Items[j].CreationTimestamp.Before(&list.Items[i].CreationTimestamp)
 	})
 
+	// Paginate before doing per-item work (external route lookup, etc.)
+	page := applyPagination(list.Items, limit, offset)
+
 	// Resolve external route once for translating internal registry URLs
 	externalRoute, _ := getExternalRegistryRoute(ctx, k8sClient, namespace)
 
-	resp := make([]BuildListItem, 0, len(list.Items))
-	for _, b := range list.Items {
+	resp := make([]BuildListItem, 0, len(page))
+	for _, b := range page {
 		var startStr, compStr string
 		if b.Status.StartTime != nil {
 			startStr = b.Status.StartTime.Format(time.RFC3339)
@@ -2666,6 +2671,45 @@ func createFlashClientSecret(
 func writeJSON(c *gin.Context, status int, v any) {
 	c.Header("Cache-Control", "no-store")
 	c.IndentedJSON(status, v)
+}
+
+const maxPageLimit = 500
+
+// parsePagination extracts limit and offset from query parameters.
+// When limit is not provided, 0 is returned and applyPagination returns
+// the full slice (preserving backward compatibility for existing clients).
+// When provided, limit is clamped to maxPageLimit (500).
+func parsePagination(c *gin.Context) (limit, offset int) {
+	if l := c.Query("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+			if limit > maxPageLimit {
+				limit = maxPageLimit
+			}
+		}
+	}
+	if o := c.Query("offset"); o != "" {
+		if n, err := strconv.Atoi(o); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	return
+}
+
+// applyPagination returns the paginated window of items. A limit of 0
+// means "no limit" — the full slice (from offset) is returned.
+func applyPagination[T any](items []T, limit, offset int) []T {
+	if offset >= len(items) {
+		return []T{}
+	}
+	if limit <= 0 {
+		return items[offset:]
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
 }
 
 func parseSinceTime(sinceParam string) *metav1.Time {
@@ -3457,6 +3501,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 
 func (a *APIServer) listFlash(c *gin.Context) {
 	namespace := resolveNamespace()
+	limit, offset := parsePagination(c)
 
 	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
@@ -3478,8 +3523,10 @@ func (a *APIServer) listFlash(c *gin.Context) {
 		return taskRunList.Items[j].CreationTimestamp.Before(&taskRunList.Items[i].CreationTimestamp)
 	})
 
-	resp := make([]FlashListItem, 0, len(taskRunList.Items))
-	for _, tr := range taskRunList.Items {
+	page := applyPagination(taskRunList.Items, limit, offset)
+
+	resp := make([]FlashListItem, 0, len(page))
+	for _, tr := range page {
 		phase, message := getTaskRunStatus(&tr)
 		var compStr string
 		if tr.Status.CompletionTime != nil {
@@ -3974,6 +4021,8 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp SealedOperation) {
 
 func (a *APIServer) listSealed(c *gin.Context) {
 	namespace := resolveNamespace()
+	limit, offset := parsePagination(c)
+
 	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -3990,8 +4039,10 @@ func (a *APIServer) listSealed(c *gin.Context) {
 		return list.Items[j].CreationTimestamp.Before(&list.Items[i].CreationTimestamp)
 	})
 
-	resp := make([]SealedListItem, 0, len(list.Items))
-	for _, s := range list.Items {
+	page := applyPagination(list.Items, limit, offset)
+
+	resp := make([]SealedListItem, 0, len(page))
+	for _, s := range page {
 		var compStr string
 		if s.Status.CompletionTime != nil {
 			compStr = s.Status.CompletionTime.Format(time.RFC3339)

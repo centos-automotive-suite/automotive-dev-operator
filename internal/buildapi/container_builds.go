@@ -365,6 +365,7 @@ func (a *APIServer) createContainerBuild(c *gin.Context) {
 
 func listContainerBuilds(c *gin.Context) {
 	namespace := resolveNamespace()
+	limit, offset := parsePagination(c)
 
 	k8sClient, err := getClientFromRequest(c)
 	if err != nil {
@@ -384,8 +385,10 @@ func listContainerBuilds(c *gin.Context) {
 		return cbList.Items[j].CreationTimestamp.Before(&cbList.Items[i].CreationTimestamp)
 	})
 
-	items := make([]ContainerBuildListItem, 0, len(cbList.Items))
-	for _, cb := range cbList.Items {
+	page := applyPagination(cbList.Items, limit, offset)
+
+	items := make([]ContainerBuildListItem, 0, len(page))
+	for _, cb := range page {
 		item := ContainerBuildListItem{
 			Name:        cb.Name,
 			Phase:       cb.Status.Phase,

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -316,6 +318,7 @@ func (a *APIServer) listWorkspaces(c *gin.Context) {
 
 	namespace := resolveNamespace()
 	requester := a.resolveRequester(c)
+	limit, offset := parsePagination(c)
 
 	wsList := &automotivev1alpha1.WorkspaceList{}
 	if err := k8sClient.List(c.Request.Context(), wsList, &client.ListOptions{Namespace: namespace}); err != nil {
@@ -323,16 +326,22 @@ func (a *APIServer) listWorkspaces(c *gin.Context) {
 		return
 	}
 
-	workspaces := make([]WorkspaceResponse, 0, len(wsList.Items))
+	// Sort by creation time (newest first) for stable pagination
+	sort.Slice(wsList.Items, func(i, j int) bool {
+		return wsList.Items[j].CreationTimestamp.Before(&wsList.Items[i].CreationTimestamp)
+	})
+
+	// Filter to owner's workspaces, then paginate
+	owned := make([]WorkspaceResponse, 0, len(wsList.Items))
 	for i := range wsList.Items {
 		ws := &wsList.Items[i]
 		if ws.Spec.Owner != requester {
 			continue
 		}
-		workspaces = append(workspaces, workspaceResponseFromCR(ws))
+		owned = append(owned, workspaceResponseFromCR(ws))
 	}
 
-	c.JSON(http.StatusOK, workspaces)
+	c.JSON(http.StatusOK, applyPagination(owned, limit, offset))
 }
 
 func (a *APIServer) getWorkspace(c *gin.Context, name string) {
@@ -501,20 +510,32 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	// Buffer the tar stream so that EOF propagates cleanly to the SPDY executor.
-	// Limit to 512MB to prevent OOM from oversized uploads.
-	const maxSyncSize = 512 << 20 // 512 MiB
-	tarData, err := io.ReadAll(io.LimitReader(c.Request.Body, maxSyncSize+1))
+	// Spool the tar stream to a temp file so that EOF propagates cleanly to
+	// the SPDY executor, without buffering the entire upload in memory.
+	const maxSyncSize int64 = 512 << 20 // 512 MiB
+	tmpFile, err := os.CreateTemp("", "workspace-sync-*.tar")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp file for upload"})
+		return
+	}
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	defer func() { _ = tmpFile.Close() }()
+
+	written, err := io.Copy(tmpFile, io.LimitReader(c.Request.Body, maxSyncSize+1))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read upload: %v", err)})
 		return
 	}
-	if int64(len(tarData)) > maxSyncSize {
+	if written > maxSyncSize {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("upload exceeds maximum size of %d MiB", maxSyncSize>>20)})
 		return
 	}
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rewind temp file"})
+		return
+	}
 
-	if err := copyToPod(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, bytes.NewReader(tarData), "/workspace/src/"); err != nil {
+	if err := copyToPod(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, tmpFile, "/workspace/src/"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to sync files: %v", err)})
 		return
 	}
