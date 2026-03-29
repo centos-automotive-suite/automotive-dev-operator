@@ -485,6 +485,14 @@ type OSBuildsConfig struct {
 	// +optional
 	StorageClass string `json:"storageClass,omitempty"`
 
+	// UsePVCScratchVolumes moves build scratch directories (build cache, output, container storage)
+	// from node-local emptyDir volumes onto the shared workspace PVC.
+	// This prevents builds from consuming node ephemeral storage, avoiding node disk exhaustion
+	// when running multiple concurrent builds. Requires a larger PVC size (see pvcSize).
+	// Default: true
+	// +optional
+	UsePVCScratchVolumes *bool `json:"usePVCScratchVolumes,omitempty"`
+
 	// RuntimeClassName specifies the runtime class to use for the build pod
 	// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
 	// +optional
@@ -560,6 +568,14 @@ func (c *OSBuildsConfig) GetFlashTimeoutMinutes() int32 {
 		return c.FlashTimeoutMinutes
 	}
 	return DefaultFlashTimeoutMinutes
+}
+
+// GetUsePVCScratchVolumes returns whether to use PVC-backed scratch volumes (default: true)
+func (c *OSBuildsConfig) GetUsePVCScratchVolumes() bool {
+	if c.UsePVCScratchVolumes != nil {
+		return *c.UsePVCScratchVolumes
+	}
+	return true
 }
 
 // OperatorConfigStatus defines the observed state of OperatorConfig

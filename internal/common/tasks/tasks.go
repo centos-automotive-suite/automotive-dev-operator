@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // BuildConfig defines configuration options for build operations
@@ -28,6 +29,7 @@ type BuildConfig struct {
 	DefaultLeaseDuration        string
 	TrustedCABundleKind         string
 	TrustedCABundleName         string
+	UsePVCScratchVolumes        bool
 }
 
 // getAutomotiveImageBuilderImage returns the AIB image from config or the default constant
@@ -75,6 +77,13 @@ const DefaultInternalRegistryURL = "image-registry.openshift-image-registry.svc:
 
 // volumeNameContainerStorage is the common volume name for container storage across tasks.
 const volumeNameContainerStorage = "container-storage"
+
+// workspaceNameShared is the Tekton workspace name for the shared PVC workspace.
+const workspaceNameShared = "shared-workspace"
+
+// workspaceVolumeRef is the Tekton variable reference for the shared workspace volume name.
+// Tekton resolves this at runtime to the actual volume name in the pod spec.
+const workspaceVolumeRef = "$(workspaces." + workspaceNameShared + ".volume)"
 
 const defaultTrustedCABundleConfigMap = "rhivos-ca-bundle"
 
@@ -205,7 +214,7 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
 				{
-					Name:        "shared-workspace",
+					Name:        workspaceNameShared,
 					Description: "Workspace containing the build artifacts",
 					MountPath:   "/workspace/shared",
 				},
@@ -435,7 +444,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
 				{
-					Name:        "shared-workspace",
+					Name:        workspaceNameShared,
 					Description: "Workspace for sharing data between steps",
 					MountPath:   "/workspace/shared",
 				},
@@ -583,11 +592,15 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 		},
 	}
 
-	if buildConfig != nil && buildConfig.UseMemoryVolumes {
+	if buildConfig != nil && buildConfig.UseMemoryVolumes && buildConfig.UsePVCScratchVolumes {
+		log.Log.Info("WARNING: useMemoryVolumes and usePVCScratchVolumes are both enabled; usePVCScratchVolumes takes precedence")
+	}
+
+	if buildConfig != nil && buildConfig.UseMemoryVolumes && !buildConfig.UsePVCScratchVolumes {
 		for i := range task.Spec.Volumes {
 			vol := &task.Spec.Volumes[i]
 
-			if vol.Name == "build-dir" || vol.Name == "run-dir" || vol.Name == "container-storage" || vol.Name == "output-dir" {
+			if vol.Name == "build-dir" || vol.Name == "run-dir" || vol.Name == volumeNameContainerStorage || vol.Name == "output-dir" {
 				vol.EmptyDir = &corev1.EmptyDirVolumeSource{
 					Medium: corev1.StorageMediumMemory,
 				}
@@ -598,6 +611,43 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 				}
 			}
 		}
+	}
+
+	if buildConfig != nil && buildConfig.UsePVCScratchVolumes {
+		// Redirect scratch directory volume mounts to use subPaths of the
+		// shared-workspace PVC instead of node-local emptyDir volumes.
+		// container-storage is excluded because the overlay storage driver
+		// requires a filesystem that supports overlayfs (tmpfs/node disk).
+		//
+		// We rewrite volumeMounts to reference the workspace volume (which Tekton
+		// names based on the workspace declaration) with subPaths, keeping the
+		// same mount paths so scripts don't need changes.
+		pvcScratchRedirects := map[string]string{
+			"build-dir":  "scratch-build",
+			"output-dir": "scratch-output",
+			"run-dir":    "scratch-run",
+		}
+
+		for i := range task.Spec.Steps {
+			step := &task.Spec.Steps[i]
+			for j := range step.VolumeMounts {
+				vm := &step.VolumeMounts[j]
+				if subPath, ok := pvcScratchRedirects[vm.Name]; ok {
+					// Rewrite to use the workspace volume with a subPath
+					vm.Name = workspaceVolumeRef
+					vm.SubPath = subPath
+				}
+			}
+		}
+
+		// Remove the now-unused emptyDir volume definitions
+		var filtered []corev1.Volume
+		for _, vol := range task.Spec.Volumes {
+			if _, ok := pvcScratchRedirects[vol.Name]; !ok {
+				filtered = append(filtered, vol)
+			}
+		}
+		task.Spec.Volumes = filtered
 	}
 
 	return task
@@ -838,7 +888,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 				},
 			},
 			Workspaces: []tektonv1.PipelineWorkspaceDeclaration{
-				{Name: "shared-workspace"},
+				{Name: workspaceNameShared},
 				{Name: "manifest-config-workspace"},
 				{Name: "registry-auth", Optional: true},
 				{Name: "flash-oci-auth", Optional: true},
@@ -1008,7 +1058,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 						},
 					},
 					Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
-						{Name: "shared-workspace", Workspace: "shared-workspace"},
+						{Name: workspaceNameShared, Workspace: workspaceNameShared},
 						{Name: "manifest-config-workspace", Workspace: "manifest-config-workspace"},
 						{Name: "registry-auth", Workspace: "registry-auth"},
 					},
@@ -1124,7 +1174,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 						},
 					},
 					Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
-						{Name: "shared-workspace", Workspace: "shared-workspace"},
+						{Name: workspaceNameShared, Workspace: workspaceNameShared},
 					},
 					RunAfter: []string{"build-image"},
 					When: []tektonv1.WhenExpression{
