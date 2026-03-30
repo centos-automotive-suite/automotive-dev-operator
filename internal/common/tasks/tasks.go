@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // BuildConfig defines configuration options for build operations
@@ -592,15 +591,16 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 		},
 	}
 
-	if buildConfig != nil && buildConfig.UseMemoryVolumes && buildConfig.UsePVCScratchVolumes {
-		log.Log.Info("WARNING: useMemoryVolumes and usePVCScratchVolumes are both enabled; usePVCScratchVolumes takes precedence")
-	}
-
-	if buildConfig != nil && buildConfig.UseMemoryVolumes && !buildConfig.UsePVCScratchVolumes {
+	if buildConfig != nil && buildConfig.UseMemoryVolumes {
 		for i := range task.Spec.Volumes {
 			vol := &task.Spec.Volumes[i]
 
-			if vol.Name == "build-dir" || vol.Name == "run-dir" || vol.Name == volumeNameContainerStorage || vol.Name == "output-dir" {
+			isContainerStorage := vol.Name == volumeNameContainerStorage
+			isScratch := vol.Name == "build-dir" || vol.Name == "run-dir" || vol.Name == "output-dir"
+
+			// When PVC scratch is on, only container-storage remains as emptyDir;
+			// the other scratch volumes get redirected to the workspace PVC below.
+			if isContainerStorage || (!buildConfig.UsePVCScratchVolumes && isScratch) {
 				vol.EmptyDir = &corev1.EmptyDirVolumeSource{
 					Medium: corev1.StorageMediumMemory,
 				}

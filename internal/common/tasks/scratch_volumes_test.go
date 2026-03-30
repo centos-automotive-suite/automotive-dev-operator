@@ -22,10 +22,10 @@ var pvcScratchMountPaths = map[string]bool{
 
 // allScratchVolumeNames includes container-storage for memory volume tests
 var allScratchVolumeNames = map[string]bool{
-	"build-dir":         true,
-	"output-dir":        true,
-	"run-dir":           true,
-	"container-storage": true,
+	"build-dir":                true,
+	"output-dir":               true,
+	"run-dir":                  true,
+	volumeNameContainerStorage: true,
 }
 
 func TestPVCScratchVolumes_RemovesEmptyDirVolumes(t *testing.T) {
@@ -47,7 +47,7 @@ func TestPVCScratchVolumes_KeepsContainerStorage(t *testing.T) {
 
 	found := false
 	for _, vol := range task.Spec.Volumes {
-		if vol.Name == "container-storage" {
+		if vol.Name == volumeNameContainerStorage {
 			found = true
 			if vol.EmptyDir == nil {
 				t.Fatal("container-storage should remain as emptyDir")
@@ -167,6 +167,20 @@ func TestPVCScratchVolumes_TakesPrecedenceOverMemory(t *testing.T) {
 		if pvcScratchVolumeNames[vol.Name] {
 			t.Fatalf("scratch volume %q should be removed when UsePVCScratchVolumes is true, even with UseMemoryVolumes", vol.Name)
 		}
+	}
+
+	// container-storage should still be present and get memory medium
+	found := false
+	for _, vol := range task.Spec.Volumes {
+		if vol.Name == volumeNameContainerStorage {
+			found = true
+			if vol.EmptyDir == nil || vol.EmptyDir.Medium != corev1.StorageMediumMemory {
+				t.Fatal("container-storage should have memory medium when useMemoryVolumes is true")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("container-storage volume should be preserved when both useMemoryVolumes and usePVCScratchVolumes are true")
 	}
 
 	// Steps that had scratch mounts should now reference workspace volume

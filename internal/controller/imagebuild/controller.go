@@ -2051,7 +2051,7 @@ func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(
 			"old-pvc", imageBuild.Status.PVCName)
 	}
 
-	// Fetch OperatorConfig to get PVC size configuration
+	// Fetch OperatorConfig to get PVC size and storage class configuration
 	operatorConfig := &automotivev1alpha1.OperatorConfig{}
 	err := r.Get(ctx, types.NamespacedName{Name: "config", Namespace: OperatorNamespace}, operatorConfig)
 
@@ -2097,6 +2097,8 @@ func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(
 
 	if imageBuild.Spec.StorageClass != "" {
 		pvc.Spec.StorageClassName = &imageBuild.Spec.StorageClass
+	} else if err == nil && operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.StorageClass != "" {
+		pvc.Spec.StorageClassName = &operatorConfig.Spec.OSBuilds.StorageClass
 	}
 
 	if err := r.Create(ctx, pvc); err != nil {
