@@ -23,7 +23,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	kuberneteslib "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -112,7 +114,7 @@ type ImageBuildReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
-// +kubebuilder:rbac:groups=image.openshift.io,resources=imagestreams,verbs=get;create;delete
+// +kubebuilder:rbac:groups=image.openshift.io,resources=imagestreams,verbs=get;create;update;delete
 // +kubebuilder:rbac:groups=image.openshift.io,resources=imagestreamtags,verbs=delete
 // +kubebuilder:rbac:groups=tekton.dev,resources=tasks;pipelines;pipelineruns;taskruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
@@ -159,6 +161,85 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 }
 
+// ensureImageStreamOwnerRef adds a non-controller owner reference from the
+// ImageBuild to the ImageStream used by the internal registry, so that the
+// ImageStream is garbage collected when all owning ImageBuilds are deleted.
+func (r *ImageBuildReconciler) ensureImageStreamOwnerRef(
+	ctx context.Context,
+	imageBuild *automotivev1alpha1.ImageBuild,
+) error {
+	if !imageBuild.Spec.GetUseServiceAccountAuth() {
+		return nil
+	}
+
+	streamName := extractImageStreamName(imageBuild)
+	if streamName == "" {
+		return nil
+	}
+
+	log := r.Log.WithValues(
+		"imagebuild",
+		types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace},
+	)
+
+	is := &unstructured.Unstructured{}
+	is.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "image.openshift.io",
+		Version: "v1",
+		Kind:    "ImageStream",
+	})
+
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      streamName,
+		Namespace: imageBuild.Namespace,
+	}, is); err != nil {
+		if errors.IsNotFound(err) {
+			log.Info("ImageStream not found, skipping owner ref", "imageStream", streamName)
+			return nil
+		}
+		return fmt.Errorf("failed to get ImageStream %s: %w", streamName, err)
+	}
+
+	existingCount := len(is.GetOwnerReferences())
+
+	if err := controllerutil.SetOwnerReference(imageBuild, is, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner reference on ImageStream %s: %w", streamName, err)
+	}
+
+	// Skip the Update if SetOwnerReference didn't add a new entry
+	if len(is.GetOwnerReferences()) == existingCount {
+		return nil
+	}
+
+	if err := r.Update(ctx, is); err != nil {
+		return fmt.Errorf("failed to update ImageStream %s with owner reference: %w", streamName, err)
+	}
+
+	log.Info("Set owner reference on ImageStream", "imageStream", streamName)
+	return nil
+}
+
+// extractImageStreamName extracts the ImageStream name from the ImageBuild's
+// internal registry URLs (GetContainerPush and GetExportOCI).
+func extractImageStreamName(imageBuild *automotivev1alpha1.ImageBuild) string {
+	prefix := tasks.DefaultInternalRegistryURL + "/"
+	for _, ref := range []string{imageBuild.Spec.GetContainerPush(), imageBuild.Spec.GetExportOCI()} {
+		after, ok := strings.CutPrefix(ref, prefix)
+		if !ok {
+			continue
+		}
+		parts := strings.SplitN(after, "/", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		nameTag := strings.SplitN(parts[1], ":", 2)
+		if nameTag[0] != "" {
+			return nameTag[0]
+		}
+	}
+	return ""
+}
+
 func (r *ImageBuildReconciler) handleInitialState(
 	ctx context.Context,
 	imageBuild *automotivev1alpha1.ImageBuild,
@@ -167,6 +248,10 @@ func (r *ImageBuildReconciler) handleInitialState(
 		"imagebuild",
 		types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace},
 	)
+
+	if err := r.ensureImageStreamOwnerRef(ctx, imageBuild); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	if imageBuild.Spec.GetInputFilesServer() {
 		if err := r.createUploadPod(ctx, imageBuild); err != nil {

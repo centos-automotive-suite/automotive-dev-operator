@@ -128,6 +128,7 @@ rules:
   - create
   - delete
   - get
+  - update
 - apiGroups:
   - image.openshift.io
   resources:
