@@ -70,6 +70,11 @@ if [ "$(params.use-persistent-cache)" = "true" ]; then
   done
 else
   BUILD_DIR="/_build"
+
+  # When scratch volumes are PVC-backed (usePVCScratchVolumes), OpenShift applies
+  # setgid + namespace GID on the mount. Clear it so osbuild doesn't create files
+  # with GIDs that don't exist in the target rootfs.
+  chmod g-s "/_build" 2>/dev/null || true
 fi
 
 install_custom_ca_certs
