@@ -1736,9 +1736,24 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 		return fmt.Errorf("error checking for existing pod: %w", err)
 	}
 
-	workspacePVCName, err := r.getOrCreateWorkspacePVC(ctx, imageBuild)
-	if err != nil {
-		return err
+	// When a build-cache PVC exists (from --workspace), use it for uploads too
+	// so files land on the same PVC the TaskRun will mount as shared-workspace.
+	var workspacePVCName string
+	if imageBuild.Spec.BuildCachePVC != "" {
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      imageBuild.Spec.BuildCachePVC,
+			Namespace: imageBuild.Namespace,
+		}, pvc); err != nil {
+			return fmt.Errorf("buildCachePVC %q is not available: %w", imageBuild.Spec.BuildCachePVC, err)
+		}
+		workspacePVCName = pvc.Name
+	} else {
+		var err error
+		workspacePVCName, err = r.getOrCreateWorkspacePVC(ctx, imageBuild)
+		if err != nil {
+			return err
+		}
 	}
 
 	if imageBuild.Status.PVCName != workspacePVCName {
@@ -1788,7 +1803,7 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 			Containers: []corev1.Container{
 				{
 					Name:    "fileserver",
-					Image:   "quay.io/nginx/nginx-unprivileged:latest",
+					Image:   "registry.access.redhat.com/ubi10-minimal:latest",
 					Command: []string{"sleep", "infinity"},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
