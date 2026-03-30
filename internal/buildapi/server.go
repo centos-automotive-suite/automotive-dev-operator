@@ -1,8 +1,8 @@
 package buildapi
 
 import (
-	"archive/tar"
 	"bufio"
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -84,6 +84,26 @@ const (
 var getClientFromRequestFn = getClientFromRequest
 var getRESTConfigFromRequestFn = getRESTConfigFromRequest
 var createInternalRegistrySecretFn = createInternalRegistrySecret
+var newPodExecExecutorFn = func(
+	config *rest.Config,
+	namespace, podName, containerName string,
+	cmd []string,
+) (remotecommand.Executor, error) {
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	req := clientset.CoreV1().RESTClient().Post().Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: containerName,
+			Command:   cmd,
+			Stdin:     true,
+			Stdout:    true,
+			Stderr:    true,
+			TTY:       false,
+		}, kscheme.ParameterCodec)
+	return remotecommand.NewSPDYExecutor(config, http.MethodPost, req.URL())
+}
 var errRegistryCredentialsRequiredForPush = errors.New("registry credentials are required when push repository is specified")
 var loadOperatorConfigFn = func(
 	ctx context.Context,
@@ -2355,6 +2375,7 @@ func getBuildTemplate(c *gin.Context, name string) {
 
 // uploadContext holds the context needed for file upload operations.
 type uploadContext struct {
+	ctx       context.Context
 	restCfg   *rest.Config
 	namespace string
 	podName   string
@@ -2422,7 +2443,7 @@ func processFilePart(part *multipart.Part, pendingPath string, uctx *uploadConte
 	}
 
 	destPath := "/workspace/shared/" + cleanDest
-	if err := copyFileToPod(uctx.restCfg, uctx.namespace, uctx.podName, uctx.container, tmpName, destPath); err != nil {
+	if err := copyFileToPod(uctx.ctx, uctx.restCfg, uctx.namespace, uctx.podName, uctx.container, tmpName, destPath); err != nil {
 		return processFilePartResult{}, fmt.Errorf("stream to pod failed: %w", err)
 	}
 
@@ -2498,6 +2519,7 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	}
 
 	uctx := &uploadContext{
+		ctx:       c.Request.Context(),
 		restCfg:   restCfg,
 		namespace: namespace,
 		podName:   uploadPod.Name,
@@ -2560,7 +2582,7 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	writeJSON(c, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func copyFileToPod(config *rest.Config, namespace, podName, containerName, localPath, podPath string) error {
+func copyFileToPod(ctx context.Context, config *rest.Config, namespace, podName, containerName, localPath, podPath string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -2570,55 +2592,24 @@ func copyFileToPod(config *rest.Config, namespace, podName, containerName, local
 			fmt.Fprintf(os.Stderr, "Warning: failed to close file: %v\n", err)
 		}
 	}()
-	info, err := f.Stat()
+
+	// Stream raw file bytes via stdin; the pod-side command writes them directly.
+	// Uses only sh + cat (available in ubi-minimal), no tar dependency.
+	cmd := []string{"/bin/sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\" && chmod 0600 \"$1\"", "--", podPath}
+
+	executor, err := newPodExecExecutorFn(config, namespace, podName, containerName, cmd)
 	if err != nil {
 		return err
 	}
-
-	pr, pw := io.Pipe()
-	go func() {
-		tw := tar.NewWriter(pw)
-		defer func() {
-			if err := tw.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to close tar writer: %v\n", err)
-			}
-			if err := pw.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to close pipe writer: %v\n", err)
-			}
-		}()
-		hdr := &tar.Header{Name: path.Base(podPath), Mode: 0600, Size: info.Size(), ModTime: info.ModTime()}
-		if err := tw.WriteHeader(hdr); err != nil {
-			pw.CloseWithError(err)
-			return
+	var stderr bytes.Buffer
+	streamOpts := remotecommand.StreamOptions{Stdin: f, Stdout: io.Discard, Stderr: &stderr}
+	if err := executor.StreamWithContext(ctx, streamOpts); err != nil {
+		if stderr.Len() > 0 {
+			return fmt.Errorf("copy to pod: %w (stderr: %s)", err, stderr.String())
 		}
-		if _, err := io.Copy(tw, f); err != nil {
-			pw.CloseWithError(err)
-			return
-		}
-	}()
-
-	destDir := path.Dir(podPath)
-	cmd := []string{"/bin/sh", "-c", "mkdir -p \"$1\" && tar -x -C \"$1\"", "--", destDir}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
 		return err
 	}
-	req := clientset.CoreV1().RESTClient().Post().Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: containerName,
-			Command:   cmd,
-			Stdin:     true,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, kscheme.ParameterCodec)
-	executor, err := remotecommand.NewSPDYExecutor(config, http.MethodPost, req.URL())
-	if err != nil {
-		return err
-	}
-	streamOpts := remotecommand.StreamOptions{Stdin: pr, Stdout: io.Discard, Stderr: io.Discard}
-	return executor.StreamWithContext(context.Background(), streamOpts)
+	return nil
 }
 
 func setSecretOwnerRef(
