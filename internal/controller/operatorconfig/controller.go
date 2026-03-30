@@ -636,6 +636,7 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 			BuildTimeoutMinutes:         config.Spec.OSBuilds.GetBuildTimeoutMinutes(),
 			FlashTimeoutMinutes:         config.Spec.OSBuilds.GetFlashTimeoutMinutes(),
 			DefaultLeaseDuration:        config.Spec.Jumpstarter.GetDefaultLeaseDuration(),
+			UsePVCScratchVolumes:        config.Spec.OSBuilds.GetUsePVCScratchVolumes(),
 		}
 		if config.Spec.OSBuilds.Certificates != nil && config.Spec.OSBuilds.Certificates.TrustedCABundle != nil {
 			buildConfig.TrustedCABundleKind = config.Spec.OSBuilds.Certificates.TrustedCABundle.Kind

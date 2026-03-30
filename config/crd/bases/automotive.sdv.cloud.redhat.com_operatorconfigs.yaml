@@ -817,6 +817,14 @@ spec:
                       When true, all emptyDir volumes (build-dir, run-dir, container-storage, etc.) use tmpfs
                       Default: false (disk-backed)
                     type: boolean
+                  usePVCScratchVolumes:
+                    description: |-
+                      UsePVCScratchVolumes moves build scratch directories (build cache, output, container storage)
+                      from node-local emptyDir volumes onto the shared workspace PVC.
+                      This prevents builds from consuming node ephemeral storage, avoiding node disk exhaustion
+                      when running multiple concurrent builds. Requires a larger PVC size (see pvcSize).
+                      Default: true
+                    type: boolean
                 required:
                 - enabled
                 type: object
