@@ -338,14 +338,24 @@ catalog-deploy: ## Build and deploy the catalog to OpenShift OperatorHub
 	./deploy-catalog.sh
 
 .PHONY: catalog-update
-catalog-update: ## Update catalog configuration with current version
-	@echo "Updating catalog configuration for version $(VERSION)..."
-	@sed -i.bak \
-		-e "s|name: automotive-dev-operator\.v[^[:space:]]*|name: automotive-dev-operator.v$(VERSION)|g" \
-		-e "s|image:[[:space:]]*[^[:space:]]*automotive-dev-operator-bundle:[^[:space:]]*|image: $(BUNDLE_IMG)|g" \
-		catalog/automotive-dev-operator.yaml
-	@rm -f catalog/automotive-dev-operator.yaml.bak
-	@echo "Catalog updated to version $(VERSION) with bundle image: $(BUNDLE_IMG)"
+catalog-update: opm ## Generate catalog configuration for current version
+	@echo "Generating catalog configuration for version $(VERSION)..."
+	@mkdir -p catalog
+	@{ \
+		echo "---"; \
+		echo "defaultChannel: $(or $(DEFAULT_CHANNEL),alpha)"; \
+		echo "name: automotive-dev-operator"; \
+		echo "schema: olm.package"; \
+		echo "---"; \
+		echo "schema: olm.channel"; \
+		echo "package: automotive-dev-operator"; \
+		echo "name: $(or $(DEFAULT_CHANNEL),alpha)"; \
+		echo "entries:"; \
+		echo "  - name: automotive-dev-operator.v$(VERSION)"; \
+		echo "---"; \
+		$(OPM) render $(BUNDLE_IMG); \
+	} > catalog/automotive-dev-operator.yaml
+	@echo "Catalog generated for version $(VERSION) with bundle image: $(BUNDLE_IMG)"
 
 .PHONY: build-caib
 build-caib: ## Build the caib tool
