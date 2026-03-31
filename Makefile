@@ -323,7 +323,7 @@ endif
 
 # Build a catalog image using File-Based Catalog (FBC)
 .PHONY: catalog-build
-catalog-build: opm ## Build a catalog image.
+catalog-build: opm catalog-update ## Build a catalog image.
 	$(CONTAINER_TOOL) build -f catalog.Dockerfile -t $(CATALOG_IMG) .
 
 # Push the catalog image.
@@ -338,11 +338,14 @@ catalog-deploy: ## Build and deploy the catalog to OpenShift OperatorHub
 	./deploy-catalog.sh
 
 .PHONY: catalog-update
-catalog-update: ## Update catalog configuration with current bundle image
-	@echo "Updating catalog configuration..."
-	@sed -i.bak "s|image:.*|image: $(BUNDLE_IMG)|g" catalog/automotive-dev-operator.yaml
+catalog-update: ## Update catalog configuration with current version
+	@echo "Updating catalog configuration for version $(VERSION)..."
+	@sed -i.bak \
+		-e "s|name: automotive-dev-operator\.v[^[:space:]]*|name: automotive-dev-operator.v$(VERSION)|g" \
+		-e "s|image:[[:space:]]*[^[:space:]]*automotive-dev-operator-bundle:[^[:space:]]*|image: $(BUNDLE_IMG)|g" \
+		catalog/automotive-dev-operator.yaml
 	@rm -f catalog/automotive-dev-operator.yaml.bak
-	@echo "Catalog updated to use bundle image: $(BUNDLE_IMG)"
+	@echo "Catalog updated to version $(VERSION) with bundle image: $(BUNDLE_IMG)"
 
 .PHONY: build-caib
 build-caib: ## Build the caib tool

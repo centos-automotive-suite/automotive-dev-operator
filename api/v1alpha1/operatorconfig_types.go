@@ -25,7 +25,7 @@ import (
 
 const (
 	// DefaultAutomotiveImageBuilderImage is the default container image for automotive-image-builder
-	DefaultAutomotiveImageBuilderImage = "quay.io/centos-sig-automotive/automotive-image-builder:1.1.11"
+	DefaultAutomotiveImageBuilderImage = "quay.io/centos-sig-automotive/automotive-image-builder:1.1.14"
 
 	// DefaultYQHelperImage is the default yq helper image used in Tekton task steps
 	DefaultYQHelperImage = "quay.io/konflux-ci/yq:latest"
@@ -49,7 +49,7 @@ const (
 	DefaultFlashLeaseDuration = "03:00:00"
 
 	// DefaultToolchainImage is the default container image for workspace toolchains
-	DefaultToolchainImage = "quay.io/centos-sig-automotive/autosd-toolchain:latest"
+	DefaultToolchainImage = "quay.io/rh-sdv-cloud/autosd-toolchain:latest"
 
 	// DefaultWorkspaceArch is the default target architecture for workspaces
 	DefaultWorkspaceArch = "arm64"

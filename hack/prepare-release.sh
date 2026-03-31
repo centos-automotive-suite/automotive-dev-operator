@@ -119,6 +119,35 @@ EOF
     echo "  3. Create a PR with title: operator automotive-dev-operator ($version)"
 }
 
+update_catalog() {
+    local version=$1
+    log_info "Updating catalog configuration for version $version..."
+
+    cd "$ROOT_DIR"
+    make catalog-update VERSION="$version"
+
+    log_success "Catalog updated"
+}
+
+bump_dev_version() {
+    local version=$1
+    local major minor _
+    IFS='.' read -r major minor _ <<< "$version"
+    local next_minor=$((minor + 1))
+    local dev_version="${major}.${next_minor}.0-dev"
+
+    log_info "Bumping version to $dev_version for next development cycle..."
+
+    sed -i.bak "s/^VERSION ?= .*/VERSION ?= $dev_version/" "$ROOT_DIR/Makefile"
+    rm -f "$ROOT_DIR/Makefile.bak"
+
+    log_success "Version bumped to $dev_version in Makefile"
+    echo ""
+    log_info "Commit this change on main after tagging the release:"
+    echo "  git add Makefile"
+    echo "  git commit -m 'chore: bump version to $dev_version for next development cycle'"
+}
+
 # Generate release notes template
 generate_release_notes() {
     local version=$1
@@ -178,8 +207,20 @@ EOF
 main() {
     if [[ $# -lt 1 ]]; then
         echo "Usage: $0 <version>"
-        echo "Example: $0 0.1.0"
+        echo "       $0 post-release <version>"
+        echo ""
+        echo "Example: $0 0.1.0              # Prepare release"
+        echo "         $0 post-release 0.1.0  # Bump to next dev version"
         exit 1
+    fi
+
+    if [[ "$1" == "post-release" ]]; then
+        if [[ $# -lt 2 ]]; then
+            log_error "Usage: $0 post-release <released-version>"
+        fi
+        validate_version "$2"
+        bump_dev_version "$2"
+        return
     fi
 
     local version=$1
@@ -196,6 +237,7 @@ main() {
     update_version "$version"
     generate_bundle "$version"
     validate_bundle
+    update_catalog "$version"
     prepare_community_operators "$version"
     generate_release_notes "$version"
 
@@ -210,6 +252,7 @@ main() {
     echo "  3. Push: git push origin main --tags"
     echo "  4. GitHub Actions will build and publish images"
     echo "  5. Submit PR to community-operators-prod"
+    echo "  6. Bump to next dev version: $0 post-release $version"
     echo ""
 }
 
