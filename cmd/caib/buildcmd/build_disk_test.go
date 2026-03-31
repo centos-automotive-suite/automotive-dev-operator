@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +20,7 @@ func newTestDiskOpts() Options {
 		arch                 = "amd64"
 		exportFormat         string
 		mode                 string
-		aib                  = "quay.io/centos-sig-automotive/automotive-image-builder:latest"
+		aib                  = automotivev1alpha1.DefaultAutomotiveImageBuilderImage
 		storageClass         string
 		outputDir            string
 		timeout              = 60

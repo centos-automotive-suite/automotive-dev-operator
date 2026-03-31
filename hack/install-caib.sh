@@ -21,14 +21,14 @@ ARCH=$(uname -m)
 case "${OS}" in
     linux)
         case "${ARCH}" in
-            x86_64)  SUFFIX="amd64" ;;
-            aarch64) SUFFIX="arm64" ;;
+            x86_64)  SUFFIX="linux-amd64" ;;
+            aarch64) SUFFIX="linux-arm64" ;;
             *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;;
         esac
         ;;
     darwin)
         case "${ARCH}" in
-            arm64) SUFFIX="darwin" ;;
+            arm64) SUFFIX="darwin-arm64" ;;
             *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;;
         esac
         ;;
@@ -38,21 +38,39 @@ case "${OS}" in
         ;;
 esac
 
-URL="https://github.com/${REPO}/releases/download/${VERSION}/caib-${VERSION}-${SUFFIX}"
+ARTIFACT="caib-${VERSION}-${SUFFIX}.tar.gz"
+URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARTIFACT}"
+CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
 INSTALL_DIR="/usr/local/bin"
 
-TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE"' EXIT
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
 
 echo "Downloading caib ${VERSION} for ${OS}/${ARCH}..."
-curl -fSL -o "$TMPFILE" "$URL"
-chmod +x "$TMPFILE"
+curl -fSL -o "${TMPDIR}/${ARTIFACT}" "$URL"
+
+# Verify checksum
+echo "Verifying checksum..."
+curl -fSL -o "${TMPDIR}/checksums.txt" "$CHECKSUMS_URL"
+if ! grep -q "${ARTIFACT}" "${TMPDIR}/checksums.txt"; then
+    echo "Error: No checksum entry found for ${ARTIFACT}" >&2
+    exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$TMPDIR" && grep "${ARTIFACT}" checksums.txt | sha256sum -c -)
+else
+    (cd "$TMPDIR" && grep "${ARTIFACT}" checksums.txt | shasum -a 256 -c -)
+fi
+
+# Extract
+tar xzf "${TMPDIR}/${ARTIFACT}" -C "$TMPDIR"
+chmod +x "${TMPDIR}/caib"
 
 if [ -w "$INSTALL_DIR" ]; then
-    mv "$TMPFILE" "${INSTALL_DIR}/caib"
+    mv "${TMPDIR}/caib" "${INSTALL_DIR}/caib"
 else
     echo "Installing to ${INSTALL_DIR} (requires sudo)..."
-    sudo mv "$TMPFILE" "${INSTALL_DIR}/caib"
+    sudo mv "${TMPDIR}/caib" "${INSTALL_DIR}/caib"
 fi
 
 echo "caib ${VERSION} installed to ${INSTALL_DIR}/caib"

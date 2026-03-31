@@ -93,7 +93,7 @@ bin/caib image build <manifest.aib.yml> [flags]
 | `--push-disk` | | Push disk image as OCI artifact to registry |
 | `-o`, `--output` | | Download disk image to local file (implies `--disk`) |
 | `--builder-image` | | Custom aib-build container |
-| `--aib-image` | `quay.io/.../automotive-image-builder:latest` | AIB container image |
+| `--aib-image` | `quay.io/.../automotive-image-builder:1.1.14` | AIB container image |
 | `--storage-class` | | Storage class for build workspace PVC |
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--timeout` | `60` | Timeout in minutes |
@@ -166,7 +166,7 @@ bin/caib image disk <container-ref> [flags]
 | `-d`, `--distro` | `autosd` | Distribution |
 | `-t`, `--target` | `qemu` | Target platform |
 | `-a`, `--arch` | (current system) | Architecture (`amd64`, `arm64`) |
-| `--aib-image` | `quay.io/.../automotive-image-builder:latest` | AIB container image |
+| `--aib-image` | `quay.io/.../automotive-image-builder:1.1.14` | AIB container image |
 | `--storage-class` | | Kubernetes storage class |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `false` | Wait for build to complete |
@@ -211,7 +211,7 @@ bin/caib image build-dev <manifest.aib.yml> [flags]
 | `--compress` | `gzip` | Compression algorithm (`gzip`, `lz4`, `xz`) |
 | `--push` | | Push disk image as OCI artifact to registry |
 | `-o`, `--output` | | Download artifact to local file |
-| `--aib-image` | `quay.io/.../automotive-image-builder:latest` | AIB container image |
+| `--aib-image` | `quay.io/.../automotive-image-builder:1.1.14` | AIB container image |
 | `--storage-class` | | Storage class for build workspace PVC |
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--timeout` | `60` | Timeout in minutes |
@@ -247,7 +247,7 @@ Sealed operations manage TPM-based image sealing for secure boot workflows. All 
 | `--token` | `$CAIB_TOKEN` | Bearer token |
 | `--input` | | Input/source container ref (alternative to positional) |
 | `--output` | | Output container ref (alternative to positional) |
-| `--aib-image` | `quay.io/.../automotive-image-builder:latest` | AIB container image |
+| `--aib-image` | `quay.io/.../automotive-image-builder:1.1.14` | AIB container image |
 | `--builder-image` | | Builder container image (overrides `--arch` default) |
 | `--arch` | (auto-detected) | Target architecture (`amd64`, `arm64`) |
 | `--key` | | Path to local PEM key file |

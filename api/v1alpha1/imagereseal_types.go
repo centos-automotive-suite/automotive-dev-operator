@@ -132,7 +132,7 @@ func (s *ImageResealSpec) GetAIBImage() string {
 	if s.AIBImage != "" {
 		return s.AIBImage
 	}
-	return "quay.io/centos-sig-automotive/automotive-image-builder:latest"
+	return DefaultAutomotiveImageBuilderImage
 }
 
 // GetStages returns the ordered list of stages to run. Uses Stages if set, otherwise []string{Operation}.

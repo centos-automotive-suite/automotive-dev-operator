@@ -38,12 +38,12 @@ var _ = Describe("ImageResealSpec", func() {
 
 		It("should return default AIB image when not set", func() {
 			spec := &ImageResealSpec{}
-			Expect(spec.GetAIBImage()).To(Equal("quay.io/centos-sig-automotive/automotive-image-builder:latest"))
+			Expect(spec.GetAIBImage()).To(Equal(DefaultAutomotiveImageBuilderImage))
 		})
 
 		It("should return default AIB image when empty string", func() {
 			spec := &ImageResealSpec{AIBImage: ""}
-			Expect(spec.GetAIBImage()).To(Equal("quay.io/centos-sig-automotive/automotive-image-builder:latest"))
+			Expect(spec.GetAIBImage()).To(Equal(DefaultAutomotiveImageBuilderImage))
 		})
 	})
 
