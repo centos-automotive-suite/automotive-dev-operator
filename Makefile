@@ -355,6 +355,19 @@ catalog-update: opm ## Generate catalog configuration for current version
 		echo "---"; \
 		$(OPM) render $(BUNDLE_IMG); \
 	} > catalog/automotive-dev-operator.yaml
+	@# Add openshift-pipelines dependency (opm render doesn't include it)
+	@awk '\
+		/^- type: olm\.package$$/ { in_pkg=1 } \
+		in_pkg && /version:/ { \
+			print; \
+			print "- type: olm.package.required"; \
+			print "  value:"; \
+			print "    packageName: openshift-pipelines-operator-rh"; \
+			print "    versionRange: \">=1.12.0\""; \
+			in_pkg=0; next \
+		} \
+		{ print }' catalog/automotive-dev-operator.yaml > catalog/automotive-dev-operator.yaml.tmp
+	@mv catalog/automotive-dev-operator.yaml.tmp catalog/automotive-dev-operator.yaml
 	@echo "Catalog generated for version $(VERSION) with bundle image: $(BUNDLE_IMG)"
 
 .PHONY: build-caib
