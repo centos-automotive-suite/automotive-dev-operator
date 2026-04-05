@@ -327,12 +327,14 @@ EOF
   # Push with multi-layer manifest using annotation file
   # Files are pushed from current directory (parts_dir) so they extract flat
   # shellcheck disable=SC2086
+  set -o pipefail
   "$HOME/bin/oras" push --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${artifact_type}" \
     --annotation-file "$annotations_file" \
     "${repo_url}" \
-    ${layer_args}
+    ${layer_args} 2>&1 | tee /tmp/oras-push-output.txt
+  set +o pipefail
 
   # Clean up annotation file (also handled by trap)
   rm -f "$annotations_file"
@@ -388,15 +390,84 @@ PYEOF
   echo "  Media type: ${media_type}"
   echo "  Annotations: distro=${distro}, target=${target}, arch=${arch}"
 
+  set -o pipefail
   "$HOME/bin/oras" push --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${media_type}" \
     --annotation-file "$single_annotations_file" \
     "${repo_url}" \
-    "${exportFile}:${media_type}"
+    "${exportFile}:${media_type}" 2>&1 | tee /tmp/oras-push-output.txt
+  set +o pipefail
 
   emit_progress "Pushing artifact" 1 1
 
   echo ""
   echo "=== Artifact pushed successfully ==="
+fi
+
+# Write Tekton Chains type hint results for disk artifact
+DISK_DIGEST=$(sed -n 's/.*Digest: \(sha256:[a-f0-9]*\).*/\1/p' /tmp/oras-push-output.txt 2>/dev/null | head -1)
+if [ -z "$DISK_DIGEST" ]; then
+  # Fallback: fetch manifest descriptor from registry
+  DISK_DIGEST=$("$HOME/bin/oras" manifest fetch --descriptor "${repo_url}" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || echo "")
+fi
+echo -n "${repo_url}" > /tekton/results/IMAGE_URL
+echo -n "${DISK_DIGEST}" > /tekton/results/IMAGE_DIGEST
+echo "Tekton Chains: IMAGE_URL=${repo_url} IMAGE_DIGEST=${DISK_DIGEST}"
+
+# Attach sanitized osbuild manifest as OCI referrer for supply chain verification.
+# image.json is the fully-resolved osbuild manifest produced by AIB — it contains
+# the complete build recipe (RPMs, stages, filesystem layout). We strip credentials
+# (password hashes, repo auth, secrets) before publishing.
+OSBUILD_MANIFEST="/workspace/shared/image.json"
+if [ -f "$OSBUILD_MANIFEST" ] && [ -n "$DISK_DIGEST" ]; then
+  # Use a relative path so ORAS stores "image.json" as the OCI title (not /tmp/...)
+  SANITIZED_MANIFEST="./image-sanitized.json"
+
+  python3 - "$OSBUILD_MANIFEST" "$SANITIZED_MANIFEST" <<'PYEOF'
+import json, sys, re
+
+SENSITIVE_KEYS = {"password", "secrets", "secret", "auth", "token", "key", "credential", "passphrase"}
+
+def redact_sensitive(obj):
+    """Recursively redact fields with sensitive-sounding names anywhere in the tree."""
+    if isinstance(obj, dict):
+        for k in obj:
+            if k.lower() in SENSITIVE_KEYS:
+                obj[k] = "REDACTED"
+            else:
+                redact_sensitive(obj[k])
+    elif isinstance(obj, list):
+        for item in obj:
+            redact_sensitive(item)
+
+def redact_source_urls(sources):
+    """Strip embedded user:pass from source URLs (e.g. https://user:pass@host/...)."""
+    for source_data in sources.values():
+        items = source_data if isinstance(source_data, dict) else {}
+        for val in items.get("items", {}).values():
+            if isinstance(val, dict) and "url" in val:
+                val["url"] = re.sub(r'(https?://)([^@/]+)@', r'\1REDACTED@', val["url"])
+
+with open(sys.argv[1]) as f:
+    manifest = json.load(f)
+redact_sensitive(manifest)
+if "sources" in manifest:
+    redact_source_urls(manifest["sources"])
+
+with open(sys.argv[2], "w") as f:
+    json.dump(manifest, f, indent=2)
+PYEOF
+
+  echo "Attaching sanitized osbuild manifest to ${repo_url}@${DISK_DIGEST}"
+  "$HOME/bin/oras" attach \
+    --artifact-type "application/vnd.osbuild.manifest.v1+json" \
+    "${repo_url}@${DISK_DIGEST}" \
+    "${SANITIZED_MANIFEST}:application/vnd.osbuild.manifest.v1+json" 2>&1 || \
+    echo "WARNING: Failed to attach osbuild manifest — registry may not support OCI referrers (non-fatal)"
+
+  rm -f "$SANITIZED_MANIFEST"
+else
+  echo "No osbuild manifest found or no digest available, skipping manifest attach"
 fi

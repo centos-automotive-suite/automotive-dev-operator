@@ -14,6 +14,12 @@ umask 0077
 
 setup_cluster_auth
 
+# Initialize Tekton Chains type hint results with empty defaults.
+# Tekton requires all declared results to exist; these are overwritten
+# later if a container push actually happens.
+echo -n "" > /tekton/results/IMAGE_URL
+echo -n "" > /tekton/results/IMAGE_DIGEST
+
 # Read registry credentials from workspace and set up auth
 read_registry_creds "/workspace/registry-auth"
 setup_registry_auth || echo "No custom registry auth found, using cluster auth only"
@@ -462,12 +468,14 @@ PYEOF
           echo "⏱ Container annotate: $((ANNOTATE_DONE - COPY_DONE))s"
 
           echo "Pushing container to registry: $CONTAINER_PUSH"
-          skopeo copy --authfile="$REGISTRY_AUTH_FILE" "oci:${OCI_DIR}:latest" "docker://$CONTAINER_PUSH"
+          skopeo copy --digestfile /tmp/container-push-digest.txt \
+            --authfile="$REGISTRY_AUTH_FILE" "oci:${OCI_DIR}:latest" "docker://$CONTAINER_PUSH"
           rm -rf "${OCI_DIR:-/tmp/nonexistent}" 2>/dev/null || true
           PUSH_DONE=$(date +%s)
           echo "⏱ Container registry push: $((PUSH_DONE - ANNOTATE_DONE))s"
           echo "⏱ Container push total: $((PUSH_DONE - PUSH_START))s"
           echo "Container pushed successfully to $CONTAINER_PUSH"
+          echo "Container digest: $(cat /tmp/container-push-digest.txt 2>/dev/null)"
         ) &
         CONTAINER_PUSH_PID=$!
       fi
@@ -744,6 +752,14 @@ fi
 if [ -n "${CONTAINER_PUSH_PID:-}" ]; then
   echo "Waiting for container push to complete..."
   wait "$CONTAINER_PUSH_PID" || { echo "Error: Container push failed"; exit 1; }
+fi
+
+# Write Tekton Chains type hint results for bootc container
+if [ -n "${CONTAINER_PUSH:-}" ]; then
+  PUSHED_DIGEST=$(cat /tmp/container-push-digest.txt 2>/dev/null || echo "")
+  echo -n "$CONTAINER_PUSH" > /tekton/results/IMAGE_URL
+  echo -n "$PUSHED_DIGEST" > /tekton/results/IMAGE_DIGEST
+  echo "Tekton Chains: IMAGE_URL=$CONTAINER_PUSH IMAGE_DIGEST=$PUSHED_DIGEST"
 fi
 
 BUILD_END_TIME=$(date +%s)

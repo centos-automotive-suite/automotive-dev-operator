@@ -211,6 +211,16 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 					},
 				},
 			},
+			Results: []tektonv1.TaskResult{
+				{
+					Name:        "IMAGE_URL",
+					Description: "Pushed disk artifact OCI URL (Tekton Chains type hint)",
+				},
+				{
+					Name:        "IMAGE_DIGEST",
+					Description: "Pushed disk artifact OCI digest (Tekton Chains type hint)",
+				},
+			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
 				{
 					Name:        workspaceNameShared,
@@ -439,6 +449,14 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 				{
 					Name:        "build-timing",
 					Description: "JSON timing breakdown of build phases in seconds",
+				},
+				{
+					Name:        "IMAGE_URL",
+					Description: "Pushed bootc container image URL (Tekton Chains type hint)",
+				},
+				{
+					Name:        "IMAGE_DIGEST",
+					Description: "Pushed bootc container image digest (Tekton Chains type hint)",
 				},
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
@@ -914,6 +932,26 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					Name:        "build-timing",
 					Description: "JSON timing breakdown of build phases in seconds",
 					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.build-image.results.build-timing)"},
+				},
+				{
+					Name:        "container-image-url",
+					Description: "Pushed bootc container image URL",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.build-image.results.IMAGE_URL)"},
+				},
+				{
+					Name:        "container-image-digest",
+					Description: "Pushed bootc container image digest",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.build-image.results.IMAGE_DIGEST)"},
+				},
+				{
+					Name:        "disk-artifact-url",
+					Description: "Pushed disk artifact OCI URL",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_URL)"},
+				},
+				{
+					Name:        "disk-artifact-digest",
+					Description: "Pushed disk artifact OCI digest",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_DIGEST)"},
 				},
 			},
 			Tasks: []tektonv1.PipelineTask{
