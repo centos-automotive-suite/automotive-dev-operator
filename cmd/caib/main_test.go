@@ -293,6 +293,19 @@ func TestOutputFormatFlagSetFromArgs(t *testing.T) {
 	outputFormat = "table"
 }
 
+func TestValidOutputFormats(t *testing.T) {
+	for _, f := range []string{"table", "json", "yaml", "yml"} {
+		if !validOutputFormats[f] {
+			t.Errorf("expected %q to be a valid output format", f)
+		}
+	}
+	for _, f := range []string{"csv", "xml", "", "TABLE"} {
+		if validOutputFormats[f] {
+			t.Errorf("expected %q to NOT be a valid output format", f)
+		}
+	}
+}
+
 func TestApplyTargetDefaults_MappingWithEmptyArchDoesNotOverride(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{

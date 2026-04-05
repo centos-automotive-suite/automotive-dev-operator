@@ -27,7 +27,8 @@ import (
 )
 
 const (
-	defaultNamespace = "default"
+	defaultNamespace    = "default"
+	outputFormatTable   = "table"
 )
 
 var (
@@ -69,7 +70,7 @@ func getOutputFormat(cmd *cobra.Command) string {
 			return flag.Value.String()
 		}
 	}
-	return "table"
+	return outputFormatTable
 }
 
 // getInsecureSkipTLS returns whether to skip TLS verification
