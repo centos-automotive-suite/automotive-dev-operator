@@ -32,7 +32,6 @@ type Options struct {
 	ServerURL              *string
 	AuthToken              *string
 	BuildName              *string
-	ShowOutputFormat       *string
 	Distro                 *string
 	Target                 *string
 	Architecture           *string
@@ -173,9 +172,6 @@ func NewImageCmd(opts Options) *cobra.Command {
 	showCmd.Flags().StringVar(
 		opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"),
 		"Bearer token for authentication (e.g., OpenShift access token)",
-	)
-	showCmd.Flags().StringVarP(
-		opts.ShowOutputFormat, "output", "o", "table", "Output format (table, json, yaml)",
 	)
 
 	// disk command flags (create disk from existing container)
@@ -425,7 +421,7 @@ Examples:
   caib image show my-build
 
   # Show details as JSON
-  caib image show my-build -o json`,
+  caib image show my-build --output-format json`,
 		Args: cobra.ExactArgs(1),
 		Run:  opts.RunShow,
 	}

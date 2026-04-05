@@ -251,6 +251,65 @@ func TestSanitizeBuildName(t *testing.T) {
 	}
 }
 
+func TestOutputFormatFlagRegistered(t *testing.T) {
+	rootCmd := newRootCmd()
+	flag := rootCmd.PersistentFlags().Lookup("output-format")
+	if flag == nil {
+		t.Fatal("expected --output-format persistent flag on root command")
+	}
+	if flag.DefValue != "table" {
+		t.Errorf("expected default value 'table', got %q", flag.DefValue)
+	}
+}
+
+func TestOutputFormatFlagPropagates(t *testing.T) {
+	rootCmd := newRootCmd()
+
+	// Simulate: caib image list --output-format json
+	// Find the image subcommand, then list under it
+	imageCmd, _, err := rootCmd.Find([]string{"image", "list"})
+	if err != nil {
+		t.Fatalf("could not find image list command: %v", err)
+	}
+
+	flag := imageCmd.Root().PersistentFlags().Lookup("output-format")
+	if flag == nil {
+		t.Fatal("expected --output-format to be visible from image list command")
+	}
+}
+
+func TestOutputFormatFlagSetFromArgs(t *testing.T) {
+	originalFormat := outputFormat
+	t.Cleanup(func() { outputFormat = originalFormat })
+
+	rootCmd := newRootCmd()
+
+	// Parse --output-format json at root level
+	rootCmd.SetArgs([]string{"--output-format", "json", "--help"})
+	_ = rootCmd.Execute()
+
+	if outputFormat != "json" {
+		t.Errorf("expected outputFormat to be 'json' after parsing, got %q", outputFormat)
+	}
+}
+
+func TestValidOutputFormats(t *testing.T) {
+	// This tests the validOutputFormats map keys directly.
+	// Note: PersistentPreRunE applies strings.ToLower before the lookup,
+	// so CLI users can pass e.g. "--output-format TABLE" and it will be
+	// accepted as "table". This test only validates the canonical map entries.
+	for _, f := range []string{"table", "json", "yaml", "yml"} {
+		if !validOutputFormats[f] {
+			t.Errorf("expected %q to be a valid output format", f)
+		}
+	}
+	for _, f := range []string{"csv", "xml", "", "TABLE"} {
+		if validOutputFormats[f] {
+			t.Errorf("expected %q to NOT be a valid output format", f)
+		}
+	}
+}
+
 func TestApplyTargetDefaults_MappingWithEmptyArchDoesNotOverride(t *testing.T) {
 	cmd := newCmdWithArchFlag(archAMD64, false)
 	config := &buildapitypes.OperatorConfigResponse{

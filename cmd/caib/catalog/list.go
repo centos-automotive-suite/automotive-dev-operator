@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
@@ -171,15 +172,18 @@ func runList(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Output in requested format
-	switch outputFormat {
+	format := strings.ToLower(strings.TrimSpace(getOutputFormat(cmd)))
+	switch format {
 	case "json":
 		output, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Println(string(output))
-	case "yaml":
+	case "yaml", "yml":
 		output, _ := yaml.Marshal(result)
 		fmt.Println(string(output))
-	default:
+	case outputFormatTable:
 		printTable(result.Items)
+	default:
+		return fmt.Errorf("invalid output format %q (supported: table, json, yaml)", format)
 	}
 
 	return nil

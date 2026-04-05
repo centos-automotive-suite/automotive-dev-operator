@@ -15,7 +15,7 @@ var (
 	serverURL              string
 	manifest               string
 	buildName              string
-	showOutputFormat       string
+	outputFormat           string
 	distro                 string
 	target                 string
 	architecture           string
