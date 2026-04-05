@@ -14,7 +14,7 @@ type runtimeState struct {
 	ServerURL              *string
 	Manifest               *string
 	BuildName              *string
-	ShowOutputFormat       *string
+	OutputFormat           *string
 	Distro                 *string
 	Target                 *string
 	Architecture           *string
@@ -72,7 +72,7 @@ func newRuntimeState() runtimeState {
 		ServerURL:              &serverURL,
 		Manifest:               &manifest,
 		BuildName:              &buildName,
-		ShowOutputFormat:       &showOutputFormat,
+		OutputFormat:           &outputFormat,
 		Distro:                 &distro,
 		Target:                 &target,
 		Architecture:           &architecture,
@@ -179,11 +179,11 @@ func (s runtimeState) newHandlers() handlerSet {
 			HandleError:               handleError,
 		}),
 		query: querycmd.NewHandler(querycmd.Options{
-			ServerURL:        s.ServerURL,
-			AuthToken:        s.AuthToken,
-			ShowOutputFormat: s.ShowOutputFormat,
-			InsecureSkipTLS:  s.InsecureSkipTLS,
-			HandleError:      handleError,
+			ServerURL:       s.ServerURL,
+			AuthToken:       s.AuthToken,
+			OutputFormat:    s.OutputFormat,
+			InsecureSkipTLS: s.InsecureSkipTLS,
+			HandleError:     handleError,
 		}),
 		download: downloadcmd.NewHandler(downloadcmd.Options{
 			ServerURL:       s.ServerURL,
@@ -259,7 +259,7 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		ServerURL:              s.ServerURL,
 		AuthToken:              s.AuthToken,
 		BuildName:              s.BuildName,
-		ShowOutputFormat:       s.ShowOutputFormat,
+		OutputFormat:           s.OutputFormat,
 		Distro:                 s.Distro,
 		Target:                 s.Target,
 		Architecture:           s.Architecture,

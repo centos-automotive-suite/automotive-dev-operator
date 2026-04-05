@@ -17,12 +17,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const outputFormatTable = "table"
+
 // Options wires query handlers to caller-owned state and helper callbacks.
 type Options struct {
-	ServerURL        *string
-	AuthToken        *string
-	ShowOutputFormat *string
-	InsecureSkipTLS  *bool
+	ServerURL       *string
+	AuthToken       *string
+	OutputFormat    *string
+	InsecureSkipTLS *bool
 
 	HandleError func(error)
 }
@@ -75,34 +77,12 @@ func (h *Handler) RunList(_ *cobra.Command, _ []string) {
 		return
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	defer func() {
-		if flushErr := w.Flush(); flushErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to flush output: %v\n", flushErr)
-		}
-	}()
+	h.renderList(items)
+}
 
-	if _, err := fmt.Fprintln(w, "NAME\tSTATUS\tAGE\tREQUESTED BY\tARTIFACT"); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to write header: %v\n", err)
-		return
-	}
-	for _, it := range items {
-		artifact := it.DiskImage
-		if artifact == "" {
-			artifact = it.ContainerImage
-		}
-		if _, err := fmt.Fprintf(
-			w,
-			"%s\t%s\t%s\t%s\t%s\n",
-			it.Name,
-			it.Phase,
-			formatAge(it.CreatedAt),
-			it.RequestedBy,
-			artifact,
-		); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to write row: %v\n", err)
-		}
-	}
+// renderList formats and prints a list of builds according to the configured output format.
+func (h *Handler) renderList(items []buildapitypes.BuildListItem) {
+	h.renderFormatted(items, func() { printBuildList(items) })
 }
 
 // RunShow handles `caib image show`.
@@ -118,11 +98,6 @@ func (h *Handler) RunShow(_ *cobra.Command, args []string) {
 		h.handleError(fmt.Errorf("internal error: --insecure option is not configured"))
 		return
 	}
-	if h.opts.ShowOutputFormat == nil {
-		h.handleError(fmt.Errorf("internal error: output format option is not configured"))
-		return
-	}
-
 	serverURL := strings.TrimSpace(*h.opts.ServerURL)
 	insecureSkipTLS := *h.opts.InsecureSkipTLS
 
@@ -158,26 +133,40 @@ func (h *Handler) RunShow(_ *cobra.Command, args []string) {
 		}
 	}
 
-	switch strings.ToLower(*h.opts.ShowOutputFormat) {
+	h.renderShow(st)
+}
+
+// renderShow formats and prints a single build response according to the configured output format.
+func (h *Handler) renderShow(st *buildapitypes.BuildResponse) {
+	h.renderFormatted(st, func() { printBuildDetails(st) })
+}
+
+// renderFormatted outputs data in the configured format, using tablePrinter for table output.
+func (h *Handler) renderFormatted(data any, tablePrinter func()) {
+	format := outputFormatTable
+	if h.opts.OutputFormat != nil {
+		format = strings.ToLower(*h.opts.OutputFormat)
+	}
+
+	switch format {
 	case "json":
-		out, marshalErr := json.MarshalIndent(st, "", "  ")
+		out, marshalErr := json.MarshalIndent(data, "", "  ")
 		if marshalErr != nil {
 			h.handleError(fmt.Errorf("error rendering JSON output: %w", marshalErr))
 			return
 		}
 		fmt.Println(string(out))
 	case "yaml", "yml":
-		out, marshalErr := yaml.Marshal(st)
+		out, marshalErr := yaml.Marshal(data)
 		if marshalErr != nil {
 			h.handleError(fmt.Errorf("error rendering YAML output: %w", marshalErr))
 			return
 		}
 		fmt.Print(string(out))
-	case "table":
-		printBuildDetails(st)
+	case outputFormatTable:
+		tablePrinter()
 	default:
-		h.handleError(fmt.Errorf("invalid output format %q (supported: table, json, yaml)", *h.opts.ShowOutputFormat))
-		return
+		h.handleError(fmt.Errorf("invalid output format %q (supported: table, json, yaml)", format))
 	}
 }
 
@@ -221,6 +210,37 @@ func buildParametersFromTemplate(tpl *buildapitypes.BuildTemplateResponse) *buil
 	}
 
 	return params
+}
+
+func printBuildList(items []buildapitypes.BuildListItem) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	defer func() {
+		if flushErr := w.Flush(); flushErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to flush output: %v\n", flushErr)
+		}
+	}()
+
+	if _, err := fmt.Fprintln(w, "NAME\tSTATUS\tAGE\tREQUESTED BY\tARTIFACT"); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write header: %v\n", err)
+		return
+	}
+	for _, it := range items {
+		artifact := it.DiskImage
+		if artifact == "" {
+			artifact = it.ContainerImage
+		}
+		if _, err := fmt.Fprintf(
+			w,
+			"%s\t%s\t%s\t%s\t%s\n",
+			it.Name,
+			it.Phase,
+			formatAge(it.CreatedAt),
+			it.RequestedBy,
+			artifact,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write row: %v\n", err)
+		}
+	}
 }
 
 func printBuildDetails(st *buildapitypes.BuildResponse) {

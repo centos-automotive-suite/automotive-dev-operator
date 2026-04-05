@@ -98,21 +98,20 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	switch outputFormat {
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse JSON response: %w", err)
+	}
+
+	switch getOutputFormat(cmd) {
 	case "json":
-		var result map[string]interface{}
-		if err := json.Unmarshal(body, &result); err != nil {
-			return fmt.Errorf("failed to parse JSON response: %w", err)
-		}
 		output, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Println(string(output))
-	default:
-		var result map[string]interface{}
-		if err := json.Unmarshal(body, &result); err != nil {
-			return fmt.Errorf("failed to parse JSON response: %w", err)
-		}
+	case "yaml", "yml", "table":
 		output, _ := yaml.Marshal(result)
 		fmt.Println(string(output))
+	default:
+		return fmt.Errorf("invalid output format %q (supported: table, json, yaml)", getOutputFormat(cmd))
 	}
 
 	return nil

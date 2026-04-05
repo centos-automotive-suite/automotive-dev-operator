@@ -171,15 +171,17 @@ func runList(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Output in requested format
-	switch outputFormat {
+	switch getOutputFormat(cmd) {
 	case "json":
 		output, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Println(string(output))
-	case "yaml":
+	case "yaml", "yml":
 		output, _ := yaml.Marshal(result)
 		fmt.Println(string(output))
-	default:
+	case "table":
 		printTable(result.Items)
+	default:
+		return fmt.Errorf("invalid output format %q (supported: table, json, yaml)", getOutputFormat(cmd))
 	}
 
 	return nil

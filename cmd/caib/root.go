@@ -25,6 +25,12 @@ func newRootCmd() *cobra.Command {
 		envBool("CAIB_INSECURE"),
 		"skip TLS certificate verification (insecure, for testing only; env: CAIB_INSECURE)",
 	)
+	rootCmd.PersistentFlags().StringVar(
+		&outputFormat,
+		"output-format",
+		"table",
+		"output format: table, json, yaml",
+	)
 	state := newRuntimeState()
 	handlers := state.newHandlers()
 
