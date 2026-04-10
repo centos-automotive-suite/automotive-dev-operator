@@ -1,0 +1,30 @@
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: SoftwareBuild
+metadata:
+  name: softwarebuild-sample
+  labels:
+    app.kubernetes.io/name: automotive-dev-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  runtime:
+    image: ubuntu:24.04
+  source:
+    type: git
+    git:
+      url: https://github.com/example/my-project
+      revision: main
+  stages:
+    fetch:
+      command: "git clone https://github.com/example/my-project ."
+    prebuild:
+      command: "apt-get update && apt-get install -y build-essential cmake"
+    build:
+      command: "cmake -B build && cmake --build build -j$(nproc)"
+    postbuild:
+      command: "ctest --test-dir build --output-on-failure"
+    deploy:
+      command: "cp build/output/* /workspace/artifacts/"
+  destination:
+    type: sharedFolder
+    path: /workspace/artifacts
+  timeoutSeconds: 600

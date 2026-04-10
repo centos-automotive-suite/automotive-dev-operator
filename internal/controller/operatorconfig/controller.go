@@ -286,6 +286,13 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
+	// Deploy software build pipeline when enabled
+	if config.Spec.SoftwareBuilds != nil && config.Spec.SoftwareBuilds.Enabled {
+		if err := r.deploySoftwareBuilds(ctx, config); err != nil {
+			log.Error(err, "Failed to deploy SoftwareBuilds pipeline")
+		}
+	}
+
 	// Detect Jumpstarter availability: explicitly configured or auto-detected from local CRDs
 	jumpstarterAvailable := config.Spec.Jumpstarter != nil || r.detectJumpstarter(ctx)
 	if config.Status.JumpstarterAvailable != jumpstarterAvailable {
@@ -1010,6 +1017,31 @@ func (r *OperatorConfigReconciler) createOrUpdateTask(ctx context.Context, task 
 
 func (r *OperatorConfigReconciler) createOrUpdatePipeline(ctx context.Context, pipeline *tektonv1.Pipeline) error {
 	return r.createOrUpdate(ctx, pipeline, nil)
+}
+
+func (r *OperatorConfigReconciler) deploySoftwareBuilds(
+	ctx context.Context,
+	config *automotivev1alpha1.OperatorConfig,
+) error {
+	r.Log.Info("Deploying SoftwareBuilds pipeline")
+
+	pipeline := tasks.GenerateSoftwareBuildPipeline(
+		tasks.SoftwareBuildPipelineName,
+		config.Namespace,
+		nil,
+	)
+	pipeline.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = config.Name
+
+	if err := controllerutil.SetControllerReference(config, pipeline, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set controller reference on software-build pipeline: %w", err)
+	}
+
+	if err := r.createOrUpdatePipeline(ctx, pipeline); err != nil {
+		return fmt.Errorf("failed to create/update software-build pipeline: %w", err)
+	}
+
+	r.Log.Info("SoftwareBuilds pipeline deployed successfully")
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -1,0 +1,165 @@
+package softwarebuild
+
+import (
+	"testing"
+
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	knativeapis "knative.dev/pkg/apis"
+	duckv1 "knative.dev/pkg/apis/duck/v1"
+)
+
+func newSB() *automotivev1alpha1.SoftwareBuild {
+	return &automotivev1alpha1.SoftwareBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Generation: 3},
+		Spec: automotivev1alpha1.SoftwareBuildSpec{
+			Destination: automotivev1alpha1.SoftwareBuildDestinationSpec{
+				Path: "/workspace/artifacts",
+			},
+		},
+	}
+}
+
+func prWithCondition(status, reason, message string) *tektonv1.PipelineRun {
+	return &tektonv1.PipelineRun{
+		Status: tektonv1.PipelineRunStatus{
+			Status: duckv1.Status{
+				Conditions: duckv1.Conditions{
+					{
+						Type:    knativeapis.ConditionSucceeded,
+						Status:  "True",
+						Reason:  reason,
+						Message: message,
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestSyncStatusFromPipelineRun_Succeeded(t *testing.T) {
+	r := &SoftwareBuildReconciler{}
+	sb := newSB()
+
+	pr := &tektonv1.PipelineRun{
+		Status: tektonv1.PipelineRunStatus{
+			Status: duckv1.Status{
+				Conditions: duckv1.Conditions{
+					{
+						Type:    knativeapis.ConditionSucceeded,
+						Status:  "True",
+						Reason:  "Completed",
+						Message: "All tasks finished",
+					},
+				},
+			},
+			PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+				ChildReferences: []tektonv1.ChildStatusReference{
+					{Name: "taskrun-build", PipelineTaskName: "build"},
+				},
+			},
+		},
+	}
+
+	r.syncStatusFromPipelineRun(sb, pr)
+
+	if sb.Status.Phase != automotivev1alpha1.SoftwareBuildPhaseSucceeded {
+		t.Fatalf("expected Succeeded, got %s", sb.Status.Phase)
+	}
+	if sb.Status.ArtifactURI != "/workspace/artifacts" {
+		t.Fatalf("expected artifactURI to be populated")
+	}
+	if len(sb.Status.Stages) != 1 {
+		t.Fatalf("expected 1 stage, got %d", len(sb.Status.Stages))
+	}
+	if sb.Status.Stages[0].Name != "build" {
+		t.Errorf("expected stage name build, got %s", sb.Status.Stages[0].Name)
+	}
+}
+
+func TestSyncStatusFromPipelineRun_Failed(t *testing.T) {
+	r := &SoftwareBuildReconciler{}
+	sb := newSB()
+
+	pr := &tektonv1.PipelineRun{
+		Status: tektonv1.PipelineRunStatus{
+			Status: duckv1.Status{
+				Conditions: duckv1.Conditions{
+					{
+						Type:    knativeapis.ConditionSucceeded,
+						Status:  "False",
+						Reason:  "TaskRunFailed",
+						Message: "build task failed",
+					},
+				},
+			},
+		},
+	}
+
+	r.syncStatusFromPipelineRun(sb, pr)
+
+	if sb.Status.Phase != automotivev1alpha1.SoftwareBuildPhaseFailed {
+		t.Fatalf("expected Failed, got %s", sb.Status.Phase)
+	}
+	if sb.Status.FailureReason != "TaskRunFailed" {
+		t.Fatalf("expected FailureReason TaskRunFailed, got %s", sb.Status.FailureReason)
+	}
+}
+
+func TestSyncStatusFromPipelineRun_Running(t *testing.T) {
+	r := &SoftwareBuildReconciler{}
+	sb := newSB()
+
+	pr := &tektonv1.PipelineRun{
+		Status: tektonv1.PipelineRunStatus{
+			Status: duckv1.Status{
+				Conditions: duckv1.Conditions{},
+			},
+		},
+	}
+
+	r.syncStatusFromPipelineRun(sb, pr)
+
+	if sb.Status.Phase != automotivev1alpha1.SoftwareBuildPhaseRunning {
+		t.Fatalf("expected Running, got %s", sb.Status.Phase)
+	}
+}
+
+func TestSyncStatusFromPipelineRun_ConditionSet(t *testing.T) {
+	r := &SoftwareBuildReconciler{}
+	sb := newSB()
+
+	pr := &tektonv1.PipelineRun{
+		Status: tektonv1.PipelineRunStatus{
+			Status: duckv1.Status{
+				Conditions: duckv1.Conditions{
+					{
+						Type:    knativeapis.ConditionSucceeded,
+						Status:  "True",
+						Reason:  "Succeeded",
+						Message: "done",
+					},
+				},
+			},
+		},
+	}
+
+	r.syncStatusFromPipelineRun(sb, pr)
+
+	if len(sb.Status.Conditions) == 0 {
+		t.Fatal("expected at least one condition")
+	}
+	found := false
+	for _, c := range sb.Status.Conditions {
+		if c.Type == conditionReady {
+			found = true
+			if c.Status != metav1.ConditionTrue {
+				t.Errorf("expected Ready=True, got %s", c.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Ready condition not found")
+	}
+}
