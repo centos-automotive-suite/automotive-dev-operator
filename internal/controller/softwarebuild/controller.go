@@ -60,6 +60,11 @@ func (r *SoftwareBuildReconciler) createPipelineRun(ctx context.Context, logger 
 	}
 
 	if err := r.Create(ctx, pr); err != nil {
+		if errors.IsAlreadyExists(err) {
+			sb.Status.PipelineRunName = pr.Name
+			_ = r.Status().Update(ctx, sb)
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("creating PipelineRun: %w", err)
 	}
 
