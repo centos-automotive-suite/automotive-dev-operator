@@ -145,17 +145,31 @@ func GenerateSoftwareBuildPipelineRun(sb *automotivev1alpha1.SoftwareBuild, conf
 				{Name: "postbuildCommand", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sb.Spec.Stages.Postbuild.Command}},
 				{Name: "deployCommand", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sb.Spec.Stages.Deploy.Command}},
 			},
-			Workspaces: []tektonv1.WorkspaceBinding{
-				{
-					Name: "shared-workspace",
-					VolumeClaimTemplate: &corev1.PersistentVolumeClaim{
-						Spec: corev1.PersistentVolumeClaimSpec{
-							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-							Resources: corev1.VolumeResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceStorage: resource.MustParse(pvcSize),
-								},
-							},
+			Workspaces: buildWorkspaceBinding(sb, pvcSize),
+		},
+	}
+}
+
+func buildWorkspaceBinding(sb *automotivev1alpha1.SoftwareBuild, pvcSize string) []tektonv1.WorkspaceBinding {
+	if sb.Spec.Source.Type == automotivev1alpha1.SoftwareBuildSourcePVC && sb.Spec.Source.PVC != nil {
+		return []tektonv1.WorkspaceBinding{
+			{
+				Name: "shared-workspace",
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: sb.Spec.Source.PVC.ClaimName,
+				},
+			},
+		}
+	}
+	return []tektonv1.WorkspaceBinding{
+		{
+			Name: "shared-workspace",
+			VolumeClaimTemplate: &corev1.PersistentVolumeClaim{
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse(pvcSize),
 						},
 					},
 				},
