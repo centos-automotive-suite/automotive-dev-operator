@@ -31,8 +31,9 @@ func softwareBuildStageTask(stageName, paramImage, paramCommand string) tektonv1
 				},
 				Steps: []tektonv1.Step{
 					{
-						Name:  "run",
-						Image: "$(params.image)",
+						Name:            "run",
+						Image:           "$(params.image)",
+						ImagePullPolicy: corev1.PullIfNotPresent,
 						Script: `#!/usr/bin/env bash
 set -euo pipefail
 cd $(workspaces.ws.path)
@@ -112,6 +113,16 @@ func GenerateSoftwareBuildPipelineRun(sb *automotivev1alpha1.SoftwareBuild, conf
 		pvcSize = config.PVCSize
 	}
 
+	fetchCommand := sb.Spec.Stages.Fetch.Command
+	if sb.Spec.Source.Type == automotivev1alpha1.SoftwareBuildSourceGit && sb.Spec.Source.Git != nil {
+		revision := sb.Spec.Source.Git.Revision
+		if revision == "" {
+			revision = "main"
+		}
+		gitClone := fmt.Sprintf("git clone --branch %s --single-branch %s src\n", revision, sb.Spec.Source.Git.URL)
+		fetchCommand = gitClone + fetchCommand
+	}
+
 	prName := fmt.Sprintf("%s-%d", sb.Name, time.Now().Unix())
 
 	return &tektonv1.PipelineRun{
@@ -128,7 +139,7 @@ func GenerateSoftwareBuildPipelineRun(sb *automotivev1alpha1.SoftwareBuild, conf
 			PipelineRef: &tektonv1.PipelineRef{Name: SoftwareBuildPipelineName},
 			Params: []tektonv1.Param{
 				{Name: "containerImage", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: image}},
-				{Name: "fetchCommand", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sb.Spec.Stages.Fetch.Command}},
+				{Name: "fetchCommand", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: fetchCommand}},
 				{Name: "prebuildCommand", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sb.Spec.Stages.Prebuild.Command}},
 				{Name: "buildCommand", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sb.Spec.Stages.Build.Command}},
 				{Name: "postbuildCommand", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sb.Spec.Stages.Postbuild.Command}},
