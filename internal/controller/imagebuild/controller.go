@@ -434,6 +434,9 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 		fresh.Status.AIBImageUsed = aibImageUsed
 		fresh.Status.BuilderImageUsed = builderImageUsed
 
+		// Populate supply-chain artifact ref (IMAGE_URL, IMAGE_DIGEST, SBOM_URI)
+		fresh.Status.Artifact = extractArtifactRef(pipelineRun)
+
 		// Extract lease ID if flash was enabled
 		if fresh.Spec.IsFlashEnabled() {
 			fresh.Status.LeaseID = extractLeaseID(pipelineRun)
@@ -1773,6 +1776,30 @@ func extractProvenance(pipelineRun *tektonv1.PipelineRun, aibImage string) (aibI
 	return aibImageUsed, builderImageUsed
 }
 
+// extractArtifactRef builds an ArtifactRef from PipelineRun results.
+// Returns nil when no artifact was pushed (IMAGE_URL missing).
+func extractArtifactRef(pipelineRun *tektonv1.PipelineRun) *automotivev1alpha1.ArtifactRef {
+	ref := &automotivev1alpha1.ArtifactRef{}
+	found := false
+
+	for _, result := range pipelineRun.Status.Results {
+		switch result.Name {
+		case "IMAGE_URL":
+			ref.Registry = result.Value.StringVal
+			found = true
+		case "IMAGE_DIGEST":
+			ref.Digest = result.Value.StringVal
+		case "SBOM_URI":
+			ref.SBOMRef = result.Value.StringVal
+		}
+	}
+
+	if !found {
+		return nil
+	}
+	return ref
+}
+
 // extractArtifactFilename extracts the artifact filename from PipelineRun results
 func extractArtifactFilename(pipelineRun *tektonv1.PipelineRun) string {
 	for _, result := range pipelineRun.Status.Results {
@@ -1957,6 +1984,11 @@ func (r *ImageBuildReconciler) resolveBuildConfig(ctx context.Context) *tasks.Bu
 		bc.BuildTimeoutMinutes = operatorConfig.Spec.OSBuilds.GetBuildTimeoutMinutes()
 		bc.FlashTimeoutMinutes = operatorConfig.Spec.OSBuilds.GetFlashTimeoutMinutes()
 		controllerutils.ApplyTrustedCABundleFromOSBuilds(bc, operatorConfig.Spec.OSBuilds)
+	}
+	if operatorConfig.Spec.Compliance != nil && operatorConfig.Spec.Compliance.Enabled {
+		bc.ComplianceEnabled = true
+		bc.SyftImage = operatorConfig.Spec.Compliance.GetSyftImage()
+		bc.SBOMFormat = operatorConfig.Spec.Compliance.GetSBOMFormat()
 	}
 	return bc
 }
