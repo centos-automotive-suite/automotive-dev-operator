@@ -86,6 +86,29 @@ func TestSyncStatusFromPipelineRun_Running(t *testing.T) {
 	r := &SoftwareBuildReconciler{}
 	sb := newSB()
 
+	now := metav1.Now()
+	pr := &tektonv1.PipelineRun{
+		Status: tektonv1.PipelineRunStatus{
+			Status: duckv1.Status{
+				Conditions: duckv1.Conditions{},
+			},
+			PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+				StartTime: &now,
+			},
+		},
+	}
+
+	r.syncStatusFromPipelineRun(sb, pr)
+
+	if sb.Status.Phase != automotivev1alpha1.SoftwareBuildPhaseRunning {
+		t.Fatalf("expected Running, got %s", sb.Status.Phase)
+	}
+}
+
+func TestSyncStatusFromPipelineRun_Pending(t *testing.T) {
+	r := &SoftwareBuildReconciler{}
+	sb := newSB()
+
 	pr := &tektonv1.PipelineRun{
 		Status: tektonv1.PipelineRunStatus{
 			Status: duckv1.Status{
@@ -96,8 +119,8 @@ func TestSyncStatusFromPipelineRun_Running(t *testing.T) {
 
 	r.syncStatusFromPipelineRun(sb, pr)
 
-	if sb.Status.Phase != automotivev1alpha1.SoftwareBuildPhaseRunning {
-		t.Fatalf("expected Running, got %s", sb.Status.Phase)
+	if sb.Status.Phase != automotivev1alpha1.SoftwareBuildPhasePending {
+		t.Fatalf("expected Pending when no conditions and no StartTime, got %s", sb.Status.Phase)
 	}
 }
 
@@ -198,5 +221,87 @@ func TestSyncStatusFromPipelineRun_StagesPopulatedFromChildRefs(t *testing.T) {
 		if s.Name != expectedNames[i] {
 			t.Errorf("stage %d: got %q, want %q", i, s.Name, expectedNames[i])
 		}
+	}
+}
+
+func TestMapPipelineRunPhase_Succeeded(t *testing.T) {
+	pr := prWithCondition(corev1.ConditionTrue, "Completed", "done")
+	phase, condStatus, reason, _ := mapPipelineRunPhase(pr)
+
+	if phase != automotivev1alpha1.SoftwareBuildPhaseSucceeded {
+		t.Errorf("expected Succeeded, got %s", phase)
+	}
+	if condStatus != metav1.ConditionTrue {
+		t.Errorf("expected ConditionTrue, got %s", condStatus)
+	}
+	if reason != "Completed" {
+		t.Errorf("expected reason Completed, got %s", reason)
+	}
+}
+
+func TestMapPipelineRunPhase_Failed(t *testing.T) {
+	pr := prWithCondition(corev1.ConditionFalse, "BuildFailed", "error")
+	phase, condStatus, reason, _ := mapPipelineRunPhase(pr)
+
+	if phase != automotivev1alpha1.SoftwareBuildPhaseFailed {
+		t.Errorf("expected Failed, got %s", phase)
+	}
+	if condStatus != metav1.ConditionFalse {
+		t.Errorf("expected ConditionFalse, got %s", condStatus)
+	}
+	if reason != "BuildFailed" {
+		t.Errorf("expected reason BuildFailed, got %s", reason)
+	}
+}
+
+func TestMapPipelineRunPhase_PendingNoStartTime(t *testing.T) {
+	pr := &tektonv1.PipelineRun{}
+	phase, _, reason, _ := mapPipelineRunPhase(pr)
+
+	if phase != automotivev1alpha1.SoftwareBuildPhasePending {
+		t.Errorf("expected Pending, got %s", phase)
+	}
+	if reason != "Pending" {
+		t.Errorf("expected reason Pending, got %s", reason)
+	}
+}
+
+func TestMapPipelineRunPhase_RunningWithStartTime(t *testing.T) {
+	now := metav1.Now()
+	pr := &tektonv1.PipelineRun{
+		Status: tektonv1.PipelineRunStatus{
+			PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+				StartTime: &now,
+			},
+		},
+	}
+	phase, _, reason, _ := mapPipelineRunPhase(pr)
+
+	if phase != automotivev1alpha1.SoftwareBuildPhaseRunning {
+		t.Errorf("expected Running, got %s", phase)
+	}
+	if reason != "Running" {
+		t.Errorf("expected reason Running, got %s", reason)
+	}
+}
+
+func TestBuildStageStatuses(t *testing.T) {
+	pr := &tektonv1.PipelineRun{
+		Status: tektonv1.PipelineRunStatus{
+			PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
+				ChildReferences: []tektonv1.ChildStatusReference{
+					{Name: "tr-1", PipelineTaskName: "fetch"},
+					{Name: "tr-2", PipelineTaskName: "build"},
+				},
+			},
+		},
+	}
+
+	stages := buildStageStatuses(pr)
+	if len(stages) != 2 {
+		t.Fatalf("expected 2 stages, got %d", len(stages))
+	}
+	if stages[0].Name != "fetch" || stages[1].Name != "build" {
+		t.Errorf("unexpected stage names: %v", stages)
 	}
 }

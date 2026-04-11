@@ -133,3 +133,37 @@ func TestSoftwareBuildStatus_JSONRoundTrip(t *testing.T) {
 		t.Errorf("stage[1] name: got %q, want build", roundTripped.Stages[1].Name)
 	}
 }
+
+func TestSoftwareBuildSpec_PerStageImage_JSONRoundTrip(t *testing.T) {
+	original := SoftwareBuild{
+		Spec: SoftwareBuildSpec{
+			Runtime: SoftwareBuildRuntimeSpec{Image: "ubuntu:24.04"},
+			Source:  SoftwareBuildSourceSpec{Type: SoftwareBuildSourceGit, Git: &SoftwareBuildGitSource{URL: "https://example.com/repo"}},
+			Stages: SoftwareBuildPipelineStages{
+				Fetch:     SoftwareBuildStageSpec{Command: "echo fetch"},
+				Prebuild:  SoftwareBuildStageSpec{Command: "echo prebuild"},
+				Build:     SoftwareBuildStageSpec{Command: "make", Image: "gcc:14"},
+				Postbuild: SoftwareBuildStageSpec{Command: "echo postbuild"},
+				Deploy:    SoftwareBuildStageSpec{Command: "echo deploy"},
+			},
+			Destination: SoftwareBuildDestinationSpec{Type: SoftwareBuildDestSharedFolder},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	var roundTripped SoftwareBuild
+	if err := json.Unmarshal(data, &roundTripped); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if roundTripped.Spec.Stages.Build.Image != "gcc:14" {
+		t.Errorf("build stage image: got %q, want gcc:14", roundTripped.Spec.Stages.Build.Image)
+	}
+	if roundTripped.Spec.Stages.Fetch.Image != "" {
+		t.Errorf("fetch stage image should be empty, got %q", roundTripped.Spec.Stages.Fetch.Image)
+	}
+}

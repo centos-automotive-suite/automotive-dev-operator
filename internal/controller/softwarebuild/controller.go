@@ -10,11 +10,13 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	"github.com/go-logr/logr"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	knativeapis "knative.dev/pkg/apis"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -62,7 +64,9 @@ func (r *SoftwareBuildReconciler) createPipelineRun(ctx context.Context, logger 
 	if err := r.Create(ctx, pr); err != nil {
 		if errors.IsAlreadyExists(err) {
 			sb.Status.PipelineRunName = pr.Name
-			_ = r.Status().Update(ctx, sb)
+			if statusErr := r.Status().Update(ctx, sb); statusErr != nil {
+				return ctrl.Result{}, fmt.Errorf("updating status after AlreadyExists: %w", statusErr)
+			}
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("creating PipelineRun: %w", err)
@@ -100,16 +104,18 @@ func (r *SoftwareBuildReconciler) syncStatus(ctx context.Context, logger logr.Lo
 				Message:            "Referenced PipelineRun no longer exists",
 				ObservedGeneration: sb.Generation,
 			})
-			_ = r.Status().Update(ctx, sb)
+			if statusErr := r.Status().Update(ctx, sb); statusErr != nil {
+				return ctrl.Result{}, fmt.Errorf("updating status after PipelineRun not found: %w", statusErr)
+			}
 			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("fetching PipelineRun %s: %w", prKey.Name, err)
 	}
 
 	r.syncStatusFromPipelineRun(sb, &pr)
 
 	if err := r.Status().Update(ctx, sb); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("updating SoftwareBuild status: %w", err)
 	}
 
 	if sb.Status.Phase == automotivev1alpha1.SoftwareBuildPhaseRunning ||
@@ -127,29 +133,9 @@ func (r *SoftwareBuildReconciler) syncStatus(ctx context.Context, logger logr.Lo
 }
 
 func (r *SoftwareBuildReconciler) syncStatusFromPipelineRun(sb *automotivev1alpha1.SoftwareBuild, pr *tektonv1.PipelineRun) {
-	phase := automotivev1alpha1.SoftwareBuildPhaseRunning
-	condStatus := metav1.ConditionFalse
-	reason := "Running"
-	message := "PipelineRun is in progress"
-
-	for _, c := range pr.Status.Conditions {
-		if c.Type == "Succeeded" {
-			switch c.Status {
-			case "True":
-				phase = automotivev1alpha1.SoftwareBuildPhaseSucceeded
-				condStatus = metav1.ConditionTrue
-				reason = string(c.Reason)
-				message = c.Message
-			case "False":
-				phase = automotivev1alpha1.SoftwareBuildPhaseFailed
-				condStatus = metav1.ConditionFalse
-				reason = string(c.Reason)
-				message = c.Message
-				sb.Status.FailureReason = string(c.Reason)
-			default:
-				phase = automotivev1alpha1.SoftwareBuildPhaseRunning
-			}
-		}
+	phase, condStatus, reason, message := mapPipelineRunPhase(pr)
+	if phase == automotivev1alpha1.SoftwareBuildPhaseFailed {
+		sb.Status.FailureReason = reason
 	}
 
 	sb.Status.Phase = phase
@@ -161,6 +147,34 @@ func (r *SoftwareBuildReconciler) syncStatusFromPipelineRun(sb *automotivev1alph
 		ObservedGeneration: sb.Generation,
 	})
 
+	sb.Status.Stages = buildStageStatuses(pr)
+
+	if sb.Spec.Destination.Path != "" {
+		sb.Status.ArtifactURI = sb.Spec.Destination.Path
+	}
+}
+
+func mapPipelineRunPhase(pr *tektonv1.PipelineRun) (automotivev1alpha1.SoftwareBuildPhase, metav1.ConditionStatus, string, string) {
+	for _, c := range pr.Status.Conditions {
+		if c.Type == knativeapis.ConditionSucceeded {
+			switch c.Status {
+			case corev1.ConditionTrue:
+				return automotivev1alpha1.SoftwareBuildPhaseSucceeded, metav1.ConditionTrue, string(c.Reason), c.Message
+			case corev1.ConditionFalse:
+				return automotivev1alpha1.SoftwareBuildPhaseFailed, metav1.ConditionFalse, string(c.Reason), c.Message
+			default:
+				return automotivev1alpha1.SoftwareBuildPhaseRunning, metav1.ConditionFalse, "Running", "PipelineRun is in progress"
+			}
+		}
+	}
+
+	if pr.Status.StartTime != nil {
+		return automotivev1alpha1.SoftwareBuildPhaseRunning, metav1.ConditionFalse, "Running", "PipelineRun is in progress"
+	}
+	return automotivev1alpha1.SoftwareBuildPhasePending, metav1.ConditionFalse, "Pending", "PipelineRun is pending"
+}
+
+func buildStageStatuses(pr *tektonv1.PipelineRun) []automotivev1alpha1.SoftwareBuildStageStatus {
 	stages := make([]automotivev1alpha1.SoftwareBuildStageStatus, 0, len(pr.Status.ChildReferences))
 	for _, cr := range pr.Status.ChildReferences {
 		stages = append(stages, automotivev1alpha1.SoftwareBuildStageStatus{
@@ -169,11 +183,7 @@ func (r *SoftwareBuildReconciler) syncStatusFromPipelineRun(sb *automotivev1alph
 			Message: fmt.Sprintf("TaskRun: %s", cr.Name),
 		})
 	}
-	sb.Status.Stages = stages
-
-	if sb.Spec.Destination.Path != "" {
-		sb.Status.ArtifactURI = sb.Spec.Destination.Path
-	}
+	return stages
 }
 
 func (r *SoftwareBuildReconciler) loadBuildConfig(ctx context.Context, namespace string) *tasks.BuildConfig {
@@ -187,6 +197,7 @@ func (r *SoftwareBuildReconciler) loadBuildConfig(ctx context.Context, namespace
 	return &tasks.BuildConfig{
 		PVCSize:             opConfig.Spec.SoftwareBuilds.PVCSize,
 		BuildTimeoutMinutes: opConfig.Spec.SoftwareBuilds.BuildTimeoutMinutes,
+		DefaultImage:        opConfig.Spec.SoftwareBuilds.DefaultImage,
 	}
 }
 

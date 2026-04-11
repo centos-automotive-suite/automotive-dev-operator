@@ -286,10 +286,23 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	// Deploy software build pipeline when enabled
+	// Deploy or cleanup software build pipeline
 	if config.Spec.SoftwareBuilds != nil && config.Spec.SoftwareBuilds.Enabled {
 		if err := r.deploySoftwareBuilds(ctx, config); err != nil {
 			log.Error(err, "Failed to deploy SoftwareBuilds pipeline")
+			if config.Status.Phase != phaseFailed {
+				config.Status.Phase = phaseFailed
+				config.Status.Message = fmt.Sprintf("Failed to deploy SoftwareBuilds: %v", err)
+				statusChanged = true
+			}
+			if statusChanged {
+				_ = r.Status().Update(ctx, config)
+			}
+			return ctrl.Result{}, err
+		}
+	} else {
+		if err := r.cleanupSoftwareBuilds(ctx, config); err != nil {
+			log.Error(err, "Failed to cleanup SoftwareBuilds pipeline")
 		}
 	}
 
@@ -1025,10 +1038,19 @@ func (r *OperatorConfigReconciler) deploySoftwareBuilds(
 ) error {
 	r.Log.Info("Deploying SoftwareBuilds pipeline")
 
+	var buildConfig *tasks.BuildConfig
+	if config.Spec.SoftwareBuilds != nil {
+		buildConfig = &tasks.BuildConfig{
+			PVCSize:             config.Spec.SoftwareBuilds.PVCSize,
+			BuildTimeoutMinutes: config.Spec.SoftwareBuilds.BuildTimeoutMinutes,
+			DefaultImage:        config.Spec.SoftwareBuilds.DefaultImage,
+		}
+	}
+
 	pipeline := tasks.GenerateSoftwareBuildPipeline(
 		tasks.SoftwareBuildPipelineName,
 		config.Namespace,
-		nil,
+		buildConfig,
 	)
 	pipeline.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = config.Name
 
@@ -1041,6 +1063,19 @@ func (r *OperatorConfigReconciler) deploySoftwareBuilds(
 	}
 
 	r.Log.Info("SoftwareBuilds pipeline deployed successfully")
+	return nil
+}
+
+func (r *OperatorConfigReconciler) cleanupSoftwareBuilds(
+	ctx context.Context,
+	config *automotivev1alpha1.OperatorConfig,
+) error {
+	pipeline := &tektonv1.Pipeline{}
+	pipeline.Name = tasks.SoftwareBuildPipelineName
+	pipeline.Namespace = config.Namespace
+	if err := r.Delete(ctx, pipeline); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete software-build pipeline: %w", err)
+	}
 	return nil
 }
 

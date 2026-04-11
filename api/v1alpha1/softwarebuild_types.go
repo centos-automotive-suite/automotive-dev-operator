@@ -24,9 +24,8 @@ import (
 type SoftwareBuildSourceType string
 
 const (
-	SoftwareBuildSourceGit      SoftwareBuildSourceType = "git"
-	SoftwareBuildSourcePVC      SoftwareBuildSourceType = "pvc"
-	SoftwareBuildSourceHostPath SoftwareBuildSourceType = "hostPath"
+	SoftwareBuildSourceGit SoftwareBuildSourceType = "git"
+	SoftwareBuildSourcePVC SoftwareBuildSourceType = "pvc"
 )
 
 // SoftwareBuildDestinationType identifies where build artifacts are stored.
@@ -34,9 +33,6 @@ type SoftwareBuildDestinationType string
 
 const (
 	SoftwareBuildDestSharedFolder SoftwareBuildDestinationType = "sharedFolder"
-	SoftwareBuildDestRegistry     SoftwareBuildDestinationType = "registry"
-	SoftwareBuildDestArtifactory  SoftwareBuildDestinationType = "artifactory"
-	SoftwareBuildDestQuay         SoftwareBuildDestinationType = "quay"
 )
 
 // SoftwareBuildPhase represents the current lifecycle phase.
@@ -72,10 +68,12 @@ type SoftwareBuildRuntimeSpec struct {
 
 // SoftwareBuildGitSource describes a Git repository to clone.
 type SoftwareBuildGitSource struct {
-	// +kubebuilder:validation:Pattern=`^https?://|^git@`
+	// +kubebuilder:validation:Pattern=`^https?://[^\s;|&$]+$`
 	URL string `json:"url"`
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._/-]+$`
 	// +kubebuilder:default=main
 	Revision string `json:"revision,omitempty"`
+	// CredentialsSecretRef references a secret for private repo access (not yet implemented).
 	// +optional
 	CredentialsSecretRef *SoftwareBuildSecretReference `json:"credentialsSecretRef,omitempty"`
 }
@@ -88,22 +86,16 @@ type SoftwareBuildPVCSource struct {
 	Path string `json:"path,omitempty"`
 }
 
-// SoftwareBuildHostPathSource mounts a node-local directory.
-type SoftwareBuildHostPathSource struct {
-	// +kubebuilder:validation:MinLength=1
-	Path string `json:"path"`
-}
-
 // SoftwareBuildSourceSpec identifies the code location.
+// +kubebuilder:validation:XValidation:rule="self.type != 'git' || has(self.git)",message="git source details required when type is git"
+// +kubebuilder:validation:XValidation:rule="self.type != 'pvc' || has(self.pvc)",message="pvc source details required when type is pvc"
 type SoftwareBuildSourceSpec struct {
-	// +kubebuilder:validation:Enum=git;pvc;hostPath
+	// +kubebuilder:validation:Enum=git;pvc
 	Type SoftwareBuildSourceType `json:"type"`
 	// +optional
 	Git *SoftwareBuildGitSource `json:"git,omitempty"`
 	// +optional
 	PVC *SoftwareBuildPVCSource `json:"pvc,omitempty"`
-	// +optional
-	HostPath *SoftwareBuildHostPathSource `json:"hostPath,omitempty"`
 }
 
 // SoftwareBuildStageSpec defines a single pipeline stage.
@@ -127,14 +119,10 @@ type SoftwareBuildPipelineStages struct {
 
 // SoftwareBuildDestinationSpec describes where artifacts go.
 type SoftwareBuildDestinationSpec struct {
-	// +kubebuilder:validation:Enum=sharedFolder;registry;artifactory;quay
+	// +kubebuilder:validation:Enum=sharedFolder
 	Type SoftwareBuildDestinationType `json:"type"`
 	// +optional
 	Path string `json:"path,omitempty"`
-	// +optional
-	Repository string `json:"repository,omitempty"`
-	// +optional
-	CredentialsSecretRef *SoftwareBuildSecretReference `json:"credentialsSecretRef,omitempty"`
 }
 
 // SoftwareBuildSpec defines the desired state of SoftwareBuild.

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -12,12 +13,12 @@ func TestGenerateSoftwareBuildPipeline_HasCorrectParams(t *testing.T) {
 	p := GenerateSoftwareBuildPipeline("test-pipe", "ns", nil)
 
 	wantParams := map[string]bool{
-		"containerImage":  false,
-		"fetchCommand":    false,
-		"prebuildCommand": false,
-		"buildCommand":    false,
-		"postbuildCommand": false,
-		"deployCommand":   false,
+		"containerImage": false,
+		"fetchCommand":   false, "fetchImage": false,
+		"prebuildCommand": false, "prebuildImage": false,
+		"buildCommand": false, "buildImage": false,
+		"postbuildCommand": false, "postbuildImage": false,
+		"deployCommand": false, "deployImage": false,
 	}
 	for _, param := range p.Spec.Params {
 		if _, ok := wantParams[param.Name]; ok {
@@ -38,6 +39,21 @@ func TestGenerateSoftwareBuildPipeline_DefaultImage(t *testing.T) {
 		if param.Name == "containerImage" {
 			if param.Default == nil || param.Default.StringVal != "ubuntu:24.04" {
 				t.Fatalf("expected default containerImage ubuntu:24.04, got %v", param.Default)
+			}
+			return
+		}
+	}
+	t.Fatal("containerImage param not found")
+}
+
+func TestGenerateSoftwareBuildPipeline_ConfigDefaultImage(t *testing.T) {
+	config := &BuildConfig{DefaultImage: "fedora:40"}
+	p := GenerateSoftwareBuildPipeline("test-pipe", "ns", config)
+
+	for _, param := range p.Spec.Params {
+		if param.Name == "containerImage" {
+			if param.Default == nil || param.Default.StringVal != "fedora:40" {
+				t.Fatalf("expected config default image fedora:40, got %v", param.Default)
 			}
 			return
 		}
@@ -79,11 +95,48 @@ func TestGenerateSoftwareBuildPipeline_Workspace(t *testing.T) {
 	}
 }
 
+func TestGenerateSoftwareBuildPipeline_ImagePullPolicy(t *testing.T) {
+	p := GenerateSoftwareBuildPipeline("test-pipe", "ns", nil)
+
+	for _, task := range p.Spec.Tasks {
+		if task.TaskSpec == nil {
+			t.Errorf("task %q: expected inline TaskSpec", task.Name)
+			continue
+		}
+		for _, step := range task.TaskSpec.Steps {
+			if step.ImagePullPolicy != corev1.PullIfNotPresent {
+				t.Errorf("task %q step %q: expected ImagePullPolicy IfNotPresent, got %q",
+					task.Name, step.Name, step.ImagePullPolicy)
+			}
+		}
+	}
+}
+
+func TestGenerateSoftwareBuildPipeline_SecurityContext(t *testing.T) {
+	p := GenerateSoftwareBuildPipeline("test-pipe", "ns", nil)
+
+	for _, task := range p.Spec.Tasks {
+		if task.TaskSpec == nil {
+			continue
+		}
+		for _, step := range task.TaskSpec.Steps {
+			if step.SecurityContext == nil {
+				t.Errorf("task %q step %q: expected SecurityContext", task.Name, step.Name)
+				continue
+			}
+			if step.SecurityContext.AllowPrivilegeEscalation == nil || *step.SecurityContext.AllowPrivilegeEscalation {
+				t.Errorf("task %q step %q: expected AllowPrivilegeEscalation=false", task.Name, step.Name)
+			}
+		}
+	}
+}
+
 func newTestSoftwareBuild() *automotivev1alpha1.SoftwareBuild {
 	return &automotivev1alpha1.SoftwareBuild{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-build",
-			Namespace: "default",
+			Name:       "test-build",
+			Namespace:  "default",
+			Generation: 1,
 		},
 		Spec: automotivev1alpha1.SoftwareBuildSpec{
 			Runtime: automotivev1alpha1.SoftwareBuildRuntimeSpec{Image: "ghcr.io/zephyrproject-rtos/ci-base:latest"},
@@ -103,6 +156,16 @@ func TestGenerateSoftwareBuildPipelineRun_PipelineRef(t *testing.T) {
 
 	if pr.Spec.PipelineRef == nil || pr.Spec.PipelineRef.Name != SoftwareBuildPipelineName {
 		t.Fatalf("expected pipelineRef %q, got %v", SoftwareBuildPipelineName, pr.Spec.PipelineRef)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_DeterministicName(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Generation = 5
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	if pr.Name != "test-build-gen5" {
+		t.Errorf("expected deterministic name test-build-gen5, got %q", pr.Name)
 	}
 }
 
@@ -135,6 +198,23 @@ func TestGenerateSoftwareBuildPipelineRun_DefaultImage(t *testing.T) {
 		if p.Name == "containerImage" {
 			if p.Value.StringVal != "ubuntu:24.04" {
 				t.Fatalf("expected default image ubuntu:24.04, got %q", p.Value.StringVal)
+			}
+			return
+		}
+	}
+	t.Fatal("containerImage param not found")
+}
+
+func TestGenerateSoftwareBuildPipelineRun_ConfigDefaultImage(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Runtime.Image = ""
+	config := &BuildConfig{DefaultImage: "fedora:40"}
+	pr := GenerateSoftwareBuildPipelineRun(sb, config)
+
+	for _, p := range pr.Spec.Params {
+		if p.Name == "containerImage" {
+			if p.Value.StringVal != "fedora:40" {
+				t.Fatalf("expected config default image fedora:40, got %q", p.Value.StringVal)
 			}
 			return
 		}
@@ -177,6 +257,18 @@ func TestGenerateSoftwareBuildPipelineRun_CustomPVCSize(t *testing.T) {
 	}
 }
 
+func TestGenerateSoftwareBuildPipelineRun_InvalidPVCSizeFallback(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	config := &BuildConfig{PVCSize: "not-a-size"}
+	pr := GenerateSoftwareBuildPipelineRun(sb, config)
+
+	ws := pr.Spec.Workspaces[0]
+	storageReq := ws.VolumeClaimTemplate.Spec.Resources.Requests["storage"]
+	if storageReq.String() != "1Gi" {
+		t.Errorf("expected fallback PVC size 1Gi, got %s", storageReq.String())
+	}
+}
+
 func TestGenerateSoftwareBuildPipelineRun_PVCSource(t *testing.T) {
 	sb := newTestSoftwareBuild()
 	sb.Spec.Source = automotivev1alpha1.SoftwareBuildSourceSpec{
@@ -216,11 +308,11 @@ func TestGenerateSoftwareBuildPipelineRun_GitSourcePrependsClone(t *testing.T) {
 			if !strings.Contains(p.Value.StringVal, "git clone") {
 				t.Errorf("fetchCommand should contain git clone, got %q", p.Value.StringVal)
 			}
-			if !strings.Contains(p.Value.StringVal, "develop") {
-				t.Errorf("fetchCommand should contain revision, got %q", p.Value.StringVal)
+			if !strings.Contains(p.Value.StringVal, "'develop'") {
+				t.Errorf("fetchCommand should contain quoted revision, got %q", p.Value.StringVal)
 			}
-			if !strings.Contains(p.Value.StringVal, "https://github.com/example/repo") {
-				t.Errorf("fetchCommand should contain repo URL, got %q", p.Value.StringVal)
+			if !strings.Contains(p.Value.StringVal, "'https://github.com/example/repo'") {
+				t.Errorf("fetchCommand should contain quoted repo URL, got %q", p.Value.StringVal)
 			}
 			return
 		}
@@ -240,7 +332,7 @@ func TestGenerateSoftwareBuildPipelineRun_GitSourceDefaultRevision(t *testing.T)
 
 	for _, p := range pr.Spec.Params {
 		if p.Name == "fetchCommand" {
-			if !strings.Contains(p.Value.StringVal, "main") {
+			if !strings.Contains(p.Value.StringVal, "'main'") {
 				t.Errorf("fetchCommand should default to main revision, got %q", p.Value.StringVal)
 			}
 			return
@@ -249,19 +341,99 @@ func TestGenerateSoftwareBuildPipelineRun_GitSourceDefaultRevision(t *testing.T)
 	t.Fatal("fetchCommand param not found")
 }
 
-func TestGenerateSoftwareBuildPipeline_ImagePullPolicy(t *testing.T) {
-	p := GenerateSoftwareBuildPipeline("test-pipe", "ns", nil)
+func TestGenerateSoftwareBuildPipelineRun_UnsafeRevisionSanitized(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Source = automotivev1alpha1.SoftwareBuildSourceSpec{
+		Type: automotivev1alpha1.SoftwareBuildSourceGit,
+		Git: &automotivev1alpha1.SoftwareBuildGitSource{
+			URL:      "https://github.com/example/repo",
+			Revision: "main; rm -rf /",
+		},
+	}
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
 
-	for _, task := range p.Spec.Tasks {
-		if task.TaskSpec == nil {
-			t.Errorf("task %q: expected inline TaskSpec", task.Name)
-			continue
-		}
-		for _, step := range task.TaskSpec.Steps {
-			if step.ImagePullPolicy != "IfNotPresent" {
-				t.Errorf("task %q step %q: expected ImagePullPolicy IfNotPresent, got %q",
-					task.Name, step.Name, step.ImagePullPolicy)
+	for _, p := range pr.Spec.Params {
+		if p.Name == "fetchCommand" {
+			if strings.Contains(p.Value.StringVal, "rm -rf") {
+				t.Errorf("unsafe revision should be sanitized, got %q", p.Value.StringVal)
 			}
+			if !strings.Contains(p.Value.StringVal, "'main'") {
+				t.Errorf("unsafe revision should fall back to main, got %q", p.Value.StringVal)
+			}
+			return
 		}
+	}
+	t.Fatal("fetchCommand param not found")
+}
+
+func TestGenerateSoftwareBuildPipelineRun_Timeout(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.TimeoutSeconds = 3600
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	if pr.Spec.Timeouts == nil {
+		t.Fatal("expected Timeouts to be set")
+	}
+	if pr.Spec.Timeouts.Pipeline == nil || pr.Spec.Timeouts.Pipeline.Duration.Minutes() != 60 {
+		t.Errorf("expected 60min timeout, got %v", pr.Spec.Timeouts.Pipeline)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_TimeoutFromConfig(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	config := &BuildConfig{BuildTimeoutMinutes: 45}
+	pr := GenerateSoftwareBuildPipelineRun(sb, config)
+
+	if pr.Spec.Timeouts == nil {
+		t.Fatal("expected Timeouts to be set from config")
+	}
+	if pr.Spec.Timeouts.Pipeline == nil || pr.Spec.Timeouts.Pipeline.Duration.Minutes() != 45 {
+		t.Errorf("expected 45min timeout, got %v", pr.Spec.Timeouts.Pipeline)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_NoTimeoutWhenZero(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	if pr.Spec.Timeouts != nil {
+		t.Errorf("expected no Timeouts when zero, got %v", pr.Spec.Timeouts)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_ServiceAccountName(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Runtime.ServiceAccountName = "build-sa"
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	if pr.Spec.TaskRunTemplate.ServiceAccountName != "build-sa" {
+		t.Errorf("expected ServiceAccountName build-sa, got %q", pr.Spec.TaskRunTemplate.ServiceAccountName)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_NoServiceAccountByDefault(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	if pr.Spec.TaskRunTemplate.ServiceAccountName != "" {
+		t.Errorf("expected empty ServiceAccountName, got %q", pr.Spec.TaskRunTemplate.ServiceAccountName)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_PerStageImage(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Stages.Build.Image = "gcc:14"
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	paramMap := make(map[string]string)
+	for _, p := range pr.Spec.Params {
+		paramMap[p.Name] = p.Value.StringVal
+	}
+
+	if paramMap["buildImage"] != "gcc:14" {
+		t.Errorf("expected buildImage gcc:14, got %q", paramMap["buildImage"])
+	}
+	if paramMap["fetchImage"] != "$(params.containerImage)" {
+		t.Errorf("expected fetchImage to default to containerImage param ref, got %q", paramMap["fetchImage"])
 	}
 }
