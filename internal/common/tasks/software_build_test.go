@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"strings"
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -173,5 +174,94 @@ func TestGenerateSoftwareBuildPipelineRun_CustomPVCSize(t *testing.T) {
 	storageReq := ws.VolumeClaimTemplate.Spec.Resources.Requests["storage"]
 	if storageReq.String() != "10Gi" {
 		t.Errorf("expected PVC size 10Gi, got %s", storageReq.String())
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_PVCSource(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Source = automotivev1alpha1.SoftwareBuildSourceSpec{
+		Type: automotivev1alpha1.SoftwareBuildSourcePVC,
+		PVC:  &automotivev1alpha1.SoftwareBuildPVCSource{ClaimName: "my-workspace"},
+	}
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	if len(pr.Spec.Workspaces) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(pr.Spec.Workspaces))
+	}
+	ws := pr.Spec.Workspaces[0]
+	if ws.VolumeClaimTemplate != nil {
+		t.Fatal("PVC source should not use VolumeClaimTemplate")
+	}
+	if ws.PersistentVolumeClaim == nil {
+		t.Fatal("PVC source should use PersistentVolumeClaim binding")
+	}
+	if ws.PersistentVolumeClaim.ClaimName != "my-workspace" {
+		t.Errorf("expected claimName my-workspace, got %s", ws.PersistentVolumeClaim.ClaimName)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_GitSourcePrependsClone(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Source = automotivev1alpha1.SoftwareBuildSourceSpec{
+		Type: automotivev1alpha1.SoftwareBuildSourceGit,
+		Git: &automotivev1alpha1.SoftwareBuildGitSource{
+			URL:      "https://github.com/example/repo",
+			Revision: "develop",
+		},
+	}
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	for _, p := range pr.Spec.Params {
+		if p.Name == "fetchCommand" {
+			if !strings.Contains(p.Value.StringVal, "git clone") {
+				t.Errorf("fetchCommand should contain git clone, got %q", p.Value.StringVal)
+			}
+			if !strings.Contains(p.Value.StringVal, "develop") {
+				t.Errorf("fetchCommand should contain revision, got %q", p.Value.StringVal)
+			}
+			if !strings.Contains(p.Value.StringVal, "https://github.com/example/repo") {
+				t.Errorf("fetchCommand should contain repo URL, got %q", p.Value.StringVal)
+			}
+			return
+		}
+	}
+	t.Fatal("fetchCommand param not found")
+}
+
+func TestGenerateSoftwareBuildPipelineRun_GitSourceDefaultRevision(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Source = automotivev1alpha1.SoftwareBuildSourceSpec{
+		Type: automotivev1alpha1.SoftwareBuildSourceGit,
+		Git: &automotivev1alpha1.SoftwareBuildGitSource{
+			URL: "https://github.com/example/repo",
+		},
+	}
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	for _, p := range pr.Spec.Params {
+		if p.Name == "fetchCommand" {
+			if !strings.Contains(p.Value.StringVal, "main") {
+				t.Errorf("fetchCommand should default to main revision, got %q", p.Value.StringVal)
+			}
+			return
+		}
+	}
+	t.Fatal("fetchCommand param not found")
+}
+
+func TestGenerateSoftwareBuildPipeline_ImagePullPolicy(t *testing.T) {
+	p := GenerateSoftwareBuildPipeline("test-pipe", "ns", nil)
+
+	for _, task := range p.Spec.Tasks {
+		if task.TaskSpec == nil {
+			t.Errorf("task %q: expected inline TaskSpec", task.Name)
+			continue
+		}
+		for _, step := range task.TaskSpec.Steps {
+			if step.ImagePullPolicy != "IfNotPresent" {
+				t.Errorf("task %q step %q: expected ImagePullPolicy IfNotPresent, got %q",
+					task.Name, step.Name, step.ImagePullPolicy)
+			}
+		}
 	}
 }

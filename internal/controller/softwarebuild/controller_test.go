@@ -5,6 +5,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	knativeapis "knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
@@ -21,14 +22,14 @@ func newSB() *automotivev1alpha1.SoftwareBuild {
 	}
 }
 
-func prWithCondition(status, reason, message string) *tektonv1.PipelineRun {
+func prWithCondition(status corev1.ConditionStatus, reason, message string) *tektonv1.PipelineRun {
 	return &tektonv1.PipelineRun{
 		Status: tektonv1.PipelineRunStatus{
 			Status: duckv1.Status{
 				Conditions: duckv1.Conditions{
 					{
 						Type:    knativeapis.ConditionSucceeded,
-						Status:  "True",
+						Status:  status,
 						Reason:  reason,
 						Message: message,
 					},
@@ -42,23 +43,10 @@ func TestSyncStatusFromPipelineRun_Succeeded(t *testing.T) {
 	r := &SoftwareBuildReconciler{}
 	sb := newSB()
 
-	pr := &tektonv1.PipelineRun{
-		Status: tektonv1.PipelineRunStatus{
-			Status: duckv1.Status{
-				Conditions: duckv1.Conditions{
-					{
-						Type:    knativeapis.ConditionSucceeded,
-						Status:  "True",
-						Reason:  "Completed",
-						Message: "All tasks finished",
-					},
-				},
-			},
-			PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
-				ChildReferences: []tektonv1.ChildStatusReference{
-					{Name: "taskrun-build", PipelineTaskName: "build"},
-				},
-			},
+	pr := prWithCondition(corev1.ConditionTrue, "Completed", "All tasks finished")
+	pr.Status.PipelineRunStatusFields = tektonv1.PipelineRunStatusFields{
+		ChildReferences: []tektonv1.ChildStatusReference{
+			{Name: "taskrun-build", PipelineTaskName: "build"},
 		},
 	}
 
@@ -82,20 +70,7 @@ func TestSyncStatusFromPipelineRun_Failed(t *testing.T) {
 	r := &SoftwareBuildReconciler{}
 	sb := newSB()
 
-	pr := &tektonv1.PipelineRun{
-		Status: tektonv1.PipelineRunStatus{
-			Status: duckv1.Status{
-				Conditions: duckv1.Conditions{
-					{
-						Type:    knativeapis.ConditionSucceeded,
-						Status:  "False",
-						Reason:  "TaskRunFailed",
-						Message: "build task failed",
-					},
-				},
-			},
-		},
-	}
+	pr := prWithCondition(corev1.ConditionFalse, "TaskRunFailed", "build task failed")
 
 	r.syncStatusFromPipelineRun(sb, pr)
 
@@ -130,20 +105,7 @@ func TestSyncStatusFromPipelineRun_ConditionSet(t *testing.T) {
 	r := &SoftwareBuildReconciler{}
 	sb := newSB()
 
-	pr := &tektonv1.PipelineRun{
-		Status: tektonv1.PipelineRunStatus{
-			Status: duckv1.Status{
-				Conditions: duckv1.Conditions{
-					{
-						Type:    knativeapis.ConditionSucceeded,
-						Status:  "True",
-						Reason:  "Succeeded",
-						Message: "done",
-					},
-				},
-			},
-		},
-	}
+	pr := prWithCondition(corev1.ConditionTrue, "Succeeded", "done")
 
 	r.syncStatusFromPipelineRun(sb, pr)
 
@@ -161,5 +123,80 @@ func TestSyncStatusFromPipelineRun_ConditionSet(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("Ready condition not found")
+	}
+}
+
+func TestSyncStatusFromPipelineRun_FailedConditionSetsReadyFalse(t *testing.T) {
+	r := &SoftwareBuildReconciler{}
+	sb := newSB()
+
+	pr := prWithCondition(corev1.ConditionFalse, "TaskRunFailed", "build step failed")
+
+	r.syncStatusFromPipelineRun(sb, pr)
+
+	if sb.Status.Phase != automotivev1alpha1.SoftwareBuildPhaseFailed {
+		t.Fatalf("expected Failed, got %s", sb.Status.Phase)
+	}
+
+	found := false
+	for _, c := range sb.Status.Conditions {
+		if c.Type == conditionReady {
+			found = true
+			if c.Status != metav1.ConditionFalse {
+				t.Errorf("expected Ready=False on failure, got %s", c.Status)
+			}
+			if c.Reason != "TaskRunFailed" {
+				t.Errorf("expected reason TaskRunFailed, got %s", c.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Ready condition not found")
+	}
+}
+
+func TestSyncStatusFromPipelineRun_ObservedGenerationTracked(t *testing.T) {
+	r := &SoftwareBuildReconciler{}
+	sb := newSB()
+	sb.Generation = 7
+
+	pr := prWithCondition(corev1.ConditionTrue, "Completed", "all done")
+	r.syncStatusFromPipelineRun(sb, pr)
+
+	for _, c := range sb.Status.Conditions {
+		if c.Type == conditionReady {
+			if c.ObservedGeneration != 7 {
+				t.Errorf("expected ObservedGeneration=7, got %d", c.ObservedGeneration)
+			}
+			return
+		}
+	}
+	t.Fatal("Ready condition not found")
+}
+
+func TestSyncStatusFromPipelineRun_StagesPopulatedFromChildRefs(t *testing.T) {
+	r := &SoftwareBuildReconciler{}
+	sb := newSB()
+
+	pr := prWithCondition(corev1.ConditionTrue, "Completed", "done")
+	pr.Status.PipelineRunStatusFields = tektonv1.PipelineRunStatusFields{
+		ChildReferences: []tektonv1.ChildStatusReference{
+			{Name: "tr-fetch", PipelineTaskName: "fetch"},
+			{Name: "tr-build", PipelineTaskName: "build"},
+			{Name: "tr-deploy", PipelineTaskName: "deploy"},
+		},
+	}
+
+	r.syncStatusFromPipelineRun(sb, pr)
+
+	if len(sb.Status.Stages) != 3 {
+		t.Fatalf("expected 3 stages, got %d", len(sb.Status.Stages))
+	}
+
+	expectedNames := []string{"fetch", "build", "deploy"}
+	for i, s := range sb.Status.Stages {
+		if s.Name != expectedNames[i] {
+			t.Errorf("stage %d: got %q, want %q", i, s.Name, expectedNames[i])
+		}
 	}
 }
