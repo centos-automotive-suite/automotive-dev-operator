@@ -2046,6 +2046,23 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		}
 	}
 
+	// Validate secureBuild requirements before creating the ImageBuild
+	if req.SecureBuild {
+		operatorConfig := &automotivev1alpha1.OperatorConfig{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "config", Namespace: namespace}, operatorConfig); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "secureBuild requested but OperatorConfig could not be read"})
+			return
+		}
+		if operatorConfig.Spec.OSBuilds == nil || operatorConfig.Spec.OSBuilds.TaskBundleRef == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "secureBuild requested but OperatorConfig.spec.osBuilds.taskBundleRef is not set"})
+			return
+		}
+		if !strings.Contains(operatorConfig.Spec.OSBuilds.TaskBundleRef, "@sha256:") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("secureBuild requires a digest-pinned taskBundleRef (must contain @sha256:), got %q", operatorConfig.Spec.OSBuilds.TaskBundleRef)})
+			return
+		}
+	}
+
 	imageBuild := &automotivev1alpha1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      req.Name,
@@ -2065,6 +2082,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			Flash:         flashSpec,
 			BuildCachePVC: buildCachePVCName,
 			Workspace:     req.Workspace,
+			SecureBuild:   req.SecureBuild,
 		},
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
@@ -2368,6 +2386,7 @@ func getBuildTemplate(c *gin.Context, name string) {
 			CustomDefs:             build.Spec.GetCustomDefs(),
 			AIBExtraArgs:           build.Spec.GetAIBExtraArgs(),
 			Compression:            build.Spec.GetCompression(),
+			SecureBuild:            build.Spec.SecureBuild,
 		},
 		SourceFiles: sourceFiles,
 	})

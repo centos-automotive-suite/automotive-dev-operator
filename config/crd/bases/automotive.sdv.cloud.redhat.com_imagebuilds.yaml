@@ -199,6 +199,13 @@ spec:
                   SecretRef is the name of the secret containing credentials for registry operations
                   The secret should contain keys like REGISTRY_AUTH_FILE for authentication
                 type: string
+              secureBuild:
+                description: |-
+                  SecureBuild enables supply chain security for this build.
+                  When true, pipeline tasks are resolved from the signed Tekton Bundle
+                  configured in OperatorConfig.OSBuilds.TaskBundleRef instead of
+                  cluster-installed tasks.
+                type: boolean
               storageClass:
                 description: StorageClass is the name of the storage class to use
                   for the build PVC

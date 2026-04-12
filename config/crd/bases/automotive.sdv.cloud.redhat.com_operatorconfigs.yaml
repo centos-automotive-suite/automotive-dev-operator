@@ -762,6 +762,14 @@ spec:
                       StorageClass specifies the storage class for build PVCs
                       If empty, the cluster default storage class is used
                     type: string
+                  taskBundleRef:
+                    description: |-
+                      TaskBundleRef is the OCI reference to a signed Tekton Bundle containing task definitions.
+                      When set, builds created with SecureBuild=true will resolve tasks from this bundle
+                      instead of the cluster-installed tasks. The bundle should be signed with cosign
+                      and contain the same tasks as the operator deploys.
+                      Example: "quay.io/rh-sdv-cloud/automotive-dev-tekton-tasks:v0.1.0@sha256:abc123..."
+                    type: string
                   tolerations:
                     description: |-
                       Tolerations specifies tolerations to be added to build pods

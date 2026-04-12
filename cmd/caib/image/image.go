@@ -69,6 +69,8 @@ type Options struct {
 	InternalRegistryImageName *string
 	InternalRegistryTag       *string
 
+	SecureBuild *bool
+
 	SealedBuilderImage      *string
 	SealedArchitecture      *string
 	SealedKeySecret         *string
@@ -155,6 +157,8 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	buildCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	buildCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	// Secure build
+	buildCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "resolve tasks from signed Tekton Bundle (requires OperatorConfig taskBundleRef)")
 	// Internal registry options
 	buildCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
@@ -213,6 +217,8 @@ func NewImageCmd(opts Options) *cobra.Command {
 	diskCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	diskCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	diskCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	// Secure build
+	diskCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "resolve tasks from signed Tekton Bundle (requires OperatorConfig taskBundleRef)")
 	// Internal registry options
 	diskCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	diskCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
@@ -255,6 +261,8 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	buildDevCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	buildDevCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	// Secure build
+	buildDevCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "resolve tasks from signed Tekton Bundle (requires OperatorConfig taskBundleRef)")
 	// Internal registry options
 	buildDevCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildDevCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
