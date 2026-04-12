@@ -1862,6 +1862,14 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 		"app.kubernetes.io/name":                          "upload-pod",
 	}
 
+	// Fetch OperatorConfig to inherit nodeSelector and tolerations for the upload pod.
+	// This ensures the upload pod (the PVC's first consumer) schedules in the same
+	// availability zone as the build pod.
+	operatorConfig := &automotivev1alpha1.OperatorConfig{}
+	if err := r.Get(ctx, types.NamespacedName{Name: "config", Namespace: OperatorNamespace}, operatorConfig); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to get OperatorConfig: %w", err)
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -1919,6 +1927,16 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 				},
 			},
 		},
+	}
+
+	// Apply the same nodeSelector and tolerations used by build pods so the upload
+	// pod lands in the same AZ, ensuring the WaitForFirstConsumer PVC is provisioned
+	// on a topology reachable by the build pod.
+	if operatorConfig.Spec.OSBuilds != nil && len(operatorConfig.Spec.OSBuilds.NodeSelector) > 0 {
+		pod.Spec.NodeSelector = operatorConfig.Spec.OSBuilds.NodeSelector
+	}
+	if operatorConfig.Spec.OSBuilds != nil && len(operatorConfig.Spec.OSBuilds.Tolerations) > 0 {
+		pod.Spec.Tolerations = operatorConfig.Spec.OSBuilds.Tolerations
 	}
 
 	if err := r.Create(ctx, pod); err != nil && !errors.IsAlreadyExists(err) {
