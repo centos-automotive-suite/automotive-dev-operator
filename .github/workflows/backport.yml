@@ -1,0 +1,40 @@
+# WARNING:
+# When extending this action, be aware that $GITHUB_TOKEN allows write access to
+# the GitHub repository. This means that it should not evaluate user input in a
+# way that allows code injection.
+
+name: Backport
+
+on:
+  pull_request_target:
+    types: [closed, labeled]
+
+permissions: {}
+
+jobs:
+  backport:
+    name: Backport Pull Request
+    if: >-
+      github.repository_owner == 'centos-automotive-suite' &&
+      github.event.pull_request.merged == true &&
+      (github.event.action != 'labeled' || startsWith(github.event.label.name, 'backport/'))
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.BACKPORT_BOT_APP_ID }}
+          private-key: ${{ secrets.BACKPORT_BOT_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Create backport PRs
+        uses: korthout/backport-action@v4
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+          merge_commits: skip
+          pull_description: |-
+            Backport to `${target_branch}`, triggered by a label in #${pull_number}.
