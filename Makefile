@@ -378,6 +378,18 @@ build-caib: ## Build the caib tool
 build-api-server: ## Build the api server
 	go build -o bin/build-api cmd/build-api/main.go
 
+# Tekton Bundle configuration
+TEKTON_TASKS_DIR ?= _output/tasks
+TEKTON_BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-tekton-tasks:$(VERSION)
+
+.PHONY: export-tasks
+export-tasks: ## Export Tekton task definitions as YAML
+	go run ./cmd/export-tasks --output-dir $(TEKTON_TASKS_DIR)
+
+.PHONY: bundle-tasks
+bundle-tasks: export-tasks ## Build and push a Tekton Bundle OCI image from exported tasks
+	tkn bundle push $(TEKTON_BUNDLE_IMG) $(addprefix -f ,$(wildcard $(TEKTON_TASKS_DIR)/*.yaml))
+
 ##@ Release
 
 .PHONY: prepare-release

@@ -45,6 +45,7 @@ func newTestDiskOpts() Options {
 		useInternalRegistry  bool
 		internalRegImageName string
 		internalRegTag       string
+		secureBuild          bool
 		insecureSkipTLS      bool
 	)
 	return Options{
@@ -81,6 +82,7 @@ func newTestDiskOpts() Options {
 		UseInternalRegistry:       &useInternalRegistry,
 		InternalRegistryImageName: &internalRegImageName,
 		InternalRegistryTag:       &internalRegTag,
+		SecureBuild:               &secureBuild,
 		InsecureSkipTLS:           &insecureSkipTLS,
 	}
 }

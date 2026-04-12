@@ -535,6 +535,14 @@ type OSBuildsConfig struct {
 	// Certificates defines trusted certificate configuration for build tasks.
 	// +optional
 	Certificates *BuildCertificatesConfig `json:"certificates,omitempty"`
+
+	// TaskBundleRef is the OCI reference to a signed Tekton Bundle containing task definitions.
+	// When set, builds created with SecureBuild=true will resolve tasks from this bundle
+	// instead of the cluster-installed tasks. The bundle should be signed with cosign
+	// and contain the same tasks as the operator deploys.
+	// Example: "quay.io/rh-sdv-cloud/automotive-dev-tekton-tasks:v0.1.0@sha256:abc123..."
+	// +optional
+	TaskBundleRef string `json:"taskBundleRef,omitempty"`
 }
 
 // CertificateSourceRef references a Secret or ConfigMap that contains trusted CA certificates.

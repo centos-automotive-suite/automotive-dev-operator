@@ -59,6 +59,9 @@ var (
 	internalRegistryImageName string
 	internalRegistryTag       string
 
+	// Secure build
+	secureBuild bool
+
 	// TLS options
 	insecureSkipTLS bool
 

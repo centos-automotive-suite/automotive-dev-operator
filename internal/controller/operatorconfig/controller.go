@@ -642,6 +642,9 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 			buildConfig.TrustedCABundleKind = config.Spec.OSBuilds.Certificates.TrustedCABundle.Kind
 			buildConfig.TrustedCABundleName = config.Spec.OSBuilds.Certificates.TrustedCABundle.Name
 		}
+		if config.Spec.OSBuilds.TaskBundleRef != "" {
+			buildConfig.TaskBundleRef = config.Spec.OSBuilds.TaskBundleRef
+		}
 	}
 
 	// Create target defaults ConfigMap (architecture, partition rules, etc.)

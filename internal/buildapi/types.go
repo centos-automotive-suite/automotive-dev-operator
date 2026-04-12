@@ -140,6 +140,9 @@ type BuildRequest struct {
 	InternalRegistryImageName string `json:"internalRegistryImageName,omitempty"` // Override image name (default: build name)
 	InternalRegistryTag       string `json:"internalRegistryTag,omitempty"`       // Tag for internal registry image (default: "bootc" for bootc mode, "disk" for disk/traditional mode)
 
+	// Secure build: resolve tasks from signed Tekton Bundle
+	SecureBuild bool `json:"secureBuild,omitempty"`
+
 	// Flash configuration for Jumpstarter device flashing after build
 	FlashEnabled          bool   `json:"flashEnabled,omitempty"`          // Enable flashing after build
 	FlashClientConfig     string `json:"flashClientConfig,omitempty"`     // Base64-encoded Jumpstarter client config

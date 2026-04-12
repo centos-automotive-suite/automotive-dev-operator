@@ -543,9 +543,17 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			UsePVCScratchVolumes:        operatorConfig.Spec.OSBuilds.GetUsePVCScratchVolumes(),
 		}
 		controllerutils.ApplyTrustedCABundleFromOSBuilds(buildConfig, operatorConfig.Spec.OSBuilds)
+		if imageBuild.Spec.SecureBuild {
+			if operatorConfig.Spec.OSBuilds.TaskBundleRef == "" {
+				return fmt.Errorf("secureBuild requested but OperatorConfig.spec.osBuilds.taskBundleRef is not set")
+			}
+			if !strings.Contains(operatorConfig.Spec.OSBuilds.TaskBundleRef, "@sha256:") {
+				return fmt.Errorf("secureBuild requires a digest-pinned taskBundleRef (must contain @sha256:), got %q", operatorConfig.Spec.OSBuilds.TaskBundleRef)
+			}
+			buildConfig.TaskResolver = tasks.TaskResolverBundle
+			buildConfig.TaskBundleRef = operatorConfig.Spec.OSBuilds.TaskBundleRef
+		}
 	}
-	_ = buildConfig // buildConfig used for RuntimeClassName if needed
-
 	// PVC is created via VolumeClaimTemplate in the PipelineRun workspace binding
 	// to ensure proper zone affinity with WaitForFirstConsumer storage class
 
@@ -996,6 +1004,26 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		log.Info("Setting RuntimeClassName from ImageBuild spec", "runtimeClassName", imageBuild.Spec.RuntimeClassName)
 		podTemplate.RuntimeClassName = &imageBuild.Spec.RuntimeClassName
 	}
+	pipelineRunSpec := tektonv1.PipelineRunSpec{
+		Params:     params,
+		Workspaces: pipelineWorkspaces,
+		TaskRunTemplate: tektonv1.PipelineTaskRunTemplate{
+			PodTemplate:        podTemplate,
+			ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
+		},
+	}
+
+	// When using bundle resolver, embed the pipeline spec inline so task refs
+	// point to the signed bundle. Otherwise reference the cluster-installed pipeline.
+	if buildConfig != nil && buildConfig.TaskResolver == tasks.TaskResolverBundle {
+		pipeline := tasks.GenerateTektonPipeline("", imageBuild.Namespace, buildConfig)
+		pipelineRunSpec.PipelineSpec = &pipeline.Spec
+	} else {
+		pipelineRunSpec.PipelineRef = &tektonv1.PipelineRef{
+			Name: "automotive-build-pipeline",
+		}
+	}
+
 	pipelineRun := &tektonv1.PipelineRun{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: safeDerivedName(imageBuild.Name, "-build-"),
@@ -1014,17 +1042,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				},
 			},
 		},
-		Spec: tektonv1.PipelineRunSpec{
-			PipelineRef: &tektonv1.PipelineRef{
-				Name: "automotive-build-pipeline",
-			},
-			Params:     params,
-			Workspaces: pipelineWorkspaces,
-			TaskRunTemplate: tektonv1.PipelineTaskRunTemplate{
-				PodTemplate:        podTemplate,
-				ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
-			},
-		},
+		Spec: pipelineRunSpec,
 	}
 
 	if err := r.Create(ctx, pipelineRun); err != nil {
@@ -1929,14 +1947,33 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 		},
 	}
 
-	// Apply the same nodeSelector and tolerations used by build pods so the upload
-	// pod lands in the same AZ, ensuring the WaitForFirstConsumer PVC is provisioned
-	// on a topology reachable by the build pod.
+	// Apply the same scheduling constraints used by build pods so the upload
+	// pod lands in the same AZ and architecture, ensuring the WaitForFirstConsumer
+	// PVC is provisioned on a topology reachable by the build pod.
 	if operatorConfig.Spec.OSBuilds != nil && len(operatorConfig.Spec.OSBuilds.NodeSelector) > 0 {
 		pod.Spec.NodeSelector = operatorConfig.Spec.OSBuilds.NodeSelector
 	}
 	if operatorConfig.Spec.OSBuilds != nil && len(operatorConfig.Spec.OSBuilds.Tolerations) > 0 {
 		pod.Spec.Tolerations = operatorConfig.Spec.OSBuilds.Tolerations
+	}
+	if imageBuild.Spec.Architecture != "" {
+		pod.Spec.Affinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      corev1.LabelArchStable,
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{imageBuild.Spec.Architecture},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
 	}
 
 	if err := r.Create(ctx, pod); err != nil && !errors.IsAlreadyExists(err) {

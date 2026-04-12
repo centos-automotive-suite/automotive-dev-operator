@@ -54,6 +54,8 @@ type runtimeState struct {
 	InternalRegistryImageName *string
 	InternalRegistryTag       *string
 
+	SecureBuild *bool
+
 	InsecureSkipTLS *bool
 
 	SealedBuilderImage      *string
@@ -111,6 +113,8 @@ func newRuntimeState() runtimeState {
 		UseInternalRegistry:       &useInternalRegistry,
 		InternalRegistryImageName: &internalRegistryImageName,
 		InternalRegistryTag:       &internalRegistryTag,
+
+		SecureBuild: &secureBuild,
 
 		InsecureSkipTLS: &insecureSkipTLS,
 
@@ -175,6 +179,7 @@ func (s runtimeState) newHandlers() handlerSet {
 			UseInternalRegistry:       s.UseInternalRegistry,
 			InternalRegistryImageName: s.InternalRegistryImageName,
 			InternalRegistryTag:       s.InternalRegistryTag,
+			SecureBuild:               s.SecureBuild,
 			InsecureSkipTLS:           s.InsecureSkipTLS,
 			HandleError:               handleError,
 		}),
@@ -295,6 +300,8 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		UseInternalRegistry:       s.UseInternalRegistry,
 		InternalRegistryImageName: s.InternalRegistryImageName,
 		InternalRegistryTag:       s.InternalRegistryTag,
+
+		SecureBuild: s.SecureBuild,
 
 		SealedBuilderImage:      s.SealedBuilderImage,
 		SealedArchitecture:      s.SealedArchitecture,
