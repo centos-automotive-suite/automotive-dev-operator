@@ -280,7 +280,7 @@ jobs:
                   tar czf ${AIB_CLI_BINARY}-${{ github.ref_name }}-linux-arm64.tar.gz -C bin caib
 
             - name: Upload ARM64 artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: caib-linux-arm64
                   path: ${{ env.AIB_CLI_BINARY }}-${{ github.ref_name }}-linux-arm64.tar.gz
@@ -306,7 +306,7 @@ jobs:
                   tar czf ${AIB_CLI_BINARY}-${{ github.ref_name }}-linux-amd64.tar.gz -C bin caib
 
             - name: Upload AMD64 artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: caib-linux-amd64
                   path: ${{ env.AIB_CLI_BINARY }}-${{ github.ref_name }}-linux-amd64.tar.gz
@@ -332,7 +332,7 @@ jobs:
                   tar czf ${AIB_CLI_BINARY}-${{ github.ref_name }}-darwin-arm64.tar.gz -C bin caib
 
             - name: Upload darwin/arm64 artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: caib-darwin-arm64
                   path: ${{ env.AIB_CLI_BINARY }}-${{ github.ref_name }}-darwin-arm64.tar.gz
