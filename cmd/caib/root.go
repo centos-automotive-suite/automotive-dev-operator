@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/authcmd"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/catalog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/container"
@@ -9,11 +12,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var validOutputFormats = map[string]bool{
+	"table": true,
+	"json":  true,
+	"yaml":  true,
+	"yml":   true,
+}
+
 func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:     "caib",
 		Short:   "Cloud Automotive Image Builder",
 		Version: version,
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			f := strings.ToLower(strings.TrimSpace(outputFormat))
+			if !validOutputFormats[f] {
+				return fmt.Errorf("invalid output format %q (supported: table, json, yaml)", outputFormat)
+			}
+			return nil
+		},
 	}
 
 	rootCmd.InitDefaultVersionFlag()
@@ -24,6 +41,12 @@ func newRootCmd() *cobra.Command {
 		"insecure",
 		envBool("CAIB_INSECURE"),
 		"skip TLS certificate verification (insecure, for testing only; env: CAIB_INSECURE)",
+	)
+	rootCmd.PersistentFlags().StringVar(
+		&outputFormat,
+		"output-format",
+		"table",
+		"output format: table, json, yaml",
 	)
 	state := newRuntimeState()
 	handlers := state.newHandlers()

@@ -22,6 +22,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
+	"text/tabwriter"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
@@ -98,7 +100,8 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	switch outputFormat {
+	format := strings.ToLower(strings.TrimSpace(getOutputFormat(cmd)))
+	switch format {
 	case "json":
 		var result map[string]interface{}
 		if err := json.Unmarshal(body, &result); err != nil {
@@ -106,14 +109,61 @@ func runGet(cmd *cobra.Command, args []string) error {
 		}
 		output, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Println(string(output))
-	default:
+	case "yaml", "yml":
 		var result map[string]interface{}
 		if err := json.Unmarshal(body, &result); err != nil {
 			return fmt.Errorf("failed to parse JSON response: %w", err)
 		}
 		output, _ := yaml.Marshal(result)
-		fmt.Println(string(output))
+		fmt.Print(string(output))
+	case outputFormatTable:
+		var img CatalogImageResponse
+		if err := json.Unmarshal(body, &img); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		printImageDetails(img)
+	default:
+		return fmt.Errorf("invalid output format %q (supported: table, json, yaml)", format)
 	}
 
 	return nil
+}
+
+func printImageDetails(img CatalogImageResponse) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	defer func() {
+		if err := w.Flush(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to flush output: %v\n", err)
+		}
+	}()
+
+	target := ""
+	if len(img.Targets) > 0 {
+		names := make([]string, len(img.Targets))
+		for i, t := range img.Targets {
+			names[i] = t.Name
+		}
+		target = fmt.Sprintf("%v", names)
+	}
+
+	rows := [][2]string{
+		{"Name", img.Name},
+		{"Namespace", img.Namespace},
+		{"Registry URL", img.RegistryURL},
+		{"Phase", img.Phase},
+		{"Architecture", img.Architecture},
+		{"Distro", img.Distro},
+		{"Targets", target},
+		{"Created At", img.CreatedAt},
+	}
+	if img.SizeBytes > 0 {
+		rows = append(rows, [2]string{"Size", fmt.Sprintf("%d bytes", img.SizeBytes)})
+	}
+
+	for _, row := range rows {
+		if _, err := fmt.Fprintf(w, "%s\t%s\n", row[0], row[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write output row: %v\n", err)
+			return
+		}
+	}
 }
