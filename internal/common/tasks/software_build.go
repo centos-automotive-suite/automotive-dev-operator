@@ -235,14 +235,16 @@ func parsePVCSize(config *BuildConfig) string {
 
 func buildWorkspaceBinding(sb *automotivev1alpha1.SoftwareBuild, pvcSize string) []tektonv1.WorkspaceBinding {
 	if sb.Spec.Source.Type == automotivev1alpha1.SoftwareBuildSourcePVC && sb.Spec.Source.PVC != nil {
-		return []tektonv1.WorkspaceBinding{
-			{
-				Name: "shared-workspace",
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: sb.Spec.Source.PVC.ClaimName,
-				},
+		wb := tektonv1.WorkspaceBinding{
+			Name: "shared-workspace",
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: sb.Spec.Source.PVC.ClaimName,
 			},
 		}
+		if sb.Spec.Source.PVC.Path != "" && sb.Spec.Source.PVC.Path != "/" {
+			wb.SubPath = sb.Spec.Source.PVC.Path
+		}
+		return []tektonv1.WorkspaceBinding{wb}
 	}
 	return []tektonv1.WorkspaceBinding{
 		{

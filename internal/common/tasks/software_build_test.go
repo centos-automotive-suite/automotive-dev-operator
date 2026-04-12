@@ -290,6 +290,37 @@ func TestGenerateSoftwareBuildPipelineRun_PVCSource(t *testing.T) {
 	if ws.PersistentVolumeClaim.ClaimName != "my-workspace" {
 		t.Errorf("expected claimName my-workspace, got %s", ws.PersistentVolumeClaim.ClaimName)
 	}
+	if ws.SubPath != "" {
+		t.Errorf("default path should not set SubPath, got %q", ws.SubPath)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_PVCSourceWithSubPath(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Source = automotivev1alpha1.SoftwareBuildSourceSpec{
+		Type: automotivev1alpha1.SoftwareBuildSourcePVC,
+		PVC:  &automotivev1alpha1.SoftwareBuildPVCSource{ClaimName: "my-workspace", Path: "src/project"},
+	}
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	ws := pr.Spec.Workspaces[0]
+	if ws.SubPath != "src/project" {
+		t.Errorf("expected SubPath src/project, got %q", ws.SubPath)
+	}
+}
+
+func TestGenerateSoftwareBuildPipelineRun_PVCSourceRootPathNoSubPath(t *testing.T) {
+	sb := newTestSoftwareBuild()
+	sb.Spec.Source = automotivev1alpha1.SoftwareBuildSourceSpec{
+		Type: automotivev1alpha1.SoftwareBuildSourcePVC,
+		PVC:  &automotivev1alpha1.SoftwareBuildPVCSource{ClaimName: "my-workspace", Path: "/"},
+	}
+	pr := GenerateSoftwareBuildPipelineRun(sb, nil)
+
+	ws := pr.Spec.Workspaces[0]
+	if ws.SubPath != "" {
+		t.Errorf("root path should not set SubPath, got %q", ws.SubPath)
+	}
 }
 
 func TestGenerateSoftwareBuildPipelineRun_GitSourcePrependsClone(t *testing.T) {
