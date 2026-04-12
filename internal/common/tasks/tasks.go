@@ -29,6 +29,7 @@ type BuildConfig struct {
 	TrustedCABundleKind         string
 	TrustedCABundleName         string
 	UsePVCScratchVolumes        bool
+	DefaultImage                string
 }
 
 // getAutomotiveImageBuilderImage returns the AIB image from config or the default constant

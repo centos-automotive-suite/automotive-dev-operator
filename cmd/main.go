@@ -49,6 +49,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/imagebuild"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/imagereseal"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/operatorconfig"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/softwarebuild"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/workspace"
 	// +kubebuilder:scaffold:imports
 )
@@ -288,6 +289,17 @@ func main() {
 		}
 		if err = workspaceReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "Workspace")
+			os.Exit(1)
+		}
+
+		softwareBuildReconciler := &softwarebuild.Reconciler{
+			Client:            mgr.GetClient(),
+			Scheme:            mgr.GetScheme(),
+			Log:               ctrl.Log.WithName("controllers").WithName("SoftwareBuild"),
+			OperatorNamespace: imagebuild.OperatorNamespace,
+		}
+		if err = softwareBuildReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "SoftwareBuild")
 			os.Exit(1)
 		}
 	}

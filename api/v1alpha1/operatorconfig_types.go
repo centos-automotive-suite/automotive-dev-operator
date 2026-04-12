@@ -430,6 +430,28 @@ func (c *WorkspacesConfig) GetAutoPauseTimeoutMinutes() int32 {
 	return DefaultAutoPauseTimeoutMinutes
 }
 
+// SoftwareBuildsConfig defines configuration for generic software build operations
+type SoftwareBuildsConfig struct {
+	// Enabled determines if Tekton pipeline for generic software builds should be deployed
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled"`
+
+	// PVCSize specifies the size for persistent volume claims created for build workspaces
+	// Default: "1Gi"
+	// +optional
+	PVCSize string `json:"pvcSize,omitempty"`
+
+	// BuildTimeoutMinutes is the timeout for software build pipeline tasks in minutes
+	// Default: 30
+	// +optional
+	BuildTimeoutMinutes int32 `json:"buildTimeoutMinutes,omitempty"`
+
+	// DefaultImage is the default container image for software builds when not specified in the CR
+	// Default: "ubuntu:24.04"
+	// +optional
+	DefaultImage string `json:"defaultImage,omitempty"`
+}
+
 // OperatorConfigSpec defines the desired state of OperatorConfig
 type OperatorConfigSpec struct {
 	// OSBuilds defines the configuration for OS build operations
@@ -455,6 +477,12 @@ type OperatorConfigSpec struct {
 	// Workspaces defines configuration for developer workspaces
 	// +optional
 	Workspaces *WorkspacesConfig `json:"workspaces,omitempty"`
+
+	// SoftwareBuilds defines configuration for generic software build operations.
+	// When enabled, the operator deploys a stage-based Tekton pipeline that can
+	// build software for arbitrary target OSes using user-specified container images.
+	// +optional
+	SoftwareBuilds *SoftwareBuildsConfig `json:"softwareBuilds,omitempty"`
 }
 
 // OSBuildsConfig defines configuration for OS build operations

@@ -286,6 +286,26 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
+	// Deploy or cleanup software build pipeline
+	if config.Spec.SoftwareBuilds != nil && config.Spec.SoftwareBuilds.Enabled {
+		if err := r.deploySoftwareBuilds(ctx, config); err != nil {
+			log.Error(err, "Failed to deploy SoftwareBuilds pipeline")
+			if config.Status.Phase != phaseFailed {
+				config.Status.Phase = phaseFailed
+				config.Status.Message = fmt.Sprintf("Failed to deploy SoftwareBuilds: %v", err)
+				statusChanged = true
+			}
+			if statusChanged {
+				_ = r.Status().Update(ctx, config)
+			}
+			return ctrl.Result{}, err
+		}
+	} else {
+		if err := r.cleanupSoftwareBuilds(ctx, config); err != nil {
+			log.Error(err, "Failed to cleanup SoftwareBuilds pipeline")
+		}
+	}
+
 	// Detect Jumpstarter availability: explicitly configured or auto-detected from local CRDs
 	jumpstarterAvailable := config.Spec.Jumpstarter != nil || r.detectJumpstarter(ctx)
 	if config.Status.JumpstarterAvailable != jumpstarterAvailable {
@@ -983,7 +1003,7 @@ func (r *OperatorConfigReconciler) cleanupWorkspaceInfra(ctx context.Context, co
 
 	scc := &securityv1.SecurityContextConstraints{}
 	scc.Name = workspaceSCCName
-	if err := r.Delete(ctx, scc); err != nil && !errors.IsNotFound(err) {
+	if err := r.Delete(ctx, scc); err != nil && !errors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
 		return fmt.Errorf("failed to delete workspace SCC: %w", err)
 	}
 
@@ -1010,6 +1030,53 @@ func (r *OperatorConfigReconciler) createOrUpdateTask(ctx context.Context, task 
 
 func (r *OperatorConfigReconciler) createOrUpdatePipeline(ctx context.Context, pipeline *tektonv1.Pipeline) error {
 	return r.createOrUpdate(ctx, pipeline, nil)
+}
+
+func (r *OperatorConfigReconciler) deploySoftwareBuilds(
+	ctx context.Context,
+	config *automotivev1alpha1.OperatorConfig,
+) error {
+	r.Log.Info("Deploying SoftwareBuilds pipeline")
+
+	var buildConfig *tasks.BuildConfig
+	if config.Spec.SoftwareBuilds != nil {
+		buildConfig = &tasks.BuildConfig{
+			PVCSize:             config.Spec.SoftwareBuilds.PVCSize,
+			BuildTimeoutMinutes: config.Spec.SoftwareBuilds.BuildTimeoutMinutes,
+			DefaultImage:        config.Spec.SoftwareBuilds.DefaultImage,
+		}
+	}
+
+	pipeline := tasks.GenerateSoftwareBuildPipeline(
+		tasks.SoftwareBuildPipelineName,
+		config.Namespace,
+		buildConfig,
+	)
+	pipeline.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = config.Name
+
+	if err := controllerutil.SetControllerReference(config, pipeline, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set controller reference on software-build pipeline: %w", err)
+	}
+
+	if err := r.createOrUpdatePipeline(ctx, pipeline); err != nil {
+		return fmt.Errorf("failed to create/update software-build pipeline: %w", err)
+	}
+
+	r.Log.Info("SoftwareBuilds pipeline deployed successfully")
+	return nil
+}
+
+func (r *OperatorConfigReconciler) cleanupSoftwareBuilds(
+	ctx context.Context,
+	config *automotivev1alpha1.OperatorConfig,
+) error {
+	pipeline := &tektonv1.Pipeline{}
+	pipeline.Name = tasks.SoftwareBuildPipelineName
+	pipeline.Namespace = config.Namespace
+	if err := r.Delete(ctx, pipeline); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete software-build pipeline: %w", err)
+	}
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
