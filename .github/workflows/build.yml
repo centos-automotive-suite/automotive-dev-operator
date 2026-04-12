@@ -383,7 +383,7 @@ jobs:
 
             - name: Create Release
               id: create_release
-              uses: softprops/action-gh-release@v2
+              uses: softprops/action-gh-release@v3
               with:
                   files: |
                       ${{ env.AIB_CLI_BINARY }}-${{ github.ref_name }}-linux-arm64.tar.gz
