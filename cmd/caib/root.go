@@ -31,6 +31,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(
 		image.NewImageCmd(state.imageOptions(handlers)),
 		newLoginCmd(),
+		newStatusCmd(),
 		container.NewContainerCmd(),
 		catalog.NewCatalogCmd(),
 		authcmd.NewAuthCmd(),
