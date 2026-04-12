@@ -1947,14 +1947,33 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 		},
 	}
 
-	// Apply the same nodeSelector and tolerations used by build pods so the upload
-	// pod lands in the same AZ, ensuring the WaitForFirstConsumer PVC is provisioned
-	// on a topology reachable by the build pod.
+	// Apply the same scheduling constraints used by build pods so the upload
+	// pod lands in the same AZ and architecture, ensuring the WaitForFirstConsumer
+	// PVC is provisioned on a topology reachable by the build pod.
 	if operatorConfig.Spec.OSBuilds != nil && len(operatorConfig.Spec.OSBuilds.NodeSelector) > 0 {
 		pod.Spec.NodeSelector = operatorConfig.Spec.OSBuilds.NodeSelector
 	}
 	if operatorConfig.Spec.OSBuilds != nil && len(operatorConfig.Spec.OSBuilds.Tolerations) > 0 {
 		pod.Spec.Tolerations = operatorConfig.Spec.OSBuilds.Tolerations
+	}
+	if imageBuild.Spec.Architecture != "" {
+		pod.Spec.Affinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      corev1.LabelArchStable,
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{imageBuild.Spec.Architecture},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
 	}
 
 	if err := r.Create(ctx, pod); err != nil && !errors.IsAlreadyExists(err) {
