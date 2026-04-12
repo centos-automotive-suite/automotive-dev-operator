@@ -24,7 +24,7 @@ jobs:
         runs-on: ubuntu-24.04-arm
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/release-')
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -66,7 +66,7 @@ jobs:
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/release-')
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -109,7 +109,7 @@ jobs:
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/release-')
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -141,7 +141,7 @@ jobs:
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/tags/')
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
@@ -173,7 +173,7 @@ jobs:
         env:
             BUNDLE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-bundle
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Go
               uses: actions/setup-go@v5
@@ -228,7 +228,7 @@ jobs:
             BUNDLE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-bundle
             CATALOG_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-catalog
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Go
               uses: actions/setup-go@v5
@@ -266,7 +266,7 @@ jobs:
         runs-on: ubuntu-24.04-arm
         if: startsWith(github.ref, 'refs/tags/')
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Go
               uses: actions/setup-go@v5
@@ -292,7 +292,7 @@ jobs:
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/tags/')
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Go
               uses: actions/setup-go@v5
@@ -318,7 +318,7 @@ jobs:
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/tags/')
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Go
               uses: actions/setup-go@v5
@@ -348,7 +348,7 @@ jobs:
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/tags/')
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Set up Go
               uses: actions/setup-go@v5

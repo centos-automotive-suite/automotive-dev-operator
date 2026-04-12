@@ -26,7 +26,7 @@ jobs:
           app-id: ${{ secrets.BACKPORT_BOT_APP_ID }}
           private-key: ${{ secrets.BACKPORT_BOT_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           token: ${{ steps.app-token.outputs.token }}
