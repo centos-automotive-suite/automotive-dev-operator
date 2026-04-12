@@ -40,7 +40,7 @@ func prWithCondition(status corev1.ConditionStatus, reason, message string) *tek
 }
 
 func TestSyncStatusFromPipelineRun_Succeeded(t *testing.T) {
-	r := &SoftwareBuildReconciler{}
+	r := &Reconciler{}
 	sb := newSB()
 
 	pr := prWithCondition(corev1.ConditionTrue, "Completed", "All tasks finished")
@@ -67,7 +67,7 @@ func TestSyncStatusFromPipelineRun_Succeeded(t *testing.T) {
 }
 
 func TestSyncStatusFromPipelineRun_Failed(t *testing.T) {
-	r := &SoftwareBuildReconciler{}
+	r := &Reconciler{}
 	sb := newSB()
 
 	pr := prWithCondition(corev1.ConditionFalse, "TaskRunFailed", "build task failed")
@@ -83,7 +83,7 @@ func TestSyncStatusFromPipelineRun_Failed(t *testing.T) {
 }
 
 func TestSyncStatusFromPipelineRun_Running(t *testing.T) {
-	r := &SoftwareBuildReconciler{}
+	r := &Reconciler{}
 	sb := newSB()
 
 	now := metav1.Now()
@@ -106,7 +106,7 @@ func TestSyncStatusFromPipelineRun_Running(t *testing.T) {
 }
 
 func TestSyncStatusFromPipelineRun_Pending(t *testing.T) {
-	r := &SoftwareBuildReconciler{}
+	r := &Reconciler{}
 	sb := newSB()
 
 	pr := &tektonv1.PipelineRun{
@@ -125,7 +125,7 @@ func TestSyncStatusFromPipelineRun_Pending(t *testing.T) {
 }
 
 func TestSyncStatusFromPipelineRun_ConditionSet(t *testing.T) {
-	r := &SoftwareBuildReconciler{}
+	r := &Reconciler{}
 	sb := newSB()
 
 	pr := prWithCondition(corev1.ConditionTrue, "Succeeded", "done")
@@ -150,7 +150,7 @@ func TestSyncStatusFromPipelineRun_ConditionSet(t *testing.T) {
 }
 
 func TestSyncStatusFromPipelineRun_FailedConditionSetsReadyFalse(t *testing.T) {
-	r := &SoftwareBuildReconciler{}
+	r := &Reconciler{}
 	sb := newSB()
 
 	pr := prWithCondition(corev1.ConditionFalse, "TaskRunFailed", "build step failed")
@@ -179,7 +179,7 @@ func TestSyncStatusFromPipelineRun_FailedConditionSetsReadyFalse(t *testing.T) {
 }
 
 func TestSyncStatusFromPipelineRun_ObservedGenerationTracked(t *testing.T) {
-	r := &SoftwareBuildReconciler{}
+	r := &Reconciler{}
 	sb := newSB()
 	sb.Generation = 7
 
@@ -198,7 +198,7 @@ func TestSyncStatusFromPipelineRun_ObservedGenerationTracked(t *testing.T) {
 }
 
 func TestSyncStatusFromPipelineRun_StagesPopulatedFromChildRefs(t *testing.T) {
-	r := &SoftwareBuildReconciler{}
+	r := &Reconciler{}
 	sb := newSB()
 
 	pr := prWithCondition(corev1.ConditionTrue, "Completed", "done")
@@ -280,7 +280,7 @@ func TestMapPipelineRunPhase_RunningWithStartTime(t *testing.T) {
 	if phase != automotivev1alpha1.SoftwareBuildPhaseRunning {
 		t.Errorf("expected Running, got %s", phase)
 	}
-	if reason != "Running" {
+	if reason != reasonRunning {
 		t.Errorf("expected reason Running, got %s", reason)
 	}
 }

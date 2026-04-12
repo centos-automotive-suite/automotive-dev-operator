@@ -13,6 +13,7 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+// SoftwareBuildPipelineName is the well-known name of the shared Tekton Pipeline.
 const (
 	SoftwareBuildPipelineName = "software-build-pipeline"
 	defaultSoftwareBuildImage = "ubuntu:24.04"
@@ -124,7 +125,14 @@ func GenerateSoftwareBuildPipeline(name, namespace string, config *BuildConfig) 
 
 // GenerateSoftwareBuildPipelineRun creates a PipelineRun for the given
 // SoftwareBuild CR, referencing the software-build-pipeline.
-func GenerateSoftwareBuildPipelineRun(sb *automotivev1alpha1.SoftwareBuild, config *BuildConfig) *tektonv1.PipelineRun {
+// The PipelineRun is placed in operatorNS so the PipelineRef resolves to the
+// shared Pipeline deployed by OperatorConfig. When operatorNS is empty the
+// SoftwareBuild's own namespace is used as a fallback.
+func GenerateSoftwareBuildPipelineRun(sb *automotivev1alpha1.SoftwareBuild, config *BuildConfig, operatorNS string) *tektonv1.PipelineRun {
+	ns := operatorNS
+	if ns == "" {
+		ns = sb.Namespace
+	}
 	image := sb.Spec.Runtime.Image
 	if image == "" {
 		if config != nil && config.DefaultImage != "" {
@@ -142,7 +150,7 @@ func GenerateSoftwareBuildPipelineRun(sb *automotivev1alpha1.SoftwareBuild, conf
 		TypeMeta: metav1.TypeMeta{APIVersion: "tekton.dev/v1", Kind: "PipelineRun"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      prName,
-			Namespace: sb.Namespace,
+			Namespace: ns,
 			Labels: map[string]string{
 				"automotive.sdv.cloud.redhat.com/softwarebuild": sb.Name,
 				"app.kubernetes.io/managed-by":                  "automotive-dev-operator",
@@ -197,7 +205,7 @@ func buildPipelineRunParams(sb *automotivev1alpha1.SoftwareBuild, globalImage st
 		{Name: "containerImage", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: globalImage}},
 	}
 	for _, s := range stages {
-		stageImage := "$(params.containerImage)"
+		stageImage := globalImage
 		if s.image != "" {
 			stageImage = s.image
 		}

@@ -91,7 +91,7 @@ var _ = Describe("SoftwareBuild Controller", func() {
 
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &softwarebuild.SoftwareBuildReconciler{
+			controllerReconciler := &softwarebuild.Reconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
@@ -132,7 +132,7 @@ var _ = Describe("SoftwareBuild Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			controllerReconciler := &softwarebuild.SoftwareBuildReconciler{
+			controllerReconciler := &softwarebuild.Reconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

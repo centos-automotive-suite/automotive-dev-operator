@@ -292,10 +292,11 @@ func main() {
 			os.Exit(1)
 		}
 
-		softwareBuildReconciler := &softwarebuild.SoftwareBuildReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
-			Log:    ctrl.Log.WithName("controllers").WithName("SoftwareBuild"),
+		softwareBuildReconciler := &softwarebuild.Reconciler{
+			Client:            mgr.GetClient(),
+			Scheme:            mgr.GetScheme(),
+			Log:               ctrl.Log.WithName("controllers").WithName("SoftwareBuild"),
+			OperatorNamespace: imagebuild.OperatorNamespace,
 		}
 		if err = softwareBuildReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SoftwareBuild")

@@ -23,6 +23,7 @@ import (
 // SoftwareBuildSourceType identifies where source code is obtained from.
 type SoftwareBuildSourceType string
 
+// SoftwareBuildSourceType values.
 const (
 	SoftwareBuildSourceGit SoftwareBuildSourceType = "git"
 	SoftwareBuildSourcePVC SoftwareBuildSourceType = "pvc"
@@ -31,6 +32,7 @@ const (
 // SoftwareBuildDestinationType identifies where build artifacts are stored.
 type SoftwareBuildDestinationType string
 
+// SoftwareBuildDestinationType values.
 const (
 	SoftwareBuildDestSharedFolder SoftwareBuildDestinationType = "sharedFolder"
 )
@@ -38,6 +40,7 @@ const (
 // SoftwareBuildPhase represents the current lifecycle phase.
 type SoftwareBuildPhase string
 
+// SoftwareBuildPhase values.
 const (
 	SoftwareBuildPhasePending   SoftwareBuildPhase = "Pending"
 	SoftwareBuildPhaseRunning   SoftwareBuildPhase = "Running"

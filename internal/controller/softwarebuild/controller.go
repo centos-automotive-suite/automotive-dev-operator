@@ -24,13 +24,15 @@ import (
 
 const (
 	conditionReady = "Ready"
+	reasonRunning  = "Running"
 )
 
-// SoftwareBuildReconciler reconciles SoftwareBuild objects.
-type SoftwareBuildReconciler struct {
+// Reconciler reconciles SoftwareBuild objects.
+type Reconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Log    logr.Logger
+	Scheme            *runtime.Scheme
+	Log               logr.Logger
+	OperatorNamespace string
 }
 
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=softwarebuilds,verbs=get;list;watch;create;update;patch;delete
@@ -38,7 +40,8 @@ type SoftwareBuildReconciler struct {
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,resources=softwarebuilds/finalizers,verbs=update
 // +kubebuilder:rbac:groups=tekton.dev,resources=pipelineruns,verbs=get;list;watch;create;update;patch;delete
 
-func (r *SoftwareBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// Reconcile handles a single reconciliation loop for a SoftwareBuild resource.
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := r.Log.WithValues("softwarebuild", req.NamespacedName)
 
 	var sb automotivev1alpha1.SoftwareBuild
@@ -53,9 +56,9 @@ func (r *SoftwareBuildReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return r.syncStatus(ctx, logger, &sb)
 }
 
-func (r *SoftwareBuildReconciler) createPipelineRun(ctx context.Context, logger logr.Logger, sb *automotivev1alpha1.SoftwareBuild) (ctrl.Result, error) {
-	config := r.loadBuildConfig(ctx, sb.Namespace)
-	pr := tasks.GenerateSoftwareBuildPipelineRun(sb, config)
+func (r *Reconciler) createPipelineRun(ctx context.Context, logger logr.Logger, sb *automotivev1alpha1.SoftwareBuild) (ctrl.Result, error) {
+	config := r.loadBuildConfig(ctx)
+	pr := tasks.GenerateSoftwareBuildPipelineRun(sb, config, r.OperatorNamespace)
 
 	if err := controllerutil.SetControllerReference(sb, pr, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting controller reference: %w", err)
@@ -90,9 +93,13 @@ func (r *SoftwareBuildReconciler) createPipelineRun(ctx context.Context, logger 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-func (r *SoftwareBuildReconciler) syncStatus(ctx context.Context, logger logr.Logger, sb *automotivev1alpha1.SoftwareBuild) (ctrl.Result, error) {
+func (r *Reconciler) syncStatus(ctx context.Context, logger logr.Logger, sb *automotivev1alpha1.SoftwareBuild) (ctrl.Result, error) {
 	var pr tektonv1.PipelineRun
-	prKey := types.NamespacedName{Namespace: sb.Namespace, Name: sb.Status.PipelineRunName}
+	ns := r.OperatorNamespace
+	if ns == "" {
+		ns = sb.Namespace
+	}
+	prKey := types.NamespacedName{Namespace: ns, Name: sb.Status.PipelineRunName}
 	if err := r.Get(ctx, prKey, &pr); err != nil {
 		if errors.IsNotFound(err) {
 			sb.Status.Phase = automotivev1alpha1.SoftwareBuildPhaseFailed
@@ -123,16 +130,17 @@ func (r *SoftwareBuildReconciler) syncStatus(ctx context.Context, logger logr.Lo
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if sb.Status.Phase == automotivev1alpha1.SoftwareBuildPhaseSucceeded {
+	switch sb.Status.Phase {
+	case automotivev1alpha1.SoftwareBuildPhaseSucceeded:
 		logger.Info("build succeeded", "pipelineRun", sb.Status.PipelineRunName)
-	} else if sb.Status.Phase == automotivev1alpha1.SoftwareBuildPhaseFailed {
+	case automotivev1alpha1.SoftwareBuildPhaseFailed:
 		logger.Info("build failed", "pipelineRun", sb.Status.PipelineRunName, "reason", sb.Status.FailureReason)
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *SoftwareBuildReconciler) syncStatusFromPipelineRun(sb *automotivev1alpha1.SoftwareBuild, pr *tektonv1.PipelineRun) {
+func (r *Reconciler) syncStatusFromPipelineRun(sb *automotivev1alpha1.SoftwareBuild, pr *tektonv1.PipelineRun) {
 	phase, condStatus, reason, message := mapPipelineRunPhase(pr)
 	if phase == automotivev1alpha1.SoftwareBuildPhaseFailed {
 		sb.Status.FailureReason = reason
@@ -159,17 +167,17 @@ func mapPipelineRunPhase(pr *tektonv1.PipelineRun) (automotivev1alpha1.SoftwareB
 		if c.Type == knativeapis.ConditionSucceeded {
 			switch c.Status {
 			case corev1.ConditionTrue:
-				return automotivev1alpha1.SoftwareBuildPhaseSucceeded, metav1.ConditionTrue, string(c.Reason), c.Message
+				return automotivev1alpha1.SoftwareBuildPhaseSucceeded, metav1.ConditionTrue, c.Reason, c.Message
 			case corev1.ConditionFalse:
-				return automotivev1alpha1.SoftwareBuildPhaseFailed, metav1.ConditionFalse, string(c.Reason), c.Message
+				return automotivev1alpha1.SoftwareBuildPhaseFailed, metav1.ConditionFalse, c.Reason, c.Message
 			default:
-				return automotivev1alpha1.SoftwareBuildPhaseRunning, metav1.ConditionFalse, "Running", "PipelineRun is in progress"
+				return automotivev1alpha1.SoftwareBuildPhaseRunning, metav1.ConditionFalse, reasonRunning, "PipelineRun is in progress"
 			}
 		}
 	}
 
 	if pr.Status.StartTime != nil {
-		return automotivev1alpha1.SoftwareBuildPhaseRunning, metav1.ConditionFalse, "Running", "PipelineRun is in progress"
+		return automotivev1alpha1.SoftwareBuildPhaseRunning, metav1.ConditionFalse, reasonRunning, "PipelineRun is in progress"
 	}
 	return automotivev1alpha1.SoftwareBuildPhasePending, metav1.ConditionFalse, "Pending", "PipelineRun is pending"
 }
@@ -186,9 +194,9 @@ func buildStageStatuses(pr *tektonv1.PipelineRun) []automotivev1alpha1.SoftwareB
 	return stages
 }
 
-func (r *SoftwareBuildReconciler) loadBuildConfig(ctx context.Context, namespace string) *tasks.BuildConfig {
+func (r *Reconciler) loadBuildConfig(ctx context.Context) *tasks.BuildConfig {
 	var opConfig automotivev1alpha1.OperatorConfig
-	if err := r.Get(ctx, types.NamespacedName{Name: "default", Namespace: namespace}, &opConfig); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: "default", Namespace: r.OperatorNamespace}, &opConfig); err != nil {
 		return nil
 	}
 	if opConfig.Spec.SoftwareBuilds == nil {
@@ -202,7 +210,7 @@ func (r *SoftwareBuildReconciler) loadBuildConfig(ctx context.Context, namespace
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SoftwareBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&automotivev1alpha1.SoftwareBuild{}).
 		Owns(&tektonv1.PipelineRun{}).
