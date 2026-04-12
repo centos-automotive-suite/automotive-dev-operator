@@ -1,0 +1,82 @@
+name: Bump AIB Image
+
+on:
+    schedule:
+        # Run daily at 08:00 UTC
+        - cron: "0 8 * * *"
+    workflow_dispatch:
+
+permissions:
+    contents: write
+    pull-requests: write
+
+jobs:
+    bump-aib:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+            - name: Get current AIB version
+              id: current
+              run: |
+                  set -euo pipefail
+                  VERSION="$(grep -oP 'automotive-image-builder:\K[0-9]+\.[0-9]+\.[0-9]+' api/v1alpha1/operatorconfig_types.go | head -n1 || true)"
+                  if [ -z "$VERSION" ]; then
+                      echo "Failed to detect current automotive-image-builder version" >&2
+                      exit 1
+                  fi
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+            - name: Get latest AIB version from Quay.io
+              id: latest
+              run: |
+                  set -euo pipefail
+                  LATEST="$(curl --fail --silent --show-error --location \
+                      'https://quay.io/api/v1/repository/centos-sig-automotive/automotive-image-builder/tag/?limit=50&onlyActiveTags=true' \
+                      | jq -r '.tags[].name' \
+                      | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+                      | sort -V \
+                      | tail -1)"
+                  if [ -z "$LATEST" ]; then
+                      echo "Failed to detect latest automotive-image-builder version from Quay.io" >&2
+                      exit 1
+                  fi
+                  echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+
+            - name: Check if update is needed
+              id: check
+              env:
+                  CURRENT_VERSION: ${{ steps.current.outputs.version }}
+                  LATEST_VERSION: ${{ steps.latest.outputs.version }}
+              run: |
+                  if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+                      echo "skip=true" >> "$GITHUB_OUTPUT"
+                      echo "Already up to date: $CURRENT_VERSION"
+                  else
+                      echo "skip=false" >> "$GITHUB_OUTPUT"
+                      echo "Update available: $CURRENT_VERSION -> $LATEST_VERSION"
+                  fi
+
+            - name: Update AIB image references
+              if: steps.check.outputs.skip == 'false'
+              env:
+                  OLD_VERSION: ${{ steps.current.outputs.version }}
+                  NEW_VERSION: ${{ steps.latest.outputs.version }}
+              run: |
+                  git grep -lz "automotive-image-builder:${OLD_VERSION}" -- '*.go' '*.yaml' '*.yml' '*.md' \
+                      | xargs -0 -r sed -i "s|automotive-image-builder:${OLD_VERSION}|automotive-image-builder:${NEW_VERSION}|g"
+
+            - name: Create pull request
+              if: steps.check.outputs.skip == 'false'
+              uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+              with:
+                  commit-message: "chore: bump AIB image to ${{ steps.latest.outputs.version }}"
+                  title: "chore: bump AIB image to ${{ steps.latest.outputs.version }}"
+                  body: |
+                      Automated bump of `automotive-image-builder` container image.
+
+                      `${{ steps.current.outputs.version }}` → `${{ steps.latest.outputs.version }}`
+
+                      Release: https://quay.io/repository/centos-sig-automotive/automotive-image-builder?tab=tags&tag=${{ steps.latest.outputs.version }}
+                  branch: chore/bump-aib-${{ steps.latest.outputs.version }}
+                  delete-branch: true
