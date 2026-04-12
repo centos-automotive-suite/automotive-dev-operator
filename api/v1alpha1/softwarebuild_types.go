@@ -128,9 +128,9 @@ type SoftwareBuildDestinationSpec struct {
 // SoftwareBuildSpec defines the desired state of SoftwareBuild.
 type SoftwareBuildSpec struct {
 	// +optional
-	Runtime SoftwareBuildRuntimeSpec `json:"runtime,omitempty"`
-	Source  SoftwareBuildSourceSpec  `json:"source"`
-	Stages  SoftwareBuildPipelineStages `json:"stages"`
+	Runtime     SoftwareBuildRuntimeSpec     `json:"runtime,omitempty"`
+	Source      SoftwareBuildSourceSpec      `json:"source"`
+	Stages      SoftwareBuildPipelineStages  `json:"stages"`
 	Destination SoftwareBuildDestinationSpec `json:"destination"`
 	// +optional
 	TimeoutSeconds int64 `json:"timeoutSeconds,omitempty"`

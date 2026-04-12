@@ -114,8 +114,8 @@ var _ = Describe("SoftwareBuild Controller", func() {
 						Image: "ubuntu:24.04",
 					},
 					Source: automotivev1alpha1.SoftwareBuildSourceSpec{
-						Type:     automotivev1alpha1.SoftwareBuildSourceHostPath,
-						HostPath: &automotivev1alpha1.SoftwareBuildHostPathSource{Path: "/src"},
+						Type: automotivev1alpha1.SoftwareBuildSourcePVC,
+						PVC:  &automotivev1alpha1.SoftwareBuildPVCSource{ClaimName: "test-pvc"},
 					},
 					Stages: automotivev1alpha1.SoftwareBuildPipelineStages{
 						Fetch:     automotivev1alpha1.SoftwareBuildStageSpec{Command: "echo fetch"},
