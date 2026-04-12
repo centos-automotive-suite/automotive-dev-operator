@@ -27,6 +27,7 @@ import (
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/softwarebuild"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 )
@@ -92,8 +93,10 @@ var _ = Describe("SoftwareBuild Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &softwarebuild.Reconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:            k8sClient,
+				Scheme:            k8sClient.Scheme(),
+				Log:               ctrl.Log.WithName("test"),
+				OperatorNamespace: "default",
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -133,8 +136,10 @@ var _ = Describe("SoftwareBuild Controller", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			controllerReconciler := &softwarebuild.Reconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:            k8sClient,
+				Scheme:            k8sClient.Scheme(),
+				Log:               ctrl.Log.WithName("test"),
+				OperatorNamespace: "default",
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
