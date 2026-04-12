@@ -68,7 +68,7 @@ type SoftwareBuildRuntimeSpec struct {
 
 // SoftwareBuildGitSource describes a Git repository to clone.
 type SoftwareBuildGitSource struct {
-	// +kubebuilder:validation:Pattern=`^https?://[^\s;|&$]+$`
+	// +kubebuilder:validation:Pattern=`^https?://[^\s;|&$'\"` + "`" + `]+$`
 	URL string `json:"url"`
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._/-]+$`
 	// +kubebuilder:default=main
@@ -132,6 +132,7 @@ type SoftwareBuildSpec struct {
 	Source      SoftwareBuildSourceSpec      `json:"source"`
 	Stages      SoftwareBuildPipelineStages  `json:"stages"`
 	Destination SoftwareBuildDestinationSpec `json:"destination"`
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	TimeoutSeconds int64 `json:"timeoutSeconds,omitempty"`
 }

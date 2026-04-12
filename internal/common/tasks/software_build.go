@@ -136,19 +136,6 @@ func GenerateSoftwareBuildPipelineRun(sb *automotivev1alpha1.SoftwareBuild, conf
 
 	pvcSize := parsePVCSize(config)
 
-	fetchCommand := sb.Spec.Stages.Fetch.Command
-	if sb.Spec.Source.Type == automotivev1alpha1.SoftwareBuildSourceGit && sb.Spec.Source.Git != nil {
-		revision := sb.Spec.Source.Git.Revision
-		if revision == "" {
-			revision = "main"
-		}
-		if !safeGitRefRe.MatchString(revision) {
-			revision = "main"
-		}
-		gitClone := fmt.Sprintf("git clone --branch '%s' --single-branch '%s' src\n", revision, sb.Spec.Source.Git.URL)
-		fetchCommand = gitClone + fetchCommand
-	}
-
 	prName := fmt.Sprintf("%s-gen%d", sb.Name, sb.Generation)
 
 	pr := &tektonv1.PipelineRun{
