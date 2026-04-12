@@ -165,6 +165,18 @@ load_custom_definitions() {
   echo "Loaded $((${#CUSTOM_DEFS_ARGS[@]} / 2)) custom definitions"
 }
 
+# Compute a content-addressable digest of an artifact (parts directory or single file).
+# Outputs "sha256:<hex>" to stdout, or empty string if nothing found.
+# Args: $1 = parts directory path, $2 = single file path
+compute_artifact_digest() {
+  local parts_dir="$1" single_file="$2"
+  if [ -d "$parts_dir" ] && [ -n "$(ls -A "$parts_dir" 2>/dev/null)" ]; then
+    echo "sha256:$(cd "$parts_dir" && find . -maxdepth 1 -type f ! -name '*.size' ! -name 'aib-manifest.yml' -printf '%f\n' | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)"
+  elif [ -f "$single_file" ]; then
+    echo "sha256:$(sha256sum "$single_file" | cut -d' ' -f1)"
+  fi
+}
+
 # Create service account authentication JSON for container registries.
 # Args: $1 - registry URL, $2 - output file path, $3 - optional token (defaults to SA token)
 create_service_account_auth() {

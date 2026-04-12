@@ -14,11 +14,12 @@ umask 0077
 
 setup_cluster_auth
 
-# Initialize Tekton Chains type hint results with empty defaults.
+# Initialize Tekton results with empty defaults.
 # Tekton requires all declared results to exist; these are overwritten
-# later if a container push actually happens.
+# later when applicable.
 echo -n "" > /tekton/results/IMAGE_URL
 echo -n "" > /tekton/results/IMAGE_DIGEST
+echo -n "" > /tekton/results/ARTIFACT_INTEGRITY_DIGEST
 
 # Read registry credentials from workspace and set up auth
 read_registry_creds "/workspace/registry-auth"
@@ -746,6 +747,17 @@ if [ -n "$final_name" ]; then
   echo "$final_name" > /tekton/results/artifact-filename || echo "Failed to write Tekton result"
 else
   echo "Warning: final_name is empty, no artifact filename will be recorded"
+fi
+
+# Compute artifact integrity digest for cross-task verification.
+# Covers both multi-layer (parts directory) and single-file modes.
+if [ -n "$final_name" ] && [ "$final_name" != "container:$CONTAINER_PUSH" ]; then
+  parts_dir="$WORKSPACE_PATH/${final_name}-parts"
+  ARTIFACT_DIGEST=$(compute_artifact_digest "$parts_dir" "$WORKSPACE_PATH/$final_name")
+  if [ -n "$ARTIFACT_DIGEST" ]; then
+    echo "Artifact integrity digest: $ARTIFACT_DIGEST"
+    echo -n "$ARTIFACT_DIGEST" > /tekton/results/ARTIFACT_INTEGRITY_DIGEST
+  fi
 fi
 
 # Wait for background container push to complete (bootc mode only)

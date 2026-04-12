@@ -194,6 +194,27 @@ fi
 
 cd /workspace/shared
 
+# Verify artifact integrity against the digest produced by the build task.
+EXPECTED_DIGEST="$(params.expected-artifact-digest)"
+if [ -n "$EXPECTED_DIGEST" ]; then
+  echo "=== Artifact Integrity Verification ==="
+  ACTUAL_DIGEST=$(compute_artifact_digest "${parts_dir}" "${exportFile}")
+  if [ -z "$ACTUAL_DIGEST" ]; then
+    echo "WARNING: Cannot verify integrity — artifact not found yet"
+  fi
+  if [ -n "$ACTUAL_DIGEST" ]; then
+    if [ "$EXPECTED_DIGEST" != "$ACTUAL_DIGEST" ]; then
+      echo "ERROR: Artifact integrity check failed!" >&2
+      echo "  Expected: $EXPECTED_DIGEST" >&2
+      echo "  Actual:   $ACTUAL_DIGEST" >&2
+      exit 1
+    fi
+    echo "  Integrity verified: $ACTUAL_DIGEST"
+  fi
+else
+  echo "No artifact integrity digest provided, skipping verification"
+fi
+
 echo "=== Artifact Push Configuration ==="
 echo "  Working directory: $(pwd)"
 echo "  Artifact file:     ${exportFile}"
