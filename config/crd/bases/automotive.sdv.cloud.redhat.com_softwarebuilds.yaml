@@ -59,30 +59,13 @@ spec:
                 description: SoftwareBuildDestinationSpec describes where artifacts
                   go.
                 properties:
-                  credentialsSecretRef:
-                    description: SoftwareBuildSecretReference points to a Kubernetes
-                      Secret.
-                    properties:
-                      key:
-                        type: string
-                      name:
-                        minLength: 1
-                        type: string
-                    required:
-                    - name
-                    type: object
                   path:
-                    type: string
-                  repository:
                     type: string
                   type:
                     description: SoftwareBuildDestinationType identifies where build
                       artifacts are stored.
                     enum:
                     - sharedFolder
-                    - registry
-                    - artifactory
-                    - quay
                     type: string
                 required:
                 - type
@@ -111,8 +94,8 @@ spec:
                       to clone.
                     properties:
                       credentialsSecretRef:
-                        description: SoftwareBuildSecretReference points to a Kubernetes
-                          Secret.
+                        description: CredentialsSecretRef references a secret for
+                          private repo access (not yet implemented).
                         properties:
                           key:
                             type: string
@@ -124,21 +107,13 @@ spec:
                         type: object
                       revision:
                         default: main
+                        pattern: ^[a-zA-Z0-9._/-]+$
                         type: string
                       url:
-                        pattern: ^https?://|^git@
+                        pattern: ^https?://[^\s;|&$'"]+$
                         type: string
                     required:
                     - url
-                    type: object
-                  hostPath:
-                    description: SoftwareBuildHostPathSource mounts a node-local directory.
-                    properties:
-                      path:
-                        minLength: 1
-                        type: string
-                    required:
-                    - path
                     type: object
                   pvc:
                     description: SoftwareBuildPVCSource references an existing PVC.
@@ -158,11 +133,15 @@ spec:
                     enum:
                     - git
                     - pvc
-                    - hostPath
                     type: string
                 required:
                 - type
                 type: object
+                x-kubernetes-validations:
+                - message: git source details required when type is git
+                  rule: self.type != 'git' || has(self.git)
+                - message: pvc source details required when type is pvc
+                  rule: self.type != 'pvc' || has(self.pvc)
               stages:
                 description: SoftwareBuildPipelineStages groups the five sequential
                   stages.
@@ -256,6 +235,7 @@ spec:
                 type: object
               timeoutSeconds:
                 format: int64
+                minimum: 0
                 type: integer
             required:
             - destination
