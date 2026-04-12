@@ -217,6 +217,34 @@ spec:
                 description: AIBImageUsed is the automotive-image-builder container
                   image that was used for the build
                 type: string
+              artifact:
+                description: |-
+                  Artifact captures supply-chain traceability metadata (digest, SBOM, signature, provenance)
+                  for the build output. Populated from PipelineRun results when the artifact is pushed to a registry.
+                properties:
+                  digest:
+                    description: Digest is the content-addressable digest of the pushed
+                      artifact (sha256:...)
+                    type: string
+                  provenanceRef:
+                    description: |-
+                      ProvenanceRef is the OCI reference to the SLSA provenance attestation
+                      Populated by Tekton Chains when provenance is configured
+                    type: string
+                  registry:
+                    description: Registry is the OCI registry URL where the artifact
+                      was pushed (IMAGE_URL)
+                    type: string
+                  sbomRef:
+                    description: SBOMRef is the OCI reference to the attached SBOM
+                      artifact
+                    type: string
+                  signatureRef:
+                    description: |-
+                      SignatureRef is the OCI reference to the cosign/Sigstore signature
+                      Populated by Tekton Chains when signing is configured
+                    type: string
+                type: object
               builderImageUsed:
                 description: |-
                   BuilderImageUsed is the osbuild builder container image that was used for the build

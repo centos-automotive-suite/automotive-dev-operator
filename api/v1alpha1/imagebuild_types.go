@@ -178,6 +178,32 @@ type DiskExport struct {
 	// PVC *PVCExport `json:"pvc,omitempty"`
 }
 
+// ArtifactRef captures the supply-chain traceability metadata for a build artifact.
+// Populated from PipelineRun results when compliance is enabled.
+type ArtifactRef struct {
+	// Registry is the OCI registry URL where the artifact was pushed (IMAGE_URL)
+	// +optional
+	Registry string `json:"registry,omitempty"`
+
+	// Digest is the content-addressable digest of the pushed artifact (sha256:...)
+	// +optional
+	Digest string `json:"digest,omitempty"`
+
+	// SBOMRef is the OCI reference to the attached SBOM artifact
+	// +optional
+	SBOMRef string `json:"sbomRef,omitempty"`
+
+	// SignatureRef is the OCI reference to the cosign/Sigstore signature
+	// Populated by Tekton Chains when signing is configured
+	// +optional
+	SignatureRef string `json:"signatureRef,omitempty"`
+
+	// ProvenanceRef is the OCI reference to the SLSA provenance attestation
+	// Populated by Tekton Chains when provenance is configured
+	// +optional
+	ProvenanceRef string `json:"provenanceRef,omitempty"`
+}
+
 // ImageBuildStatus defines the observed state of ImageBuild
 type ImageBuildStatus struct {
 	// ObservedGeneration is the most recent generation observed by the controller.
@@ -227,6 +253,11 @@ type ImageBuildStatus struct {
 	// LeaseID is the Jumpstarter lease ID acquired during flash
 	// +optional
 	LeaseID string `json:"leaseId,omitempty"`
+
+	// Artifact captures supply-chain traceability metadata (digest, SBOM, signature, provenance)
+	// for the build output. Populated from PipelineRun results when the artifact is pushed to a registry.
+	// +optional
+	Artifact *ArtifactRef `json:"artifact,omitempty"`
 }
 
 // +kubebuilder:object:root=true

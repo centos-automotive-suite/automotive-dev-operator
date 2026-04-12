@@ -650,6 +650,13 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		return fmt.Errorf("failed to create target defaults ConfigMap: %w", err)
 	}
 
+	// Wire compliance configuration into build config
+	if config.Spec.Compliance != nil && config.Spec.Compliance.Enabled {
+		buildConfig.ComplianceEnabled = true
+		buildConfig.SyftImage = config.Spec.Compliance.GetSyftImage()
+		buildConfig.SBOMFormat = config.Spec.Compliance.GetSBOMFormat()
+	}
+
 	// Generate and deploy Tekton tasks
 	tektonTasks := []*tektonv1.Task{
 		tasks.GenerateBuildAutomotiveImageTask(config.Namespace, buildConfig, ""),
@@ -657,6 +664,10 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		tasks.GenerateFlashTask(config.Namespace, buildConfig),
 	}
 	tektonTasks = append(tektonTasks, tasks.GenerateSealedTasks(config.Namespace, buildConfig)...)
+
+	if buildConfig.ComplianceEnabled {
+		tektonTasks = append(tektonTasks, tasks.GenerateSBOMTask(config.Namespace, buildConfig))
+	}
 
 	for _, task := range tektonTasks {
 		task.Labels["automotive.sdv.cloud.redhat.com/managed-by"] = config.Name

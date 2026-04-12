@@ -327,12 +327,18 @@ EOF
   # Push with multi-layer manifest using annotation file
   # Files are pushed from current directory (parts_dir) so they extract flat
   # shellcheck disable=SC2086
-  "$HOME/bin/oras" push --disable-path-validation \
+  push_output=$("$HOME/bin/oras" push --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${artifact_type}" \
     --annotation-file "$annotations_file" \
     "${repo_url}" \
-    ${layer_args}
+    ${layer_args} 2>&1)
+  echo "$push_output"
+
+  # Extract digest from oras output (format: "Digest: sha256:abc123...")
+  pushed_digest=$(echo "$push_output" | grep -i '^Digest:' | awk '{print $2}' | head -1)
+  printf '%s' "${repo_url}" > "$(results.IMAGE_URL.path)"
+  printf '%s' "${pushed_digest}" > "$(results.IMAGE_DIGEST.path)"
 
   # Clean up annotation file (also handled by trap)
   rm -f "$annotations_file"
@@ -341,6 +347,8 @@ EOF
 
   echo ""
   echo "=== Multi-layer artifact pushed successfully ==="
+  echo "  IMAGE_URL:    ${repo_url}"
+  echo "  IMAGE_DIGEST: ${pushed_digest}"
 
 else
   # Fallback to single-file push (original behavior)
@@ -388,15 +396,22 @@ PYEOF
   echo "  Media type: ${media_type}"
   echo "  Annotations: distro=${distro}, target=${target}, arch=${arch}"
 
-  "$HOME/bin/oras" push --disable-path-validation \
+  push_output=$("$HOME/bin/oras" push --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${media_type}" \
     --annotation-file "$single_annotations_file" \
     "${repo_url}" \
-    "${exportFile}:${media_type}"
+    "${exportFile}:${media_type}" 2>&1)
+  echo "$push_output"
+
+  pushed_digest=$(echo "$push_output" | grep -i '^Digest:' | awk '{print $2}' | head -1)
+  printf '%s' "${repo_url}" > "$(results.IMAGE_URL.path)"
+  printf '%s' "${pushed_digest}" > "$(results.IMAGE_DIGEST.path)"
 
   emit_progress "Pushing artifact" 1 1
 
   echo ""
   echo "=== Artifact pushed successfully ==="
+  echo "  IMAGE_URL:    ${repo_url}"
+  echo "  IMAGE_DIGEST: ${pushed_digest}"
 fi

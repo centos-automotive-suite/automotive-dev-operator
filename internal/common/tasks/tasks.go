@@ -29,6 +29,9 @@ type BuildConfig struct {
 	TrustedCABundleKind         string
 	TrustedCABundleName         string
 	UsePVCScratchVolumes        bool
+	ComplianceEnabled           bool
+	SyftImage                   string
+	SBOMFormat                  string
 }
 
 // getAutomotiveImageBuilderImage returns the AIB image from config or the default constant
@@ -209,6 +212,16 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 						Type:      tektonv1.ParamTypeString,
 						StringVal: "",
 					},
+				},
+			},
+			Results: []tektonv1.TaskResult{
+				{
+					Name:        "IMAGE_URL",
+					Description: "OCI reference to the pushed artifact (registry/repo:tag)",
+				},
+				{
+					Name:        "IMAGE_DIGEST",
+					Description: "Content-addressable digest of the pushed artifact (sha256:...)",
 				},
 			},
 			Workspaces: []tektonv1.WorkspaceDeclaration{
@@ -915,6 +928,16 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					Description: "JSON timing breakdown of build phases in seconds",
 					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.build-image.results.build-timing)"},
 				},
+				{
+					Name:        "IMAGE_URL",
+					Description: "OCI reference to the pushed artifact (Tekton Chains contract)",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_URL)"},
+				},
+				{
+					Name:        "IMAGE_DIGEST",
+					Description: "Content-addressable digest of the pushed artifact (Tekton Chains contract)",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_DIGEST)"},
+				},
 			},
 			Tasks: []tektonv1.PipelineTask{
 				{
@@ -1288,6 +1311,59 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 		},
 	}
 
+	if buildConfig != nil && buildConfig.ComplianceEnabled {
+		sbomFormat := buildConfig.SBOMFormat
+		if sbomFormat == "" {
+			sbomFormat = automotivev1alpha1.DefaultSBOMFormat
+		}
+
+		pipeline.Spec.Params = append(pipeline.Spec.Params, tektonv1.ParamSpec{
+			Name:        "sbom-format",
+			Type:        tektonv1.ParamTypeString,
+			Description: "SBOM output format (spdx-json or cyclonedx-json)",
+			Default: &tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: sbomFormat,
+			},
+		})
+
+		pipeline.Spec.Results = append(pipeline.Spec.Results, tektonv1.PipelineResult{
+			Name:        "SBOM_URI",
+			Description: "OCI reference to the attached SBOM artifact",
+			Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.sbom-generate.results.SBOM_URI)"},
+		})
+
+		pipeline.Spec.Tasks = append(pipeline.Spec.Tasks, tektonv1.PipelineTask{
+			Name: "sbom-generate",
+			TaskRef: &tektonv1.TaskRef{
+				ResolverRef: tektonv1.ResolverRef{
+					Resolver: "cluster",
+					Params: []tektonv1.Param{
+						{Name: "kind", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "task"}},
+						{Name: "name", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "sbom-generate"}},
+						{Name: "namespace", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: namespace}},
+					},
+				},
+			},
+			Params: []tektonv1.Param{
+				{Name: "IMAGE_URL", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_URL)"}},
+				{Name: "IMAGE_DIGEST", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_DIGEST)"}},
+				{Name: "sbom-format", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(params.sbom-format)"}},
+			},
+			Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
+				{Name: "registry-auth", Workspace: "registry-auth"},
+			},
+			RunAfter: []string{"push-disk-artifact"},
+			When: []tektonv1.WhenExpression{
+				{
+					Input:    "$(tasks.push-disk-artifact.results.IMAGE_URL)",
+					Operator: "notin",
+					Values:   []string{"", "null"},
+				},
+			},
+		})
+	}
+
 	return pipeline
 }
 
@@ -1301,6 +1377,110 @@ func buildEnvFrom(envSecretRef string) []corev1.EnvFromSource {
 			SecretRef: &corev1.SecretEnvSource{
 				LocalObjectReference: corev1.LocalObjectReference{
 					Name: envSecretRef,
+				},
+			},
+		},
+	}
+}
+
+// GenerateSBOMTask creates a Tekton Task for generating and attaching SBOMs to OCI artifacts via Syft.
+// The task runs after push-disk-artifact and attaches the SBOM as an OCI referrer.
+func GenerateSBOMTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
+	syftImage := automotivev1alpha1.DefaultSyftImage
+	if buildConfig != nil && buildConfig.SyftImage != "" {
+		syftImage = buildConfig.SyftImage
+	}
+
+	return &tektonv1.Task{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1",
+			Kind:       "Task",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sbom-generate",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "automotive-dev-operator",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+			},
+		},
+		Spec: tektonv1.TaskSpec{
+			Params: []tektonv1.ParamSpec{
+				{
+					Name:        "IMAGE_URL",
+					Type:        tektonv1.ParamTypeString,
+					Description: "OCI reference to the artifact to scan",
+				},
+				{
+					Name:        "IMAGE_DIGEST",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Digest of the artifact to scan (sha256:...)",
+				},
+				{
+					Name:        "sbom-format",
+					Type:        tektonv1.ParamTypeString,
+					Description: "SBOM output format (spdx-json or cyclonedx-json)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: automotivev1alpha1.DefaultSBOMFormat,
+					},
+				},
+			},
+			Results: []tektonv1.TaskResult{
+				{
+					Name:        "SBOM_URI",
+					Description: "OCI reference to the attached SBOM artifact",
+				},
+			},
+			Workspaces: []tektonv1.WorkspaceDeclaration{
+				{
+					Name:        "registry-auth",
+					Description: "Optional registry credentials for pulling/pushing SBOM",
+					MountPath:   "/workspace/registry-auth",
+					Optional:    true,
+				},
+			},
+			Steps: []tektonv1.Step{
+				{
+					Name:  "generate-sbom",
+					Image: syftImage,
+					Env: []corev1.EnvVar{
+						{
+							Name:  "IMAGE_URL",
+							Value: "$(params.IMAGE_URL)",
+						},
+						{
+							Name:  "IMAGE_DIGEST",
+							Value: "$(params.IMAGE_DIGEST)",
+						},
+						{
+							Name:  "SBOM_FORMAT",
+							Value: "$(params.sbom-format)",
+						},
+						{
+							Name:  "RESULT_PATH",
+							Value: "$(results.SBOM_URI.path)",
+						},
+					},
+					Script: SBOMGenerateScript,
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "docker-config",
+							MountPath: "/docker-config",
+							ReadOnly:  true,
+						},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "docker-config",
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{
+							SecretName: "$(params.IMAGE_URL)",
+							Optional:   ptr.To(true),
+						},
+					},
 				},
 			},
 		},
