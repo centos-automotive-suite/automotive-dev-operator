@@ -24,7 +24,7 @@ func TestSoftwareBuildSpec_JSONRoundTrip(t *testing.T) {
 				Deploy:    SoftwareBuildStageSpec{Command: "cp build/zephyr/zephyr.elf /out/"},
 			},
 			Destination: SoftwareBuildDestinationSpec{
-				Type: SoftwareBuildDestSharedFolder,
+				Type: SoftwareBuildDestinationSharedFolder,
 				Path: "/out",
 			},
 			TimeoutSeconds: 1800,
@@ -56,8 +56,8 @@ func TestSoftwareBuildSpec_JSONRoundTrip(t *testing.T) {
 	if roundTripped.Spec.TimeoutSeconds != 1800 {
 		t.Errorf("timeout: got %d, want 1800", roundTripped.Spec.TimeoutSeconds)
 	}
-	if roundTripped.Spec.Destination.Type != SoftwareBuildDestSharedFolder {
-		t.Errorf("destination type: got %q, want %q", roundTripped.Spec.Destination.Type, SoftwareBuildDestSharedFolder)
+	if roundTripped.Spec.Destination.Type != SoftwareBuildDestinationSharedFolder {
+		t.Errorf("destination type: got %q, want %q", roundTripped.Spec.Destination.Type, SoftwareBuildDestinationSharedFolder)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestSoftwareBuildSpec_PerStageImage_JSONRoundTrip(t *testing.T) {
 				Postbuild: SoftwareBuildStageSpec{Command: "echo postbuild"},
 				Deploy:    SoftwareBuildStageSpec{Command: "echo deploy"},
 			},
-			Destination: SoftwareBuildDestinationSpec{Type: SoftwareBuildDestSharedFolder},
+			Destination: SoftwareBuildDestinationSpec{Type: SoftwareBuildDestinationSharedFolder},
 		},
 	}
 

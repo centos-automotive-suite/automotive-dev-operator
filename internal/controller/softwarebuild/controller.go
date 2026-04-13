@@ -184,11 +184,11 @@ func mapPipelineRunPhase(pr *tektonv1.PipelineRun) (automotivev1alpha1.SoftwareB
 
 func buildStageStatuses(pr *tektonv1.PipelineRun) []automotivev1alpha1.SoftwareBuildStageStatus {
 	stages := make([]automotivev1alpha1.SoftwareBuildStageStatus, 0, len(pr.Status.ChildReferences))
-	for _, cr := range pr.Status.ChildReferences {
+	for _, childRef := range pr.Status.ChildReferences {
 		stages = append(stages, automotivev1alpha1.SoftwareBuildStageStatus{
-			Name:    cr.PipelineTaskName,
+			Name:    childRef.PipelineTaskName,
 			State:   "Created",
-			Message: fmt.Sprintf("TaskRun: %s", cr.Name),
+			Message: fmt.Sprintf("TaskRun: %s", childRef.Name),
 		})
 	}
 	return stages
@@ -199,14 +199,7 @@ func (r *Reconciler) loadBuildConfig(ctx context.Context) *tasks.BuildConfig {
 	if err := r.Get(ctx, types.NamespacedName{Name: "default", Namespace: r.OperatorNamespace}, &opConfig); err != nil {
 		return nil
 	}
-	if opConfig.Spec.SoftwareBuilds == nil {
-		return nil
-	}
-	return &tasks.BuildConfig{
-		PVCSize:             opConfig.Spec.SoftwareBuilds.PVCSize,
-		BuildTimeoutMinutes: opConfig.Spec.SoftwareBuilds.BuildTimeoutMinutes,
-		DefaultImage:        opConfig.Spec.SoftwareBuilds.DefaultImage,
-	}
+	return tasks.BuildConfigFromSoftwareBuilds(opConfig.Spec.SoftwareBuilds)
 }
 
 // SetupWithManager sets up the controller with the Manager.

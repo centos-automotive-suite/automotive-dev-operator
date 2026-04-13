@@ -32,6 +32,18 @@ type BuildConfig struct {
 	DefaultImage                string
 }
 
+// BuildConfigFromSoftwareBuilds maps SoftwareBuildsConfig fields into a BuildConfig.
+func BuildConfigFromSoftwareBuilds(swb *automotivev1alpha1.SoftwareBuildsConfig) *BuildConfig {
+	if swb == nil {
+		return nil
+	}
+	return &BuildConfig{
+		PVCSize:             swb.PVCSize,
+		BuildTimeoutMinutes: swb.BuildTimeoutMinutes,
+		DefaultImage:        swb.DefaultImage,
+	}
+}
+
 // getAutomotiveImageBuilderImage returns the AIB image from config or the default constant
 func (c *BuildConfig) getAutomotiveImageBuilderImage() string {
 	if c != nil && c.AutomotiveImageBuilderImage != "" {

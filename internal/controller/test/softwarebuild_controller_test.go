@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
+	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -72,7 +73,7 @@ var _ = Describe("SoftwareBuild Controller", func() {
 							Deploy:    automotivev1alpha1.SoftwareBuildStageSpec{Command: "echo deploy"},
 						},
 						Destination: automotivev1alpha1.SoftwareBuildDestinationSpec{
-							Type: automotivev1alpha1.SoftwareBuildDestSharedFolder,
+							Type: automotivev1alpha1.SoftwareBuildDestinationSharedFolder,
 							Path: "/workspace/artifacts",
 						},
 					},
@@ -90,8 +91,7 @@ var _ = Describe("SoftwareBuild Controller", func() {
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+		It("should create a PipelineRun and set status", func() {
 			controllerReconciler := &softwarebuild.Reconciler{
 				Client:            k8sClient,
 				Scheme:            k8sClient.Scheme(),
@@ -103,6 +103,18 @@ var _ = Describe("SoftwareBuild Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying PipelineRunName was set in status")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, sb)).To(Succeed())
+			Expect(sb.Status.PipelineRunName).NotTo(BeEmpty())
+			Expect(sb.Status.Phase).To(Equal(automotivev1alpha1.SoftwareBuildPhasePending))
+
+			By("verifying the PipelineRun was created in the cluster")
+			var pr tektonv1.PipelineRun
+			prKey := types.NamespacedName{Name: sb.Status.PipelineRunName, Namespace: "default"}
+			Expect(k8sClient.Get(ctx, prKey, &pr)).To(Succeed())
+			Expect(pr.Spec.PipelineRef).NotTo(BeNil())
+			Expect(pr.Spec.PipelineRef.Name).To(Equal("software-build-pipeline"))
 		})
 
 		It("should accept ubuntu runtime image", func() {
@@ -128,7 +140,7 @@ var _ = Describe("SoftwareBuild Controller", func() {
 						Deploy:    automotivev1alpha1.SoftwareBuildStageSpec{Command: "echo deploy"},
 					},
 					Destination: automotivev1alpha1.SoftwareBuildDestinationSpec{
-						Type: automotivev1alpha1.SoftwareBuildDestSharedFolder,
+						Type: automotivev1alpha1.SoftwareBuildDestinationSharedFolder,
 						Path: "/out",
 					},
 				},
@@ -146,6 +158,11 @@ var _ = Describe("SoftwareBuild Controller", func() {
 				NamespacedName: types.NamespacedName{Name: ubuntuName, Namespace: "default"},
 			})
 			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying PipelineRun was created for ubuntu build")
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: ubuntuName, Namespace: "default"}, resource)).To(Succeed())
+			Expect(resource.Status.PipelineRunName).NotTo(BeEmpty())
+			Expect(resource.Status.Phase).To(Equal(automotivev1alpha1.SoftwareBuildPhasePending))
 
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})

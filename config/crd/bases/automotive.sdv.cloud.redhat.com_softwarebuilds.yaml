@@ -93,18 +93,6 @@ spec:
                     description: SoftwareBuildGitSource describes a Git repository
                       to clone.
                     properties:
-                      credentialsSecretRef:
-                        description: CredentialsSecretRef references a secret for
-                          private repo access (not yet implemented).
-                        properties:
-                          key:
-                            type: string
-                          name:
-                            minLength: 1
-                            type: string
-                        required:
-                        - name
-                        type: object
                       revision:
                         default: main
                         pattern: ^[a-zA-Z0-9._/-]+$
@@ -127,6 +115,9 @@ spec:
                     required:
                     - claimName
                     type: object
+                    x-kubernetes-validations:
+                    - message: path must not contain '..'
+                      rule: '!has(self.path) || !self.path.contains(''..'')'
                   type:
                     description: SoftwareBuildSourceType identifies where source code
                       is obtained from.

@@ -292,7 +292,7 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			log.Error(err, "Failed to deploy SoftwareBuilds pipeline")
 			if config.Status.Phase != phaseFailed {
 				config.Status.Phase = phaseFailed
-				config.Status.Message = fmt.Sprintf("Failed to deploy SoftwareBuilds: %v", err)
+				config.Status.Message = "Failed to deploy SoftwareBuilds pipeline"
 				statusChanged = true
 			}
 			if statusChanged {
@@ -1038,14 +1038,7 @@ func (r *OperatorConfigReconciler) deploySoftwareBuilds(
 ) error {
 	r.Log.Info("Deploying SoftwareBuilds pipeline")
 
-	var buildConfig *tasks.BuildConfig
-	if config.Spec.SoftwareBuilds != nil {
-		buildConfig = &tasks.BuildConfig{
-			PVCSize:             config.Spec.SoftwareBuilds.PVCSize,
-			BuildTimeoutMinutes: config.Spec.SoftwareBuilds.BuildTimeoutMinutes,
-			DefaultImage:        config.Spec.SoftwareBuilds.DefaultImage,
-		}
-	}
+	buildConfig := tasks.BuildConfigFromSoftwareBuilds(config.Spec.SoftwareBuilds)
 
 	pipeline := tasks.GenerateSoftwareBuildPipeline(
 		tasks.SoftwareBuildPipelineName,

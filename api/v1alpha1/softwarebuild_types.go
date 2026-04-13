@@ -23,7 +23,7 @@ import (
 // SoftwareBuildSourceType identifies where source code is obtained from.
 type SoftwareBuildSourceType string
 
-// SoftwareBuildSourceType values.
+// Source can be a Git repository or an existing PVC with pre-populated content.
 const (
 	SoftwareBuildSourceGit SoftwareBuildSourceType = "git"
 	SoftwareBuildSourcePVC SoftwareBuildSourceType = "pvc"
@@ -32,29 +32,21 @@ const (
 // SoftwareBuildDestinationType identifies where build artifacts are stored.
 type SoftwareBuildDestinationType string
 
-// SoftwareBuildDestinationType values.
+// Artifacts are written to a shared folder on the workspace PVC.
 const (
-	SoftwareBuildDestSharedFolder SoftwareBuildDestinationType = "sharedFolder"
+	SoftwareBuildDestinationSharedFolder SoftwareBuildDestinationType = "sharedFolder"
 )
 
 // SoftwareBuildPhase represents the current lifecycle phase.
 type SoftwareBuildPhase string
 
-// SoftwareBuildPhase values.
+// Phases track the SoftwareBuild lifecycle from submission through completion.
 const (
 	SoftwareBuildPhasePending   SoftwareBuildPhase = "Pending"
 	SoftwareBuildPhaseRunning   SoftwareBuildPhase = "Running"
 	SoftwareBuildPhaseSucceeded SoftwareBuildPhase = "Succeeded"
 	SoftwareBuildPhaseFailed    SoftwareBuildPhase = "Failed"
 )
-
-// SoftwareBuildSecretReference points to a Kubernetes Secret.
-type SoftwareBuildSecretReference struct {
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-	// +optional
-	Key string `json:"key,omitempty"`
-}
 
 // SoftwareBuildRuntimeSpec configures the container environment used for every
 // pipeline stage unless overridden per-stage.
@@ -76,12 +68,10 @@ type SoftwareBuildGitSource struct {
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._/-]+$`
 	// +kubebuilder:default=main
 	Revision string `json:"revision,omitempty"`
-	// CredentialsSecretRef references a secret for private repo access (not yet implemented).
-	// +optional
-	CredentialsSecretRef *SoftwareBuildSecretReference `json:"credentialsSecretRef,omitempty"`
 }
 
 // SoftwareBuildPVCSource references an existing PVC.
+// +kubebuilder:validation:XValidation:rule="!has(self.path) || !self.path.contains('..')",message="path must not contain '..'"
 type SoftwareBuildPVCSource struct {
 	// +kubebuilder:validation:MinLength=1
 	ClaimName string `json:"claimName"`

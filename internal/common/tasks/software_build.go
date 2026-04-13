@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"time"
 
@@ -20,7 +21,7 @@ const (
 	softwareBuildPVCSize      = "1Gi"
 )
 
-var safeGitRefRe = regexp.MustCompile(`^[a-zA-Z0-9._/-]+$`)
+var safeGitRefPattern = regexp.MustCompile(`^[a-zA-Z0-9._/-]+$`)
 
 func softwareBuildStageTask(stageName, paramImage, paramCommand string) tektonv1.PipelineTask {
 	return tektonv1.PipelineTask{
@@ -181,7 +182,7 @@ func buildPipelineRunParams(sb *automotivev1alpha1.SoftwareBuild, globalImage st
 		if revision == "" {
 			revision = "main"
 		}
-		if !safeGitRefRe.MatchString(revision) {
+		if !safeGitRefPattern.MatchString(revision) {
 			revision = "main"
 		}
 		gitClone := fmt.Sprintf("git clone --branch '%s' --single-branch '%s' src\n", revision, sb.Spec.Source.Git.URL)
@@ -234,7 +235,9 @@ func buildTimeouts(sb *automotivev1alpha1.SoftwareBuild, config *BuildConfig) *t
 
 func parsePVCSize(config *BuildConfig) string {
 	if config != nil && config.PVCSize != "" {
-		if _, err := resource.ParseQuantity(config.PVCSize); err == nil {
+		if _, err := resource.ParseQuantity(config.PVCSize); err != nil {
+			log.Printf("WARNING: invalid PVCSize %q in OperatorConfig, falling back to %s: %v", config.PVCSize, softwareBuildPVCSize, err)
+		} else {
 			return config.PVCSize
 		}
 	}
