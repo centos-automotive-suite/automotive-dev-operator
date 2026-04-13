@@ -179,7 +179,9 @@ type DiskExport struct {
 }
 
 // ArtifactRef captures the supply-chain traceability metadata for a build artifact.
-// Populated from PipelineRun results when compliance is enabled.
+// Registry and Digest are populated for any successful registry push.
+// SBOMRef, SignatureRef, and ProvenanceRef are populated when their respective
+// features (SBOM generation, Sigstore signing, Tekton Chains provenance) are active.
 type ArtifactRef struct {
 	// Registry is the OCI registry URL where the artifact was pushed (IMAGE_URL)
 	// +optional
@@ -194,12 +196,10 @@ type ArtifactRef struct {
 	SBOMRef string `json:"sbomRef,omitempty"`
 
 	// SignatureRef is the OCI reference to the cosign/Sigstore signature
-	// Populated by Tekton Chains when signing is configured
 	// +optional
 	SignatureRef string `json:"signatureRef,omitempty"`
 
 	// ProvenanceRef is the OCI reference to the SLSA provenance attestation
-	// Populated by Tekton Chains when provenance is configured
 	// +optional
 	ProvenanceRef string `json:"provenanceRef,omitempty"`
 }
@@ -255,7 +255,7 @@ type ImageBuildStatus struct {
 	LeaseID string `json:"leaseId,omitempty"`
 
 	// Artifact captures supply-chain traceability metadata (digest, SBOM, signature, provenance)
-	// for the build output. Populated from PipelineRun results when the artifact is pushed to a registry.
+	// for the build output. Populated from PipelineRun results after a successful registry push.
 	// +optional
 	Artifact *ArtifactRef `json:"artifact,omitempty"`
 }

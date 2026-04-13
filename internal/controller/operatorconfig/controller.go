@@ -667,6 +667,13 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 
 	if buildConfig.ComplianceEnabled {
 		tektonTasks = append(tektonTasks, tasks.GenerateSBOMTask(config.Namespace, buildConfig))
+	} else {
+		sbomTask := &tektonv1.Task{}
+		sbomTask.Name = "sbom-generate"
+		sbomTask.Namespace = config.Namespace
+		if err := r.Client.Delete(ctx, sbomTask); err != nil && !errors.IsNotFound(err) {
+			r.Log.Error(err, "Failed to cleanup sbom-generate task")
+		}
 	}
 
 	for _, task := range tektonTasks {

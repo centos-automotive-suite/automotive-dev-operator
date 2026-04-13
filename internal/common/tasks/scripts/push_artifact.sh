@@ -337,6 +337,10 @@ EOF
 
   # Extract digest from oras output (format: "Digest: sha256:abc123...")
   pushed_digest=$(echo "$push_output" | grep -i '^Digest:' | awk '{print $2}' | head -1)
+  if [ -z "$pushed_digest" ]; then
+    echo "ERROR: Failed to parse pushed digest from oras output" >&2
+    exit 1
+  fi
   printf '%s' "${repo_url}" > "$(results.IMAGE_URL.path)"
   printf '%s' "${pushed_digest}" > "$(results.IMAGE_DIGEST.path)"
 
@@ -405,6 +409,10 @@ PYEOF
   echo "$push_output"
 
   pushed_digest=$(echo "$push_output" | grep -i '^Digest:' | awk '{print $2}' | head -1)
+  if [ -z "$pushed_digest" ]; then
+    echo "ERROR: Failed to parse pushed digest from oras output" >&2
+    exit 1
+  fi
   printf '%s' "${repo_url}" > "$(results.IMAGE_URL.path)"
   printf '%s' "${pushed_digest}" > "$(results.IMAGE_DIGEST.path)"
 

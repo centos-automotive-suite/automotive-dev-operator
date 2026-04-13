@@ -1349,6 +1349,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 				{Name: "IMAGE_URL", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_URL)"}},
 				{Name: "IMAGE_DIGEST", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_DIGEST)"}},
 				{Name: "sbom-format", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(params.sbom-format)"}},
+				{Name: "secret-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(params.secret-ref)"}},
 			},
 			Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
 				{Name: "registry-auth", Workspace: "registry-auth"},
@@ -1425,6 +1426,15 @@ func GenerateSBOMTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task
 						StringVal: automotivev1alpha1.DefaultSBOMFormat,
 					},
 				},
+				{
+					Name:        "secret-ref",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Name of the secret containing registry credentials",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
 			},
 			Results: []tektonv1.TaskResult{
 				{
@@ -1461,13 +1471,17 @@ func GenerateSBOMTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task
 							Name:  "RESULT_PATH",
 							Value: "$(results.SBOM_URI.path)",
 						},
+						{
+							Name:  "DOCKER_CONFIG",
+							Value: "/docker-config",
+						},
 					},
 					Script: SBOMGenerateScript,
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "docker-config",
-							MountPath: "/docker-config",
-							ReadOnly:  true,
+							MountPath: "/docker-config/config.json",
+							SubPath:   ".dockerconfigjson",
 						},
 					},
 				},
@@ -1477,7 +1491,7 @@ func GenerateSBOMTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task
 					Name: "docker-config",
 					VolumeSource: corev1.VolumeSource{
 						Secret: &corev1.SecretVolumeSource{
-							SecretName: "$(params.IMAGE_URL)",
+							SecretName: "$(params.secret-ref)",
 							Optional:   ptr.To(true),
 						},
 					},

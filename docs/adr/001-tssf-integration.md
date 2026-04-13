@@ -113,7 +113,7 @@ Enterprise Contract (EC) evaluates whether a built artifact meets a defined
 policy (signed, has SBOM, no critical CVEs, SLSA provenance present). This
 will be an optional, cluster-level configuration:
 
-- `OperatorConfig.Spec.Compliance.PolicyRef` points to an EC policy.
+- `OperatorConfig.Spec.Compliance.ECPolicyRef` points to an EC policy.
 - When set, the operator appends an `ec-validate` task as the final pipeline
   stage.
 - Builds that fail policy are marked `Failed` with a compliance-specific
@@ -123,18 +123,19 @@ will be an optional, cluster-level configuration:
 
 ```go
 type ComplianceConfig struct {
-    Enabled              bool   `json:"enabled"`
-    SBOMFormat           string `json:"sbomFormat,omitempty"`
-    SBOMTaskBundle       string `json:"sbomTaskBundle,omitempty"`
-    ECPolicyRef          string `json:"ecPolicyRef,omitempty"`
-    TrustedArtifactSignerURL string `json:"trustedArtifactSignerURL,omitempty"`
-    RekorURL             string `json:"rekorURL,omitempty"`
-    FulcioURL            string `json:"fulcioURL,omitempty"`
+    Enabled     bool   `json:"enabled"`
+    SBOMFormat  string `json:"sbomFormat,omitempty"`   // spdx-json (default) or cyclonedx-json
+    SyftImage   string `json:"syftImage,omitempty"`    // container image for SBOM generation
+    ECPolicyRef string `json:"ecPolicyRef,omitempty"`  // Enterprise Contract policy reference
+    RekorURL    string `json:"rekorURL,omitempty"`     // Rekor transparency log URL
+    FulcioURL   string `json:"fulcioURL,omitempty"`    // Fulcio CA URL for keyless signing
 }
 ```
 
-These fields configure the cluster-wide compliance behaviour. Per-build
-overrides via `spec.compliance` on individual CRs are a future consideration.
+`SyftImage` defaults to `docker.io/anchore/syft:v1.22.0`. Fulcio and Rekor
+URLs are passed through to Tekton Chains configuration and are not required
+when the cluster already has RHTAS configured. Per-build overrides via
+`spec.compliance` on individual CRs are a future consideration.
 
 ## Consequences
 

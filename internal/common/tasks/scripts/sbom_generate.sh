@@ -42,17 +42,24 @@ esac
 # Attach the SBOM as an OCI referrer to the original artifact
 echo "Attaching SBOM to ${image_ref}..."
 
-# Use ORAS to attach the SBOM as a referrer (OCI 1.1 referrers API)
-DOCKER_CONFIG="${DOCKER_CONFIG:-}" oras attach \
+attach_output=$(DOCKER_CONFIG="${DOCKER_CONFIG:-}" oras attach \
   --artifact-type "${sbom_media_type}" \
   "${image_ref}" \
-  "${sbom_file}:${sbom_media_type}" 2>&1 || {
+  "${sbom_file}:${sbom_media_type}" 2>&1) || {
   echo "ERROR: Failed to attach SBOM to artifact" >&2
+  echo "$attach_output" >&2
   exit 1
 }
+echo "$attach_output"
 
-# Write the SBOM reference as a result (image_url with SBOM digest)
-sbom_ref="${image_url}"
+# Extract SBOM referrer digest from oras attach output
+sbom_digest=$(echo "$attach_output" | grep -i '^Digest:' | awk '{print $2}' | head -1)
+if [ -z "$sbom_digest" ]; then
+  echo "ERROR: Failed to parse SBOM digest from oras attach output" >&2
+  exit 1
+fi
+
+sbom_ref="${image_url}@${sbom_digest}"
 printf '%s' "${sbom_ref}" > "${result_path}"
 
 emit_progress "Generating SBOM" 2 2

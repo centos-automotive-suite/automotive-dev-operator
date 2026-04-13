@@ -220,16 +220,15 @@ spec:
               artifact:
                 description: |-
                   Artifact captures supply-chain traceability metadata (digest, SBOM, signature, provenance)
-                  for the build output. Populated from PipelineRun results when the artifact is pushed to a registry.
+                  for the build output. Populated from PipelineRun results after a successful registry push.
                 properties:
                   digest:
                     description: Digest is the content-addressable digest of the pushed
                       artifact (sha256:...)
                     type: string
                   provenanceRef:
-                    description: |-
-                      ProvenanceRef is the OCI reference to the SLSA provenance attestation
-                      Populated by Tekton Chains when provenance is configured
+                    description: ProvenanceRef is the OCI reference to the SLSA provenance
+                      attestation
                     type: string
                   registry:
                     description: Registry is the OCI registry URL where the artifact
@@ -240,9 +239,8 @@ spec:
                       artifact
                     type: string
                   signatureRef:
-                    description: |-
-                      SignatureRef is the OCI reference to the cosign/Sigstore signature
-                      Populated by Tekton Chains when signing is configured
+                    description: SignatureRef is the OCI reference to the cosign/Sigstore
+                      signature
                     type: string
                 type: object
               builderImageUsed:
