@@ -609,6 +609,44 @@ spec:
                         type: object
                     type: object
                 type: object
+              compliance:
+                description: |-
+                  Compliance configures supply-chain compliance features (SBOM generation,
+                  signing endpoints, policy enforcement). When enabled, build pipelines
+                  gain SBOM generation and emit results for Tekton Chains.
+                properties:
+                  ecPolicyRef:
+                    description: ECPolicyRef references an Enterprise Contract policy
+                      for optional gate enforcement
+                    type: string
+                  enabled:
+                    default: false
+                    description: Enabled activates supply-chain compliance for build
+                      pipelines
+                    type: boolean
+                  fulcioURL:
+                    description: FulcioURL is the Fulcio CA URL for keyless signing
+                      via Tekton Chains
+                    type: string
+                  rekorURL:
+                    description: RekorURL is the Rekor transparency log URL for Tekton
+                      Chains configuration
+                    type: string
+                  sbomFormat:
+                    default: spdx-json
+                    description: SBOMFormat is the SBOM output format (spdx-json or
+                      cyclonedx-json)
+                    enum:
+                    - spdx-json
+                    - cyclonedx-json
+                    type: string
+                  syftImage:
+                    description: SyftImage is the container image for SBOM generation
+                      (Syft)
+                    type: string
+                required:
+                - enabled
+                type: object
               containerBuilds:
                 description: ContainerBuilds defines configuration for container build
                   operations

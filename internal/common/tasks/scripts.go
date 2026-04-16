@@ -44,6 +44,7 @@ func init() {
 	PushArtifactScript = commonScript + "\n" + pushArtifactScript
 	FlashImageScript = commonScript + "\n" + flashImageScript
 	SealedOperationScript = commonScript + "\n" + sealedOperationScript
+	SBOMGenerateScript = commonScript + "\n" + sbomGenerateScript
 }
 
 //go:embed scripts/sealed_operation.sh
@@ -52,3 +53,10 @@ var sealedOperationScript string
 // SealedOperationScript contains the embedded script for AIB sealed operations.
 // It is the concatenation of common.sh and sealed_operation.sh.
 var SealedOperationScript string
+
+//go:embed scripts/sbom_generate.sh
+var sbomGenerateScript string
+
+// SBOMGenerateScript contains the embedded script for SBOM generation via Syft.
+// It is the concatenation of common.sh and sbom_generate.sh.
+var SBOMGenerateScript string

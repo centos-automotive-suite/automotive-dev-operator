@@ -50,6 +50,18 @@ spec:
     #   value: "automotive"
     #   effect: "NoExecute"
 
+  # Compliance configuration for supply-chain security (SBOM, signing, policy)
+  # When enabled, pipelines gain SBOM generation and emit Tekton Chains results
+  # compliance:
+  #   enabled: true
+  #   sbomFormat: "spdx-json"         # or "cyclonedx-json"
+  #   syftImage: "docker.io/anchore/syft:v1.22.0"
+  #   # RHTAS endpoints for Tekton Chains keyless signing
+  #   rekorURL: "https://rekor.example.com"
+  #   fulcioURL: "https://fulcio.example.com"
+  #   # Enterprise Contract policy ref (stretch goal)
+  #   ecPolicyRef: ""
+
   # BuildAPI configuration for the Build API server
   buildAPI:
     # Optional: Authentication configuration for OIDC/JWT providers
