@@ -38,4 +38,13 @@ resources:
   kind: OperatorConfig
   path: github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: sdv.cloud.redhat.com
+  group: automotive
+  kind: SoftwareBuild
+  path: github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

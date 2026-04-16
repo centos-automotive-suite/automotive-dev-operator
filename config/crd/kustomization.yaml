@@ -9,6 +9,7 @@ resources:
 - bases/automotive.sdv.cloud.redhat.com_catalogimages.yaml
 - bases/automotive.sdv.cloud.redhat.com_containerbuilds.yaml
 - bases/automotive.sdv.cloud.redhat.com_workspaces.yaml
+- bases/automotive.sdv.cloud.redhat.com_softwarebuilds.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

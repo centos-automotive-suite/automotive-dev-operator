@@ -828,6 +828,36 @@ spec:
                 required:
                 - enabled
                 type: object
+              softwareBuilds:
+                description: |-
+                  SoftwareBuilds defines configuration for generic software build operations.
+                  When enabled, the operator deploys a stage-based Tekton pipeline that can
+                  build software for arbitrary target OSes using user-specified container images.
+                properties:
+                  buildTimeoutMinutes:
+                    description: |-
+                      BuildTimeoutMinutes is the timeout for software build pipeline tasks in minutes
+                      Default: 30
+                    format: int32
+                    type: integer
+                  defaultImage:
+                    description: |-
+                      DefaultImage is the default container image for software builds when not specified in the CR
+                      Default: "ubuntu:24.04"
+                    type: string
+                  enabled:
+                    default: false
+                    description: Enabled determines if Tekton pipeline for generic
+                      software builds should be deployed
+                    type: boolean
+                  pvcSize:
+                    description: |-
+                      PVCSize specifies the size for persistent volume claims created for build workspaces
+                      Default: "1Gi"
+                    type: string
+                required:
+                - enabled
+                type: object
               workspaces:
                 description: Workspaces defines configuration for developer workspaces
                 properties:

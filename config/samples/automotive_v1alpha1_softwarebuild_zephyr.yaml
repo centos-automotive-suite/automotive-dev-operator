@@ -1,0 +1,35 @@
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: SoftwareBuild
+metadata:
+  name: softwarebuild-zephyr
+  labels:
+    app.kubernetes.io/name: automotive-dev-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  runtime:
+    image: ghcr.io/zephyrproject-rtos/ci-base:v0.27.4
+  source:
+    type: git
+    git:
+      url: https://github.com/vtz/body-ecu
+      revision: main
+  stages:
+    fetch:
+      command: |
+        west init -l .
+        west update
+    prebuild:
+      command: "echo 'Dependencies fetched via west update'"
+    build:
+      command: "west build -b native_sim app"
+    postbuild:
+      command: |
+        cmake -B build/tests -S tests/unit -DBUILD_TESTS=ON
+        cmake --build build/tests -j$(nproc)
+        ctest --test-dir build/tests --output-on-failure
+    deploy:
+      command: "cp build/zephyr/zephyr.elf /workspace/artifacts/"
+  destination:
+    type: sharedFolder
+    path: /workspace/artifacts
+  timeoutSeconds: 1800

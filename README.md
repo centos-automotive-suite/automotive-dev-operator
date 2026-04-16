@@ -7,6 +7,7 @@ An operator for building automotive OS images on OpenShift. This operator provid
 The CentOS Automotive Suite Operator enables automotive OS image building through:
 
 - **ImageBuild Custom Resource**: Declaratively define and trigger automotive OS image builds
+- **SoftwareBuild Custom Resource**: Build software for any target OS using arbitrary container images and stage commands (Zephyr, Ubuntu, OpenBSW, etc.)
 - **Multiple Build Modes**: Support for traditional AIB manifests and bootc container builds
 - **CLI Tool (caib)**: Command-line interface for creating and monitoring builds
 - **Artifact Management**: Serve built images via OpenShift Routes or push to OCI registries
@@ -135,6 +136,52 @@ oc get imagebuild my-automotive-image -w
 oc logs -f job/my-automotive-image-build
 ```
 
+### Building Software for Other Target OSes
+
+Use `SoftwareBuild` to build firmware or software with any toolchain. The build
+runs inside the container image you specify, executing five sequential stages:
+
+```yaml
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: SoftwareBuild
+metadata:
+  name: body-ecu-zephyr
+spec:
+  runtime:
+    image: ghcr.io/zephyrproject-rtos/ci-base:v0.27.4
+  source:
+    type: git
+    git:
+      url: https://github.com/vtz/body-ecu
+      revision: main
+  stages:
+    fetch:
+      command: "west init -l . && west update"
+    prebuild:
+      command: "echo 'Dependencies ready'"
+    build:
+      command: "west build -b native_sim app"
+    postbuild:
+      command: "ctest --test-dir build/tests --output-on-failure"
+    deploy:
+      command: "cp build/zephyr/zephyr.elf /workspace/artifacts/"
+  destination:
+    type: sharedFolder
+    path: /workspace/artifacts
+```
+
+Enable the software build pipeline in your `OperatorConfig`:
+
+```yaml
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: OperatorConfig
+metadata:
+  name: default
+spec:
+  softwareBuilds:
+    enabled: true
+```
+
 ## Uninstallation
 
 ### For OperatorHub Installation
@@ -164,7 +211,8 @@ make uninstall
 
 ### Custom Resources
 
-- **ImageBuild**: Defines an automotive OS image build job
+- **ImageBuild**: Defines an automotive OS image build job using AIB
+- **SoftwareBuild**: Defines a generic, stage-based software build for any target OS or toolchain
 - **Image**: Represents a built image with metadata and location information
 - **OperatorConfig**: Cluster-wide configuration for the operator
 
