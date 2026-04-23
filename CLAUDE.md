@@ -34,14 +34,9 @@ go run ./cmd/build-api/ --kubeconfig-path ~/.kube/config  # Run API server local
 #   2. Show the cluster URL and user to the user
 #   3. Ask the user to confirm this is the correct cluster
 #   4. Only proceed with -y flag after user confirms
-./hack/deploy-catalog.sh -y           # Full redeploy: uninstall, build, install
-./hack/deploy-catalog.sh uninstall -y # Uninstall the operator only
-./hack/deploy-catalog.sh build        # Build and push images only (no install, no confirmation needed)
-
-# Alternative deployment (without OLM)
-make install                  # Install CRDs
-make deploy IMG=<registry>/automotive-dev-operator:tag
-make undeploy
+./hack/deploy-catalog.sh -y --keep-config          # Full redeploy: uninstall, build, install
+./hack/deploy-catalog.sh uninstall -y              # Uninstall the operator only
+./hack/deploy-catalog.sh build                     # Build and push images only (no install, no confirmation needed)
 ```
 
 ## Architecture
@@ -71,7 +66,7 @@ This is a Kubernetes operator for automotive OS image building, built with Kubeb
 
 ## Coding Guidelines
 
-- Do not add tests or documentation without being explicitly asked.
+- Add failing tests before starting implementation.
 - Keep summaries short.
 - Container tool defaults to `podman` (CONTAINER_TOOL variable in Makefile).
 - After modifying types in api/v1alpha1/, run `make generate manifests`.
