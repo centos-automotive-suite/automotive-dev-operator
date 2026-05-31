@@ -122,7 +122,7 @@ if [ -n "$RESTORE_SOURCES_REF" ]; then
     ORAS_AUTH_FLAGS=(--registry-config "$REGISTRY_AUTH_FILE")
   fi
 
-  SOURCES_TYPE="application/vnd.automotive.sources.v1+tar+gzip"
+  SOURCES_TYPE="$OCI_REFERRER_TYPE_BUILD_SOURCES"
   SOURCES_DIGEST=$(oras discover "${ORAS_AUTH_FLAGS[@]}" "$RESTORE_SOURCES_REF" \
     --artifact-type "$SOURCES_TYPE" --format json \
     | grep -o 'sha256:[a-f0-9]\{64\}' | head -1)
@@ -495,7 +495,8 @@ case "$BUILD_MODE" in
           _AIB_IMAGE_PINNED=$(cat /tmp/aib-pinned.txt 2>/dev/null || echo "$AIB_IMAGE_REF")
 
           echo "Annotating bootc container with builder image: $BUILDER_IMAGE"
-          python3 - "$OCI_DIR" "$BUILDER_IMAGE" "$_AIB_VERSION" "$_AIB_IMAGE_PINNED" "$AIB_COMMAND" <<'PYEOF'
+          python3 - "$OCI_DIR" "$BUILDER_IMAGE" "$_AIB_VERSION" "$_AIB_IMAGE_PINNED" "$AIB_COMMAND" \
+              "$OCI_ANN_BUILDER_IMAGE" "$OCI_ANN_AIB_VERSION" "$OCI_ANN_AUTOMOTIVE_IMAGE_BUILDER" "$OCI_ANN_AIB_COMMAND" <<'PYEOF'
 import json, sys, hashlib, os
 from pathlib import Path
 
@@ -510,11 +511,8 @@ def update_blob(oci_dir, old_digest, data):
         old_path.unlink()
     return new_digest, len(content)
 
-oci_dir, builder_image, aib_version, aib_image, aib_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
-key_builder  = "automotive.sdv.cloud.redhat.com/builder-image"
-key_aib_version = "automotive.sdv.cloud.redhat.com/aib-version"
-key_aib_image   = "automotive.sdv.cloud.redhat.com/automotive-image-builder"
-key_aib_command = "automotive.sdv.cloud.redhat.com/aib-command"
+oci_dir, builder_image, aib_version, aib_image, aib_command = sys.argv[1:6]
+key_builder, key_aib_version, key_aib_image, key_aib_command = sys.argv[6:10]
 
 index_path = Path(oci_dir) / "index.json"
 index = json.loads(index_path.read_text())

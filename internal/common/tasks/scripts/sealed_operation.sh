@@ -191,7 +191,7 @@ resolve_and_pull_builder() {
   local builder_image="${BUILDER_IMAGE:-}"
 
   if [ -z "${builder_image:-}" ]; then
-    local annotation_key="automotive.sdv.cloud.redhat.com/builder-image"
+    local annotation_key="$OCI_ANN_BUILDER_IMAGE"
     echo "No builder image specified, checking source container labels..."
     builder_image=$(skopeo inspect "containers-storage:$source" 2>/dev/null \
       | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('Labels',{}).get('$annotation_key',''))" 2>/dev/null) || true

@@ -15,6 +15,8 @@ import (
 	"github.com/containers/image/v5/oci/layout"
 	"github.com/containers/image/v5/signature"
 	"github.com/containers/image/v5/types"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 )
 
 // PullOCIArtifact pulls and extracts an OCI artifact to local destination.
@@ -183,7 +185,7 @@ func extractOCIArtifactBlob(ociLayoutPath, destPath string) error {
 		return fmt.Errorf("no layers found in manifest")
 	}
 
-	annotationMultiLayer := manifest.Annotations["automotive.sdv.cloud.redhat.com/multi-layer"] == "true"
+	annotationMultiLayer := manifest.Annotations[oci.Get().AnnotationKey("multi-layer")] == "true"
 	isMultiLayer := annotationMultiLayer || len(manifest.Layers) > 1
 	if isMultiLayer {
 		if !annotationMultiLayer && len(manifest.Layers) > 1 {

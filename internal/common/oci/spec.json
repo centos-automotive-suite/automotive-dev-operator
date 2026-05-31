@@ -1,0 +1,81 @@
+{
+  "annotationPrefix": "automotive.sdv.cloud.redhat.com/",
+
+  "annotations": {
+    "manifest": {
+      "required": [
+        {"key": "distro", "var": "DISTRO"},
+        {"key": "target", "var": "TARGET"},
+        {"key": "arch", "var": "ARCH"}
+      ],
+      "optional": [
+        {"key": "parts", "var": "PARTS"},
+        {"key": "multi-layer", "var": "MULTI_LAYER"},
+        {"key": "default-partitions", "var": "DEFAULT_PARTITIONS"},
+        {"key": "builder-image", "var": "BUILDER_IMAGE"},
+        {"key": "aib-version", "var": "AIB_VERSION"},
+        {"key": "automotive-image-builder", "var": "AUTOMOTIVE_IMAGE_BUILDER"},
+        {"key": "aib-command", "var": "AIB_COMMAND"},
+        {"key": "task-bundle-ref", "var": "TASK_BUNDLE_REF"},
+        {"key": "custom-defines", "var": "CUSTOM_DEFINES"},
+        {"key": "aib-extra-args", "var": "AIB_EXTRA_ARGS"},
+        {"key": "export-format", "var": "EXPORT_FORMAT"}
+      ]
+    },
+    "layer": {
+      "custom": [
+        {"key": "partition", "var": "PARTITION"},
+        {"key": "decompressed-size", "var": "DECOMPRESSED_SIZE"}
+      ],
+      "standard": [
+        {"key": "org.opencontainers.image.title", "var": "ORG_OPENCONTAINERS_IMAGE_TITLE"}
+      ]
+    }
+  },
+
+  "mediaTypes": {
+    "diskFormats": {
+      "raw": "application/vnd.automotive.disk.raw",
+      "qcow2": "application/vnd.automotive.disk.qcow2",
+      "simg": "application/vnd.automotive.disk.simg"
+    },
+    "compressionSuffixes": {
+      "gzip": "+gzip",
+      "lz4": "+lz4",
+      "xz": "+xz"
+    },
+    "containerLayers": {
+      "base": "application/vnd.oci.image.layer.v1.tar",
+      "gzip": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "lz4": "application/vnd.oci.image.layer.v1.tar+lz4",
+      "xz": "application/vnd.oci.image.layer.v1.tar+xz"
+    },
+    "generic": {
+      "gzip": "application/gzip",
+      "lz4": "application/x-lz4",
+      "xz": "application/x-xz",
+      "octetStream": "application/octet-stream"
+    }
+  },
+
+  "referrerTypes": [
+    {
+      "artifactType": "application/vnd.automotive.manifest.v1+yaml",
+      "label": "AIB Manifest",
+      "var": "AIB_MANIFEST",
+      "filename": "manifest.aib.yml"
+    },
+    {
+      "artifactType": "application/vnd.automotive.sources.v1+tar+gzip",
+      "label": "Build Sources",
+      "var": "BUILD_SOURCES",
+      "filename": "build-sources.tar.gz"
+    },
+    {
+      "artifactType": "application/vnd.osbuild.manifest.v1+json",
+      "label": "osbuild Manifest",
+      "var": "OSBUILD_MANIFEST",
+      "filename": "image.json"
+    }
+  ]
+}

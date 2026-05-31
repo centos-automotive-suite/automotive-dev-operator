@@ -3,6 +3,8 @@ package tasks
 
 import (
 	_ "embed"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 )
 
 //go:embed scripts/common.sh
@@ -39,11 +41,12 @@ var flashImageScript string
 var FlashImageScript = ""
 
 func init() {
-	BuildImageScript = commonScript + "\n" + buildImageScript
+	ociVars := oci.Get().ShellVars()
+	BuildImageScript = commonScript + "\n" + ociVars + "\n" + buildImageScript
 	BuildBuilderScript = commonScript + "\n" + buildBuilderScript
-	PushArtifactScript = commonScript + "\n" + pushArtifactScript
+	PushArtifactScript = commonScript + "\n" + ociVars + "\n" + pushArtifactScript
 	FlashImageScript = commonScript + "\n" + flashImageScript
-	SealedOperationScript = commonScript + "\n" + sealedOperationScript
+	SealedOperationScript = commonScript + "\n" + ociVars + "\n" + sealedOperationScript
 }
 
 //go:embed scripts/sealed_operation.sh
