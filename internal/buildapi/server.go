@@ -166,9 +166,11 @@ var loadTargetDefaultsFn = func(
 
 	var parsed struct {
 		Targets map[string]struct {
-			Architecture  string   `yaml:"architecture"`
-			ExtraArgs     []string `yaml:"extraArgs"`
-			DefaultFormat string   `yaml:"defaultFormat"`
+			Architecture          string   `yaml:"architecture"`
+			ExtraArgs             []string `yaml:"extraArgs"`
+			DefaultFormat         string   `yaml:"defaultFormat"`
+			AcceptedFormats       []string `yaml:"acceptedFormats"`
+			AcceptedArchitectures []string `yaml:"acceptedArchitectures"`
 		} `yaml:"targets"`
 	}
 	if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
@@ -178,11 +180,18 @@ var loadTargetDefaultsFn = func(
 	result := make(map[string]TargetDefaults, len(parsed.Targets))
 	for name, t := range parsed.Targets {
 		result[name] = TargetDefaults{
-			Architecture:  t.Architecture,
-			ExtraArgs:     t.ExtraArgs,
-			DefaultFormat: t.DefaultFormat,
+			Architecture:          t.Architecture,
+			ExtraArgs:             t.ExtraArgs,
+			DefaultFormat:         t.DefaultFormat,
+			AcceptedFormats:       t.AcceptedFormats,
+			AcceptedArchitectures: t.AcceptedArchitectures,
 		}
 	}
+
+	if err := validateTargetDefaults(result); err != nil {
+		return nil, fmt.Errorf("invalid target-defaults.yaml: %w", err)
+	}
+
 	return result, nil
 }
 
