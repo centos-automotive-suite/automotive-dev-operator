@@ -70,12 +70,14 @@ spec:
                       jwt:
                         description: JWT authentication configuration for OIDC providers.
                         items:
-                          description: JWTAuthenticator provides the configuration
-                            for a single JWT authenticator.
+                          description: |-
+                            JWTAuthenticatorConfig configures a single external JWT/OIDC authenticator.
+                            It mirrors apiserverv1beta1.JWTAuthenticator but replaces the issuer with
+                            JWTIssuerConfig to support Kubernetes-native CA references.
                           properties:
                             claimMappings:
-                              description: claimMappings points claims of a token
-                                to be treated as user attributes.
+                              description: ClaimMappings maps OIDC claims to Kubernetes
+                                user attributes.
                               properties:
                                 extra:
                                   description: |-
@@ -242,8 +244,8 @@ spec:
                               - username
                               type: object
                             claimValidationRules:
-                              description: claimValidationRules are rules that are
-                                applied to validate token claims to authenticate users.
+                              description: ClaimValidationRules are additional rules
+                                applied to incoming JWT claims.
                               items:
                                 description: ClaimValidationRule provides the configuration
                                   for a single claim validation rule.
@@ -287,98 +289,92 @@ spec:
                                 type: object
                               type: array
                             issuer:
-                              description: issuer contains the basic OIDC provider
-                                connection options.
+                              description: Issuer configures the OIDC provider.
                               properties:
                                 audienceMatchPolicy:
-                                  description: |-
-                                    audienceMatchPolicy defines how the "audiences" field is used to match the "aud" claim in the presented JWT.
-                                    Allowed values are:
-                                    1. "MatchAny" when multiple audiences are specified and
-                                    2. empty (or unset) or "MatchAny" when a single audience is specified.
-
-                                    - MatchAny: the "aud" claim in the presented JWT must match at least one of the entries in the "audiences" field.
-                                    For example, if "audiences" is ["foo", "bar"], the "aud" claim in the presented JWT must contain either "foo" or "bar" (and may contain both).
-
-                                    - "": The match policy can be empty (or unset) when a single audience is specified in the "audiences" field. The "aud" claim in the presented JWT must contain the single audience (and may contain others).
-
-                                    For more nuanced audience validation, use claimValidationRules.
-                                      example: claimValidationRule[].expression: 'sets.equivalent(claims.aud, ["bar", "foo", "baz"])' to require an exact match.
+                                  description: AudienceMatchPolicy controls how audiences
+                                    are matched.
                                   type: string
                                 audiences:
-                                  description: |-
-                                    audiences is the set of acceptable audiences the JWT must be issued to.
-                                    At least one of the entries must match the "aud" claim in presented JWTs.
-                                    Same value as the --oidc-client-id flag (though this field supports an array).
-                                    Required to be non-empty.
+                                  description: Audiences is the set of acceptable
+                                    JWT audiences.
                                   items:
                                     type: string
+                                  minItems: 1
                                   type: array
                                 certificateAuthority:
                                   description: |-
-                                    certificateAuthority contains PEM-encoded certificate authority certificates
-                                    used to validate the connection when fetching discovery information.
-                                    If unset, the system verifier is used.
-                                    Same value as the content of the file referenced by the --oidc-ca-file flag.
+                                    CertificateAuthority is an inline PEM-encoded CA certificate used to verify
+                                    the OIDC provider's TLS certificate.
                                   type: string
-                                discoveryURL:
+                                certificateAuthorityConfigMap:
                                   description: |-
-                                    discoveryURL, if specified, overrides the URL used to fetch discovery
-                                    information instead of using "{url}/.well-known/openid-configuration".
-                                    The exact value specified is used, so "/.well-known/openid-configuration"
-                                    must be included in discoveryURL if needed.
-
-                                    The "issuer" field in the fetched discovery information must match the "issuer.url" field
-                                    in the AuthenticationConfiguration and will be used to validate the "iss" claim in the presented JWT.
-                                    This is for scenarios where the well-known and jwks endpoints are hosted at a different
-                                    location than the issuer (such as locally in the cluster).
-
-                                    Example:
-                                    A discovery url that is exposed using kubernetes service 'oidc' in namespace 'oidc-namespace'
-                                    and discovery information is available at '/.well-known/openid-configuration'.
-                                    discoveryURL: "https://oidc.oidc-namespace/.well-known/openid-configuration"
-                                    certificateAuthority is used to verify the TLS connection and the hostname on the leaf certificate
-                                    must be set to 'oidc.oidc-namespace'.
-
-                                    curl https://oidc.oidc-namespace/.well-known/openid-configuration (.discoveryURL field)
-                                    {
-                                        issuer: "https://oidc.example.com" (.url field)
-                                    }
-
-                                    discoveryURL must be different from url.
-                                    Required to be unique across all JWT authenticators.
-                                    Note that egress selection configuration is not used for this network connection.
+                                    CertificateAuthorityConfigMap references a Kubernetes ConfigMap containing the
+                                    PEM-encoded CA certificate. The build API watches the ConfigMap for changes so
+                                    CA rotations are picked up immediately without restarting the server.
+                                  properties:
+                                    key:
+                                      description: Key within the ConfigMap whose
+                                        value is the PEM-encoded CA certificate.
+                                      type: string
+                                    name:
+                                      description: Name of the ConfigMap.
+                                      type: string
+                                    namespace:
+                                      description: Namespace of the ConfigMap. If
+                                        omitted, the operator's namespace is used.
+                                      type: string
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                                certificateAuthoritySecret:
+                                  description: |-
+                                    CertificateAuthoritySecret references a Kubernetes Secret containing the
+                                    PEM-encoded CA certificate. The build API watches the Secret for changes so
+                                    CA rotations are picked up immediately without restarting the server.
+                                  properties:
+                                    key:
+                                      description: Key within the Secret whose value
+                                        is the PEM-encoded CA certificate.
+                                      type: string
+                                    name:
+                                      description: Name of the Secret.
+                                      type: string
+                                    namespace:
+                                      description: Namespace of the Secret. If omitted,
+                                        the operator's namespace is used.
+                                      type: string
+                                  required:
+                                  - key
+                                  - name
+                                  type: object
+                                discoveryURL:
+                                  description: DiscoveryURL overrides the OIDC discovery
+                                    endpoint when it differs from URL.
                                   type: string
                                 egressSelectorType:
                                   description: |-
-                                    egressSelectorType is an indicator of which egress selection should be used for sending all traffic related
-                                    to this issuer (discovery, JWKS, distributed claims, etc).  If unspecified, no custom dialer is used.
-                                    When specified, the valid choices are "controlplane" and "cluster".  These correspond to the associated
-                                    values in the --egress-selector-config-file.
-
-                                    - controlplane: for traffic intended to go to the control plane.
-
-                                    - cluster: for traffic intended to go to the system being managed by Kubernetes.
+                                    EgressSelectorType specifies which egress selector should be used for
+                                    OIDC-related network traffic (discovery, JWKS, distributed claims, etc).
+                                    Valid values are "controlplane" and "cluster".
                                   type: string
                                 url:
-                                  description: |-
-                                    url points to the issuer URL in a format https://url or https://url/path.
-                                    This must match the "iss" claim in the presented JWT, and the issuer returned from discovery.
-                                    Same value as the --oidc-issuer-url flag.
-                                    Discovery information is fetched from "{url}/.well-known/openid-configuration" unless overridden by discoveryURL.
-                                    Required to be unique across all JWT authenticators.
-                                    Note that egress selection configuration is not used for this network connection.
+                                  description: URL is the base URL of the OIDC provider.
                                   type: string
                               required:
                               - audiences
                               - url
                               type: object
+                              x-kubernetes-validations:
+                              - message: at most one of certificateAuthority, certificateAuthoritySecret,
+                                  or certificateAuthorityConfigMap may be set
+                                rule: '[has(self.certificateAuthority), has(self.certificateAuthoritySecret),
+                                  has(self.certificateAuthorityConfigMap)].filter(x,
+                                  x).size() <= 1'
                             userValidationRules:
-                              description: |-
-                                userValidationRules are rules that are applied to final user before completing authentication.
-                                These allow invariants to be applied to incoming identities such as preventing the
-                                use of the system: prefix that is commonly used by Kubernetes components.
-                                The validation rules are logically ANDed together and must all return true for the validation to pass.
+                              description: UserValidationRules are additional rules
+                                applied to the authenticated user.
                               items:
                                 description: UserValidationRule provides the configuration
                                   for a single user info validation rule.

@@ -68,10 +68,45 @@ spec:
     #     prefix: "internal:"
     #   # JWT/OIDC authentication providers
     #   jwt:
+    #     # Option 1: inline PEM CA certificate
     #     - issuer:
     #         url: "https://sso.redhat.com/auth/realms/EmployeeIDP"
     #         audiences:
     #           - "caib-cli"
+    #         certificateAuthority: |
+    #           -----BEGIN CERTIFICATE-----
+    #           <PEM content>
+    #           -----END CERTIFICATE-----
+    #       claimMappings:
+    #         username:
+    #           claim: "preferred_username"
+    #           prefix: ""
+    #
+    #     # Option 2: CA certificate from a Kubernetes Secret (e.g. OpenShift ingress CA)
+    #     # The operator reads the secret at startup and every ~60s, so CA rotations
+    #     # are picked up automatically without editing the OperatorConfig.
+    #     - issuer:
+    #         url: "https://keycloak.example.com/realms/openshift"
+    #         audiences:
+    #           - "caib-cli"
+    #         certificateAuthoritySecret:
+    #           name: router-ca
+    #           namespace: openshift-ingress-operator
+    #           key: tls.crt
+    #       claimMappings:
+    #         username:
+    #           claim: "preferred_username"
+    #           prefix: ""
+    #
+    #     # Option 3: CA certificate from a ConfigMap (e.g. cluster root CA)
+    #     - issuer:
+    #         url: "https://keycloak.example.com/realms/openshift"
+    #         audiences:
+    #           - "caib-cli"
+    #         certificateAuthorityConfigMap:
+    #           name: kube-root-ca.crt
+    #           namespace: kube-system
+    #           key: ca.crt
     #       claimMappings:
     #         username:
     #           claim: "preferred_username"
