@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -299,6 +300,18 @@ func ApplyTargetDefaults(cmd *cobra.Command, config *buildapitypes.OperatorConfi
 	if defaults.DefaultFormat != "" && !cmd.Flags().Changed("format") {
 		req.ExportFormat = buildapitypes.ExportFormat(defaults.DefaultFormat)
 		clilog.Infof("Using format %q from target defaults for %q\n", defaults.DefaultFormat, req.Target)
+	}
+
+	warnIfNotInList(defaults.AcceptedArchitectures, "architecture", string(req.Architecture))
+	warnIfNotInList(defaults.AcceptedFormats, "format", string(req.ExportFormat))
+}
+
+func warnIfNotInList(accepted []string, field, value string) {
+	if len(accepted) == 0 || value == "" {
+		return
+	}
+	if !slices.Contains(accepted, value) {
+		_, _ = color.New(color.FgRed, color.Bold).Fprintf(os.Stderr, "Warning: %s %q is not in accepted values %v\n", field, value, accepted)
 	}
 }
 

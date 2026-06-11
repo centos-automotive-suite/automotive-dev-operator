@@ -3,7 +3,10 @@
 // (stderr) and structured data output (json/yaml/table) remain visible.
 package clilog
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 var quiet bool
 
@@ -25,4 +28,9 @@ func Infoln(a ...any) {
 	if !quiet {
 		fmt.Println(a...)
 	}
+}
+
+// Warnf prints a formatted warning to stderr. Warnings are never suppressed by quiet mode.
+func Warnf(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "Warning: "+format, a...)
 }

@@ -622,6 +622,43 @@ var _ = Describe("APIServer", func() {
 				ExtraArgs:    []string{"--separate-partitions"},
 			}))
 		})
+
+		It("should return per-target validation hints in target defaults", func() {
+			config := &automotivev1alpha1.OperatorConfig{
+				Spec: automotivev1alpha1.OperatorConfigSpec{},
+			}
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return nil, nil
+			}
+			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+				return config, nil
+			}
+			loadTargetDefaultsFn = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]TargetDefaults, error) {
+				return map[string]TargetDefaults{
+					"qemu": {
+						DefaultFormat:         "raw",
+						AcceptedFormats:       []string{"qcow2", "raw"},
+						AcceptedArchitectures: []string{"amd64", "arm64"},
+					},
+				}, nil
+			}
+
+			req, err := http.NewRequest(http.MethodGet, "/v1/config", nil)
+			Expect(err).NotTo(HaveOccurred())
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = req
+			c.Set("reqID", "test-req-id")
+
+			server.handleGetOperatorConfig(c)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var response OperatorConfigResponse
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.TargetDefaults).To(HaveLen(1))
+			Expect(response.TargetDefaults["qemu"].AcceptedFormats).To(ConsistOf("qcow2", "raw"))
+			Expect(response.TargetDefaults["qemu"].AcceptedArchitectures).To(ConsistOf("amd64", "arm64"))
+		})
 	})
 
 	Context("Server Lifecycle", func() {
