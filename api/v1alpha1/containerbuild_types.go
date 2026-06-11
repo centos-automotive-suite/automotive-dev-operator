@@ -62,12 +62,21 @@ type ContainerBuildSpec struct {
 	// using a service account token (e.g. for the OpenShift internal registry).
 	// +optional
 	UseServiceAccountAuth bool `json:"useServiceAccountAuth,omitempty"`
+
+	// TTL is the time-to-live for this build. After this duration past its
+	// completion, the build transitions to the Expired phase and its
+	// BuildRun is cleaned up. The ContainerBuild CR itself is preserved.
+	// In-progress builds never expire.
+	// Uses Go duration format (e.g. "24h", "72h", "168h").
+	// Empty uses the OperatorConfig default. Set to "0" to disable expiry.
+	// +optional
+	TTL string `json:"ttl,omitempty"`
 }
 
 // ContainerBuildStatus defines the observed state of ContainerBuild
 type ContainerBuildStatus struct {
 	// Phase is the current lifecycle phase of the container build.
-	// One of: Pending, Uploading, Building, Completed, Failed.
+	// One of: Pending, Uploading, Building, Completed, Failed, Expired.
 	Phase string `json:"phase,omitempty"`
 
 	// BuildRunName is the name of the Shipwright BuildRun created for this build.
@@ -87,6 +96,16 @@ type ContainerBuildStatus struct {
 	// ImageDigest is the digest of the built and pushed image.
 	ImageDigest string `json:"imageDigest,omitempty"`
 
+	// ExpiresAt is when this build will transition to the Expired phase
+	// and have its BuildRun cleaned up. The ContainerBuild CR itself is
+	// preserved. Nil if expiry is disabled (TTL "0" or no-expire annotation).
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+
+	// PreviousPhase is the phase the build was in before transitioning to Expired.
+	// +optional
+	PreviousPhase string `json:"previousPhase,omitempty"`
+
 	// Conditions represent the latest available observations of the build's state.
 	// +optional
 	// +listType=map
@@ -98,6 +117,7 @@ type ContainerBuildStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Output",type=string,JSONPath=`.spec.output`
+// +kubebuilder:printcolumn:name="Expires",type=date,JSONPath=`.status.expiresAt`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ContainerBuild is the Schema for the containerbuilds API
@@ -152,6 +172,11 @@ func (s *ContainerBuildSpec) GetArchitecture() string {
 		return "amd64"
 	}
 	return s.Architecture
+}
+
+// GetTTL returns the per-build TTL string, or empty if not set.
+func (s *ContainerBuildSpec) GetTTL() string {
+	return s.TTL
 }
 
 // GetTimeout returns the timeout in minutes, defaulting to 30.

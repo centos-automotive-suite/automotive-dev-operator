@@ -28,6 +28,7 @@ const (
 	phasePending   = "Pending"
 	phaseUploading = "Uploading"
 	phaseBuilding  = "Building"
+	phaseExpired   = "Expired"
 
 	maxK8sNameLength = 63
 
@@ -86,6 +87,10 @@ func (r *ContainerBuildReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	if result, expired, err := r.checkExpiry(ctx, cb); expired || err != nil {
+		return result, err
+	}
+
 	switch cb.Status.Phase {
 	case "", phasePending:
 		return r.reconcilePending(ctx, log, cb)
@@ -93,6 +98,8 @@ func (r *ContainerBuildReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.reconcileUploading(ctx, log, cb)
 	case phaseBuilding:
 		return r.reconcileBuilding(ctx, log, cb)
+	case phaseExpired:
+		return r.handleExpiredState(ctx, cb)
 	case phaseCompleted, phaseFailed:
 		return ctrl.Result{}, nil
 	default:
@@ -315,7 +322,10 @@ func (r *ContainerBuildReconciler) updatePhase(
 	if buildRunName != "" {
 		cb.Status.BuildRunName = buildRunName
 	}
-	if phase == phaseFailed || phase == phaseCompleted {
+	if phase == phaseExpired {
+		cb.Status.PreviousPhase = oldPhase
+	}
+	if isTerminalPhase(phase) && cb.Status.CompletionTime == nil {
 		now := metav1.Now()
 		cb.Status.CompletionTime = &now
 	}
@@ -335,7 +345,7 @@ func (r *ContainerBuildReconciler) updatePhase(
 		)
 		r.emitContainerLifecycleEvent(cb, oldPhase, phase, message)
 	}
-	if phase == phaseFailed || phase == phaseCompleted {
+	if isTerminalPhase(phase) {
 		return ctrl.Result{}, nil
 	}
 	return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
@@ -392,6 +402,10 @@ func (r *ContainerBuildReconciler) emitContainerLifecycleEvent(
 			message,
 		)
 	}
+}
+
+func isTerminalPhase(phase string) bool {
+	return phase == phaseFailed || phase == phaseCompleted || phase == phaseExpired
 }
 
 func eventTypeForContainerPhase(phase string) string {

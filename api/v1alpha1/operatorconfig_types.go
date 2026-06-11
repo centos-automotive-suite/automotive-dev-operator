@@ -325,6 +325,22 @@ type ContainerBuildsConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	UploadTimeoutMinutes int32 `json:"uploadTimeoutMinutes,omitempty"`
+
+	// DefaultBuildTTL is the default time-to-live for container builds.
+	// After this duration past completion, a build transitions to Expired
+	// and its BuildRun is cleaned up. Uses Go duration format (e.g. "24h").
+	// Set to "0" to disable expiry by default.
+	// +optional
+	DefaultBuildTTL string `json:"defaultBuildTTL,omitempty"`
+}
+
+// GetDefaultBuildTTL returns the configured default TTL for container builds,
+// falling back to the shared DefaultBuildTTL constant ("24h").
+func (c *ContainerBuildsConfig) GetDefaultBuildTTL() string {
+	if c != nil && c.DefaultBuildTTL != "" {
+		return c.DefaultBuildTTL
+	}
+	return DefaultBuildTTL
 }
 
 // WorkspacesConfig defines configuration for developer workspaces

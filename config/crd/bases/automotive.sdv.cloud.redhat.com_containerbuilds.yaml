@@ -21,6 +21,9 @@ spec:
     - jsonPath: .spec.output
       name: Output
       type: string
+    - jsonPath: .status.expiresAt
+      name: Expires
+      type: date
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -88,6 +91,15 @@ spec:
                   to 30.
                 format: int32
                 type: integer
+              ttl:
+                description: |-
+                  TTL is the time-to-live for this build. After this duration past its
+                  completion, the build transitions to the Expired phase and its
+                  BuildRun is cleaned up. The ContainerBuild CR itself is preserved.
+                  In-progress builds never expire.
+                  Uses Go duration format (e.g. "24h", "72h", "168h").
+                  Empty uses the OperatorConfig default. Set to "0" to disable expiry.
+                type: string
               useServiceAccountAuth:
                 description: |-
                   UseServiceAccountAuth indicates the build should authenticate to the registry
@@ -168,6 +180,13 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              expiresAt:
+                description: |-
+                  ExpiresAt is when this build will transition to the Expired phase
+                  and have its BuildRun cleaned up. The ContainerBuild CR itself is
+                  preserved. Nil if expiry is disabled (TTL "0" or no-expire annotation).
+                format: date-time
+                type: string
               imageDigest:
                 description: ImageDigest is the digest of the built and pushed image.
                 type: string
@@ -178,7 +197,11 @@ spec:
               phase:
                 description: |-
                   Phase is the current lifecycle phase of the container build.
-                  One of: Pending, Uploading, Building, Completed, Failed.
+                  One of: Pending, Uploading, Building, Completed, Failed, Expired.
+                type: string
+              previousPhase:
+                description: PreviousPhase is the phase the build was in before transitioning
+                  to Expired.
                 type: string
               startTime:
                 description: StartTime is when the build started.

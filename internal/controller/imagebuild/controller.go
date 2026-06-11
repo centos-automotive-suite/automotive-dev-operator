@@ -570,36 +570,13 @@ func (r *ImageBuildReconciler) resolveEffectiveTTL(
 	ctx context.Context,
 	imageBuild *automotivev1alpha1.ImageBuild,
 ) (time.Duration, error) {
-	ttlStr := imageBuild.Spec.GetTTL()
-
-	if ttlStr == "" {
-		operatorConfig := &automotivev1alpha1.OperatorConfig{}
-		if err := r.Get(ctx, types.NamespacedName{
-			Name: "config", Namespace: controllerutils.OperatorNamespace(),
-		}, operatorConfig); err != nil {
-			if !errors.IsNotFound(err) {
-				return 0, fmt.Errorf("failed to load OperatorConfig: %w", err)
-			}
-			ttlStr = automotivev1alpha1.DefaultBuildTTL
-		} else if operatorConfig.Spec.OSBuilds != nil {
-			ttlStr = operatorConfig.Spec.OSBuilds.GetDefaultBuildTTL()
-		} else {
-			ttlStr = automotivev1alpha1.DefaultBuildTTL
-		}
+	operatorConfig := &automotivev1alpha1.OperatorConfig{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name: "config", Namespace: controllerutils.OperatorNamespace(),
+	}, operatorConfig); err != nil && !errors.IsNotFound(err) {
+		return 0, fmt.Errorf("failed to load OperatorConfig: %w", err)
 	}
-
-	if ttlStr == "0" {
-		return 0, nil
-	}
-
-	ttl, err := time.ParseDuration(ttlStr)
-	if err != nil {
-		return 0, err
-	}
-	if ttl < 0 {
-		return 0, fmt.Errorf("TTL must not be negative: %s", ttlStr)
-	}
-	return ttl, nil
+	return controllerutils.ResolveBuildTTL(imageBuild.Spec.GetTTL(), operatorConfig.Spec.OSBuilds)
 }
 
 // updateExpiresAt sets or clears status.ExpiresAt. Pass nil to clear.
@@ -608,21 +585,10 @@ func (r *ImageBuildReconciler) updateExpiresAt(
 	imageBuild *automotivev1alpha1.ImageBuild,
 	expiresAt *time.Time,
 ) error {
-	var desired *metav1.Time
-	if expiresAt != nil {
-		truncated := expiresAt.Truncate(time.Second)
-		t := metav1.NewTime(truncated)
-		desired = &t
-	}
-
-	if imageBuild.Status.ExpiresAt == nil && desired == nil {
+	desired, needsUpdate := controllerutils.ComputeExpiresAt(imageBuild.Status.ExpiresAt, expiresAt)
+	if !needsUpdate {
 		return nil
 	}
-	if imageBuild.Status.ExpiresAt != nil && desired != nil &&
-		imageBuild.Status.ExpiresAt.Time.Equal(desired.Time) {
-		return nil
-	}
-
 	fresh := &automotivev1alpha1.ImageBuild{}
 	if err := r.Get(ctx, types.NamespacedName{
 		Name: imageBuild.Name, Namespace: imageBuild.Namespace,
