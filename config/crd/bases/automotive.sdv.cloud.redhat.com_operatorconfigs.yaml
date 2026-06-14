@@ -624,6 +624,13 @@ spec:
                 description: ContainerBuilds defines configuration for container build
                   operations
                 properties:
+                  defaultBuildTTL:
+                    description: |-
+                      DefaultBuildTTL is the default time-to-live for container builds.
+                      After this duration past completion, a build transitions to Expired
+                      and its BuildRun is cleaned up. Uses Go duration format (e.g. "24h").
+                      Set to "0" to disable expiry by default.
+                    type: string
                   uploadTimeoutMinutes:
                     default: 10
                     description: |-
