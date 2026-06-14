@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/containers/image/v5/docker"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/types"
@@ -25,34 +26,26 @@ import (
 
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 )
 
-const annotationPrefix = "automotive.sdv.cloud.redhat.com/"
+var ociSpec = oci.Get()
 
-var knownAnnotations = []struct {
-	key   string
-	label string
-}{
-	{"distro", "Distro"},
-	{"target", "Target"},
-	{"arch", "Arch"},
-	{"automotive-image-builder", "AIB Image"},
-	{"builder-image", "Builder Image"},
-	{"aib-version", "AIB Version"},
-	{"task-bundle-ref", "Task Bundle"},
-	{"custom-defines", "Custom Defines"},
-	{"aib-extra-args", "AIB Extra Args"},
-	{"export-format", "Export Format"},
-	{"aib-command", "AIB Command"},
-}
-
-var knownReferrerTypes = []struct {
-	artifactType string
-	label        string
-}{
-	{"application/vnd.automotive.manifest.v1+yaml", "AIB Manifest"},
-	{"application/vnd.automotive.sources.v1+tar+gzip", "Build Sources"},
-	{"application/vnd.osbuild.manifest.v1+json", "osbuild Manifest"},
+// annotationDisplayLabels maps spec annotation keys to human-readable labels
+// for provenance display. Keys not listed here (parts, multi-layer,
+// default-partitions) are tooling-only metadata and intentionally omitted.
+var annotationDisplayLabels = map[string]string{
+	"distro":                   "Distro",
+	"target":                   "Target",
+	"arch":                     "Arch",
+	"automotive-image-builder": "AIB Image",
+	"builder-image":            "Builder Image",
+	"aib-version":              "AIB Version",
+	"task-bundle-ref":          "Task Bundle",
+	"custom-defines":           "Custom Defines",
+	"aib-extra-args":           "AIB Extra Args",
+	"export-format":            "Export Format",
+	"aib-command":              "AIB Command",
 }
 
 // Options wires inspect handler dependencies.
@@ -88,7 +81,7 @@ func (h *Handler) handleError(err error) {
 		h.opts.HandleError(err)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	fmt.Fprintln(os.Stderr, caibcommon.FormatError(err))
 	os.Exit(1)
 }
 
@@ -156,8 +149,8 @@ func (h *Handler) RunInspect(_ *cobra.Command, args []string) {
 func (h *Handler) printStructured(format, ociRef, digest string, annotations map[string]string, referrers []referrerInfo, referrerTypes map[string]bool) {
 	stripped := make(map[string]string)
 	for k, v := range annotations {
-		if strings.HasPrefix(k, annotationPrefix) {
-			stripped[strings.TrimPrefix(k, annotationPrefix)] = v
+		if strings.HasPrefix(k, ociSpec.AnnotationPrefix) {
+			stripped[strings.TrimPrefix(k, ociSpec.AnnotationPrefix)] = v
 		}
 	}
 
@@ -322,11 +315,15 @@ func (h *Handler) printProvenance(ociRef, digest string, annotations map[string]
 	fmt.Println()
 
 	hasAnnotations := false
-	for _, a := range knownAnnotations {
-		val := annotations[annotationPrefix+a.key]
+	for _, ak := range ociSpec.AllManifestAnnotationKeys() {
+		label := annotationDisplayLabels[ak.Key]
+		if label == "" {
+			continue
+		}
+		val := annotations[ociSpec.AnnotationKey(ak.Key)]
 		if val != "" {
 			hasAnnotations = true
-			fmt.Printf("  %-16s %s\n", bold(a.label+":"), green(val))
+			fmt.Printf("  %-16s %s\n", bold(label+":"), green(val))
 		}
 	}
 	if !hasAnnotations {
@@ -337,11 +334,11 @@ func (h *Handler) printProvenance(ociRef, digest string, annotations map[string]
 	fmt.Println(bold("Saved Artifacts"))
 	fmt.Println(bold(strings.Repeat("═", 50)))
 
-	for _, rt := range knownReferrerTypes {
-		if referrerTypes[rt.artifactType] {
-			fmt.Printf("  %s %s  (%s)\n", green("✓"), bold(rt.label), rt.artifactType)
+	for _, rt := range ociSpec.ReferrerTypes {
+		if referrerTypes[rt.ArtifactType] {
+			fmt.Printf("  %s %s  (%s)\n", green("✓"), bold(rt.Label), rt.ArtifactType)
 		} else {
-			fmt.Printf("  %s %s\n", yellow("✗"), rt.label)
+			fmt.Printf("  %s %s\n", yellow("✗"), rt.Label)
 		}
 	}
 
@@ -355,7 +352,7 @@ func (h *Handler) printProvenance(ociRef, digest string, annotations map[string]
 }
 
 func buildRebuildCommand(ociRef, digest string, annotations map[string]string, referrerTypes map[string]bool) string {
-	get := func(key string) string { return annotations[annotationPrefix+key] }
+	get := func(key string) string { return annotations[ociSpec.AnnotationKey(key)] }
 
 	aibCmd := get("aib-command")
 	isDevBuild := strings.HasPrefix(aibCmd, "aib-dev")
@@ -367,7 +364,7 @@ func buildRebuildCommand(ociRef, digest string, annotations map[string]string, r
 		parts = append(parts, "caib image build")
 	}
 
-	hasManifest := referrerTypes["application/vnd.automotive.manifest.v1+yaml"]
+	hasManifest := referrerTypes[ociSpec.ReferrerArtifactTypeByLabel("AIB Manifest")]
 	if hasManifest {
 		parts = append(parts, "manifest.aib.yml")
 	} else {
@@ -408,7 +405,7 @@ func buildRebuildCommand(ociRef, digest string, annotations map[string]string, r
 			}
 		}
 	}
-	hasSources := referrerTypes["application/vnd.automotive.sources.v1+tar+gzip"]
+	hasSources := referrerTypes[ociSpec.ReferrerArtifactTypeByLabel("Build Sources")]
 	taskBundleRef := get("task-bundle-ref")
 	if taskBundleRef != "" {
 		parts = append(parts, fmt.Sprintf("  --task-bundle-ref %s", taskBundleRef))
@@ -439,11 +436,7 @@ func (h *Handler) downloadReferrers(ociRef, _ string, referrers []referrerInfo, 
 	repo := splitReference(ociRef)
 	insecure := h.opts.InsecureSkipTLS != nil && *h.opts.InsecureSkipTLS
 
-	fileMap := map[string]string{
-		"application/vnd.automotive.manifest.v1+yaml":    "manifest.aib.yml",
-		"application/vnd.automotive.sources.v1+tar+gzip": "build-sources.tar.gz",
-		"application/vnd.osbuild.manifest.v1+json":       "image.json",
-	}
+	fileMap := ociSpec.ReferrerFileMap()
 
 	for _, ref := range referrers {
 		filename, known := fileMap[ref.ArtifactType]
@@ -453,7 +446,7 @@ func (h *Handler) downloadReferrers(ociRef, _ string, referrers []referrerInfo, 
 
 		destPath := filepath.Join(outputDir, filename)
 		pullRef := repo + "@" + ref.Digest
-		fmt.Printf("Downloading %s → %s\n", ref.ArtifactType, destPath)
+		clilog.Infof("Downloading %s → %s\n", ref.ArtifactType, destPath)
 		if err := caibcommon.PullOCIArtifact(pullRef, destPath, username, password, insecure, authFile); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to download %s: %v\n", filename, err)
 		}

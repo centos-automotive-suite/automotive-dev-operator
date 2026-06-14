@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
@@ -67,7 +68,7 @@ func (h *Handler) handleError(err error) {
 		h.opts.HandleError(err)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	fmt.Fprintln(os.Stderr, common.FormatError(err))
 	os.Exit(1)
 }
 
@@ -189,7 +190,7 @@ func (h *Handler) sealedRunViaAPI(op buildapitypes.SealedOperation, inputRef, ou
 		h.handleError(err)
 		return
 	}
-	fmt.Printf("Job %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
+	clilog.Infof("Job %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 
 	if *h.opts.WaitForBuild || *h.opts.FollowLogs {
 		h.sealedWaitForCompletion(ctx, api, op, resp.Name)
@@ -202,7 +203,7 @@ func (h *Handler) sealedWaitForCompletion(
 	op buildapitypes.SealedOperation,
 	name string,
 ) {
-	fmt.Println("Waiting for job to complete...")
+	clilog.Infoln("Waiting for job to complete...")
 	sealedTimeout := time.Duration(*h.opts.Timeout) * time.Minute
 	waitCtx, cancel := context.WithTimeout(ctx, sealedTimeout)
 	defer cancel()
@@ -230,19 +231,19 @@ func (h *Handler) sealedWaitForCompletion(
 					h.handleError(fmt.Errorf("timed out after %v", sealedTimeout))
 					return
 				}
-				fmt.Printf("status check failed: %v\n", err)
+				fmt.Fprintf(os.Stderr, "status check failed: %v\n", err)
 				continue
 			}
 
 			if st.Phase != lastPhase {
-				fmt.Printf("status: %s - %s\n", st.Phase, st.Message)
+				clilog.Infof("status: %s - %s\n", st.Phase, st.Message)
 				lastPhase = st.Phase
 			}
 
 			if st.Phase == phaseCompleted {
-				fmt.Println("Job completed successfully.")
+				clilog.Infoln("Job completed successfully.")
 				if st.OutputRef != "" {
-					fmt.Printf("Output: %s\n", st.OutputRef)
+					clilog.Infof("Output: %s\n", st.OutputRef)
 				}
 				return
 			}
@@ -259,13 +260,13 @@ func (h *Handler) sealedWaitForCompletion(
 					if streamErr != nil {
 						logRetries++
 						if logRetries == 1 {
-							fmt.Printf("Waiting for logs... (attempt %d/%d)\n", logRetries, maxSealedLogRetries)
+							clilog.Infof("Waiting for logs... (attempt %d/%d)\n", logRetries, maxSealedLogRetries)
 						}
 					} else {
 						logStreaming = true
 					}
 				} else if !logRetryWarningShown {
-					fmt.Printf("Log streaming failed after %d attempts. Falling back to status updates.\n", maxSealedLogRetries)
+					clilog.Infof("Log streaming failed after %d attempts. Falling back to status updates.\n", maxSealedLogRetries)
 					logRetryWarningShown = true
 					logStreaming = false
 					*h.opts.FollowLogs = false
@@ -314,7 +315,7 @@ func (h *Handler) sealedStreamLogs(ctx context.Context, op buildapitypes.SealedO
 		return fmt.Errorf("log stream error: HTTP %d", resp.StatusCode)
 	}
 
-	fmt.Println("Streaming logs...")
+	clilog.Infoln("Streaming logs...")
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {

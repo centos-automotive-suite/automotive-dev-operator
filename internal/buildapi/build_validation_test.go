@@ -194,3 +194,100 @@ var _ = Describe("validateRestoreSourcesRef", func() {
 		Expect(req.RestoreSourcesRef).ToNot(HavePrefix(" "))
 	})
 })
+
+var _ = Describe("validateTargetDefaults", func() {
+	It("passes when targets map is nil", func() {
+		Expect(validateTargetDefaults(nil)).To(Succeed())
+	})
+
+	It("passes when no accepted lists are set", func() {
+		targets := map[string]TargetDefaults{
+			"qemu": {Architecture: "arm64", DefaultFormat: "raw"},
+		}
+		Expect(validateTargetDefaults(targets)).To(Succeed())
+	})
+
+	It("passes when defaults match accepted values", func() {
+		targets := map[string]TargetDefaults{
+			"qemu": {
+				DefaultFormat:         "raw",
+				AcceptedFormats:       []string{"qcow2", "raw"},
+				AcceptedArchitectures: []string{"amd64", "arm64"},
+			},
+			"ebbr": {
+				Architecture:          "arm64",
+				DefaultFormat:         "simg",
+				AcceptedFormats:       []string{"simg"},
+				AcceptedArchitectures: []string{"arm64"},
+			},
+		}
+		Expect(validateTargetDefaults(targets)).To(Succeed())
+	})
+
+	It("rejects architecture not in target's accepted list", func() {
+		targets := map[string]TargetDefaults{
+			"bad-board": {
+				Architecture:          "mips64",
+				AcceptedArchitectures: []string{"amd64", "arm64"},
+			},
+		}
+		err := validateTargetDefaults(targets)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("bad-board"))
+		Expect(err.Error()).To(ContainSubstring("mips64"))
+		Expect(err.Error()).To(ContainSubstring("acceptedArchitectures"))
+	})
+
+	It("rejects defaultFormat not in target's accepted list", func() {
+		targets := map[string]TargetDefaults{
+			"my-target": {
+				DefaultFormat:   "vdi",
+				AcceptedFormats: []string{"qcow2", "raw", "simg"},
+			},
+		}
+		err := validateTargetDefaults(targets)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("my-target"))
+		Expect(err.Error()).To(ContainSubstring("vdi"))
+	})
+
+	It("skips validation when default field is empty", func() {
+		targets := map[string]TargetDefaults{
+			"qemu": {
+				DefaultFormat:         "raw",
+				AcceptedFormats:       []string{"qcow2", "raw"},
+				AcceptedArchitectures: []string{"amd64", "arm64"},
+			},
+		}
+		Expect(validateTargetDefaults(targets)).To(Succeed())
+	})
+
+	It("skips validation when accepted list is empty", func() {
+		targets := map[string]TargetDefaults{
+			"qemu": {
+				Architecture:          "anything",
+				DefaultFormat:         "whatever",
+				AcceptedFormats:       []string{},
+				AcceptedArchitectures: []string{},
+			},
+		}
+		Expect(validateTargetDefaults(targets)).To(Succeed())
+	})
+
+	It("reports errors from multiple targets", func() {
+		targets := map[string]TargetDefaults{
+			"a": {
+				Architecture:          "bad-arch",
+				AcceptedArchitectures: []string{"amd64", "arm64"},
+			},
+			"b": {
+				DefaultFormat:   "bad-fmt",
+				AcceptedFormats: []string{"qcow2", "raw", "simg"},
+			},
+		}
+		err := validateTargetDefaults(targets)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("bad-arch"))
+		Expect(err.Error()).To(ContainSubstring("bad-fmt"))
+	})
+})

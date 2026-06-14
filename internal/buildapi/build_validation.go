@@ -2,8 +2,10 @@ package buildapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -146,4 +148,27 @@ func validateRestoreSourcesRef(req *BuildRequest) error {
 	}
 	req.RestoreSourcesRef = ref
 	return nil
+}
+
+// validateTargetDefaults checks that each target's default values are within its own accepted values.
+func validateTargetDefaults(targets map[string]TargetDefaults) error {
+	if len(targets) == 0 {
+		return nil
+	}
+
+	var errs []string
+	for name, td := range targets {
+		checkInList(&errs, name, "architecture", td.Architecture, "acceptedArchitectures", td.AcceptedArchitectures)
+		checkInList(&errs, name, "defaultFormat", td.DefaultFormat, "acceptedFormats", td.AcceptedFormats)
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func checkInList(errs *[]string, target, field, value, listName string, accepted []string) {
+	if value != "" && len(accepted) > 0 && !slices.Contains(accepted, value) {
+		*errs = append(*errs, fmt.Sprintf("target %q: %s %q not in %s %v", target, field, value, listName, accepted))
+	}
 }

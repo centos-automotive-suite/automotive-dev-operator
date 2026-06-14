@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 )
 
@@ -84,5 +85,65 @@ func TestComplete_NoopWhenNothingRendered(t *testing.T) {
 
 	if out != "" {
 		t.Errorf("Complete() with no prior render should produce no output, got: %q", out)
+	}
+}
+
+func TestRender_QuietModeSuppressesOutput(t *testing.T) {
+	clilog.SetQuiet(true)
+	defer clilog.SetQuiet(false)
+
+	pb := &ProgressBar{isTTY: false}
+	out := captureStdout(t, func() {
+		pb.Render("Building", &buildapitypes.BuildStep{
+			Stage: "Building image",
+			Done:  4,
+			Total: 8,
+		})
+	})
+
+	if out != "" {
+		t.Errorf("Render() in quiet mode should produce no output, got: %q", out)
+	}
+}
+
+func TestComplete_QuietModeSuppressesOutput(t *testing.T) {
+	clilog.SetQuiet(false)
+	pb := &ProgressBar{isTTY: false}
+	pb.Render("Building", &buildapitypes.BuildStep{
+		Stage: "Building image",
+		Done:  4,
+		Total: 8,
+	})
+
+	clilog.SetQuiet(true)
+	defer clilog.SetQuiet(false)
+
+	out := captureStdout(t, func() {
+		pb.Complete()
+	})
+
+	if out != "" {
+		t.Errorf("Complete() in quiet mode should produce no output, got: %q", out)
+	}
+}
+
+func TestClear_QuietModeSuppressesOutput(t *testing.T) {
+	clilog.SetQuiet(false)
+	pb := &ProgressBar{isTTY: true}
+	pb.Render("Building", &buildapitypes.BuildStep{
+		Stage: "Building image",
+		Done:  4,
+		Total: 8,
+	})
+
+	clilog.SetQuiet(true)
+	defer clilog.SetQuiet(false)
+
+	out := captureStdout(t, func() {
+		pb.Clear()
+	})
+
+	if out != "" {
+		t.Errorf("Clear() in quiet mode should produce no output, got: %q", out)
 	}
 }

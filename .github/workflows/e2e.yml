@@ -46,6 +46,12 @@ jobs:
           registry-host: ${{ env.REGISTRY_HOST }}
           arch: ${{ env.ARCH }}
 
+      - name: Deploy Dex for OIDC tests
+        if: >
+          github.event.inputs.label_filter == 'auth' ||
+          github.event.inputs.label_filter == ''
+        run: hack/e2e/setup-dex.sh
+
       - name: Build caib CLI
         run: make build-caib
 

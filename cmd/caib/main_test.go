@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	"github.com/spf13/cobra"
 )
@@ -328,5 +329,52 @@ func TestApplyTargetDefaults_MappingWithEmptyArchDoesNotOverride(t *testing.T) {
 
 	if req.Architecture != buildapitypes.Architecture(archAMD64) {
 		t.Errorf("expected architecture to remain amd64 when mapping has no arch, got %s", req.Architecture)
+	}
+}
+
+func TestQuietFlagRegistered(t *testing.T) {
+	rootCmd := newRootCmd()
+	flag := rootCmd.PersistentFlags().Lookup("quiet")
+	if flag == nil {
+		t.Fatal("expected --quiet persistent flag on root command")
+	}
+	if flag.Shorthand != "q" {
+		t.Errorf("expected shorthand 'q', got %q", flag.Shorthand)
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("expected default value 'false', got %q", flag.DefValue)
+	}
+}
+
+func TestQuietFlagActivatesClilog(t *testing.T) {
+	clilog.SetQuiet(false)
+	t.Cleanup(func() { clilog.SetQuiet(false) })
+
+	rootCmd := newRootCmd()
+	noop := &cobra.Command{Use: "noop", RunE: func(_ *cobra.Command, _ []string) error { return nil }}
+	rootCmd.AddCommand(noop)
+	rootCmd.SetArgs([]string{"-q", "noop"})
+	_ = rootCmd.Execute()
+
+	if !clilog.IsQuiet() {
+		t.Error("expected clilog.IsQuiet() == true after -q flag parsed")
+	}
+}
+
+func TestQuietFlagWorksOnImageSubcommand(t *testing.T) {
+	clilog.SetQuiet(false)
+	t.Cleanup(func() { clilog.SetQuiet(false) })
+
+	rootCmd := newRootCmd()
+	// Add a noop under image to test that cobra.OnInitialize fires
+	// even when image's PersistentPreRunE overrides root's
+	imageCmd, _, _ := rootCmd.Find([]string{"image"})
+	noop := &cobra.Command{Use: "noop", RunE: func(_ *cobra.Command, _ []string) error { return nil }}
+	imageCmd.AddCommand(noop)
+	rootCmd.SetArgs([]string{"image", "noop", "-q"})
+	_ = rootCmd.Execute()
+
+	if !clilog.IsQuiet() {
+		t.Error("expected clilog.IsQuiet() == true for 'image noop -q' (child PersistentPreRunE must not override quiet)")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	"github.com/fatih/color"
 )
@@ -33,6 +34,9 @@ func hasUnresolvedFlashImagePlaceholder(cmd string) bool {
 
 // displayFlashInstructions shows flash instructions when flash is not executed or fails.
 func (h *Handler) displayFlashInstructions(st *buildapitypes.BuildResponse, isFailure bool) {
+	if clilog.IsQuiet() {
+		return
+	}
 	if st.Jumpstarter == nil || !st.Jumpstarter.Available {
 		return
 	}

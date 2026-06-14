@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/logstream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
@@ -63,7 +64,7 @@ func (h *Handler) handleError(err error) {
 		h.opts.HandleError(err)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	fmt.Fprintln(os.Stderr, common.FormatError(err))
 	os.Exit(1)
 }
 
@@ -95,7 +96,7 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	fmt.Printf("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
+	clilog.Infof("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
 
 	// Validate that either target or exporter is specified.
 	if strings.TrimSpace(*h.opts.Target) == "" && strings.TrimSpace(*h.opts.ExporterSelector) == "" {
@@ -150,7 +151,7 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	fmt.Printf("Flash job %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
+	clilog.Infof("Flash job %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 
 	if *h.opts.WaitForBuild || *h.opts.FollowLogs {
 		h.waitForFlashCompletion(ctx, api, resp.Name)
@@ -185,7 +186,7 @@ func parseLeaseDuration(duration string) (time.Duration, error) {
 
 // waitForFlashCompletion waits for a flash job to complete, optionally streaming logs.
 func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.Client, name string) {
-	fmt.Println("Waiting for flash to complete...")
+	clilog.Infoln("Waiting for flash to complete...")
 
 	var timeoutDuration time.Duration
 	if *h.opts.LeaseName != "" {
@@ -235,18 +236,18 @@ func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.
 			})
 			cancelReq()
 			if err != nil {
-				fmt.Printf("status check failed: %v\n", err)
+				fmt.Fprintf(os.Stderr, "status check failed: %v\n", err)
 				continue
 			}
 
 			if !streamState.Active && (st.Phase != lastPhase || st.Message != lastMessage) {
-				fmt.Printf("status: %s - %s\n", st.Phase, st.Message)
+				clilog.Infof("status: %s - %s\n", st.Phase, st.Message)
 				lastPhase = st.Phase
 				lastMessage = st.Message
 			}
 
 			if st.Phase == phaseCompleted {
-				fmt.Println("Flash completed successfully!")
+				clilog.Infoln("Flash completed successfully!")
 				return
 			}
 			if st.Phase == phaseFailed {
@@ -261,7 +262,7 @@ func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.
 			if st.Phase == phasePending {
 				streamState.Reset()
 				if !pendingWarningShown {
-					fmt.Println("Waiting for flash to start before streaming logs...")
+					clilog.Infoln("Waiting for flash to start before streaming logs...")
 					pendingWarningShown = true
 				}
 				continue
@@ -269,7 +270,7 @@ func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.
 
 			if st.Phase == phaseRunning {
 				if streamState.RetryCount == 0 {
-					fmt.Println("Flash is running. Attempting to stream logs...")
+					clilog.Infoln("Flash is running. Attempting to stream logs...")
 					pendingWarningShown = false
 				}
 				if err := h.tryFlashLogStreaming(timeoutCtx, logClient, name, streamState); err != nil {

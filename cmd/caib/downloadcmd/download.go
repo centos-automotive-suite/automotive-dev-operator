@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
@@ -49,11 +50,14 @@ func (h *Handler) RunDownload(_ *cobra.Command, args []string) {
 	downloadBuildName := args[0]
 
 	if h.opts.ServerURL == nil || strings.TrimSpace(*h.opts.ServerURL) == "" {
-		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
+		h.handleError(common.ServerURLRequiredError(fmt.Sprintf("caib image download --server <server-url> -o <dir> %s", downloadBuildName)))
 		return
 	}
 	if h.opts.OutputDir == nil || strings.TrimSpace(*h.opts.OutputDir) == "" {
-		h.handleError(fmt.Errorf("--output / -o is required"))
+		h.handleError(common.NewActionableError(
+			fmt.Errorf("--output / -o is required"),
+			fmt.Sprintf("caib image download -o <output-dir> %s", downloadBuildName),
+		))
 		return
 	}
 	if h.opts.InsecureSkipTLS == nil {
@@ -77,7 +81,10 @@ func (h *Handler) RunDownload(_ *cobra.Command, args []string) {
 	}
 
 	if st.Phase != phaseCompleted {
-		h.handleError(fmt.Errorf("build %s is not completed (phase: %s), cannot download artifacts", downloadBuildName, st.Phase))
+		h.handleError(common.NewActionableError(
+			fmt.Errorf("build %s is not completed (phase: %s), cannot download artifacts", downloadBuildName, st.Phase),
+			"caib image logs "+downloadBuildName,
+		))
 		return
 	}
 
@@ -105,7 +112,7 @@ func (h *Handler) RunDownload(_ *cobra.Command, args []string) {
 		}
 	}
 
-	fmt.Printf("Downloading disk image from %s\n", ociRef)
+	clilog.Infof("Downloading disk image from %s\n", ociRef)
 	if err := common.PullOCIArtifact(ociRef, outputDir, registryUsername, registryPassword, insecureSkipTLS); err != nil {
 		h.handleError(fmt.Errorf("download failed: %w", err))
 		return

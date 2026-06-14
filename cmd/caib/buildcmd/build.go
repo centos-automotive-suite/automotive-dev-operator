@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
@@ -101,7 +103,7 @@ func (h *Handler) handleError(err error) {
 		h.opts.HandleError(err)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	fmt.Fprintln(os.Stderr, common.FormatError(err))
 	os.Exit(1)
 }
 
@@ -124,11 +126,14 @@ func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command, defaultWait, defau
 // validateBootcBuildFlags validates flag combinations for the build command.
 func (h *Handler) validateBootcBuildFlags() error {
 	if strings.TrimSpace(*h.opts.ServerURL) == "" {
-		return fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')")
+		return common.ServerURLRequiredError("caib image build --server <server-url>")
 	}
 
 	if *h.opts.UseInternalRegistry && *h.opts.ExportOCI != "" {
-		return fmt.Errorf("--internal-registry cannot be used with --push-disk")
+		return common.NewActionableError(
+			fmt.Errorf("--internal-registry cannot be used with --push-disk"),
+			fmt.Sprintf("caib image build -m %s --push-disk %s", *h.opts.Manifest, *h.opts.ExportOCI),
+		)
 	}
 
 	if *h.opts.OutputDir != "" && !*h.opts.BuildDiskImage {
@@ -165,7 +170,10 @@ func (h *Handler) validateReproducibleFlags() error {
 		return err
 	}
 	if *h.opts.Reproducible && *h.opts.UseInternalRegistry {
-		return fmt.Errorf("--reproducible cannot be used with --internal-registry (internal registry does not support OCI referrers)")
+		return common.NewActionableError(
+			fmt.Errorf("--reproducible cannot be used with --internal-registry (internal registry does not support OCI referrers)"),
+			"caib image build -m <manifest> --reproducible --push-disk <registry>",
+		)
 	}
 	return nil
 }
@@ -220,7 +228,7 @@ func (h *Handler) resolveTarget(cmd *cobra.Command, manifestTarget string) {
 
 	if manifestTarget != "" {
 		*h.opts.Target = manifestTarget
-		fmt.Printf("Using target %q from manifest\n", manifestTarget)
+		clilog.Infof("Using target %q from manifest\n", manifestTarget)
 		return
 	}
 
@@ -280,18 +288,30 @@ func ApplyTargetDefaults(cmd *cobra.Command, config *buildapitypes.OperatorConfi
 
 	if defaults.Architecture != "" && !cmd.Flags().Changed("arch") {
 		req.Architecture = buildapitypes.Architecture(defaults.Architecture)
-		fmt.Printf("Using architecture %q from target defaults for %q\n", defaults.Architecture, req.Target)
+		clilog.Infof("Using architecture %q from target defaults for %q\n", defaults.Architecture, req.Target)
 	}
 
 	if len(defaults.ExtraArgs) > 0 {
 		// Default args come first, user args appended.
 		req.AIBExtraArgs = append(defaults.ExtraArgs, req.AIBExtraArgs...)
-		fmt.Printf("Prepending extra args %v from target defaults for %q\n", defaults.ExtraArgs, req.Target)
+		clilog.Infof("Prepending extra args %v from target defaults for %q\n", defaults.ExtraArgs, req.Target)
 	}
 
 	if defaults.DefaultFormat != "" && !cmd.Flags().Changed("format") {
 		req.ExportFormat = buildapitypes.ExportFormat(defaults.DefaultFormat)
-		fmt.Printf("Using format %q from target defaults for %q\n", defaults.DefaultFormat, req.Target)
+		clilog.Infof("Using format %q from target defaults for %q\n", defaults.DefaultFormat, req.Target)
+	}
+
+	warnIfNotInList(defaults.AcceptedArchitectures, "architecture", string(req.Architecture))
+	warnIfNotInList(defaults.AcceptedFormats, "format", string(req.ExportFormat))
+}
+
+func warnIfNotInList(accepted []string, field, value string) {
+	if len(accepted) == 0 || value == "" {
+		return
+	}
+	if !slices.Contains(accepted, value) {
+		_, _ = color.New(color.FgRed, color.Bold).Fprintf(os.Stderr, "Warning: %s %q is not in accepted values %v\n", field, value, accepted)
 	}
 }
 
@@ -335,11 +355,11 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 				credsFile, credsErr := common.WriteRegistryCredentialsFile(st.RegistryToken)
 				if credsErr != nil {
 					fmt.Fprintf(os.Stderr, "Warning: failed to write registry credentials file: %v\n", credsErr)
-					fmt.Printf("\n%s\n", labelColor("Registry credentials (valid ~4 hours):"))
-					fmt.Printf("  %s %s\n", labelColor("Username:"), valueColor("serviceaccount"))
-					fmt.Printf("  %s %s\n", labelColor("Token:"), valueColor(st.RegistryToken))
+					clilog.Infof("\n%s\n", labelColor("Registry credentials (valid ~4 hours):"))
+					clilog.Infof("  %s %s\n", labelColor("Username:"), valueColor("serviceaccount"))
+					clilog.Infof("  %s %s\n", labelColor("Token:"), valueColor(st.RegistryToken))
 				} else {
-					fmt.Printf("\n%s %s (valid ~4 hours)\n",
+					clilog.Infof("\n%s %s (valid ~4 hours)\n",
 						labelColor("Registry credentials written to:"),
 						valueColor(credsFile),
 					)
@@ -349,7 +369,6 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 		return
 	}
 
-	// Only show push confirmations when the server reports actual artifact locations.
 	if st.ContainerImage != "" && *h.opts.ContainerPush != "" {
 		fmt.Printf("%s %s\n", labelColor("Container image pushed to:"), valueColor(*h.opts.ContainerPush))
 	}
@@ -373,7 +392,11 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 
 func (h *Handler) validateFlashLeaseFlags(cmd *cobra.Command) error {
 	if *h.opts.FlashAfterBuild && *h.opts.LeaseName != "" && cmd.Flags().Changed("lease-duration") {
-		return fmt.Errorf("--lease and --lease-duration are mutually exclusive")
+		return common.NewActionableError(
+			fmt.Errorf("--lease and --lease-duration are mutually exclusive"),
+			fmt.Sprintf("caib image build --flash --lease %s", *h.opts.LeaseName),
+			"caib image build --flash --lease-duration <duration>",
+		)
 	}
 	return nil
 }
@@ -385,13 +408,16 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 		return nil
 	}
 	if *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
-		return fmt.Errorf("cannot enable --flash without exporting a disk image (%s)", pushRequiredFlag)
+		return common.NewActionableError(
+			fmt.Errorf("cannot enable --flash without exporting a disk image (%s)", pushRequiredFlag),
+			fmt.Sprintf("caib image build --flash %s <registry>", pushRequiredFlag),
+		)
 	}
 	clientInfo, err := common.ResolveJumpstarterClient(strings.TrimSpace(*h.opts.JumpstarterClient))
 	if err != nil {
 		return fmt.Errorf("--flash: %w", err)
 	}
-	fmt.Printf("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
+	clilog.Infof("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
 	req.FlashEnabled = true
 	req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientInfo.Data)
 	req.FlashLeaseName = *h.opts.LeaseName
@@ -404,6 +430,9 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 }
 
 func (h *Handler) displayBuildLogsCommand(buildName string) {
+	if clilog.IsQuiet() {
+		return
+	}
 	labelColor := func(a ...any) string { return fmt.Sprint(a...) }
 	commandColor := func(a ...any) string { return fmt.Sprint(a...) }
 	if h.supportsColorOutput() {
@@ -456,7 +485,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		base = strings.TrimSuffix(base, ".mpp.yml")
 		sanitized := common.SanitizeBuildName(base)
 		*h.opts.BuildName = sanitized
-		fmt.Printf("Auto-generated build name: %s\n", *h.opts.BuildName)
+		clilog.Infof("Auto-generated build name: %s\n", *h.opts.BuildName)
 	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
 		h.handleError(err)
 		return
@@ -540,7 +569,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	fmt.Printf("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
+	clilog.Infof("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 	h.displayBuildLogsCommand(resp.Name)
 
 	if len(localRefs) > 0 {
@@ -568,7 +597,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 	*h.opts.ContainerRef = containerRef
 
 	if strings.TrimSpace(*h.opts.ServerURL) == "" {
-		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
+		h.handleError(common.ServerURLRequiredError(fmt.Sprintf("caib image disk --server <server-url> %s", containerRef)))
 		return
 	}
 
@@ -578,7 +607,10 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 	}
 
 	if *h.opts.UseInternalRegistry && *h.opts.ExportOCI != "" {
-		h.handleError(fmt.Errorf("--internal-registry cannot be used with --push"))
+		h.handleError(common.NewActionableError(
+			fmt.Errorf("--internal-registry cannot be used with --push"),
+			fmt.Sprintf("caib image disk --push %s %s", *h.opts.ExportOCI, containerRef),
+		))
 		return
 	}
 
@@ -588,7 +620,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		imagePart = strings.Split(imagePart, ":")[0]
 		sanitized := common.SanitizeBuildName(imagePart)
 		*h.opts.BuildName = fmt.Sprintf("disk-%s", sanitized)
-		fmt.Printf("Auto-generated build name: %s\n", *h.opts.BuildName)
+		clilog.Infof("Auto-generated build name: %s\n", *h.opts.BuildName)
 	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
 		h.handleError(err)
 		return
@@ -648,7 +680,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	fmt.Printf("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
+	clilog.Infof("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 	h.displayBuildLogsCommand(resp.Name)
 
 	if *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild {
@@ -674,7 +706,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	}
 
 	if strings.TrimSpace(*h.opts.ServerURL) == "" {
-		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
+		h.handleError(common.ServerURLRequiredError(fmt.Sprintf("caib image build-dev --server <server-url> %s", manifestPath)))
 		return
 	}
 
@@ -685,7 +717,10 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 
 	if *h.opts.UseInternalRegistry {
 		if *h.opts.ExportOCI != "" {
-			h.handleError(fmt.Errorf("--internal-registry cannot be used with --push"))
+			h.handleError(common.NewActionableError(
+				fmt.Errorf("--internal-registry cannot be used with --push"),
+				fmt.Sprintf("caib image build-dev --push %s %s", *h.opts.ExportOCI, manifestPath),
+			))
 			return
 		}
 	} else if err := common.ValidateOutputRequiresPush(*h.opts.OutputDir, *h.opts.ExportOCI, "--push"); err != nil {
@@ -699,7 +734,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		base = strings.TrimSuffix(base, ".mpp.yml")
 		sanitized := common.SanitizeBuildName(base)
 		*h.opts.BuildName = sanitized
-		fmt.Printf("Auto-generated build name: %s\n", *h.opts.BuildName)
+		clilog.Infof("Auto-generated build name: %s\n", *h.opts.BuildName)
 	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
 		h.handleError(err)
 		return
@@ -799,7 +834,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	fmt.Printf("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
+	clilog.Infof("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 	h.displayBuildLogsCommand(resp.Name)
 
 	if len(localRefs) > 0 {
@@ -830,12 +865,15 @@ func (h *Handler) handleFileUploads(
 		}
 	}
 
-	fmt.Println("Waiting for upload server to be ready...")
+	clilog.Infoln("Waiting for upload server to be ready...")
 	readyCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	for {
 		if err := readyCtx.Err(); err != nil {
-			return fmt.Errorf("timed out waiting for upload server to be ready")
+			return common.NewActionableError(
+				fmt.Errorf("timed out waiting for upload server to be ready (10m)"),
+				"caib image logs "+buildName,
+			)
 		}
 		reqCtx, reqCancel := context.WithTimeout(readyCtx, 15*time.Second)
 		st, err := api.GetBuild(reqCtx, buildName)
@@ -864,7 +902,10 @@ func (h *Handler) handleFileUploads(
 	for {
 		remaining := time.Until(uploadDeadline)
 		if remaining <= 0 {
-			return fmt.Errorf("upload files failed: timed out after 10m")
+			return common.NewActionableError(
+				fmt.Errorf("upload files failed: timed out after 10m"),
+				"caib image logs "+buildName,
+			)
 		}
 		attemptTimeout := perAttemptTimeout
 		if remaining < attemptTimeout {
@@ -883,7 +924,7 @@ func (h *Handler) handleFileUploads(
 				strings.Contains(lower, "service unavailable") ||
 				strings.Contains(lower, "upload pod not ready")
 			if isServiceUnavailable {
-				fmt.Println("Upload server not ready yet. Retrying...")
+				clilog.Infoln("Upload server not ready yet. Retrying...")
 				time.Sleep(5 * time.Second)
 				continue
 			}
@@ -891,7 +932,7 @@ func (h *Handler) handleFileUploads(
 		}
 		break
 	}
-	fmt.Println("Local files uploaded. Build will proceed.")
+	clilog.Infoln("Local files uploaded. Build will proceed.")
 	return nil
 }
 
@@ -911,7 +952,7 @@ func (h *Handler) RunCancel(_ *cobra.Command, args []string) {
 
 func (h *Handler) runBuildAction(buildName, verb string, action func(context.Context, *buildapiclient.Client, string) error) {
 	if strings.TrimSpace(*h.opts.ServerURL) == "" {
-		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
+		h.handleError(common.ServerURLRequiredError(fmt.Sprintf("caib image %s --server <server-url> %s", verb, buildName)))
 		return
 	}
 
@@ -926,5 +967,5 @@ func (h *Handler) runBuildAction(buildName, verb string, action func(context.Con
 		return
 	}
 
-	fmt.Printf("Build %q %s\n", buildName, verb)
+	clilog.Infof("Build %q %s\n", buildName, verb)
 }

@@ -41,14 +41,14 @@ func TestSplitReference(t *testing.T) {
 
 func fullAnnotations() map[string]string {
 	return map[string]string{
-		annotationPrefix + "distro":                   "autosd",
-		annotationPrefix + "target":                   "qemu",
-		annotationPrefix + "arch":                     "amd64",
-		annotationPrefix + "automotive-image-builder": "quay.io/aib@sha256:abc",
-		annotationPrefix + "builder-image":            "quay.io/builder@sha256:def",
-		annotationPrefix + "aib-version":              "1.3.0",
-		annotationPrefix + "task-bundle-ref":          "quay.io/tasks@sha256:789",
-		annotationPrefix + "aib-command":              "aib build --distro autosd --target qemu",
+		ociSpec.AnnotationPrefix + "distro":                   "autosd",
+		ociSpec.AnnotationPrefix + "target":                   "qemu",
+		ociSpec.AnnotationPrefix + "arch":                     "amd64",
+		ociSpec.AnnotationPrefix + "automotive-image-builder": "quay.io/aib@sha256:abc",
+		ociSpec.AnnotationPrefix + "builder-image":            "quay.io/builder@sha256:def",
+		ociSpec.AnnotationPrefix + "aib-version":              "1.3.0",
+		ociSpec.AnnotationPrefix + "task-bundle-ref":          "quay.io/tasks@sha256:789",
+		ociSpec.AnnotationPrefix + "aib-command":              "aib build --distro autosd --target qemu",
 	}
 }
 
@@ -82,7 +82,7 @@ func TestBuildRebuildCommand_Bootc(t *testing.T) {
 
 func TestBuildRebuildCommand_DevBuild(t *testing.T) {
 	annotations := fullAnnotations()
-	annotations[annotationPrefix+"aib-command"] = "aib-dev --verbose build --distro autosd"
+	annotations[ociSpec.AnnotationPrefix+"aib-command"] = "aib-dev --verbose build --distro autosd"
 	referrerTypes := map[string]bool{}
 
 	cmd := buildRebuildCommand("quay.io/org/repo:v1", "sha256:abc123", annotations, referrerTypes)
@@ -100,7 +100,7 @@ func TestBuildRebuildCommand_DevBuild(t *testing.T) {
 
 func TestBuildRebuildCommand_NoSecure(t *testing.T) {
 	annotations := fullAnnotations()
-	delete(annotations, annotationPrefix+"task-bundle-ref")
+	delete(annotations, ociSpec.AnnotationPrefix+"task-bundle-ref")
 	referrerTypes := map[string]bool{}
 
 	cmd := buildRebuildCommand("quay.io/org/repo:v1", "sha256:abc123", annotations, referrerTypes)
@@ -112,7 +112,7 @@ func TestBuildRebuildCommand_NoSecure(t *testing.T) {
 
 func TestBuildRebuildCommand_CustomDefines(t *testing.T) {
 	annotations := fullAnnotations()
-	annotations[annotationPrefix+"custom-defines"] = "use_debug=true\nfoo=bar"
+	annotations[ociSpec.AnnotationPrefix+"custom-defines"] = "use_debug=true\nfoo=bar"
 	referrerTypes := map[string]bool{}
 
 	cmd := buildRebuildCommand("quay.io/org/repo:v1", "sha256:abc123", annotations, referrerTypes)
@@ -127,7 +127,7 @@ func TestBuildRebuildCommand_CustomDefines(t *testing.T) {
 
 func TestBuildRebuildCommand_ExtraArgs(t *testing.T) {
 	annotations := fullAnnotations()
-	annotations[annotationPrefix+"aib-extra-args"] = "--verbose\n--cache-max-size=unlimited"
+	annotations[ociSpec.AnnotationPrefix+"aib-extra-args"] = "--verbose\n--cache-max-size=unlimited"
 	referrerTypes := map[string]bool{}
 
 	cmd := buildRebuildCommand("quay.io/org/repo:v1", "sha256:abc123", annotations, referrerTypes)
@@ -142,7 +142,7 @@ func TestBuildRebuildCommand_ExtraArgs(t *testing.T) {
 
 func TestBuildRebuildCommand_ExportFormat(t *testing.T) {
 	annotations := fullAnnotations()
-	annotations[annotationPrefix+"export-format"] = "simg"
+	annotations[ociSpec.AnnotationPrefix+"export-format"] = "simg"
 	referrerTypes := map[string]bool{}
 
 	cmd := buildRebuildCommand("quay.io/org/repo:v1", "sha256:abc123", annotations, referrerTypes)
@@ -181,7 +181,7 @@ func TestBuildRebuildCommand_NoRestoreSourcesWithoutReferrer(t *testing.T) {
 
 func TestBuildRebuildCommand_NoBuilderImage(t *testing.T) {
 	annotations := fullAnnotations()
-	delete(annotations, annotationPrefix+"builder-image")
+	delete(annotations, ociSpec.AnnotationPrefix+"builder-image")
 	referrerTypes := map[string]bool{}
 
 	cmd := buildRebuildCommand("quay.io/org/repo:v1", "sha256:abc123", annotations, referrerTypes)
@@ -311,7 +311,7 @@ func TestPrintProvenance_FullAIBCommand(t *testing.T) {
 
 	longCmd := strings.Repeat("x", 200)
 	annotations := map[string]string{
-		annotationPrefix + "aib-command": longCmd,
+		ociSpec.AnnotationPrefix + "aib-command": longCmd,
 	}
 	referrerTypes := map[string]bool{}
 

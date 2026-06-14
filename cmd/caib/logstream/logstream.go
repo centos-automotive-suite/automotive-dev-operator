@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 )
 
 // State stores reconnect and stream progress state.
@@ -47,7 +49,7 @@ func StreamLogsToStdout(body io.Reader, state *State, captureLeaseID bool) error
 	firstStream := state.StartTime.IsZero()
 	if firstStream {
 		state.StartTime = time.Now()
-		fmt.Println("Streaming logs...")
+		clilog.Infoln("Streaming logs...")
 	}
 	state.Active = true
 	state.Reset()

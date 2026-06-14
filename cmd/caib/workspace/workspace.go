@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
@@ -279,7 +280,7 @@ func runCreate(_ *cobra.Command, args []string) {
 	var clientConfigB64 string
 	clientInfo, err := caibcommon.ResolveJumpstarterClient(strings.TrimSpace(clientConfigFile))
 	if err == nil {
-		fmt.Printf("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
+		clilog.Infof("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
 		clientConfigB64 = base64.StdEncoding.EncodeToString(clientInfo.Data)
 	}
 
@@ -315,16 +316,16 @@ func runCreate(_ *cobra.Command, args []string) {
 		handleError(fmt.Errorf("failed to create workspace: %w", err))
 	}
 
-	fmt.Printf("Workspace %q created\n", resp.Name)
-	fmt.Printf("  Architecture: %s\n", resp.Arch)
+	clilog.Infof("Workspace %q created\n", resp.Name)
+	clilog.Infof("  Architecture: %s\n", resp.Arch)
 	if resp.Lease != "" {
-		fmt.Printf("  Lease:        %s\n", resp.Lease)
+		clilog.Infof("  Lease:        %s\n", resp.Lease)
 	}
 
 	if waitForRunningFlag {
 		waitForRunning(resp.Name)
 	} else {
-		fmt.Printf("  Phase:        %s\n", resp.Phase)
+		clilog.Infof("  Phase:        %s\n", resp.Phase)
 	}
 }
 
@@ -409,7 +410,7 @@ func runDelete(_ *cobra.Command, args []string) {
 		handleError(fmt.Errorf("failed to delete workspace: %w", err))
 	}
 
-	fmt.Printf("Workspace %q deleted\n", name)
+	clilog.Infof("Workspace %q deleted\n", name)
 }
 
 func runStart(_ *cobra.Command, args []string) {
@@ -430,10 +431,10 @@ func runStart(_ *cobra.Command, args []string) {
 	}
 
 	if waitForRunningFlag {
-		fmt.Printf("Workspace %q starting...\n", resp.Name)
+		clilog.Infof("Workspace %q starting...\n", resp.Name)
 		waitForRunning(resp.Name)
 	} else {
-		fmt.Printf("Workspace %q starting (phase: %s)\n", resp.Name, resp.Phase)
+		clilog.Infof("Workspace %q starting (phase: %s)\n", resp.Name, resp.Phase)
 	}
 }
 
@@ -454,7 +455,7 @@ func runStop(_ *cobra.Command, args []string) {
 		handleError(fmt.Errorf("failed to stop workspace: %w", err))
 	}
 
-	fmt.Printf("Workspace %q stopped (storage preserved)\n", resp.Name)
+	clilog.Infof("Workspace %q stopped (storage preserved)\n", resp.Name)
 }
 
 func runSync(_ *cobra.Command, args []string) {
@@ -498,17 +499,17 @@ func runSync(_ *cobra.Command, args []string) {
 	if err != nil {
 		// Fall back to full sync — warn so users know why delta didn't work
 		fmt.Fprintf(os.Stderr, "Warning: sync plan unavailable (%v), uploading all files\n", err)
-		fmt.Printf("Syncing %d tracked files to workspace %q...\n", len(files), name)
+		clilog.Infof("Syncing %d tracked files to workspace %q...\n", len(files), name)
 		uploadFiles(name, absDir, files)
 		return
 	}
 
 	if len(plan.Changed) == 0 {
-		fmt.Printf("Workspace %q is up to date (%d files)\n", name, plan.Unchanged)
+		clilog.Infof("Workspace %q is up to date (%d files)\n", name, plan.Unchanged)
 		return
 	}
 
-	fmt.Printf("Syncing %d changed files to workspace %q (%d unchanged)...\n",
+	clilog.Infof("Syncing %d changed files to workspace %q (%d unchanged)...\n",
 		len(plan.Changed), name, plan.Unchanged)
 	uploadFiles(name, absDir, plan.Changed)
 }
@@ -532,7 +533,7 @@ func uploadFiles(name, absDir string, files []string) {
 	if err != nil {
 		handleError(fmt.Errorf("failed to sync workspace: %w", err))
 	}
-	fmt.Println("Files synced")
+	clilog.Infoln("Files synced")
 }
 
 func computeManifest(baseDir string, files []string) map[string]string {
@@ -745,9 +746,9 @@ func runDeploy(_ *cobra.Command, args []string) {
 	}
 
 	if len(artifacts) == 1 {
-		fmt.Printf("Deploying %s -> %s\n", artifacts[0].Src, artifacts[0].Dest)
+		clilog.Infof("Deploying %s -> %s\n", artifacts[0].Src, artifacts[0].Dest)
 	} else {
-		fmt.Printf("Deploying %d artifacts to board...\n", len(artifacts))
+		clilog.Infof("Deploying %d artifacts to board...\n", len(artifacts))
 	}
 
 	var body io.ReadCloser
@@ -785,7 +786,10 @@ func waitForRunning(name string) {
 			return
 		case <-timeout:
 			fmt.Println()
-			handleError(fmt.Errorf("timed out waiting for workspace %q to be running", name))
+			handleError(caibcommon.NewActionableError(
+				fmt.Errorf("timed out waiting for workspace %q to be running", name),
+				"caib workspace logs "+name,
+			))
 		case <-ticker.C:
 			var ws *buildapitypes.WorkspaceResponse
 			err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
@@ -800,23 +804,34 @@ func waitForRunning(name string) {
 				continue // transient error, retry
 			}
 
+			showProgress := !clilog.IsQuiet()
 			if ws.Phase != lastPhase {
 				lastPhase = ws.Phase
-				if isTTY {
-					fmt.Printf("\r  Phase:        %-20s", ws.Phase)
-				} else {
-					fmt.Printf("  Phase: %s\n", ws.Phase)
+				if showProgress {
+					if isTTY {
+						fmt.Printf("\r  Phase:        %-20s", ws.Phase)
+					} else {
+						fmt.Printf("  Phase: %s\n", ws.Phase)
+					}
 				}
 			}
 
 			switch ws.Phase {
 			case "Running":
-				if isTTY {
+				if isTTY && showProgress {
 					fmt.Println()
 				}
 				return
+			case "Stopped":
+				if isTTY && showProgress {
+					fmt.Println()
+				}
+				handleError(caibcommon.NewActionableError(
+					fmt.Errorf("workspace %q is stopped (auto-paused due to inactivity)", name),
+					"caib workspace start "+name,
+				))
 			case "Failed":
-				if isTTY {
+				if isTTY && showProgress {
 					fmt.Println()
 				}
 				handleError(fmt.Errorf("workspace %q failed", name))
@@ -827,12 +842,12 @@ func waitForRunning(name string) {
 
 func requireServer() {
 	if serverURL == "" {
-		handleError(fmt.Errorf("--server is required (or set CAIB_SERVER, or run 'caib login <server-url>')"))
+		handleError(caibcommon.ServerURLRequiredError("caib workspace --server <server-url>"))
 	}
 }
 
 func handleError(err error) {
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	fmt.Fprintln(os.Stderr, caibcommon.FormatError(err))
 	os.Exit(1)
 }
 
@@ -840,7 +855,7 @@ func streamToStdout(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		fmt.Println(scanner.Text())
+		clilog.Infoln(scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "stream error: %v\n", err)

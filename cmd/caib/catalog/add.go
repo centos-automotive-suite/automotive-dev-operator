@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
 )
@@ -112,8 +113,8 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		ns = defaultNamespace
 	}
 
-	fmt.Printf("Adding image to catalog...\n")
-	fmt.Printf("✓ Validating registry URL\n")
+	clilog.Infof("Adding image to catalog...\n")
+	clilog.Infof("✓ Validating registry URL\n")
 
 	reqBody := createRequest{
 		Name:           name,
@@ -173,17 +174,17 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	fmt.Printf("✓ Creating catalog image %q\n", name)
-	fmt.Println("✓ Added successfully")
-	fmt.Println()
-	fmt.Printf("Catalog Image: %s\n", result.Name)
-	fmt.Printf("Registry URL:  %s\n", result.RegistryURL)
-	fmt.Printf("Architecture:  %s\n", result.Architecture)
-	fmt.Printf("Distro:        %s\n", result.Distro)
+	clilog.Infof("✓ Creating catalog image %q\n", name)
+	clilog.Infoln("✓ Added successfully")
+	clilog.Infoln()
+	clilog.Infof("Catalog Image: %s\n", result.Name)
+	clilog.Infof("Registry URL:  %s\n", result.RegistryURL)
+	clilog.Infof("Architecture:  %s\n", result.Architecture)
+	clilog.Infof("Distro:        %s\n", result.Distro)
 	if len(result.Targets) > 0 {
-		fmt.Printf("Target:        %s\n", result.Targets[0].Name)
+		clilog.Infof("Target:        %s\n", result.Targets[0].Name)
 	}
-	fmt.Printf("Status:        %s\n", result.Phase)
+	clilog.Infof("Status:        %s\n", result.Phase)
 
 	return nil
 }

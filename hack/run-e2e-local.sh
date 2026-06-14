@@ -17,7 +17,7 @@ usage() {
   printf 'Lanes:\n'
   printf '  operator  - operator health, Tekton tasks, Build API\n'
   printf '  bootc     - bootc container build via caib\n'
-  printf '  auth      - OIDC authentication (OpenShift only)\n'
+  printf '  auth      - OIDC authentication (OpenShift or Kind+Dex)\n'
   printf '  all       - run all tests (default)\n\n'
   printf 'Options:\n'
   printf '  -h, --help    Show this help message and exit\n\n'

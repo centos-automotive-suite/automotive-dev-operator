@@ -53,55 +53,81 @@ var targetDefaultsYAML = `targets:
     extraArgs: ["--separate-partitions"]
     include: ["system_a", "system_b", "boot_a", "boot_b"]
     defaultFormat: "simg"
+    acceptedFormats: ["simg"]
+    acceptedArchitectures: ["arm64"]
   ridesx4_r3:
     architecture: arm64
     extraArgs: ["--separate-partitions"]
     include: ["system_a", "system_b", "boot_a", "boot_b"]
     defaultFormat: "simg"
+    acceptedFormats: ["simg"]
+    acceptedArchitectures: ["arm64"]
   ridesx4_scmi:
     architecture: arm64
     extraArgs: ["--separate-partitions"]
     include: ["system_a", "system_b", "boot_a", "boot_b"]
     defaultFormat: "simg"
+    acceptedFormats: ["simg"]
+    acceptedArchitectures: ["arm64"]
   ride4_sa8775p_sx_r3:
     architecture: arm64
     extraArgs: ["--separate-partitions"]
     include: ["system_a", "system_b", "boot_a", "boot_b"]
     defaultFormat: "simg"
+    acceptedFormats: ["simg"]
+    acceptedArchitectures: ["arm64"]
   ride4_sa8775p_sx:
     architecture: arm64
     extraArgs: ["--separate-partitions"]
     include: ["system_a", "system_b", "boot_a", "boot_b"]
     defaultFormat: "simg"
+    acceptedFormats: ["simg"]
+    acceptedArchitectures: ["arm64"]
   ride4_sa8775p_sx_legacy:
     architecture: arm64
     extraArgs: ["--separate-partitions"]
     include: ["system_a", "system_b", "boot_a", "boot_b"]
     defaultFormat: "simg"
+    acceptedFormats: ["simg"]
+    acceptedArchitectures: ["arm64"]
   ride4_sa8775p_sx_legacy_r3:
     architecture: arm64
     extraArgs: ["--separate-partitions"]
     include: ["system_a", "system_b", "boot_a", "boot_b"]
     defaultFormat: "simg"
+    acceptedFormats: ["simg"]
+    acceptedArchitectures: ["arm64"]
   ride4_sa8650p_sx_r3:
     architecture: arm64
     extraArgs: ["--separate-partitions"]
     include: ["system_a", "system_b", "boot_a", "boot_b"]
     defaultFormat: "simg"
+    acceptedFormats: ["simg"]
+    acceptedArchitectures: ["arm64"]
   ebbr:
     architecture: arm64
     defaultFormat: "simg"
+    acceptedFormats: ["simg", "raw"]
+    acceptedArchitectures: ["arm64"]
   rcar_s4:
     architecture: arm64
     defaultFormat: "simg"
+    acceptedFormats: ["simg", "raw"]
+    acceptedArchitectures: ["arm64"]
   j784s4evm:
     architecture: arm64
     defaultFormat: "simg"
+    acceptedFormats: ["simg", "raw"]
+    acceptedArchitectures: ["arm64"]
   s32g_vnp_rdb3:
     architecture: arm64
     defaultFormat: "simg"
+    acceptedFormats: ["simg", "raw"]
+    acceptedArchitectures: ["arm64"]
   qemu:
     defaultFormat: "raw"
+    acceptedFormats: ["qcow2", "raw"]
+    acceptedArchitectures: ["amd64", "arm64", "x86_64", "aarch64"]
 `
 
 // isNoMatchError checks if error is "no matches for kind" error (CRD doesn't exist)

@@ -79,31 +79,30 @@ echo "ORAS ${ORAS_VERSION} installed successfully"
 # Get media type based on file format and compression
 get_media_type() {
   case "$1" in
-    *.tar.gz)         echo "application/vnd.oci.image.layer.v1.tar+gzip" ;;
-    *.tar.lz4)        echo "application/vnd.oci.image.layer.v1.tar+lz4" ;;
-    *.tar.xz)         echo "application/vnd.oci.image.layer.v1.tar+xz" ;;
-    *.tar)            echo "application/vnd.oci.image.layer.v1.tar" ;;
+    *.tar.gz)         echo "$OCI_MEDIA_LAYER_GZIP" ;;
+    *.tar.lz4)        echo "$OCI_MEDIA_LAYER_LZ4" ;;
+    *.tar.xz)         echo "$OCI_MEDIA_LAYER_XZ" ;;
+    *.tar)            echo "$OCI_MEDIA_LAYER_BASE" ;;
 
-    *.simg.gz)        echo "application/vnd.automotive.disk.simg+gzip" ;;
-    *.simg.lz4)       echo "application/vnd.automotive.disk.simg+lz4" ;;
-    *.simg.xz)        echo "application/vnd.automotive.disk.simg+xz" ;;
-    *.raw.gz|*.img.gz) echo "application/vnd.automotive.disk.raw+gzip" ;;
-    *.raw.lz4|*.img.lz4) echo "application/vnd.automotive.disk.raw+lz4" ;;
-    *.raw.xz|*.img.xz) echo "application/vnd.automotive.disk.raw+xz" ;;
-    *.qcow2.gz)       echo "application/vnd.automotive.disk.qcow2+gzip" ;;
-    *.qcow2.lz4)      echo "application/vnd.automotive.disk.qcow2+lz4" ;;
-    *.qcow2.xz)       echo "application/vnd.automotive.disk.qcow2+xz" ;;
+    *.simg.gz)        echo "${OCI_MEDIA_DISK_SIMG}${OCI_COMPRESS_SUFFIX_GZIP}" ;;
+    *.simg.lz4)       echo "${OCI_MEDIA_DISK_SIMG}${OCI_COMPRESS_SUFFIX_LZ4}" ;;
+    *.simg.xz)        echo "${OCI_MEDIA_DISK_SIMG}${OCI_COMPRESS_SUFFIX_XZ}" ;;
+    *.raw.gz|*.img.gz) echo "${OCI_MEDIA_DISK_RAW}${OCI_COMPRESS_SUFFIX_GZIP}" ;;
+    *.raw.lz4|*.img.lz4) echo "${OCI_MEDIA_DISK_RAW}${OCI_COMPRESS_SUFFIX_LZ4}" ;;
+    *.raw.xz|*.img.xz) echo "${OCI_MEDIA_DISK_RAW}${OCI_COMPRESS_SUFFIX_XZ}" ;;
+    *.qcow2.gz)       echo "${OCI_MEDIA_DISK_QCOW2}${OCI_COMPRESS_SUFFIX_GZIP}" ;;
+    *.qcow2.lz4)      echo "${OCI_MEDIA_DISK_QCOW2}${OCI_COMPRESS_SUFFIX_LZ4}" ;;
+    *.qcow2.xz)       echo "${OCI_MEDIA_DISK_QCOW2}${OCI_COMPRESS_SUFFIX_XZ}" ;;
 
-    *.simg)           echo "application/vnd.automotive.disk.simg" ;;
-    *.raw|*.img)      echo "application/vnd.automotive.disk.raw" ;;
-    *.qcow2)          echo "application/vnd.automotive.disk.qcow2" ;;
+    *.simg)           echo "$OCI_MEDIA_DISK_SIMG" ;;
+    *.raw|*.img)      echo "$OCI_MEDIA_DISK_RAW" ;;
+    *.qcow2)          echo "$OCI_MEDIA_DISK_QCOW2" ;;
 
-    *.gz)             echo "application/gzip" ;;
-    *.lz4)            echo "application/x-lz4" ;;
-    *.xz)             echo "application/x-xz" ;;
+    *.gz)             echo "$OCI_MEDIA_GZIP" ;;
+    *.lz4)            echo "$OCI_MEDIA_LZ4" ;;
+    *.xz)             echo "$OCI_MEDIA_XZ" ;;
 
-    # Default fallback
-    *)                echo "application/octet-stream" ;;
+    *)                echo "$OCI_MEDIA_OCTETSTREAM" ;;
   esac
 }
 
@@ -114,10 +113,10 @@ json_escape() {
 
 get_artifact_type() {
   case "$1" in
-    *.simg.gz|*.simg.lz4|*.simg) echo "application/vnd.automotive.disk.simg" ;;
-    *.qcow2.gz|*.qcow2.lz4|*.qcow2.xz|*.qcow2) echo "application/vnd.automotive.disk.qcow2" ;;
-    *.raw.gz|*.raw.lz4|*.raw.xz|*.raw|*.img.gz|*.img.lz4|*.img.xz|*.img) echo "application/vnd.automotive.disk.raw" ;;
-    *) echo "application/octet-stream" ;;
+    *.simg.gz|*.simg.lz4|*.simg.xz|*.simg) echo "$OCI_MEDIA_DISK_SIMG" ;;
+    *.qcow2.gz|*.qcow2.lz4|*.qcow2.xz|*.qcow2) echo "$OCI_MEDIA_DISK_QCOW2" ;;
+    *.raw.gz|*.raw.lz4|*.raw.xz|*.raw|*.img.gz|*.img.lz4|*.img.xz|*.img) echo "$OCI_MEDIA_DISK_RAW" ;;
+    *) echo "$OCI_MEDIA_OCTETSTREAM" ;;
   esac
 }
 
@@ -305,9 +304,9 @@ if [ -d "${parts_dir}" ] && [ -n "$(ls -A "${parts_dir}" 2>/dev/null)" ]; then
 
       # Build JSON with properly escaped values
       if [ -n "$decompressed_size" ]; then
-        layer_annotations_json="${layer_annotations_json}\"${escaped_filename}\":{\"automotive.sdv.cloud.redhat.com/partition\":\"${escaped_partition}\",\"org.opencontainers.image.title\":\"${escaped_filename}\",\"automotive.sdv.cloud.redhat.com/decompressed-size\":\"${escaped_decompressed_size}\"}"
+        layer_annotations_json="${layer_annotations_json}\"${escaped_filename}\":{\"${OCI_LAYER_ANN_PARTITION}\":\"${escaped_partition}\",\"${OCI_LAYER_ANN_ORG_OPENCONTAINERS_IMAGE_TITLE}\":\"${escaped_filename}\",\"${OCI_LAYER_ANN_DECOMPRESSED_SIZE}\":\"${escaped_decompressed_size}\"}"
       else
-        layer_annotations_json="${layer_annotations_json}\"${escaped_filename}\":{\"automotive.sdv.cloud.redhat.com/partition\":\"${escaped_partition}\",\"org.opencontainers.image.title\":\"${escaped_filename}\"}"
+        layer_annotations_json="${layer_annotations_json}\"${escaped_filename}\":{\"${OCI_LAYER_ANN_PARTITION}\":\"${escaped_partition}\",\"${OCI_LAYER_ANN_ORG_OPENCONTAINERS_IMAGE_TITLE}\":\"${escaped_filename}\"}"
       fi
     fi
   done
@@ -327,24 +326,25 @@ if [ -d "${parts_dir}" ] && [ -n "$(ls -A "${parts_dir}" 2>/dev/null)" ]; then
       "$distro" "$target" "$arch" "$file_list" \
       "$default_partitions" "$builder_image_used" "$aib_version" "$aib_image" "$aib_command" "$TASK_BUNDLE_REF" \
       "$CUSTOM_DEFINES" "$AIB_EXTRA_ARGS" "$EXPORT_FORMAT" <<'PYEOF'
-import json, sys
+import json, os, sys
 distro, target, arch, parts, default_parts, builder, aib_ver, aib_img, aib_cmd, task_bundle, custom_defs, extra_args, export_fmt = sys.argv[1:14]
+e = os.environ
 a = {
-    "automotive.sdv.cloud.redhat.com/multi-layer": "true",
-    "automotive.sdv.cloud.redhat.com/parts":       parts,
-    "automotive.sdv.cloud.redhat.com/distro":      distro,
-    "automotive.sdv.cloud.redhat.com/target":      target,
-    "automotive.sdv.cloud.redhat.com/arch":        arch,
+    e["OCI_ANN_MULTI_LAYER"]:  "true",
+    e["OCI_ANN_PARTS"]:        parts,
+    e["OCI_ANN_DISTRO"]:       distro,
+    e["OCI_ANN_TARGET"]:       target,
+    e["OCI_ANN_ARCH"]:         arch,
 }
-if default_parts: a["automotive.sdv.cloud.redhat.com/default-partitions"]      = default_parts
-if builder:       a["automotive.sdv.cloud.redhat.com/builder-image"]            = builder
-if aib_ver:       a["automotive.sdv.cloud.redhat.com/aib-version"]              = aib_ver
-if aib_img:       a["automotive.sdv.cloud.redhat.com/automotive-image-builder"] = aib_img
-if aib_cmd:       a["automotive.sdv.cloud.redhat.com/aib-command"]              = aib_cmd
-if task_bundle:   a["automotive.sdv.cloud.redhat.com/task-bundle-ref"]          = task_bundle
-if custom_defs:   a["automotive.sdv.cloud.redhat.com/custom-defines"]           = custom_defs
-if extra_args:    a["automotive.sdv.cloud.redhat.com/aib-extra-args"]           = extra_args
-if export_fmt:    a["automotive.sdv.cloud.redhat.com/export-format"]            = export_fmt
+if default_parts: a[e["OCI_ANN_DEFAULT_PARTITIONS"]]      = default_parts
+if builder:       a[e["OCI_ANN_BUILDER_IMAGE"]]            = builder
+if aib_ver:       a[e["OCI_ANN_AIB_VERSION"]]              = aib_ver
+if aib_img:       a[e["OCI_ANN_AUTOMOTIVE_IMAGE_BUILDER"]] = aib_img
+if aib_cmd:       a[e["OCI_ANN_AIB_COMMAND"]]              = aib_cmd
+if task_bundle:   a[e["OCI_ANN_TASK_BUNDLE_REF"]]          = task_bundle
+if custom_defs:   a[e["OCI_ANN_CUSTOM_DEFINES"]]           = custom_defs
+if extra_args:    a[e["OCI_ANN_AIB_EXTRA_ARGS"]]           = extra_args
+if export_fmt:    a[e["OCI_ANN_EXPORT_FORMAT"]]            = export_fmt
 print(json.dumps(a))
 PYEOF
 )
@@ -407,24 +407,25 @@ else
       "$distro" "$target" "$arch" \
       "$parts_list" "$builder_image_used" "$aib_version" "$aib_image" "$aib_command" "$TASK_BUNDLE_REF" \
       "$CUSTOM_DEFINES" "$AIB_EXTRA_ARGS" "$EXPORT_FORMAT" <<'PYEOF'
-import json, sys
+import json, os, sys
 from pathlib import Path
 
 out_file, distro, target, arch, parts, builder, aib_ver, aib_img, aib_cmd, task_bundle, custom_defs, extra_args, export_fmt = sys.argv[1:14]
+e = os.environ
 annotations = {
-    "automotive.sdv.cloud.redhat.com/distro":  distro,
-    "automotive.sdv.cloud.redhat.com/target":  target,
-    "automotive.sdv.cloud.redhat.com/arch":    arch,
+    e["OCI_ANN_DISTRO"]: distro,
+    e["OCI_ANN_TARGET"]: target,
+    e["OCI_ANN_ARCH"]:   arch,
 }
-if parts:         annotations["automotive.sdv.cloud.redhat.com/parts"]                    = parts
-if builder:       annotations["automotive.sdv.cloud.redhat.com/builder-image"]            = builder
-if aib_ver:       annotations["automotive.sdv.cloud.redhat.com/aib-version"]              = aib_ver
-if aib_img:       annotations["automotive.sdv.cloud.redhat.com/automotive-image-builder"] = aib_img
-if aib_cmd:       annotations["automotive.sdv.cloud.redhat.com/aib-command"]              = aib_cmd
-if task_bundle:   annotations["automotive.sdv.cloud.redhat.com/task-bundle-ref"]          = task_bundle
-if custom_defs:   annotations["automotive.sdv.cloud.redhat.com/custom-defines"]           = custom_defs
-if extra_args:    annotations["automotive.sdv.cloud.redhat.com/aib-extra-args"]           = extra_args
-if export_fmt:    annotations["automotive.sdv.cloud.redhat.com/export-format"]            = export_fmt
+if parts:         annotations[e["OCI_ANN_PARTS"]]                    = parts
+if builder:       annotations[e["OCI_ANN_BUILDER_IMAGE"]]            = builder
+if aib_ver:       annotations[e["OCI_ANN_AIB_VERSION"]]              = aib_ver
+if aib_img:       annotations[e["OCI_ANN_AUTOMOTIVE_IMAGE_BUILDER"]] = aib_img
+if aib_cmd:       annotations[e["OCI_ANN_AIB_COMMAND"]]              = aib_cmd
+if task_bundle:   annotations[e["OCI_ANN_TASK_BUNDLE_REF"]]          = task_bundle
+if custom_defs:   annotations[e["OCI_ANN_CUSTOM_DEFINES"]]           = custom_defs
+if extra_args:    annotations[e["OCI_ANN_AIB_EXTRA_ARGS"]]           = extra_args
+if export_fmt:    annotations[e["OCI_ANN_EXPORT_FORMAT"]]            = export_fmt
 Path(out_file).write_text(json.dumps({"$manifest": annotations}))
 PYEOF
 
@@ -512,9 +513,9 @@ PYEOF
 
   echo "Attaching sanitized osbuild manifest to ${repo_url}@${DISK_DIGEST}"
   if ! "$HOME/bin/oras" attach "${ORAS_EXTRA_ARGS[@]}" \
-    --artifact-type "application/vnd.osbuild.manifest.v1+json" \
+    --artifact-type "$OCI_REFERRER_TYPE_OSBUILD_MANIFEST" \
     "${repo_url}@${DISK_DIGEST}" \
-    "${SANITIZED_MANIFEST}:application/vnd.osbuild.manifest.v1+json" 2>&1; then
+    "${SANITIZED_MANIFEST}:${OCI_REFERRER_TYPE_OSBUILD_MANIFEST}" 2>&1; then
     if [ "$SECURE_BUILD" = "true" ]; then
       echo "ERROR: Failed to attach osbuild manifest (fatal in secure build mode)"
       exit 1
@@ -549,8 +550,8 @@ if [ "$REPRODUCIBLE" = "true" ] && [ -n "$DISK_DIGEST" ]; then
   cd /workspace/shared || { echo "ERROR: cannot cd to /workspace/shared"; exit 1; }
   echo "=== Attaching reproducibility artifacts ==="
   attach_referrer "./aib-manifest.yml" \
-    "application/vnd.automotive.manifest.v1+yaml" "AIB input manifest"
+    "$OCI_REFERRER_TYPE_AIB_MANIFEST" "AIB input manifest"
   attach_referrer "./build-sources.tar.gz" \
-    "application/vnd.automotive.sources.v1+tar+gzip" "osbuild sources archive"
+    "$OCI_REFERRER_TYPE_BUILD_SOURCES" "osbuild sources archive"
   echo "=== Reproducibility artifacts attached ==="
 fi

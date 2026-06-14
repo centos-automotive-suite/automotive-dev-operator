@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 )
 
 // getDefaultArch returns the current system architecture in caib format.
@@ -35,6 +37,6 @@ func envBool(key string) bool {
 }
 
 func handleError(err error) {
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	fmt.Fprintln(os.Stderr, caibcommon.FormatError(err))
 	os.Exit(1)
 }

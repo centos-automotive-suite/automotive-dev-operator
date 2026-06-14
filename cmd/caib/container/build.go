@@ -34,6 +34,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
+	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/ui"
@@ -135,24 +137,31 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 	}
 
 	absContextDir, containerfile := resolveContainerBuildContext(contextDir)
-	fmt.Printf("Context: %s\n", absContextDir)
-	fmt.Printf("Containerfile: %s\n", filepath.Join(absContextDir, containerfile))
+	clilog.Infof("Context: %s\n", absContextDir)
+	clilog.Infof("Containerfile: %s\n", filepath.Join(absContextDir, containerfile))
 
 	if serverURL == "" {
-		handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
+		handleError(caibcommon.ServerURLRequiredError("caib container build --server <server-url> ."))
 	}
 
 	if containerBuildPush != "" && useInternalRegistry {
-		handleError(fmt.Errorf("--push and --internal-registry are mutually exclusive"))
+		handleError(caibcommon.NewActionableError(
+			fmt.Errorf("--push and --internal-registry are mutually exclusive"),
+			fmt.Sprintf("caib container build --push %s .", containerBuildPush),
+		))
 	}
 	if containerBuildPush == "" && !useInternalRegistry {
-		handleError(fmt.Errorf("either --push or --internal-registry is required"))
+		handleError(caibcommon.NewActionableError(
+			fmt.Errorf("either --push or --internal-registry is required"),
+			"caib container build --push <registry/image:tag> .",
+			"caib container build --internal-registry .",
+		))
 	}
 
 	if buildName == "" {
 		dirName := filepath.Base(absContextDir)
 		buildName = fmt.Sprintf("cb-%s-%s", sanitizeBuildName(dirName), uuid.New().String()[:5])
-		fmt.Printf("Auto-generated build name: %s\n", buildName)
+		clilog.Infof("Auto-generated build name: %s\n", buildName)
 	} else {
 		validateBuildName(buildName)
 	}
@@ -176,9 +185,9 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 
 	// Create the container build
 	if useInternalRegistry {
-		fmt.Println("Using OpenShift internal registry")
+		clilog.Infoln("Using OpenShift internal registry")
 	}
-	fmt.Println("Creating container build...")
+	clilog.Infoln("Creating container build...")
 	var createResp *buildapitypes.ContainerBuildResponse
 	err := executeWithReauth(serverURL, &authToken, func(client *buildapiclient.Client) error {
 		resp, cerr := client.CreateContainerBuild(ctx, buildapitypes.ContainerBuildRequest{
@@ -203,21 +212,22 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 	}
 
 	colorFormatter := NewColorFormatter()
-	fmt.Printf("%s %s - %s\n", colorFormatter.LabelColor("Build "+createResp.Name+" accepted:"), createResp.Phase, createResp.Message)
+	clilog.Infof("%s %s - %s\n", colorFormatter.LabelColor("Build "+createResp.Name+" accepted:"), createResp.Phase, createResp.Message)
 	if createResp.OutputImage != "" {
-		fmt.Printf("%s %s\n", colorFormatter.LabelColor("Output image:"), colorFormatter.ValueColor(createResp.OutputImage))
+		clilog.Infof("%s %s\n", colorFormatter.LabelColor("Output image:"), colorFormatter.ValueColor(createResp.OutputImage))
 	}
-	fmt.Printf("\n%s\n  %s\n\n", colorFormatter.LabelColor("View build logs:"), colorFormatter.CommandColor("caib container logs "+createResp.Name))
+	if !clilog.IsQuiet() {
+		fmt.Printf("\n%s\n  %s\n\n", colorFormatter.LabelColor("View build logs:"), colorFormatter.CommandColor("caib container logs "+createResp.Name))
+	}
 
-	// Create tarball and upload
-	fmt.Printf("Packaging context directory: %s\n", absContextDir)
+	clilog.Infof("Packaging context directory: %s\n", absContextDir)
 	tarball, err := createContextTarball(absContextDir)
 	if err != nil {
 		handleError(fmt.Errorf("failed to create context tarball: %w", err))
 	}
 	tarballPath := tarball.Name()
 	if info, err := tarball.Stat(); err == nil {
-		fmt.Printf("Context tarball: %s (%.1f MB)\n", tarballPath, float64(info.Size())/(1024*1024))
+		clilog.Infof("Context tarball: %s (%.1f MB)\n", tarballPath, float64(info.Size())/(1024*1024))
 	}
 	defer func() {
 		if err := tarball.Close(); err != nil {
@@ -439,8 +449,24 @@ func waitForContainerBuildCompletion(ctx context.Context, name string, pb *ui.Pr
 	}
 }
 
-// displayContainerBuildResult shows the final build result.
 func displayContainerBuildResult(finalStatus *buildapitypes.ContainerBuildResponse) {
+	if clilog.IsQuiet() {
+		if finalStatus.Phase == phaseFailed {
+			handleError(fmt.Errorf("build failed"))
+		}
+		if finalStatus.OutputImage != "" {
+			fmt.Println(finalStatus.OutputImage)
+		}
+		if finalStatus.RegistryToken != "" {
+			credsFile, err := writeRegistryCredentialsFile(finalStatus.RegistryToken)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to write registry credentials file: %v\n", err)
+			} else {
+				fmt.Println(credsFile)
+			}
+		}
+		return
+	}
 	colorFormatter := NewColorFormatter()
 
 	fmt.Printf("\n%s %s\n", colorFormatter.LabelColor("Build "+finalStatus.Name+":"), finalStatus.Phase)

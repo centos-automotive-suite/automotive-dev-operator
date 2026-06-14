@@ -340,11 +340,13 @@ type JumpstarterTarget struct {
 	FlashCmd string `json:"flashCmd,omitempty"`
 }
 
-// TargetDefaults contains build defaults for a target (from ConfigMap)
+// TargetDefaults contains build defaults and validation hints for a target (from ConfigMap)
 type TargetDefaults struct {
-	Architecture  string   `json:"architecture,omitempty"`
-	ExtraArgs     []string `json:"extraArgs,omitempty"`
-	DefaultFormat string   `json:"defaultFormat,omitempty"`
+	Architecture          string   `json:"architecture,omitempty"`
+	ExtraArgs             []string `json:"extraArgs,omitempty"`
+	DefaultFormat         string   `json:"defaultFormat,omitempty"`
+	AcceptedFormats       []string `json:"acceptedFormats,omitempty"`
+	AcceptedArchitectures []string `json:"acceptedArchitectures,omitempty"`
 }
 
 // OperatorConfigResponse returns relevant operator configuration for CLI validation

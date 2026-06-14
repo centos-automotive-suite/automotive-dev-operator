@@ -95,6 +95,19 @@ const (
 	maxManifestSize = 900 * 1024
 )
 
+// buildProducedArtifacts reports whether artifact URLs point to real objects.
+// For Failed builds, only true when flash was attempted (proving push succeeded).
+func buildProducedArtifacts(build *automotivev1alpha1.ImageBuild) bool {
+	switch build.Status.Phase {
+	case phaseCompleted, phaseFlashing:
+		return true
+	case phaseFailed:
+		return build.Status.FlashTaskRunName != ""
+	default:
+		return false
+	}
+}
+
 var getClientFromRequestFn = getClientFromRequest
 var getRESTConfigFromRequestFn = getRESTConfigFromRequest
 var createInternalRegistrySecretFn = createInternalRegistrySecret
@@ -153,9 +166,11 @@ var loadTargetDefaultsFn = func(
 
 	var parsed struct {
 		Targets map[string]struct {
-			Architecture  string   `yaml:"architecture"`
-			ExtraArgs     []string `yaml:"extraArgs"`
-			DefaultFormat string   `yaml:"defaultFormat"`
+			Architecture          string   `yaml:"architecture"`
+			ExtraArgs             []string `yaml:"extraArgs"`
+			DefaultFormat         string   `yaml:"defaultFormat"`
+			AcceptedFormats       []string `yaml:"acceptedFormats"`
+			AcceptedArchitectures []string `yaml:"acceptedArchitectures"`
 		} `yaml:"targets"`
 	}
 	if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
@@ -165,11 +180,18 @@ var loadTargetDefaultsFn = func(
 	result := make(map[string]TargetDefaults, len(parsed.Targets))
 	for name, t := range parsed.Targets {
 		result[name] = TargetDefaults{
-			Architecture:  t.Architecture,
-			ExtraArgs:     t.ExtraArgs,
-			DefaultFormat: t.DefaultFormat,
+			Architecture:          t.Architecture,
+			ExtraArgs:             t.ExtraArgs,
+			DefaultFormat:         t.DefaultFormat,
+			AcceptedFormats:       t.AcceptedFormats,
+			AcceptedArchitectures: t.AcceptedArchitectures,
 		}
 	}
+
+	if err := validateTargetDefaults(result); err != nil {
+		return nil, fmt.Errorf("invalid target-defaults.yaml: %w", err)
+	}
+
 	return result, nil
 }
 
@@ -1330,8 +1352,11 @@ func listBuilds(c *gin.Context) {
 			compStr = b.Status.CompletionTime.Format(time.RFC3339)
 		}
 
-		containerImage := b.Spec.GetContainerPush()
-		diskImage := b.Spec.GetExportOCI()
+		var containerImage, diskImage string
+		if buildProducedArtifacts(&b) {
+			containerImage = b.Spec.GetContainerPush()
+			diskImage = b.Spec.GetExportOCI()
+		}
 		if b.Spec.GetUseServiceAccountAuth() && externalRoute != "" {
 			if containerImage != "" {
 				containerImage = translateToExternalURL(containerImage, externalRoute)
@@ -1369,8 +1394,13 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 		return
 	}
 
-	containerImage := build.Spec.GetContainerPush()
-	diskImage := build.Spec.GetExportOCI()
+	// Only report artifact URLs when the build progressed past the Building
+	// phase — otherwise no image was produced and the URLs are misleading.
+	var containerImage, diskImage string
+	if buildProducedArtifacts(build) {
+		containerImage = build.Spec.GetContainerPush()
+		diskImage = build.Spec.GetExportOCI()
+	}
 	var warning string
 
 	if build.Spec.GetUseServiceAccountAuth() {

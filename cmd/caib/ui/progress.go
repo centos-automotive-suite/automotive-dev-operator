@@ -23,6 +23,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	"golang.org/x/term"
 )
@@ -44,6 +45,9 @@ func NewProgressBar() *ProgressBar {
 
 // Render displays the progress bar with monotonic progress enforcement
 func (pb *ProgressBar) Render(phase string, step *buildapitypes.BuildStep) {
+	if clilog.IsQuiet() {
+		return
+	}
 	// Work on a local copy to avoid mutating the caller's BuildStep
 	var renderStep *buildapitypes.BuildStep
 	if step != nil {
@@ -117,7 +121,7 @@ func (pb *ProgressBar) renderPlain(phase string, step *buildapitypes.BuildStep) 
 // Complete renders a fully-filled progress bar and moves to a new line so the
 // final state is visible after the build finishes.
 func (pb *ProgressBar) Complete() {
-	if pb.lastLine == "" {
+	if clilog.IsQuiet() || pb.lastLine == "" {
 		return
 	}
 	total := 8
@@ -135,7 +139,7 @@ func (pb *ProgressBar) Complete() {
 
 // Clear clears the progress bar (TTY mode only)
 func (pb *ProgressBar) Clear() {
-	if !pb.isTTY || pb.lastLine == "" {
+	if clilog.IsQuiet() || !pb.isTTY || pb.lastLine == "" {
 		return
 	}
 	width, _, err := term.GetSize(int(os.Stdout.Fd()))

@@ -107,6 +107,12 @@ jobs:
           registry-host: ${{ env.REGISTRY_HOST }}
           arch: ${{ env.ARCH }}
 
+      - name: Deploy Dex for OIDC tests
+        if: >
+          needs.parse-comment.outputs.lane_name == 'auth' ||
+          needs.parse-comment.outputs.lane_name == 'all'
+        run: hack/e2e/setup-dex.sh
+
       - name: Build caib CLI
         run: make build-caib
 

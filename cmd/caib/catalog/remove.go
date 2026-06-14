@@ -24,6 +24,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
 )
@@ -70,13 +71,13 @@ func runRemove(cmd *cobra.Command, args []string) error {
 
 	// Confirm deletion
 	if !removeForce {
-		fmt.Printf("Removing catalog image %q...\n", name)
+		clilog.Infof("Removing catalog image %q...\n", name)
 		fmt.Print("Are you sure you want to remove this image from the catalog? (y/N): ")
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')
 		response = strings.TrimSpace(strings.ToLower(response))
 		if response != "y" && response != "yes" {
-			fmt.Println("Cancelled")
+			clilog.Infoln("Cancelled")
 			return nil
 		}
 	}
@@ -111,6 +112,6 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	fmt.Println("✓ Removed successfully")
+	clilog.Infoln("✓ Removed successfully")
 	return nil
 }

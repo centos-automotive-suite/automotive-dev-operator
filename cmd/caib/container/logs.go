@@ -32,6 +32,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 )
 
@@ -84,7 +85,7 @@ func runContainerLogs(_ *cobra.Command, args []string) {
 	if err != nil {
 		handleError(fmt.Errorf("failed to get container build: %w", err))
 	}
-	fmt.Printf("Build %s: %s - %s\n", name, status.Phase, status.Message)
+	clilog.Infof("Build %s: %s - %s\n", name, status.Phase, status.Message)
 
 	logTransport := &http.Transport{
 		ResponseHeaderTimeout: 30 * time.Second,
@@ -102,14 +103,14 @@ func runContainerLogs(_ *cobra.Command, args []string) {
 		defer cancel()
 		streamState := &logStreamState{}
 		if err := tryContainerLogStreaming(fetchCtx, logClient, name, streamState, false); err != nil {
-			fmt.Printf("Could not retrieve logs (pods may have been cleaned up): %v\n", err)
+			clilog.Infof("Could not retrieve logs (pods may have been cleaned up): %v\n", err)
 		}
 		return
 	}
 
 	// Build is still active — wait for logs to become available, then stream
 	if status.Phase == phasePending || status.Phase == phaseUploading {
-		fmt.Println("Waiting for build to start...")
+		clilog.Infoln("Waiting for build to start...")
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		for status.Phase == phasePending || status.Phase == phaseUploading {
@@ -119,11 +120,11 @@ func runContainerLogs(_ *cobra.Command, args []string) {
 				continue
 			}
 			if isContainerBuildTerminal(status.Phase) {
-				fmt.Printf("Build %s: %s - %s\n", name, status.Phase, status.Message)
+				clilog.Infof("Build %s: %s - %s\n", name, status.Phase, status.Message)
 				return
 			}
 		}
-		fmt.Printf("Build %s: %s - %s\n", name, status.Phase, status.Message)
+		clilog.Infof("Build %s: %s - %s\n", name, status.Phase, status.Message)
 	}
 
 	// Stream logs
@@ -239,7 +240,7 @@ func handleLogStreamError(resp *http.Response, state *logStreamState) error {
 
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
 		if !state.warningShown {
-			fmt.Printf("log stream not ready (HTTP %d). Retrying... (attempt %d/%d)\n",
+			clilog.Infof("log stream not ready (HTTP %d). Retrying... (attempt %d/%d)\n",
 				resp.StatusCode, state.retryCount+1, maxLogRetries)
 			state.warningShown = true
 		}

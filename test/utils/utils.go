@@ -104,19 +104,13 @@ func RunSafe(cmd *exec.Cmd) ([]byte, error) {
 
 // IsOpenShiftCluster returns true when the target cluster is OpenShift.
 // It checks the OPENSHIFT_CLUSTER env var first (set explicitly by run-e2e-local.sh),
-// then falls back to probing the Route CRD dynamically.
-// Prefer this over HasOpenShiftRouteCRD for branching on cluster type.
+// then falls back to probing the OpenShift config API.
 func IsOpenShiftCluster() bool {
 	v := strings.TrimSpace(os.Getenv("OPENSHIFT_CLUSTER"))
 	if strings.EqualFold(v, "true") || v == "1" {
 		return true
 	}
-	return HasOpenShiftRouteCRD()
-}
-
-// HasOpenShiftRouteCRD returns true when the cluster exposes the OpenShift Route CRD.
-func HasOpenShiftRouteCRD() bool {
-	cmd := exec.Command("kubectl", "get", "crd", "routes.route.openshift.io")
+	cmd := exec.Command("kubectl", "get", "--raw", "/apis/config.openshift.io/v1")
 	_, err := Run(cmd)
 	return err == nil
 }

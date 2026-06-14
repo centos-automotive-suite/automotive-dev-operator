@@ -7,6 +7,7 @@ import (
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/authcmd"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/catalog"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/container"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/image"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/workspace"
@@ -65,6 +66,18 @@ func newRootCmd() *cobra.Command {
 		"table",
 		"output format: table, json, yaml",
 	)
+	rootCmd.PersistentFlags().BoolVarP(
+		&quiet,
+		"quiet",
+		"q",
+		false,
+		"suppress informational output (errors and structured data are still shown)",
+	)
+
+	cobra.OnInitialize(func() {
+		clilog.SetQuiet(quiet)
+	})
+
 	state := newRuntimeState()
 	handlers := state.newHandlers()
 

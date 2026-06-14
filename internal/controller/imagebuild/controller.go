@@ -197,6 +197,7 @@ type ImageBuildReconciler struct {
 // +kubebuilder:rbac:groups="",namespace=system,resources=pods/exec,verbs=create;get
 // +kubebuilder:rbac:groups="",namespace=system,resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups="",namespace=system,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get
 // +kubebuilder:rbac:groups=route.openshift.io,namespace=system,resources=routes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
 

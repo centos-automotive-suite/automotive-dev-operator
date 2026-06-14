@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/auth"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
 )
@@ -93,7 +94,7 @@ func runLogin(_ *cobra.Command, args []string) {
 	if err := config.SaveServerURL(server); err != nil {
 		handleError(fmt.Errorf("failed to save server URL: %w", err))
 	}
-	fmt.Printf("Server saved: %s\n", server)
+	clilog.Infof("Server saved: %s\n", server)
 
 	ctx := context.Background()
 	token, didAuth, err := auth.GetTokenWithReauth(ctx, server, "", insecureSkipTLS)
@@ -102,8 +103,8 @@ func runLogin(_ *cobra.Command, args []string) {
 		return
 	}
 	if token != "" && didAuth {
-		fmt.Println("OIDC authentication successful. Token cached for subsequent commands.")
+		clilog.Infoln("OIDC authentication successful. Token cached for subsequent commands.")
 	} else if token != "" {
-		fmt.Println("Using existing or kubeconfig token. You can run build/list/disk commands without --server.")
+		clilog.Infoln("Using existing or kubeconfig token. You can run build/list/disk commands without --server.")
 	}
 }

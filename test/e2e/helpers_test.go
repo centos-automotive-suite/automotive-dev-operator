@@ -18,9 +18,12 @@ package e2e
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -43,6 +46,7 @@ const (
 	artifactImageRepo              = "automotive-os-test1"
 	artifactImageName              = artifactImageRepo + ":latest"
 	kindPushNamespace              = "myorg"
+	defaultHTTPClientTimeout       = 5 * time.Second
 )
 
 // Shared state populated lazily via sync.Once and consumed by test lanes.
@@ -60,12 +64,19 @@ var (
 	buildAPIOnce  sync.Once
 	registryOnce  sync.Once
 	caibCredsOnce sync.Once
+	dexOnce       sync.Once
 
 	// Error flags: set when a setup panic is caught so subsequent lanes fail fast.
 	operatorSetupErr  error
 	buildAPISetupErr  error
 	registrySetupErr  error
 	caibCredsSetupErr error
+	dexSetupErr       error
+
+	// Dex OIDC state (populated by ensureDexOIDC).
+	dexEndpoint   string
+	dexPortFwdCmd *exec.Cmd
+	dexCACert     string
 )
 
 // resolveNamespace returns the E2E_NAMESPACE env var if set, otherwise generates a random "e2e-test-<hex>" namespace.
@@ -300,12 +311,7 @@ func setupBuildAPIRoute() {
 	}, 2*time.Minute, 5*time.Second).ShouldNot(BeEmpty())
 
 	By("waiting for Build API route to respond")
-	httpClient := &http.Client{
-		Timeout: 2 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
-		},
-	}
+	httpClient := newInsecureHTTPClient()
 	waitForBuildAPI := func() error {
 		resp, httpErr := httpClient.Get(caibServer + "/v1/healthz")
 		if httpErr != nil {
@@ -335,7 +341,7 @@ func setupBuildAPIPortForward() {
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
 	By("waiting for Build API to respond on port-forward")
-	httpClient := &http.Client{Timeout: 2 * time.Second}
+	httpClient := newInsecureHTTPClient()
 	waitForBuildAPI := func() error {
 		resp, httpErr := httpClient.Get("http://localhost:8080/v1/healthz")
 		if httpErr != nil {
@@ -430,23 +436,180 @@ func setupCaibCredentials() {
 	}
 }
 
-// cleanupPortForward safely terminates the port-forward process.
-func cleanupPortForward() {
-	if portForwardCmd != nil {
-		if portForwardCmd.Process != nil {
-			_ = portForwardCmd.Process.Kill()
+// isDexDeployed returns true when the Dex deployment exists in the dex namespace.
+func isDexDeployed() bool {
+	cmd := exec.Command("kubectl", "get", "deployment", "dex", "-n", "dex", "--no-headers")
+	_, err := utils.Run(cmd)
+	return err == nil
+}
+
+// ensureDexOIDC configures Dex-based OIDC authentication for the Build API.
+// It sets up a port-forward to Dex, patches OperatorConfig with Dex JWT settings,
+// and waits for the Build API to serve the OIDC config. Runs once per test run.
+func ensureDexOIDC() {
+	dexOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				dexSetupErr = fmt.Errorf("Dex OIDC setup panicked: %v", r)
+				panic(r)
+			}
+		}()
+		setupDexOIDC()
+	})
+	if dexSetupErr != nil {
+		Fail("Dex OIDC setup failed in a previous step; cannot proceed")
+	}
+}
+
+func setupDexOIDC() {
+	By("verifying Dex deployment is available")
+	cmd := exec.Command("kubectl", "wait", "--for=condition=available",
+		"--timeout=2m", "deployment/dex", "-n", "dex")
+	_, err := utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+	By("reading Dex CA certificate from ConfigMap")
+	cmd = exec.Command("kubectl", "get", "configmap", "dex-ca", "-n", "dex",
+		"-o", "jsonpath={.data.ca\\.crt}")
+	output, err := utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	dexCACert = strings.TrimSpace(string(output))
+	ExpectWithOffset(1, dexCACert).NotTo(BeEmpty(), "Dex CA cert not found in dex-ca ConfigMap")
+
+	By("setting up port-forward to Dex")
+	setupDexPortForward()
+
+	By("patching OperatorConfig with Dex OIDC configuration")
+	patchOperatorConfigWithDex()
+
+	By("waiting for Build API to serve Dex OIDC config")
+	waitForOIDCConfig()
+}
+
+func setupDexPortForward() {
+	dexEndpoint = "https://localhost:5556"
+
+	if conn, dialErr := net.DialTimeout("tcp", "localhost:5556", 500*time.Millisecond); dialErr == nil {
+		_ = conn.Close()
+		_, _ = fmt.Fprintf(GinkgoWriter, "port 5556 already in use, validating existing Dex endpoint\n")
+		validateDexEndpoint()
+		return
+	}
+
+	dexPortFwdCmd = exec.Command("kubectl", "port-forward",
+		"-n", "dex", "svc/dex", "5556:5556")
+	err := dexPortFwdCmd.Start()
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+	validateDexEndpoint()
+}
+
+func validateDexEndpoint() {
+	httpClient := newInsecureHTTPClient()
+	EventuallyWithOffset(2, func() error {
+		resp, httpErr := httpClient.Get(dexEndpoint + "/.well-known/openid-configuration")
+		if httpErr != nil {
+			return httpErr
 		}
-		_ = portForwardCmd.Wait()
-		portForwardCmd = nil
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("Dex OIDC discovery returned %d", resp.StatusCode)
+		}
+		return nil
+	}, 30*time.Second, 1*time.Second).Should(Succeed(), "Dex endpoint did not become ready")
+}
+
+func patchOperatorConfigWithDex() {
+	escapedCA := strings.ReplaceAll(dexCACert, "\n", "\\n")
+	oidcPatch := fmt.Sprintf(
+		`{"spec":{"buildAPI":{"authentication":{"clientId":"caib-cli","jwt":[{"issuer":{"url":"https://dex.dex.svc.cluster.local:5556","audiences":["caib-cli"],"certificateAuthority":"%s"},"claimMappings":{"username":{"claim":"name","prefix":"dex:"}}}]}}}}`,
+		escapedCA,
+	)
+	cmd := exec.Command("kubectl", "patch", "operatorconfig", "config",
+		"-n", testNamespace, "--type=merge", "-p", oidcPatch)
+	_, err := utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+}
+
+func waitForOIDCConfig() {
+	httpClient := newInsecureHTTPClient()
+	EventuallyWithOffset(1, func() error {
+		resp, err := httpClient.Get(caibServer + "/v1/auth/config")
+		if err != nil {
+			return err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("/v1/auth/config returned %d, waiting for OIDC config", resp.StatusCode)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		if !strings.Contains(string(b), "dex.dex.svc.cluster.local") {
+			return fmt.Errorf("OIDC config does not contain Dex issuer yet: %s", string(b))
+		}
+		return nil
+	}, 3*time.Minute, 5*time.Second).Should(Succeed(),
+		"Build API did not serve Dex OIDC config in time")
+}
+
+// getDexToken obtains an OIDC id_token from Dex using the password grant.
+func getDexToken(username, password string) string {
+	httpClient := newInsecureHTTPClient()
+
+	data := url.Values{
+		"grant_type": {"password"},
+		"username":   {username},
+		"password":   {password},
+		"client_id":  {"caib-cli"},
+		"scope":      {"openid profile email"},
+	}
+
+	resp, err := httpClient.PostForm(dexEndpoint+"/token", data)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	ExpectWithOffset(1, resp.StatusCode).To(Equal(http.StatusOK),
+		fmt.Sprintf("Dex token request failed (%d): %s", resp.StatusCode, string(body)))
+
+	var tokenResp struct {
+		IDToken string `json:"id_token"`
+	}
+	err = json.Unmarshal(body, &tokenResp)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	ExpectWithOffset(1, tokenResp.IDToken).NotTo(BeEmpty(), "Dex returned empty id_token")
+
+	return tokenResp.IDToken
+}
+
+// killPortForwardCmd safely terminates a port-forward process and nils the pointer.
+func killPortForwardCmd(cmd **exec.Cmd) {
+	if *cmd != nil {
+		if (*cmd).Process != nil {
+			_ = (*cmd).Process.Kill()
+		}
+		_ = (*cmd).Wait()
+		*cmd = nil
 	}
 }
 
 // teardownOperator cleans up all test resources. Called from AfterSuite.
 func teardownOperator() {
-	cleanupPortForward()
+	killPortForwardCmd(&portForwardCmd)
+	killPortForwardCmd(&dexPortFwdCmd)
 
 	if testNamespace != "" {
 		By("removing test namespace")
 		utils.CleanupNamespace(testNamespace)
+	}
+}
+
+// newInsecureHTTPClient returns an HTTP client that skips TLS verification.
+func newInsecureHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: defaultHTTPClientTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec // e2e test
+		},
 	}
 }

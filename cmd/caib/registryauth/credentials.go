@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 )
 
@@ -19,11 +20,6 @@ func ExtractRegistryCredentials(primaryRef, secondaryRef string) (string, string
 	}
 	if ref == "" {
 		return os.Getenv("REGISTRY_URL"), username, password
-	}
-
-	if username == "" || password == "" {
-		fmt.Fprintln(os.Stderr, "Warning: No registry credentials provided via environment variables.")
-		fmt.Fprintln(os.Stderr, "Will attempt to use local auth.json files as fallback.")
 	}
 
 	parts := strings.SplitN(ref, "/", 2)
@@ -57,7 +53,7 @@ func ResolveRegistryCredentials(
 		if err != nil {
 			return nil, err
 		}
-		fmt.Printf("Using registry credentials from auth file: %s\n", sourcePath)
+		clilog.Infof("Using registry credentials from auth file: %s\n", sourcePath)
 		return &buildapitypes.RegistryCredentials{
 			Enabled:      true,
 			AuthType:     "docker-config",
@@ -94,7 +90,7 @@ func ResolveRegistryCredentials(
 		return nil, nil
 	}
 
-	fmt.Printf("Using registry credentials from auth file: %s\n", sourcePath)
+	clilog.Infof("Using registry credentials from auth file: %s\n", sourcePath)
 	return &buildapitypes.RegistryCredentials{
 		Enabled:      true,
 		AuthType:     "docker-config",

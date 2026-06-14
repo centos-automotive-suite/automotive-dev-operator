@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
 )
@@ -72,7 +73,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		ns = defaultNamespace
 	}
 
-	fmt.Printf("Verifying catalog image %q...\n", name)
+	clilog.Infof("Verifying catalog image %q...\n", name)
 
 	reqURL := fmt.Sprintf("%s/v1/catalog/images/%s/verify?namespace=%s", server, name, ns)
 	req, err := http.NewRequest(http.MethodPost, reqURL, nil)
@@ -111,9 +112,9 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 
 	if result.Triggered {
-		fmt.Println("✓ Verification triggered successfully")
+		clilog.Infoln("✓ Verification triggered successfully")
 	} else {
-		fmt.Printf("Note: %s\n", result.Message)
+		clilog.Infof("Note: %s\n", result.Message)
 	}
 
 	// Optionally get updated status
@@ -134,16 +135,16 @@ func runVerify(cmd *cobra.Command, args []string) error {
 				getBody, _ := io.ReadAll(getResp.Body)
 				var img CatalogImageResponse
 				if json.Unmarshal(getBody, &img) == nil {
-					fmt.Println()
-					fmt.Printf("Registry URL:  %s\n", img.RegistryURL)
-					fmt.Printf("Status:        %s\n", img.Phase)
+					clilog.Infoln()
+					clilog.Infof("Registry URL:  %s\n", img.RegistryURL)
+					clilog.Infof("Status:        %s\n", img.Phase)
 					if img.SizeBytes > 0 {
 						sizeMB := float64(img.SizeBytes) / (1024 * 1024)
 						sizeGB := float64(img.SizeBytes) / (1024 * 1024 * 1024)
 						if sizeGB >= 1 {
-							fmt.Printf("Size:          %.1f GB\n", sizeGB)
+							clilog.Infof("Size:          %.1f GB\n", sizeGB)
 						} else {
-							fmt.Printf("Size:          %.1f MB\n", sizeMB)
+							clilog.Infof("Size:          %.1f MB\n", sizeMB)
 						}
 					}
 				}

@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# Enable debug mode if DEBUG is set
+if [ -n "${DEBUG:-}" ]; then
+    set -x
+fi
+
 REPO="centos-automotive-suite/automotive-dev-operator"
 
 # Determine version
@@ -41,7 +46,13 @@ esac
 ARTIFACT="caib-${VERSION}-${SUFFIX}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARTIFACT}"
 CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+
+if [ ! -d "$INSTALL_DIR" ]; then
+    echo "Error: Install directory does not exist: ${INSTALL_DIR}" >&2
+    echo "Please create it first or use an existing directory." >&2
+    exit 1
+fi
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT

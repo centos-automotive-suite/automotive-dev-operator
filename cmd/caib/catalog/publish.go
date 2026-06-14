@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
 )
@@ -79,7 +80,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		ns = defaultNamespace
 	}
 
-	fmt.Printf("Publishing ImageBuild %q to catalog...\n", imageBuildName)
+	clilog.Infof("Publishing ImageBuild %q to catalog...\n", imageBuildName)
 
 	reqBody := publishRequest{
 		ImageBuildName:      imageBuildName,
@@ -130,16 +131,16 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	fmt.Println("✓ Published successfully")
-	fmt.Println()
-	fmt.Printf("Catalog Image: %s\n", result.Name)
-	fmt.Printf("Registry URL:  %s\n", result.RegistryURL)
-	fmt.Printf("Architecture:  %s\n", result.Architecture)
-	fmt.Printf("Distro:        %s\n", result.Distro)
+	clilog.Infoln("✓ Published successfully")
+	clilog.Infoln()
+	clilog.Infof("Catalog Image: %s\n", result.Name)
+	clilog.Infof("Registry URL:  %s\n", result.RegistryURL)
+	clilog.Infof("Architecture:  %s\n", result.Architecture)
+	clilog.Infof("Distro:        %s\n", result.Distro)
 	if len(result.Targets) > 0 {
-		fmt.Printf("Target:        %s\n", result.Targets[0].Name)
+		clilog.Infof("Target:        %s\n", result.Targets[0].Name)
 	}
-	fmt.Printf("Status:        %s\n", result.Phase)
+	clilog.Infof("Status:        %s\n", result.Phase)
 
 	return nil
 }
