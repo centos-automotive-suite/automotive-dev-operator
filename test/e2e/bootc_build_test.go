@@ -19,6 +19,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -90,6 +91,66 @@ var _ = Describe("Bootc Container Build", Label("bootc"), Ordered, func() {
 
 		By("verifying container build appears in caib list")
 		verifyCaibList(containerBuildName)
+	})
+})
+
+var _ = Describe("Internal Registry Build", Label("internal-registry"), Ordered, func() {
+
+	BeforeAll(func() {
+		ensureOperatorDeployed()
+		if !openShiftCluster {
+			Skip("internal registry tests require an OpenShift cluster")
+		}
+		ensureBuildAPIAccess()
+		ensureCaibCredentials()
+
+		By("enabling insecure registry for internal registry builds")
+		patch := `{"spec":{"osBuilds":{"insecureRegistry":true}}}`
+		cmd := exec.Command("kubectl", "patch", "operatorconfig", "config",
+			"-n", testNamespace, "--type=merge", "-p", patch)
+		_, err := utils.Run(cmd)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	})
+
+	It("should build and push to the internal registry via --internal-registry", func() {
+		buildName := "e2e-test-internal-registry"
+
+		type buildResult struct {
+			output []byte
+			err    error
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), caibBuildTimeout)
+		defer cancel()
+
+		ch := make(chan buildResult, 1)
+
+		By("launching build with --internal-registry")
+		go func() {
+			cmd := utils.NewCaibCommand(ctx, caibEnv,
+				"image", "build",
+				caibBuildManifest,
+				"--name", buildName,
+				"--arch", arch,
+				"--internal-registry",
+				"--follow")
+			out, err := utils.RunSafe(cmd)
+			ch <- buildResult{output: out, err: err}
+		}()
+
+		select {
+		case r := <-ch:
+			By("verifying internal registry build completed successfully")
+			_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib internal-registry build (%s) ---\n%s\n",
+				buildName, string(r.output))
+			ExpectWithOffset(1, r.err).NotTo(HaveOccurred(),
+				fmt.Sprintf("internal registry build failed:\n%sError: %v\n", string(r.output), r.err))
+		case <-ctx.Done():
+			Fail(fmt.Sprintf("caib build did not complete within %v", caibBuildTimeout))
+		}
+
+		By("verifying build appears in caib list")
+		verifyCaibList(buildName)
 	})
 })
 
