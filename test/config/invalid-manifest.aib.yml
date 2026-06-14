@@ -1,0 +1,5 @@
+name: invalid-test
+content:
+  rpmso:
+    - vim
+  bogus_field: nope

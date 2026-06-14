@@ -17,6 +17,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -34,6 +35,8 @@ const (
 )
 
 var isTerminalPhase = automotivev1alpha1.IsTerminalBuildPhase
+
+var validateFromImageFn = manifestschema.ValidateFromImage
 
 // Options wires build handlers to caller-owned state and helper functions.
 type Options struct {
@@ -233,6 +236,31 @@ func (h *Handler) resolveTarget(cmd *cobra.Command, manifestTarget string) {
 	}
 
 	*h.opts.Target = "qemu"
+}
+
+func (h *Handler) validateManifestSchema(config *buildapitypes.OperatorConfigResponse, manifest []byte) bool {
+	if os.Getenv("CAIB_SKIP_MANIFEST_VALIDATION") != "" {
+		return true
+	}
+
+	imageRef := *h.opts.AutomotiveImageBuilder
+	if imageRef == automotivev1alpha1.DefaultAutomotiveImageBuilderImage && config != nil && config.AutomotiveImageBuilder != "" {
+		imageRef = config.AutomotiveImageBuilder
+	}
+	if imageRef == "" {
+		return true
+	}
+
+	result, err := validateFromImageFn(imageRef, manifest)
+	if err != nil {
+		clilog.Warnf("Skipping local manifest validation: %v\n", err)
+		return true
+	}
+	if !result.Valid {
+		h.handleError(fmt.Errorf("%s", result.Error()))
+		return false
+	}
+	return true
 }
 
 // fetchTargetDefaults fetches the operator config once and returns it.
@@ -505,6 +533,17 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 
 	h.resolveTarget(cmd, common.ManifestTarget(manifestBytes))
 
+	validateFlash := *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
+	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
+	if cfgErr != nil {
+		h.handleError(cfgErr)
+		return
+	}
+
+	if !h.validateManifestSchema(operatorConfig, manifestBytes) {
+		return
+	}
+
 	customDefs, err := h.resolveCustomDefs()
 	if err != nil {
 		h.handleError(err)
@@ -544,12 +583,6 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	validateFlash := *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
-	if cfgErr != nil {
-		h.handleError(cfgErr)
-		return
-	}
 	ApplyTargetDefaults(cmd, operatorConfig, &req)
 
 	if err := h.applyFlashOptions(&req, "--push-disk"); err != nil {
@@ -758,6 +791,17 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 
 	h.resolveTarget(cmd, common.ManifestTarget(manifestBytes))
 
+	validateFlash := *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
+	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
+	if cfgErr != nil {
+		h.handleError(cfgErr)
+		return
+	}
+
+	if !h.validateManifestSchema(operatorConfig, manifestBytes) {
+		return
+	}
+
 	customDefs, err := h.resolveCustomDefs()
 	if err != nil {
 		h.handleError(err)
@@ -809,12 +853,6 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	validateFlash := *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
-	if cfgErr != nil {
-		h.handleError(cfgErr)
-		return
-	}
 	ApplyTargetDefaults(cmd, operatorConfig, &req)
 
 	if err := h.applyFlashOptions(&req, "--push"); err != nil {

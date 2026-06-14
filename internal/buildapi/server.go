@@ -42,6 +42,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/catalog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -1093,6 +1094,35 @@ func verifyWorkspaceImage(ctx context.Context, k8sClient client.Client, namespac
 	return 0, nil
 }
 
+func (a *APIServer) validateManifestSchema(c *gin.Context, span trace.Span, req *BuildRequest) bool {
+	result, err := manifestschema.ValidateFromImage(req.AutomotiveImageBuilder, []byte(req.Manifest))
+	if err != nil {
+		a.log.Info("Skipping manifest schema validation", "error", err, "reqID", c.GetString("reqID"))
+		return true
+	}
+	if !result.Valid {
+		spanError(span, fmt.Errorf("%s", result.Error()))
+		c.JSON(http.StatusBadRequest, gin.H{"error": result.Error()})
+		return false
+	}
+	return true
+}
+
+func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *BuildRequest) bool {
+	restCfg, err := getRESTConfigFromRequest(c)
+	if err != nil {
+		spanError(span, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
+		return false
+	}
+	if err := a.resolveExtraRepos(ctx, k8sClient, restCfg, req); err != nil {
+		spanError(span, err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return false
+	}
+	return true
+}
+
 func (a *APIServer) createBuild(c *gin.Context) {
 	ctx, span := apiTracer.Start(c.Request.Context(), "createBuild")
 	defer span.End()
@@ -1119,6 +1149,10 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
+	if !a.validateManifestSchema(c, span, &req) {
+		return
+	}
+
 	k8sClient, err := getK8sClientOrFail(c)
 	if err != nil {
 		spanError(span, err)
@@ -1134,17 +1168,8 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
-	// Resolve --extra-repo workspace:path pairs into extra_repos custom defines
 	if len(req.ExtraRepos) > 0 {
-		restCfgForRepos, err := getRESTConfigFromRequest(c)
-		if err != nil {
-			spanError(span, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
-			return
-		}
-		if err := a.resolveExtraRepos(ctx, k8sClient, restCfgForRepos, &req); err != nil {
-			spanError(span, err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if !a.applyExtraRepos(ctx, c, span, k8sClient, &req) {
 			return
 		}
 	}
@@ -1590,8 +1615,10 @@ func (a *APIServer) handleGetOperatorConfig(c *gin.Context) {
 	operatorConfig, err := loadOperatorConfigFn(ctx, k8sClient, namespace)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			a.log.Info("OperatorConfig not found; returning empty operator config response", "reqID", reqID, "namespace", namespace)
-			c.JSON(http.StatusOK, OperatorConfigResponse{})
+			a.log.Info("OperatorConfig not found; returning defaults", "reqID", reqID, "namespace", namespace)
+			c.JSON(http.StatusOK, OperatorConfigResponse{
+				AutomotiveImageBuilder: automotivev1alpha1.DefaultAutomotiveImageBuilderImage,
+			})
 			return
 		}
 		a.log.Error(err, "failed to get OperatorConfig", "reqID", reqID, "namespace", namespace)
@@ -1600,7 +1627,9 @@ func (a *APIServer) handleGetOperatorConfig(c *gin.Context) {
 	}
 
 	// Build the response with Jumpstarter target mappings (flash-specific, from CRD)
-	response := OperatorConfigResponse{}
+	response := OperatorConfigResponse{
+		AutomotiveImageBuilder: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
+	}
 
 	if operatorConfig.Spec.Jumpstarter != nil && len(operatorConfig.Spec.Jumpstarter.TargetMappings) > 0 {
 		response.JumpstarterTargets = make(map[string]JumpstarterTarget)

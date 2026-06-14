@@ -355,6 +355,8 @@ type OperatorConfigResponse struct {
 	JumpstarterTargets map[string]JumpstarterTarget `json:"jumpstarterTargets,omitempty"`
 	// TargetDefaults contains build defaults per target (from ConfigMap)
 	TargetDefaults map[string]TargetDefaults `json:"targetDefaults,omitempty"`
+	// AutomotiveImageBuilder is the resolved AIB container image (from OperatorConfig or default)
+	AutomotiveImageBuilder string `json:"automotiveImageBuilder,omitempty"`
 }
 
 type (

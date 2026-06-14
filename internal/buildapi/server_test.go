@@ -539,7 +539,7 @@ var _ = Describe("APIServer", func() {
 			}
 		})
 
-		It("should return empty operator config when config resource is not found", func() {
+		It("should return default AIB image when config resource is not found", func() {
 			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return nil, nil
 			}
@@ -565,6 +565,7 @@ var _ = Describe("APIServer", func() {
 			Expect(w.Code).To(Equal(http.StatusOK))
 			var response OperatorConfigResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.AutomotiveImageBuilder).To(Equal(automotivev1alpha1.DefaultAutomotiveImageBuilderImage))
 			Expect(response.JumpstarterTargets).To(BeNil())
 			Expect(response.TargetDefaults).To(BeNil())
 		})
