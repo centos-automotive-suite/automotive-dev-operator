@@ -467,63 +467,22 @@ mkdir -p /workspace/shared/.chains/disk
 echo -n "${repo_url}" > /workspace/shared/.chains/disk/url
 echo -n "${DISK_DIGEST}" > /workspace/shared/.chains/disk/digest
 
-# Attach sanitized osbuild manifest as OCI referrer for supply chain verification.
+# Attach osbuild manifest as OCI referrer for supply chain verification.
 # image.json is the fully-resolved osbuild manifest produced by AIB — it contains
-# the complete build recipe (RPMs, stages, filesystem layout). We strip credentials
-# (password hashes, repo auth, secrets) before publishing.
+# the complete build recipe (RPMs, stages, filesystem layout).
 OSBUILD_MANIFEST="/workspace/shared/image.json"
 if [ -f "$OSBUILD_MANIFEST" ] && [ -n "$DISK_DIGEST" ]; then
-  # Use a relative path so ORAS stores "image.json" as the OCI title (not /tmp/...)
-  SANITIZED_MANIFEST="./image-sanitized.json"
-
-  python3 - "$OSBUILD_MANIFEST" "$SANITIZED_MANIFEST" <<'PYEOF'
-import json, sys, re
-
-SENSITIVE_KEYS = {"password", "secrets", "secret", "auth", "token", "key", "credential", "passphrase"}
-
-def redact_sensitive(obj):
-    """Recursively redact fields with sensitive-sounding names anywhere in the tree."""
-    if isinstance(obj, dict):
-        for k in obj:
-            if k.lower() in SENSITIVE_KEYS:
-                obj[k] = "REDACTED"
-            else:
-                redact_sensitive(obj[k])
-    elif isinstance(obj, list):
-        for item in obj:
-            redact_sensitive(item)
-
-def redact_source_urls(sources):
-    """Strip embedded user:pass from source URLs (e.g. https://user:pass@host/...)."""
-    for source_data in sources.values():
-        items = source_data if isinstance(source_data, dict) else {}
-        for val in items.get("items", {}).values():
-            if isinstance(val, dict) and "url" in val:
-                val["url"] = re.sub(r'(https?://)([^@/]+)@', r'\1REDACTED@', val["url"])
-
-with open(sys.argv[1]) as f:
-    manifest = json.load(f)
-redact_sensitive(manifest)
-if "sources" in manifest:
-    redact_source_urls(manifest["sources"])
-
-with open(sys.argv[2], "w") as f:
-    json.dump(manifest, f, indent=2)
-PYEOF
-
-  echo "Attaching sanitized osbuild manifest to ${repo_url}@${DISK_DIGEST}"
-  if ! "$HOME/bin/oras" attach "${ORAS_EXTRA_ARGS[@]}" \
+  echo "Attaching osbuild manifest to ${repo_url}@${DISK_DIGEST}"
+  if ! "$HOME/bin/oras" attach --disable-path-validation "${ORAS_EXTRA_ARGS[@]}" \
     --artifact-type "$OCI_REFERRER_TYPE_OSBUILD_MANIFEST" \
     "${repo_url}@${DISK_DIGEST}" \
-    "${SANITIZED_MANIFEST}:${OCI_REFERRER_TYPE_OSBUILD_MANIFEST}" 2>&1; then
+    "${OSBUILD_MANIFEST}:${OCI_REFERRER_TYPE_OSBUILD_MANIFEST}" 2>&1; then
     if [ "$SECURE_BUILD" = "true" ]; then
       echo "ERROR: Failed to attach osbuild manifest (fatal in secure build mode)"
       exit 1
     fi
     echo "WARNING: Failed to attach osbuild manifest — registry may not support OCI referrers (non-fatal)"
   fi
-
-  rm -f "$SANITIZED_MANIFEST"
 else
   echo "No osbuild manifest found or no digest available, skipping manifest attach"
 fi
