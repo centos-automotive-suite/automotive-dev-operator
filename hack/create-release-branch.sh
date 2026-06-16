@@ -65,7 +65,7 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 # Parse version components
-IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+IFS='.' read -r MAJOR MINOR _PATCH <<< "$VERSION"
 RELEASE_BRANCH="release-${MAJOR}.${MINOR}.x"
 
 log_info "Creating release branch for version $VERSION"

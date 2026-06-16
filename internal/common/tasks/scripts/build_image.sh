@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # NOTE: common.sh is prepended to this script at embed time.
 
 # Initialize optimizations
@@ -154,7 +155,7 @@ fi
 install_custom_ca_certs
 setup_osbuild
 
-cd "$WORKSPACE_PATH"
+cd "$WORKSPACE_PATH" || exit
 
 EXPORT_FORMAT="$(params.export-format)"
 # If format is empty, AIB defaults to raw
@@ -647,7 +648,7 @@ AIB_IMAGE_PINNED=$(cat /tmp/aib-pinned.txt 2>/dev/null || echo "$AIB_IMAGE_REF")
 echo "AIB image pinned reference: $AIB_IMAGE_PINNED"
 echo -n "${AIB_IMAGE_PINNED}" > /tekton/results/automotive-image-builder
 
-pushd /output
+pushd /output || exit
 mkdir -p "$WORKSPACE_PATH"
 
 # Check if disk image was created (only exists when BUILD_DISK_IMAGE=true or non-bootc mode)
@@ -778,7 +779,7 @@ elif [ -d "$WORKSPACE_PATH/${exportFile}" ]; then
   parts_dir="$WORKSPACE_PATH/${final_compressed_name}-parts"
   mkdir -p "$parts_dir"
   (
-    cd "$WORKSPACE_PATH"
+    cd "$WORKSPACE_PATH" || exit
     for item in "${exportFile}"/*; do
       [ -e "$item" ] || continue
       base=$(basename "$item")
@@ -802,11 +803,11 @@ elif [ -d "$WORKSPACE_PATH/${exportFile}" ]; then
   echo "Compressed archive size:" && ls -lah "$WORKSPACE_PATH/${final_compressed_name}" || true
   if [ -f "$WORKSPACE_PATH/${final_compressed_name}" ]; then
     echo "Removing uncompressed directory ${exportFile} (keeping parts directory)"
-    rm -rf "$WORKSPACE_PATH/${exportFile}"
-    pushd "$WORKSPACE_PATH"
-    ln -sf ${final_compressed_name} disk.img
+    rm -rf "${WORKSPACE_PATH:?}/${exportFile:?}"
+    pushd "$WORKSPACE_PATH" || exit
+    ln -sf "${final_compressed_name}" disk.img
     final_name="${final_compressed_name}"
-    popd
+    popd || exit
     echo "Available artifacts:"
     ls -la "$WORKSPACE_PATH/" || true
     if [ -d "$WORKSPACE_PATH/${final_compressed_name}-parts" ]; then
@@ -819,10 +820,10 @@ elif [ -f "${DISK_IMAGE_SOURCE}/${exportFile}" ]; then
   compress_file "${DISK_IMAGE_SOURCE}/${exportFile}" "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" || { echo "Error: Failed to compress ${exportFile}"; exit 1; }
   echo "Compressed file size:" && ls -lah "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" || true
   if [ -f "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" ]; then
-    pushd "$WORKSPACE_PATH"
-    ln -sf ${exportFile}${EXT_FILE} disk.img
+    pushd "$WORKSPACE_PATH" || exit
+    ln -sf "${exportFile}${EXT_FILE}" disk.img
     final_name="${exportFile}${EXT_FILE}"
-    popd
+    popd || exit
   fi
 fi
 

@@ -25,7 +25,7 @@ echo "=========================================="
 
 echo ""
 echo "Logging in to OpenShift registry..."
-${CONTAINER_TOOL} login -u $(oc whoami) -p $(oc whoami -t) ${REGISTRY} --tls-verify=false
+${CONTAINER_TOOL} login -u "$(oc whoami)" -p "$(oc whoami -t)" ${REGISTRY} --tls-verify=false
 
 echo ""
 echo "Regenerating catalog..."

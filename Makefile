@@ -144,6 +144,10 @@ lint: golangci-lint ## Run golangci-lint linter
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
 
+.PHONY: lint-shell
+lint-shell: ## Run shellcheck on shell scripts
+	find . -name '*.sh' -not -path './.git/*' -not -path './vendor/*' -print0 | xargs -0 shellcheck --severity=warning
+
 ##@ Build
 
 .PHONY: build
