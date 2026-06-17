@@ -158,27 +158,46 @@ func getRESTConfigFromRequest(_ *gin.Context) (*rest.Config, error) {
 	return cfgCopy, nil
 }
 
-// getKubernetesClient creates a controller-runtime client for accessing Kubernetes resources
-func getKubernetesClient() (client.Client, error) {
+// buildK8sConfig loads the REST config and registers the schemes needed by the build API.
+func buildK8sConfig() (*rest.Config, *runtime.Scheme, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
-		kubeconfig := os.Getenv("KUBECONFIG")
-		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		cfg, err = clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
 		if err != nil {
-			return nil, fmt.Errorf("failed to build kube config: %w", err)
+			return nil, nil, fmt.Errorf("failed to build kube config: %w", err)
 		}
 	}
 
 	scheme := runtime.NewScheme()
 	if err := automotivev1alpha1.AddToScheme(scheme); err != nil {
-		return nil, fmt.Errorf("failed to add scheme: %w", err)
+		return nil, nil, fmt.Errorf("failed to add automotive scheme: %w", err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		return nil, nil, fmt.Errorf("failed to add core scheme: %w", err)
+	}
+	return cfg, scheme, nil
+}
 
+// getKubernetesClient creates a controller-runtime client for accessing Kubernetes resources.
+func getKubernetesClient() (client.Client, error) {
+	cfg, scheme, err := buildK8sConfig()
+	if err != nil {
+		return nil, err
+	}
 	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 	return k8sClient, nil
+}
+
+// getWatchClient creates a controller-runtime client with Watch support.
+func getWatchClient() (client.WithWatch, error) {
+	cfg, scheme, err := buildK8sConfig()
+	if err != nil {
+		return nil, err
+	}
+	return client.NewWithWatch(cfg, client.Options{Scheme: scheme})
 }
 
 func getClientFromRequest(c *gin.Context) (client.Client, error) {

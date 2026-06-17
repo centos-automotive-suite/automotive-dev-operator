@@ -302,7 +302,7 @@ type AuthenticationConfig struct {
 
 	// JWT authentication configuration for OIDC providers.
 	// +optional
-	JWT []apiserverv1beta1.JWTAuthenticator `json:"jwt,omitempty"`
+	JWT []JWTAuthenticatorConfig `json:"jwt,omitempty"`
 
 	// OIDC client ID for caib CLI.
 	// +optional
@@ -315,6 +315,96 @@ type InternalAuthConfig struct {
 	// +kubebuilder:default="internal:"
 	// +optional
 	Prefix string `json:"prefix,omitempty"`
+}
+
+// SecretKeySelector references a key in a Kubernetes Secret.
+type SecretKeySelector struct {
+	// Name of the Secret.
+	Name string `json:"name"`
+
+	// Namespace of the Secret. If omitted, the operator's namespace is used.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Key within the Secret whose value is the PEM-encoded CA certificate.
+	Key string `json:"key"`
+}
+
+// ConfigMapKeySelector references a key in a Kubernetes ConfigMap.
+type ConfigMapKeySelector struct {
+	// Name of the ConfigMap.
+	Name string `json:"name"`
+
+	// Namespace of the ConfigMap. If omitted, the operator's namespace is used.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Key within the ConfigMap whose value is the PEM-encoded CA certificate.
+	Key string `json:"key"`
+}
+
+// JWTIssuerConfig extends the upstream JWTIssuer with Kubernetes-native CA references.
+// +kubebuilder:validation:XValidation:rule="[has(self.certificateAuthority), has(self.certificateAuthoritySecret), has(self.certificateAuthorityConfigMap)].filter(x, x).size() <= 1",message="at most one of certificateAuthority, certificateAuthoritySecret, or certificateAuthorityConfigMap may be set"
+type JWTIssuerConfig struct {
+	// URL is the base URL of the OIDC provider.
+	// +kubebuilder:validation:Required
+	URL string `json:"url"`
+
+	// DiscoveryURL overrides the OIDC discovery endpoint when it differs from URL.
+	// +optional
+	DiscoveryURL string `json:"discoveryURL,omitempty"`
+
+	// Audiences is the set of acceptable JWT audiences.
+	// +kubebuilder:validation:MinItems=1
+	Audiences []string `json:"audiences"`
+
+	// AudienceMatchPolicy controls how audiences are matched.
+	// +optional
+	AudienceMatchPolicy string `json:"audienceMatchPolicy,omitempty"`
+
+	// EgressSelectorType specifies which egress selector should be used for
+	// OIDC-related network traffic (discovery, JWKS, distributed claims, etc).
+	// Valid values are "controlplane" and "cluster".
+	// +optional
+	EgressSelectorType string `json:"egressSelectorType,omitempty"`
+
+	// CertificateAuthority is an inline PEM-encoded CA certificate used to verify
+	// the OIDC provider's TLS certificate.
+	// +optional
+	CertificateAuthority string `json:"certificateAuthority,omitempty"`
+
+	// CertificateAuthoritySecret references a Kubernetes Secret containing the
+	// PEM-encoded CA certificate. The build API watches the Secret for changes so
+	// CA rotations are picked up immediately without restarting the server.
+	// +optional
+	CertificateAuthoritySecret *SecretKeySelector `json:"certificateAuthoritySecret,omitempty"`
+
+	// CertificateAuthorityConfigMap references a Kubernetes ConfigMap containing the
+	// PEM-encoded CA certificate. The build API watches the ConfigMap for changes so
+	// CA rotations are picked up immediately without restarting the server.
+	// +optional
+	CertificateAuthorityConfigMap *ConfigMapKeySelector `json:"certificateAuthorityConfigMap,omitempty"`
+}
+
+// JWTAuthenticatorConfig configures a single external JWT/OIDC authenticator.
+// It mirrors apiserverv1beta1.JWTAuthenticator but replaces the issuer with
+// JWTIssuerConfig to support Kubernetes-native CA references.
+type JWTAuthenticatorConfig struct {
+	// Issuer configures the OIDC provider.
+	// +kubebuilder:validation:Required
+	Issuer JWTIssuerConfig `json:"issuer"`
+
+	// ClaimMappings maps OIDC claims to Kubernetes user attributes.
+	// +kubebuilder:validation:Required
+	ClaimMappings apiserverv1beta1.ClaimMappings `json:"claimMappings"`
+
+	// ClaimValidationRules are additional rules applied to incoming JWT claims.
+	// +optional
+	ClaimValidationRules []apiserverv1beta1.ClaimValidationRule `json:"claimValidationRules,omitempty"`
+
+	// UserValidationRules are additional rules applied to the authenticated user.
+	// +optional
+	UserValidationRules []apiserverv1beta1.UserValidationRule `json:"userValidationRules,omitempty"`
 }
 
 // ContainerBuildsConfig defines configuration for container build operations

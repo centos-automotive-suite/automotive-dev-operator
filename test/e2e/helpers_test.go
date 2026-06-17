@@ -552,13 +552,13 @@ func waitForOIDCConfig() {
 }
 
 // getDexToken obtains an OIDC id_token from Dex using the password grant.
-func getDexToken(username, password string) string {
+func getDexToken() string {
 	httpClient := newInsecureHTTPClient()
 
 	data := url.Values{
 		"grant_type": {"password"},
-		"username":   {username},
-		"password":   {password},
+		"username":   {"test-user@example.com"},
+		"password":   {"password"},
 		"client_id":  {"caib-cli"},
 		"scope":      {"openid profile email"},
 	}
@@ -580,6 +580,29 @@ func getDexToken(username, password string) string {
 	ExpectWithOffset(1, tokenResp.IDToken).NotTo(BeEmpty(), "Dex returned empty id_token")
 
 	return tokenResp.IDToken
+}
+
+// clearOIDCConfig removes the authentication block from the OperatorConfig and
+// waits for the Build API to reflect the change (404 on /v1/auth/config).
+func clearOIDCConfig() {
+	cmd := exec.Command("kubectl", "patch", "operatorconfig", "config",
+		"-n", testNamespace, "--type=merge",
+		"-p", `{"spec":{"buildAPI":{"authentication":null}}}`)
+	_, _ = utils.Run(cmd)
+
+	client := newInsecureHTTPClient()
+	EventuallyWithOffset(1, func() error {
+		resp, err := client.Get(caibServer + "/v1/auth/config")
+		if err != nil {
+			return err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusNotFound {
+			return fmt.Errorf("expected 404 after clearing OIDC config, got %d", resp.StatusCode)
+		}
+		return nil
+	}, 3*time.Minute, 5*time.Second).Should(Succeed(),
+		"Build API did not reflect cleared OIDC config in time")
 }
 
 // killPortForwardCmd safely terminates a port-forward process and nils the pointer.

@@ -331,6 +331,8 @@ func (a *APIServer) Start(ctx context.Context) error {
 		}
 	}()
 
+	go a.startResourceWatcher(ctx)
+
 	<-ctx.Done()
 	a.log.Info("shutting down build-api server...")
 

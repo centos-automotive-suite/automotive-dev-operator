@@ -45,13 +45,7 @@ var _ = Describe("OIDC Authentication", Label("auth"), Ordered, func() {
 	})
 
 	AfterAll(func() {
-		cmd := exec.Command("kubectl", "patch", "operatorconfig", "config",
-			"-n", testNamespace, "--type=json",
-			"-p", `[{"op": "remove", "path": "/spec/buildAPI/authentication"}]`)
-		out, err := utils.Run(cmd)
-		if err != nil {
-			_, _ = fmt.Fprintf(GinkgoWriter, "OIDC cleanup patch failed (non-fatal): %v\n%s\n", err, string(out))
-		}
+		clearOIDCConfig()
 	})
 
 	// -----------------------------------------------------------------
@@ -112,7 +106,7 @@ var _ = Describe("OIDC Authentication", Label("auth"), Ordered, func() {
 			var token string
 			if dexAvailable {
 				ensureDexOIDC()
-				token = getDexToken("test-user@example.com", "password")
+				token = getDexToken()
 			} else {
 				By("creating a ServiceAccount token for TokenReview authentication")
 				cmd := exec.Command("kubectl", "create", "token", "default",
@@ -176,6 +170,166 @@ var _ = Describe("OIDC Authentication", Label("auth"), Ordered, func() {
 				}
 				return nil
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+	})
+
+	// -----------------------------------------------------------------
+	// CA certificate reference via Secret and ConfigMap
+	// Requires Dex so that token validation against a real OIDC issuer
+	// -----------------------------------------------------------------
+	Context("CA Certificate Reference", func() {
+		const (
+			caSecretName    = "oidc-ca-secret"
+			caConfigMapName = "oidc-ca-configmap"
+			wrongCASecret   = "oidc-wrong-ca-secret"
+		)
+
+		BeforeAll(func() {
+			if !dexAvailable {
+				Skip("CA certificate reference tests require Dex; run hack/e2e/setup-dex.sh")
+			}
+		})
+
+		AfterAll(func() {
+			for _, name := range []string{caSecretName, wrongCASecret} {
+				cmd := exec.Command("kubectl", "delete", "secret", name,
+					"-n", testNamespace, "--ignore-not-found")
+				_, _ = utils.Run(cmd)
+			}
+			cmd := exec.Command("kubectl", "delete", "configmap", caConfigMapName,
+				"-n", testNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should authenticate tokens when CA is provided via a Secret", func() {
+			clearOIDCConfig()
+
+			By("creating Secret with Dex CA certificate")
+			cmd := exec.Command("kubectl", "create", "secret", "generic", caSecretName,
+				"-n", testNamespace, "--from-literal=ca.crt="+dexCACert)
+			_, err := utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+			By("patching OperatorConfig to reference CA from Secret")
+			oidcPatch := fmt.Sprintf(
+				`{"spec":{"buildAPI":{"authentication":{"clientId":"caib-cli","jwt":[{"issuer":{"url":"https://dex.dex.svc.cluster.local:5556","audiences":["caib-cli"],"certificateAuthoritySecret":{"name":"%s","key":"ca.crt"}},"claimMappings":{"username":{"claim":"name","prefix":"dex:"}}}]}}}}`,
+				caSecretName,
+			)
+			cmd = exec.Command("kubectl", "patch", "operatorconfig", "config",
+				"-n", testNamespace, "--type=merge", "-p", oidcPatch)
+			_, err = utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+			By("verifying a Dex token is accepted")
+			token := getDexToken()
+			client := newInsecureHTTPClient()
+			EventuallyWithOffset(1, func() error {
+				req, reqErr := http.NewRequest("GET", caibServer+"/v1/builds", nil)
+				if reqErr != nil {
+					return reqErr
+				}
+				req.Header.Set("Authorization", "Bearer "+token)
+				resp, respErr := client.Do(req)
+				if respErr != nil {
+					return respErr
+				}
+				defer func() { _ = resp.Body.Close() }()
+				if resp.StatusCode != http.StatusOK {
+					return fmt.Errorf("expected 200 with valid Dex token and correct Secret CA, got %d", resp.StatusCode)
+				}
+				return nil
+			}, 3*time.Minute, 5*time.Second).Should(Succeed(),
+				"token authentication failed with correct CA from Secret")
+		})
+
+		It("should authenticate tokens when CA is provided via a ConfigMap", func() {
+			clearOIDCConfig()
+
+			By("creating ConfigMap with Dex CA certificate")
+			cmd := exec.Command("kubectl", "create", "configmap", caConfigMapName,
+				"-n", testNamespace, "--from-literal=ca.crt="+dexCACert)
+			_, err := utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+			By("patching OperatorConfig to reference CA from ConfigMap")
+			oidcPatch := fmt.Sprintf(
+				`{"spec":{"buildAPI":{"authentication":{"clientId":"caib-cli","jwt":[{"issuer":{"url":"https://dex.dex.svc.cluster.local:5556","audiences":["caib-cli"],"certificateAuthorityConfigMap":{"name":"%s","key":"ca.crt"}},"claimMappings":{"username":{"claim":"name","prefix":"dex:"}}}]}}}}`,
+				caConfigMapName,
+			)
+			cmd = exec.Command("kubectl", "patch", "operatorconfig", "config",
+				"-n", testNamespace, "--type=merge", "-p", oidcPatch)
+			_, err = utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+			By("verifying a Dex token is accepted")
+			token := getDexToken()
+			client := newInsecureHTTPClient()
+			EventuallyWithOffset(1, func() error {
+				req, reqErr := http.NewRequest("GET", caibServer+"/v1/builds", nil)
+				if reqErr != nil {
+					return reqErr
+				}
+				req.Header.Set("Authorization", "Bearer "+token)
+				resp, respErr := client.Do(req)
+				if respErr != nil {
+					return respErr
+				}
+				defer func() { _ = resp.Body.Close() }()
+				if resp.StatusCode != http.StatusOK {
+					return fmt.Errorf("expected 200 with valid Dex token and correct ConfigMap CA, got %d", resp.StatusCode)
+				}
+				return nil
+			}, 3*time.Minute, 5*time.Second).Should(Succeed(),
+				"token authentication failed with correct CA from ConfigMap")
+		})
+
+		It("should reject tokens when the CA reference points to a wrong certificate", func() {
+			clearOIDCConfig()
+
+			By("reading kube-root-ca.crt as a CA that does not sign Dex's TLS certificate")
+			cmd := exec.Command("kubectl", "get", "configmap", "kube-root-ca.crt",
+				"-n", testNamespace, "-o", "jsonpath={.data.ca\\.crt}")
+			output, err := utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			wrongCA := strings.TrimSpace(string(output))
+			ExpectWithOffset(1, wrongCA).NotTo(BeEmpty())
+
+			By("creating Secret with wrong CA certificate")
+			cmd = exec.Command("kubectl", "create", "secret", "generic", wrongCASecret,
+				"-n", testNamespace, "--from-literal=ca.crt="+wrongCA)
+			_, err = utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+			By("patching OperatorConfig to reference wrong CA from Secret")
+			oidcPatch := fmt.Sprintf(
+				`{"spec":{"buildAPI":{"authentication":{"clientId":"caib-cli","jwt":[{"issuer":{"url":"https://dex.dex.svc.cluster.local:5556","audiences":["caib-cli"],"certificateAuthoritySecret":{"name":"%s","key":"ca.crt"}},"claimMappings":{"username":{"claim":"name","prefix":"dex:"}}}]}}}}`,
+				wrongCASecret,
+			)
+			cmd = exec.Command("kubectl", "patch", "operatorconfig", "config",
+				"-n", testNamespace, "--type=merge", "-p", oidcPatch)
+			_, err = utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+			By("verifying a Dex token is rejected due to TLS verification failure")
+			token := getDexToken()
+			client := newInsecureHTTPClient()
+			EventuallyWithOffset(1, func() error {
+				req, reqErr := http.NewRequest("GET", caibServer+"/v1/builds", nil)
+				if reqErr != nil {
+					return reqErr
+				}
+				req.Header.Set("Authorization", "Bearer "+token)
+				resp, respErr := client.Do(req)
+				if respErr != nil {
+					return respErr
+				}
+				defer func() { _ = resp.Body.Close() }()
+				if resp.StatusCode != http.StatusUnauthorized {
+					return fmt.Errorf("expected 401 with wrong CA, got %d", resp.StatusCode)
+				}
+				return nil
+			}, 3*time.Minute, 5*time.Second).Should(Succeed(),
+				"token authentication should have been rejected with wrong CA")
 		})
 	})
 })
