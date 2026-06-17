@@ -21,9 +21,15 @@ type FeatureSpec struct {
 	Stage Stage
 }
 
+// KeylessSignatureVerification enables Fulcio/Rekor-based keyless cosign verification
+// for workspace images and Tekton task bundles.
+const KeylessSignatureVerification FeatureName = "KeylessSignatureVerification"
+
 // defaultFeatures is the compile-time registry of known features and their
 // default stages. Each feature PR adds its own entry here.
-var defaultFeatures = map[FeatureName]FeatureSpec{}
+var defaultFeatures = map[FeatureName]FeatureSpec{
+	KeylessSignatureVerification: {Stage: Alpha},
+}
 
 // Register adds a feature to the default registry. Intended for use in init()
 // functions within the package that implements the feature, or directly in this

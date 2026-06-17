@@ -17,8 +17,12 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/featuregates"
 	"github.com/go-logr/logr"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	routev1 "github.com/openshift/api/route/v1"
+	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
 	pod "github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"go.opentelemetry.io/otel"
@@ -912,11 +916,13 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			}
 
 			if operatorConfig.Spec.OSBuilds.TaskBundleVerify {
-				pubKeyPEM, err := bundleverify.FetchCosignPublicKey(ctx, r.Client, operatorConfig.Spec.OSBuilds.TaskBundleCosignKeyRef, controllerutils.OperatorNamespace())
-				if err != nil {
-					return fmt.Errorf("secureBuild: cosign key is unavailable: %w", err)
+				osb := operatorConfig.Spec.OSBuilds
+				gates := featuregates.NewFromConfig(&operatorConfig.Spec)
+				if osb.TaskBundleCosignKeyless != nil && !gates.Enabled(featuregates.KeylessSignatureVerification) {
+					return fmt.Errorf("keyless signature verification is configured but the KeylessSignatureVerification feature gate is not enabled")
 				}
-				if err := bundleverify.VerifyBundle(ctx, ref, pubKeyPEM); err != nil {
+				registryOpts := ociremote.WithRemoteOptions(remote.WithAuthFromKeychain(authn.DefaultKeychain))
+				if err := bundleverify.VerifyImage(ctx, ref, osb.TaskBundleCosignKeyless, r.Client, osb.TaskBundleCosignKeyRef, controllerutils.OperatorNamespace(), registryOpts); err != nil {
 					return fmt.Errorf("task bundle signature verification failed: %w", err)
 				}
 			}

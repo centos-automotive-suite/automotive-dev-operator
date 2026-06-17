@@ -43,6 +43,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/featuregates"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -1061,12 +1062,32 @@ func verifyTaskBundle(ctx context.Context, k8sClient client.Client, namespace st
 		return 0, nil
 	}
 
+	registryOpts := ociremote.WithRemoteOptions(remote.WithAuthFromKeychain(authn.DefaultKeychain))
+
+	if kl := operatorConfig.Spec.OSBuilds.TaskBundleCosignKeyless; kl != nil {
+		gates := featuregates.NewFromConfig(&operatorConfig.Spec)
+		if !gates.Enabled(featuregates.KeylessSignatureVerification) {
+			return http.StatusBadRequest, fmt.Errorf("keyless signature verification is configured but the KeylessSignatureVerification feature gate is not enabled")
+		}
+		identity := bundleverify.KeylessIdentityFromAPI(kl)
+		if kl.FulcioRootCARef != nil {
+			rootCA, err := bundleverify.FetchFulcioRootCA(ctx, k8sClient, kl.FulcioRootCARef, namespace)
+			if err != nil {
+				return http.StatusBadRequest, fmt.Errorf("fulcioRootCARef configured but unavailable: %w", err)
+			}
+			identity.FulcioRootCAPEM = rootCA
+		}
+		if err := bundleverify.VerifyImageKeyless(ctx, bundleRef, identity, registryOpts); err != nil {
+			return http.StatusForbidden, fmt.Errorf("task bundle keyless signature verification failed: %w", err)
+		}
+		return 0, nil
+	}
+
 	pubKeyPEM, err := bundleverify.FetchCosignPublicKey(ctx, k8sClient, operatorConfig.Spec.OSBuilds.TaskBundleCosignKeyRef, namespace)
 	if err != nil {
 		return http.StatusBadRequest, fmt.Errorf("taskBundleVerify is enabled but cosign key is unavailable: %w", err)
 	}
 
-	registryOpts := ociremote.WithRemoteOptions(remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err := bundleverify.VerifyBundle(ctx, bundleRef, pubKeyPEM, registryOpts); err != nil {
 		return http.StatusForbidden, fmt.Errorf("task bundle signature verification failed: %w", err)
 	}
@@ -1074,14 +1095,9 @@ func verifyTaskBundle(ctx context.Context, k8sClient client.Client, namespace st
 	return 0, nil
 }
 
-func verifyWorkspaceImage(ctx context.Context, k8sClient client.Client, namespace string, wsConfig *automotivev1alpha1.WorkspacesConfig, imageRef string, imagePullSecrets []corev1.LocalObjectReference) (int, error) {
+func verifyWorkspaceImage(ctx context.Context, k8sClient client.Client, namespace string, wsConfig *automotivev1alpha1.WorkspacesConfig, imageRef string, imagePullSecrets []corev1.LocalObjectReference, gates *featuregates.Gates) (int, error) {
 	if wsConfig == nil || !wsConfig.ImageVerify {
 		return 0, nil
-	}
-
-	pubKeyPEM, err := bundleverify.FetchCosignPublicKey(ctx, k8sClient, wsConfig.ImageCosignKeyRef, namespace)
-	if err != nil {
-		return http.StatusBadRequest, fmt.Errorf("imageVerify is enabled but cosign key is unavailable: %w", err)
 	}
 
 	keychain, err := bundleverify.KeychainFromPullSecrets(ctx, k8sClient, namespace, imagePullSecrets)
@@ -1089,8 +1105,32 @@ func verifyWorkspaceImage(ctx context.Context, k8sClient client.Client, namespac
 		return http.StatusInternalServerError, fmt.Errorf("building registry keychain: %w", err)
 	}
 	registryOpts := ociremote.WithRemoteOptions(remote.WithAuthFromKeychain(keychain))
-	if err := bundleverify.VerifyBundle(ctx, imageRef, pubKeyPEM, registryOpts); err != nil {
-		return http.StatusForbidden, fmt.Errorf("workspace image signature verification failed: %w", err)
+
+	if kl := wsConfig.ImageCosignKeyless; kl != nil {
+		if !gates.Enabled(featuregates.KeylessSignatureVerification) {
+			return http.StatusBadRequest, fmt.Errorf("keyless signature verification is configured but the KeylessSignatureVerification feature gate is not enabled")
+		}
+		identity := bundleverify.KeylessIdentityFromAPI(kl)
+		if kl.FulcioRootCARef != nil {
+			rootCA, err := bundleverify.FetchFulcioRootCA(ctx, k8sClient, kl.FulcioRootCARef, namespace)
+			if err != nil {
+				return http.StatusBadRequest, fmt.Errorf("fulcioRootCARef configured but unavailable: %w", err)
+			}
+			identity.FulcioRootCAPEM = rootCA
+		}
+		if err := bundleverify.VerifyImageKeyless(ctx, imageRef, identity, registryOpts); err != nil {
+			return http.StatusForbidden, fmt.Errorf("workspace image keyless signature verification failed: %w", err)
+		}
+		return 0, nil
+	}
+
+	pubKeyPEM, err2 := bundleverify.FetchCosignPublicKey(ctx, k8sClient, wsConfig.ImageCosignKeyRef, namespace)
+	if err2 != nil {
+		return http.StatusBadRequest, fmt.Errorf("imageVerify is enabled but cosign key is unavailable: %w", err2)
+	}
+
+	if err2 = bundleverify.VerifyBundle(ctx, imageRef, pubKeyPEM, registryOpts); err2 != nil {
+		return http.StatusForbidden, fmt.Errorf("workspace image signature verification failed: %w", err2)
 	}
 
 	return 0, nil

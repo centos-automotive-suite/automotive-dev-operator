@@ -1,0 +1,77 @@
+# Sigstore scaffold Helm values for CRC (OpenShift Local).
+# Deploys Fulcio + Rekor + Trillian with minimal resource footprint.
+# CTLog, TUF mirror, and TSA are disabled to conserve memory.
+#
+# Fulcio trusts the Kubernetes in-cluster OIDC issuer so that
+# Tekton Chains can obtain ephemeral signing certificates using
+# its ServiceAccount token.
+
+fulcio:
+  enabled: true
+  namespace:
+    name: fulcio-system
+    create: true
+  forceNamespace: fulcio-system
+  server:
+    fullnameOverride: fulcio-server
+    args:
+      certificateAuthority: fileca
+      disable_ct_log: true
+      ct_log_url: ""
+    ingress:
+      http:
+        enabled: false
+      grpc:
+        enabled: false
+  createcerts:
+    fullnameOverride: fulcio-createcerts
+  ctlog:
+    enabled: false
+  config:
+    contents:
+      OIDCIssuers:
+        https://kubernetes.default.svc:
+          IssuerURL: https://kubernetes.default.svc
+          ClientID: sigstore
+          Type: kubernetes
+    format: json
+
+ctlog:
+  enabled: false
+
+rekor:
+  enabled: true
+  namespace:
+    name: rekor-system
+    create: true
+  forceNamespace: rekor-system
+  server:
+    fullnameOverride: rekor-server
+    ingress:
+      enabled: false
+  redis:
+    enabled: false
+  trillian:
+    enabled: false
+  createtree:
+    fullnameOverride: rekor-createtree
+
+trillian:
+  enabled: true
+  namespace:
+    name: trillian-system
+    create: true
+  forceNamespace: trillian-system
+  fullnameOverride: trillian
+  logServer:
+    fullnameOverride: trillian-logserver
+  logSigner:
+    fullnameOverride: trillian-logsigner
+  mysql:
+    fullnameOverride: trillian-mysql
+
+tuf:
+  enabled: false
+
+tsa:
+  enabled: false

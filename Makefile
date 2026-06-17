@@ -121,6 +121,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 #   test-e2e-bootc           - bootc container build via caib
 #   test-e2e-container-build - Shipwright container build via caib
 #   test-e2e-auth            - OIDC authentication (OpenShift only)
+#   test-e2e-keyless         - keyless signing via Tekton Chains + Sigstore
 .PHONY: test-e2e
 test-e2e:
 	go test ./test/e2e/ -v -ginkgo.v -timeout 45m
@@ -140,6 +141,10 @@ test-e2e-container-build:
 .PHONY: test-e2e-auth
 test-e2e-auth:
 	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-auth} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="auth" -timeout 15m
+
+.PHONY: test-e2e-keyless
+test-e2e-keyless:
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-keyless} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="keyless" -timeout 45m
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

@@ -434,7 +434,8 @@ func (c *ContainerBuildsConfig) GetDefaultBuildTTL() string {
 }
 
 // WorkspacesConfig defines configuration for developer workspaces
-// +kubebuilder:validation:XValidation:rule="!has(self.imageVerify) || !self.imageVerify || has(self.imageCosignKeyRef)",message="imageCosignKeyRef is required when imageVerify is true"
+// +kubebuilder:validation:XValidation:rule="!has(self.imageVerify) || !self.imageVerify || has(self.imageCosignKeyRef) || has(self.imageCosignKeyless)",message="imageCosignKeyRef or imageCosignKeyless is required when imageVerify is true"
+// +kubebuilder:validation:XValidation:rule="!has(self.imageCosignKeyRef) || !has(self.imageCosignKeyless)",message="imageCosignKeyRef and imageCosignKeyless are mutually exclusive"
 type WorkspacesConfig struct {
 	// ToolchainImage is the container image for workspace toolchains
 	// +optional
@@ -504,9 +505,15 @@ type WorkspacesConfig struct {
 
 	// ImageCosignKeyRef references a ConfigMap key containing the cosign public key
 	// (PEM-encoded) used to verify workspace image signatures.
-	// Required when ImageVerify is true.
+	// Mutually exclusive with ImageCosignKeyless.
 	// +optional
 	ImageCosignKeyRef *corev1.ConfigMapKeySelector `json:"imageCosignKeyRef,omitempty"`
+
+	// ImageCosignKeyless configures keyless (Fulcio/Rekor) signature verification
+	// for workspace images. Uses certificate identity and OIDC issuer instead of a static key.
+	// Mutually exclusive with ImageCosignKeyRef.
+	// +optional
+	ImageCosignKeyless *CosignKeylessIdentity `json:"imageCosignKeyless,omitempty"`
 }
 
 // GetToolchainImage returns the toolchain image, falling back to the default
@@ -722,7 +729,8 @@ type OperatorConfigSpec struct {
 }
 
 // OSBuildsConfig defines configuration for OS build operations
-// +kubebuilder:validation:XValidation:rule="!has(self.taskBundleVerify) || !self.taskBundleVerify || has(self.taskBundleCosignKeyRef)",message="taskBundleCosignKeyRef is required when taskBundleVerify is true"
+// +kubebuilder:validation:XValidation:rule="!has(self.taskBundleVerify) || !self.taskBundleVerify || has(self.taskBundleCosignKeyRef) || has(self.taskBundleCosignKeyless)",message="taskBundleCosignKeyRef or taskBundleCosignKeyless is required when taskBundleVerify is true"
+// +kubebuilder:validation:XValidation:rule="!has(self.taskBundleCosignKeyRef) || !has(self.taskBundleCosignKeyless)",message="taskBundleCosignKeyRef and taskBundleCosignKeyless are mutually exclusive"
 type OSBuildsConfig struct {
 	// Enabled determines if Tekton tasks for OS builds should be deployed
 	// +kubebuilder:default=true
@@ -824,9 +832,15 @@ type OSBuildsConfig struct {
 
 	// TaskBundleCosignKeyRef references a ConfigMap key containing the cosign public key (PEM-encoded)
 	// used to verify Tekton Bundle signatures.
-	// Required when TaskBundleVerify is true.
+	// Mutually exclusive with TaskBundleCosignKeyless.
 	// +optional
 	TaskBundleCosignKeyRef *corev1.ConfigMapKeySelector `json:"taskBundleCosignKeyRef,omitempty"`
+
+	// TaskBundleCosignKeyless configures keyless (Fulcio/Rekor) signature verification
+	// for Tekton Bundle images. Uses certificate identity and OIDC issuer instead of a static key.
+	// Mutually exclusive with TaskBundleCosignKeyRef.
+	// +optional
+	TaskBundleCosignKeyless *CosignKeylessIdentity `json:"taskBundleCosignKeyless,omitempty"`
 
 	// DefaultBuildTTL is the default time-to-live for builds (all phases, including in-progress).
 	// Builds are automatically deleted after this duration. Uses Go duration format (e.g. "24h", "72h").
@@ -847,6 +861,49 @@ type OSBuildsConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	RegistryTokenLifetimeSeconds int64 `json:"registryTokenLifetimeSeconds,omitempty"`
+}
+
+// CosignKeylessIdentity configures keyless (Fulcio/Rekor) signature verification.
+// Instead of a static public key, verification uses the signing certificate's identity
+// and OIDC issuer, validated against the Sigstore transparency log.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.certificateIdentity) || has(self.certificateIdentityRegExp)",message="at least one of certificateIdentity or certificateIdentityRegExp must be set"
+// +kubebuilder:validation:XValidation:rule="has(self.certificateOIDCIssuer) || has(self.certificateOIDCIssuerRegExp)",message="at least one of certificateOIDCIssuer or certificateOIDCIssuerRegExp must be set"
+type CosignKeylessIdentity struct {
+	// CertificateIdentity is the expected Subject Alternative Name (SAN) of the signing certificate.
+	// For Tekton Chains with a Kubernetes SA, this is typically the SA's OIDC URI
+	// (e.g., "https://kubernetes.io/namespaces/my-ns/serviceaccounts/my-sa").
+	// Supports regex when CertificateIdentityRegExp is used instead.
+	// +optional
+	CertificateIdentity string `json:"certificateIdentity,omitempty"`
+
+	// CertificateIdentityRegExp is a regular expression alternative to CertificateIdentity.
+	// Exactly one of CertificateIdentity or CertificateIdentityRegExp must be set.
+	// +optional
+	CertificateIdentityRegExp string `json:"certificateIdentityRegExp,omitempty"`
+
+	// CertificateOIDCIssuer is the expected OIDC issuer of the Fulcio-issued signing certificate.
+	// For Kubernetes SA tokens, this is the cluster's OIDC issuer URL.
+	// Supports regex when CertificateOIDCIssuerRegExp is used instead.
+	// +optional
+	CertificateOIDCIssuer string `json:"certificateOIDCIssuer,omitempty"`
+
+	// CertificateOIDCIssuerRegExp is a regular expression alternative to CertificateOIDCIssuer.
+	// Exactly one of CertificateOIDCIssuer or CertificateOIDCIssuerRegExp must be set.
+	// +optional
+	CertificateOIDCIssuerRegExp string `json:"certificateOIDCIssuerRegExp,omitempty"`
+
+	// RekorURL is the Rekor transparency log URL for signature verification.
+	// Defaults to the public Sigstore instance (https://rekor.sigstore.dev) when empty.
+	// +optional
+	RekorURL string `json:"rekorURL,omitempty"`
+
+	// FulcioRootCARef references a ConfigMap containing the Fulcio root CA certificate (PEM).
+	// When set, only signatures issued by this specific Fulcio instance are accepted,
+	// preventing trust of certificates from other Fulcio instances (e.g. public Sigstore).
+	// The ConfigMap key should contain PEM-encoded certificate data.
+	// +optional
+	FulcioRootCARef *corev1.ConfigMapKeySelector `json:"fulcioRootCARef,omitempty"`
 }
 
 // CertificateSourceRef references a Secret or ConfigMap that contains trusted CA certificates.

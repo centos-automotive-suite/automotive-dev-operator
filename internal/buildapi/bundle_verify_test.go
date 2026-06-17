@@ -8,6 +8,8 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/featuregates"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -122,6 +124,51 @@ var _ = Describe("verifyTaskBundle", func() {
 		Expect(err.Error()).To(ContainSubstring("does not contain key \"cosign.pub\""))
 		Expect(status).To(Equal(http.StatusBadRequest))
 	})
+
+	It("should attempt keyless verification when taskBundleCosignKeyless is set", func() {
+		operatorConfig := &automotivev1alpha1.OperatorConfig{
+			Spec: automotivev1alpha1.OperatorConfigSpec{
+				FeatureGates: map[string]bool{"KeylessSignatureVerification": true},
+				OSBuilds: &automotivev1alpha1.OSBuildsConfig{
+					TaskBundleVerify: true,
+					TaskBundleCosignKeyless: &automotivev1alpha1.CosignKeylessIdentity{
+						CertificateIdentity:   "https://kubernetes.io/namespaces/default/serviceaccounts/pipeline",
+						CertificateOIDCIssuer: "https://kubernetes.default.svc",
+					},
+				},
+			},
+		}
+
+		k8sClient := newFakeClient()
+		status, err := verifyTaskBundle(ctx, k8sClient, namespace, operatorConfig, bundleRef)
+		// Keyless verification will fail (no Sigstore infra in test), but should
+		// attempt it rather than falling through to key-based path.
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("keyless"))
+		Expect(status).To(Equal(http.StatusForbidden))
+	})
+
+	It("should not require cosignKeyRef when keyless is configured", func() {
+		operatorConfig := &automotivev1alpha1.OperatorConfig{
+			Spec: automotivev1alpha1.OperatorConfigSpec{
+				FeatureGates: map[string]bool{"KeylessSignatureVerification": true},
+				OSBuilds: &automotivev1alpha1.OSBuildsConfig{
+					TaskBundleVerify: true,
+					TaskBundleCosignKeyless: &automotivev1alpha1.CosignKeylessIdentity{
+						CertificateIdentity:   "test@example.com",
+						CertificateOIDCIssuer: "https://issuer.example.com",
+					},
+				},
+			},
+		}
+
+		k8sClient := newFakeClient()
+		_, err := verifyTaskBundle(ctx, k8sClient, namespace, operatorConfig, bundleRef)
+		// Should NOT contain "cosign key reference is not configured" —
+		// keyless path should be used instead.
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).ToNot(ContainSubstring("cosign key reference is not configured"))
+	})
 })
 
 var _ = Describe("verifyWorkspaceImage", func() {
@@ -139,7 +186,7 @@ var _ = Describe("verifyWorkspaceImage", func() {
 
 	It("should skip verification when wsConfig is nil", func() {
 		k8sClient := newFakeClient()
-		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, nil, imageRef, nil)
+		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, nil, imageRef, nil, featuregates.New(nil))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(status).To(Equal(0))
 	})
@@ -147,7 +194,7 @@ var _ = Describe("verifyWorkspaceImage", func() {
 	It("should skip verification when ImageVerify is false", func() {
 		wsConfig := &automotivev1alpha1.WorkspacesConfig{ImageVerify: false}
 		k8sClient := newFakeClient()
-		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil)
+		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil, featuregates.New(nil))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(status).To(Equal(0))
 	})
@@ -155,7 +202,7 @@ var _ = Describe("verifyWorkspaceImage", func() {
 	It("should reject when ImageVerify is true but cosignKeyRef is empty", func() {
 		wsConfig := &automotivev1alpha1.WorkspacesConfig{ImageVerify: true}
 		k8sClient := newFakeClient()
-		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil)
+		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil, featuregates.New(nil))
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("cosign key reference is not configured"))
 		Expect(status).To(Equal(http.StatusBadRequest))
@@ -170,7 +217,7 @@ var _ = Describe("verifyWorkspaceImage", func() {
 			},
 		}
 		k8sClient := newFakeClient()
-		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil)
+		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil, featuregates.New(nil))
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("not found"))
 		Expect(status).To(Equal(http.StatusBadRequest))
@@ -189,10 +236,79 @@ var _ = Describe("verifyWorkspaceImage", func() {
 			Data:       map[string]string{"wrong-key": "some-data"},
 		}
 		k8sClient := newFakeClient(cm)
-		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil)
+		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil, featuregates.New(nil))
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("does not contain key \"cosign.pub\""))
 		Expect(status).To(Equal(http.StatusBadRequest))
+	})
+
+	It("should reject keyless verification when feature gate is disabled", func() {
+		wsConfig := &automotivev1alpha1.WorkspacesConfig{
+			ImageVerify: true,
+			ImageCosignKeyless: &automotivev1alpha1.CosignKeylessIdentity{
+				CertificateIdentity:   "test@example.com",
+				CertificateOIDCIssuer: "https://issuer.example.com",
+			},
+		}
+		k8sClient := newFakeClient()
+		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil, featuregates.New(nil))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("feature gate"))
+		Expect(status).To(Equal(http.StatusBadRequest))
+	})
+
+	It("should attempt keyless verification when feature gate is enabled", func() {
+		wsConfig := &automotivev1alpha1.WorkspacesConfig{
+			ImageVerify: true,
+			ImageCosignKeyless: &automotivev1alpha1.CosignKeylessIdentity{
+				CertificateIdentity:   "test@example.com",
+				CertificateOIDCIssuer: "https://issuer.example.com",
+			},
+		}
+		k8sClient := newFakeClient()
+		keylessGates := featuregates.New(map[featuregates.FeatureName]bool{
+			featuregates.KeylessSignatureVerification: true,
+		})
+		status, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil, keylessGates)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("keyless"))
+		Expect(status).To(Equal(http.StatusForbidden))
+	})
+
+	It("should not require cosignKeyRef when keyless is configured and gate enabled", func() {
+		wsConfig := &automotivev1alpha1.WorkspacesConfig{
+			ImageVerify: true,
+			ImageCosignKeyless: &automotivev1alpha1.CosignKeylessIdentity{
+				CertificateIdentity:   "test@example.com",
+				CertificateOIDCIssuer: "https://issuer.example.com",
+			},
+		}
+		k8sClient := newFakeClient()
+		keylessGates := featuregates.New(map[featuregates.FeatureName]bool{
+			featuregates.KeylessSignatureVerification: true,
+		})
+		_, err := verifyWorkspaceImage(ctx, k8sClient, namespace, wsConfig, imageRef, nil, keylessGates)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).ToNot(ContainSubstring("cosign key reference is not configured"))
+	})
+})
+
+var _ = Describe("KeylessIdentityFromAPI", func() {
+	It("should map all fields from API type to bundleverify type", func() {
+		apiIdentity := &automotivev1alpha1.CosignKeylessIdentity{
+			CertificateIdentity:         "https://kubernetes.io/namespaces/ns/serviceaccounts/sa",
+			CertificateIdentityRegExp:   "https://kubernetes.io/namespaces/.*/serviceaccounts/.*",
+			CertificateOIDCIssuer:       "https://kubernetes.default.svc",
+			CertificateOIDCIssuerRegExp: "https://kubernetes\\..*",
+			RekorURL:                    "https://rekor.example.com",
+		}
+
+		result := bundleverify.KeylessIdentityFromAPI(apiIdentity)
+		Expect(result.Subject).To(Equal(apiIdentity.CertificateIdentity))
+		Expect(result.SubjectRegExp).To(Equal(apiIdentity.CertificateIdentityRegExp))
+		Expect(result.Issuer).To(Equal(apiIdentity.CertificateOIDCIssuer))
+		Expect(result.IssuerRegExp).To(Equal(apiIdentity.CertificateOIDCIssuerRegExp))
+		Expect(result.RekorURL).To(Equal(apiIdentity.RekorURL))
 	})
 })
 

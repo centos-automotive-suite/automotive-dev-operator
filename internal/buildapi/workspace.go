@@ -15,6 +15,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/featuregates"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
@@ -163,7 +164,12 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("image %q is not in the allowed images list", image)})
 		return
 	}
-	if status, verifyErr := verifyWorkspaceImage(c.Request.Context(), k8sClient, namespace, wsConfig, image, wsConfig.GetImagePullSecrets()); verifyErr != nil {
+	var configSpec *automotivev1alpha1.OperatorConfigSpec
+	if operatorConfig != nil {
+		configSpec = &operatorConfig.Spec
+	}
+	gates := featuregates.NewFromConfig(configSpec)
+	if status, verifyErr := verifyWorkspaceImage(c.Request.Context(), k8sClient, namespace, wsConfig, image, wsConfig.GetImagePullSecrets(), gates); verifyErr != nil {
 		c.JSON(status, gin.H{"error": verifyErr.Error()})
 		return
 	}

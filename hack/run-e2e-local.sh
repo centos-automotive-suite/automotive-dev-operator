@@ -19,6 +19,7 @@ usage() {
   printf '  bootc           - bootc container build via caib\n'
   printf '  container-build - Shipwright container build via caib\n'
   printf '  auth            - OIDC authentication (OpenShift or Kind+Dex)\n'
+  printf '  keyless         - keyless signing via Tekton Chains + Sigstore\n'
   printf '  all             - run all tests (default)\n\n'
   printf 'Options:\n'
   printf '  -h, --help    Show this help message and exit\n\n'
@@ -38,7 +39,7 @@ esac
 
 E2E_LANE="${1:-}"
 case "$E2E_LANE" in
-  operator|bootc|auth|container-build)
+  operator|bootc|auth|container-build|keyless)
     E2E_MAKE_TARGET="test-e2e-${E2E_LANE}"
     ;;
   ""|all)
@@ -289,6 +290,16 @@ set_build_platform
 
 info "Building caib CLI..."
 make build-caib
+
+if [[ "$E2E_LANE" == "keyless" || "$E2E_LANE" == "all" ]]; then
+  info "Deploying local Sigstore stack for keyless signing..."
+  bash hack/crc/05-deploy-sigstore.sh
+  export SIGSTORE_FULCIO_ROOT="$REPO_ROOT/.e2e/sigstore-certs/fulcio-root.pem"
+  REGISTRY_ROUTE="$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}' 2>/dev/null || true)"
+  if [[ -n "$REGISTRY_ROUTE" ]]; then
+    export REGISTRY_EXTERNAL_HOST="$REGISTRY_ROUTE"
+  fi
+fi
 
 info "Running e2e lane: ${E2E_LANE} (make ${E2E_MAKE_TARGET})..."
 export CONTAINER_TOOL
