@@ -40,7 +40,6 @@ type Options struct {
 	ExportFormat           *string
 	Mode                   *string
 	AutomotiveImageBuilder *string
-	StorageClass           *string
 	OutputDir              *string
 	Timeout                *int
 	WaitForBuild           *bool
@@ -148,7 +147,6 @@ func NewImageCmd(opts Options) *cobra.Command {
 	)
 	buildCmd.Flags().StringVar(opts.BuilderImage, "builder-image", "", "custom builder container")
 	buildCmd.Flags().BoolVar(opts.RebuildBuilder, "rebuild-builder", false, "force rebuild of the bootc builder image")
-	buildCmd.Flags().StringVar(opts.StorageClass, "storage-class", "", "Kubernetes storage class for build workspace")
 	buildCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
 	buildCmd.Flags().StringArrayVar(opts.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
 	buildCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
@@ -215,7 +213,6 @@ func NewImageCmd(opts Options) *cobra.Command {
 		opts.AutomotiveImageBuilder, "aib-image",
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
-	diskCmd.Flags().StringVar(opts.StorageClass, "storage-class", "", "Kubernetes storage class")
 	diskCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
 	diskCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
 	diskCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", false, "wait for build to complete")
@@ -258,7 +255,6 @@ func NewImageCmd(opts Options) *cobra.Command {
 		opts.AutomotiveImageBuilder, "aib-image",
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
-	buildDevCmd.Flags().StringVar(opts.StorageClass, "storage-class", "", "Kubernetes storage class")
 	buildDevCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
 	buildDevCmd.Flags().StringArrayVar(opts.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
 	buildDevCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
