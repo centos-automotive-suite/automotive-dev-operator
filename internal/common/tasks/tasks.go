@@ -959,15 +959,6 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					Description: "Compression algorithm for artifacts (lz4, gzip, xz)",
 				},
 				{
-					Name:        "storage-class",
-					Type:        tektonv1.ParamTypeString,
-					Description: "Storage class for the PVC to build on (optional, uses cluster default if not specified)",
-					Default: &tektonv1.ParamValue{
-						Type:      tektonv1.ParamTypeString,
-						StringVal: "",
-					},
-				},
-				{
 					Name: "automotive-image-builder",
 					Type: tektonv1.ParamTypeString,
 					Default: &tektonv1.ParamValue{

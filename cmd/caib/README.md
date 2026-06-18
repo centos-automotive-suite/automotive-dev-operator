@@ -126,7 +126,6 @@ caib image build <manifest.aib.yml> [flags]
 | `-o`, `--output` | | Download disk image to local file (implies `--disk`) |
 | `--builder-image` | | Custom aib-build container |
 | `--aib-image` | `quay.io/.../automotive-image-builder:1.3.2` | AIB container image |
-| `--storage-class` | | Storage class for build workspace PVC |
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `false` | Wait for build to complete |
@@ -210,7 +209,6 @@ caib image disk <container-ref> [flags]
 | `-t`, `--target` | `qemu` | Target platform |
 | `-a`, `--arch` | (current system) | Architecture (`amd64`, `arm64`) |
 | `--aib-image` | `quay.io/.../automotive-image-builder:1.3.2` | AIB container image |
-| `--storage-class` | | Kubernetes storage class |
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `false` | Wait for build to complete |
@@ -270,7 +268,6 @@ caib image build-dev <manifest.aib.yml> [flags]
 | `--push` | | Push disk image as OCI artifact to registry |
 | `-o`, `--output` | | Download artifact to local file |
 | `--aib-image` | `quay.io/.../automotive-image-builder:1.3.2` | AIB container image |
-| `--storage-class` | | Storage class for build workspace PVC |
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--define-file` | | Load defines from YAML dictionary file (repeatable) |
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |

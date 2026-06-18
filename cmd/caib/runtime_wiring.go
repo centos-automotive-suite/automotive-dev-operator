@@ -296,7 +296,6 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		ExportFormat:           s.ExportFormat,
 		Mode:                   s.Mode,
 		AutomotiveImageBuilder: s.AutomotiveImageBuilder,
-		StorageClass:           s.StorageClass,
 		OutputDir:              s.OutputDir,
 		Timeout:                s.Timeout,
 		WaitForBuild:           s.WaitForBuild,
