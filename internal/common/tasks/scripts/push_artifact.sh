@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # NOTE: common.sh is prepended to this script at embed time.
 
 ORAS_VERSION="1.2.0"
@@ -205,7 +206,7 @@ else
   echo "No partition configuration found, skipping default-partitions annotation"
 fi
 
-cd /workspace/shared
+cd /workspace/shared || exit
 
 # Verify artifact integrity against the digest produced by the build task.
 EXPECTED_DIGEST="$(params.expected-artifact-digest)"
@@ -257,7 +258,7 @@ if [ -d "${parts_dir}" ] && [ -n "$(ls -A "${parts_dir}" 2>/dev/null)" ]; then
 
   ls -la "${parts_dir}/"
 
-  cd "${parts_dir}"
+  cd "${parts_dir}" || exit
 
   # Create annotations file in current directory (ORAS container may not have /tmp)
   annotations_file="./oras-annotations.json"

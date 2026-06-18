@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # NOTE: common.sh is prepended to this script at embed time.
 set -uo pipefail
 

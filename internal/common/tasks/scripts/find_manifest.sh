@@ -4,9 +4,9 @@ set -e
 echo "looking for manifest file..."
 
 echo "listing contents of manifest config workspace:"
-ls -la $(workspaces.manifest-config-workspace.path)
+ls -la "$(workspaces.manifest-config-workspace.path)"
 
-MANIFEST_FILE=$(find $(workspaces.manifest-config-workspace.path) -name '*.mpp.yml' -o -name '*.aib.yml' -type f | head -n 1)
+MANIFEST_FILE=$(find "$(workspaces.manifest-config-workspace.path)" \( -name '*.mpp.yml' -o -name '*.aib.yml' \) -type f | head -n 1)
 
 if [ -z "$MANIFEST_FILE" ]; then
   echo "No manifest file found in the ConfigMap"
@@ -74,4 +74,4 @@ echo "updated manifest contents:"
 cat "$workspace_manifest"
 
 mkdir -p /tekton/results
-echo -n "$workspace_manifest" > /tekton/results/manifest-file-path
+printf '%s' "$workspace_manifest" > /tekton/results/manifest-file-path

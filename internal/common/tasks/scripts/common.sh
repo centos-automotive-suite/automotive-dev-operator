@@ -98,6 +98,7 @@ setup_cluster_auth() {
   echo "DEBUG: Reading service account token"
   TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
   echo "DEBUG: Reading service account namespace"
+  # shellcheck disable=SC2034 # NAMESPACE is used by scripts prepended with common.sh
   NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
   REGISTRY="${1:-$INTERNAL_REGISTRY}"
   echo "DEBUG: Using registry: $REGISTRY"
@@ -281,6 +282,7 @@ detect_stat_command() {
     declare -g GET_SIZE_CMD="stat -f%z"
     echo "DEBUG: Using BSD stat"
   else
+    # shellcheck disable=SC2034 # GET_SIZE_CMD is used by scripts prepended with common.sh
     declare -g GET_SIZE_CMD="echo ''"
     echo "DEBUG: No working stat command found"
   fi

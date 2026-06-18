@@ -125,7 +125,7 @@ if [ -z "$INTERNAL_REGISTRY" ]; then
     oc patch configs.imageregistry.operator.openshift.io/cluster --patch '{"spec":{"defaultRoute":true}}' --type=merge
 
     echo "Waiting for registry route to be created..."
-    for i in {1..30}; do
+    for _ in {1..30}; do
         INTERNAL_REGISTRY=$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
         if [ -n "$INTERNAL_REGISTRY" ]; then
             break
@@ -268,12 +268,12 @@ fi
 
 echo ""
 echo "Ensuring push permissions..."
-oc policy add-role-to-user system:image-pusher $(oc whoami) -n ${NAMESPACE} 2>/dev/null || true
-oc policy add-role-to-user system:image-pusher $(oc whoami) -n ${CATALOG_NAMESPACE} 2>/dev/null || true
+oc policy add-role-to-user system:image-pusher "$(oc whoami)" -n ${NAMESPACE} 2>/dev/null || true
+oc policy add-role-to-user system:image-pusher "$(oc whoami)" -n ${CATALOG_NAMESPACE} 2>/dev/null || true
 
 echo ""
 echo "Logging in to OpenShift registry..."
-${CONTAINER_TOOL} login -u $(oc whoami) -p $(oc whoami -t) ${REGISTRY} --tls-verify=false
+${CONTAINER_TOOL} login -u "$(oc whoami)" -p "$(oc whoami -t)" ${REGISTRY} --tls-verify=false
 
 echo ""
 echo "Ensuring namespace ${NAMESPACE} exists..."
@@ -285,7 +285,7 @@ CLUSTER_ARCHS=$(oc get nodes -o jsonpath='{.items[*].status.nodeInfo.architectur
 echo "Found architectures: ${CLUSTER_ARCHS}"
 
 # Build multi-arch manifest if cluster has multiple architectures
-ARCHS_ARRAY=(${CLUSTER_ARCHS})
+read -ra ARCHS_ARRAY <<< "${CLUSTER_ARCHS}"
 if [ ${#ARCHS_ARRAY[@]} -gt 1 ]; then
     echo ""
     echo "Multi-arch cluster detected. Building for all architectures..."
@@ -434,7 +434,7 @@ if [ "$COMMAND" = "redeploy" ]; then
 
     echo ""
     echo "Waiting for catalog pod to be ready..."
-    for i in {1..60}; do
+    for _ in {1..60}; do
         CATALOG_POD=$(oc get pods -n ${CATALOG_NAMESPACE} -l olm.catalogSource=${CATALOG_NAME} -o name 2>/dev/null || echo "")
         if [ -n "$CATALOG_POD" ]; then
             oc wait --for=condition=Ready ${CATALOG_POD} -n ${CATALOG_NAMESPACE} --timeout=120s && break
@@ -452,7 +452,7 @@ if [ "$COMMAND" = "redeploy" ]; then
 
     echo ""
     echo "Waiting for CSV to be installed..."
-    for i in {1..60}; do
+    for _ in {1..60}; do
         CSV=$(oc get csv -n ${NAMESPACE} -o name 2>/dev/null | grep automotive-dev-operator || echo "")
         if [ -n "$CSV" ]; then
             PHASE=$(oc get ${CSV} -n ${NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
@@ -473,7 +473,7 @@ if [ "$COMMAND" = "redeploy" ]; then
 
     echo ""
     echo "Waiting for operator deployment to be available..."
-    for i in {1..30}; do
+    for _ in {1..30}; do
         if oc get deployment ado-operator -n ${NAMESPACE} &>/dev/null; then
             oc wait --for=condition=Available deployment/ado-operator -n ${NAMESPACE} --timeout=300s && break
         fi
