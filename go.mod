@@ -5,6 +5,7 @@ go 1.25.7
 require (
 	github.com/containers/image/v5 v5.36.2
 	github.com/containers/storage v1.59.1
+	github.com/dlclark/regexp2 v1.12.0
 	github.com/docker/cli v29.4.0+incompatible
 	github.com/fatih/color v1.18.0
 	github.com/gin-gonic/gin v1.10.1
@@ -15,6 +16,7 @@ require (
 	github.com/onsi/gomega v1.39.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/shipwright-io/build v0.18.3
 	github.com/sigstore/cosign/v3 v3.0.6
 	github.com/sigstore/sigstore v1.10.5

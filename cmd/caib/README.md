@@ -682,6 +682,7 @@ Supported locations:
 | `REGISTRY_USERNAME` | Registry username for push operations |
 | `REGISTRY_PASSWORD` | Registry password for push operations |
 | `REGISTRY_AUTH_FILE` | Path to Docker/Podman auth file (auto-discovery candidate) |
+| `CAIB_SKIP_MANIFEST_VALIDATION` | Skip local manifest schema validation when set to any value |
 
 ## Timeouts and Retries
 

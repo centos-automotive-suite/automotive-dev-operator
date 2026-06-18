@@ -3,6 +3,7 @@ package buildapi
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -109,6 +110,24 @@ func stageForPipelineTask(taskName string) string {
 	}
 }
 
+// pendingPodStage returns a human-readable stage name for a pod that is
+// still in the Pending phase, based on container waiting reasons.
+func pendingPodStage(pod *corev1.Pod) string {
+	statuses := slices.Concat(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses)
+	for _, cs := range statuses {
+		if cs.State.Waiting == nil {
+			continue
+		}
+		switch cs.State.Waiting.Reason {
+		case "ContainerCreating", "PodInitializing":
+			return "Pulling image"
+		case "ErrImagePull", "ImagePullBackOff":
+			return "Pulling image (retrying)"
+		}
+	}
+	return ""
+}
+
 // readTaskProgressFromPods reads the progress annotation from each pipeline
 // task pod, sorted by pod start time. For pods that don't have the annotation
 // yet (e.g. just started), a synthetic marker is generated when the pod is
@@ -145,7 +164,8 @@ func readTaskProgressFromPods(ctx context.Context, cs *kubernetes.Clientset, pip
 
 		// Synthesize a marker for pods that don't have the annotation
 		// yet so the progress bar advances when tasks start running.
-		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded {
+		switch pod.Status.Phase {
+		case corev1.PodRunning, corev1.PodSucceeded:
 			done := 0
 			if pod.Status.Phase == corev1.PodSucceeded {
 				done = 1
@@ -154,6 +174,15 @@ func readTaskProgressFromPods(ctx context.Context, cs *kubernetes.Clientset, pip
 				taskName: taskName,
 				marker:   BuildStep{Stage: stageForPipelineTask(taskName), Done: done, Total: 1},
 			})
+		case corev1.PodPending:
+			// Surface image-pull or container-creating status so the
+			// user knows the pod is making progress, not stuck.
+			if stage := pendingPodStage(&pod); stage != "" {
+				results = append(results, taskProgress{
+					taskName: taskName,
+					marker:   BuildStep{Stage: stage, Done: 0, Total: 1},
+				})
+			}
 		}
 	}
 
