@@ -1,0 +1,4 @@
+FROM registry.access.redhat.com/ubi9-minimal:latest
+ARG VERSION=latest
+LABEL version="${VERSION}"
+RUN echo "e2e container build test"

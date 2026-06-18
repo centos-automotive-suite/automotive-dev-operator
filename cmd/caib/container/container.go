@@ -17,6 +17,7 @@ limitations under the License.
 package container
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
@@ -29,15 +30,18 @@ func NewContainerCmd() *cobra.Command {
 		Use:   "container",
 		Short: "Build container images using Shipwright",
 		Long:  `Build container images using Shipwright Build and push to registries.`,
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(serverURL) == "" {
 				serverURL = config.DefaultServerWithDerive()
+			}
+			if flag := cmd.Root().PersistentFlags().Lookup("insecure"); flag != nil {
+				if val, err := strconv.ParseBool(flag.Value.String()); err == nil && val {
+					insecureSkipTLS = true
+				}
 			}
 			return nil
 		},
 	}
-
-	cmd.PersistentFlags().BoolVar(&insecureSkipTLS, "insecure-skip-tls-verify", false, "skip TLS certificate verification")
 
 	cmd.AddCommand(newBuildCmd())
 	cmd.AddCommand(newLogsCmd())

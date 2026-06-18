@@ -156,7 +156,7 @@ func deployOperator() {
 		_, _ = utils.Run(cmd)
 	}
 
-	projectImage := "automotive-dev-operator:test"
+	projectImage := fmt.Sprintf("automotive-dev-operator:test-%d", time.Now().Unix())
 	deployedImage := utils.PrepareOperatorImage(projectImage, testNamespace)
 
 	By("installing CRDs")

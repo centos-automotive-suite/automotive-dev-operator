@@ -117,9 +117,10 @@ test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # E2E test targets. Use test-e2e to run everything, or pick a lane:
-#   test-e2e-operator  - operator health, Tekton tasks, Build API
-#   test-e2e-bootc     - bootc container build via caib
-#   test-e2e-auth      - OIDC authentication (OpenShift only)
+#   test-e2e-operator        - operator health, Tekton tasks, Build API
+#   test-e2e-bootc           - bootc container build via caib
+#   test-e2e-container-build - Shipwright container build via caib
+#   test-e2e-auth            - OIDC authentication (OpenShift only)
 .PHONY: test-e2e
 test-e2e:
 	go test ./test/e2e/ -v -ginkgo.v -timeout 45m
@@ -131,6 +132,10 @@ test-e2e-operator:
 .PHONY: test-e2e-bootc
 test-e2e-bootc:
 	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-bootc} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="bootc" -timeout 35m
+
+.PHONY: test-e2e-container-build
+test-e2e-container-build:
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-container-build} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="container-build" -timeout 45m
 
 .PHONY: test-e2e-auth
 test-e2e-auth:

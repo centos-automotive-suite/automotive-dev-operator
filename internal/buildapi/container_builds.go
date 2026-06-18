@@ -597,12 +597,19 @@ func (a *APIServer) uploadContainerBuildContext(c *gin.Context, name string) {
 	}
 
 	// Phase 2: Signal completion to the waiter.
-	// Retry with backoff: the waiter's "start" command may not have created the lock file yet
-	// when the tar extraction completes quickly (race between Tekton entrypoint and our exec).
-	doneCmd := []string{"waiter", "done"}
-	if lockFile, ok := getWaiterLockFileFromPodSpec(buildPod, waiterContainer); ok {
-		doneCmd = append(doneCmd, "--lock-file="+lockFile)
+	// The waiter's "start" command may not have created the lock file yet when the
+	// tar extraction completes quickly (race between Tekton entrypoint and our exec).
+	// Wait for the lock file inside the container to avoid SPDY reconnection overhead.
+	lockFile := "/shp-tmp/waiter.lock"
+	if lf, ok := getWaiterLockFileFromPodSpec(buildPod, waiterContainer); ok {
+		lockFile = lf
 	}
+
+	waitAndDoneScript := fmt.Sprintf(
+		`for i in $(seq 1 60); do [ -f %[1]s ] && exec waiter done --lock-file=%[1]s; sleep 1; done; echo "timeout waiting for lock file %[1]s" >&2; exit 1`,
+		lockFile,
+	)
+	doneCmd := []string{"sh", "-c", waitAndDoneScript}
 
 	doneExecReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -624,41 +631,21 @@ func (a *APIServer) uploadContainerBuildContext(c *gin.Context, name string) {
 		return
 	}
 
-	const maxDoneRetries = 5
-	var lastErr error
-	var lastDetail string
-	for attempt := range maxDoneRetries {
-		var doneStdout strings.Builder
-		var doneStderr strings.Builder
-		err := doneExecutor.StreamWithContext(ctx, remotecommand.StreamOptions{
-			Stdout: &doneStdout,
-			Stderr: &doneStderr,
-		})
-		if err == nil {
-			break
+	var doneStdout strings.Builder
+	var doneStderr strings.Builder
+	if err := doneExecutor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &doneStdout,
+		Stderr: &doneStderr,
+	}); err != nil {
+		detail := strings.TrimSpace(doneStderr.String())
+		if detail == "" {
+			detail = strings.TrimSpace(doneStdout.String())
 		}
-		lastDetail = strings.TrimSpace(doneStderr.String())
-		if lastDetail == "" {
-			lastDetail = strings.TrimSpace(doneStdout.String())
-		}
-		lastErr = err
-		if !strings.Contains(lastDetail, "no such file or directory") || attempt >= maxDoneRetries-1 {
-			break
-		}
-		select {
-		case <-time.After(time.Duration(attempt+1) * time.Second):
-		case <-ctx.Done():
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "request cancelled during retry"})
+		if detail != "" {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error signaling completion: %v: %s", err, detail)})
 			return
 		}
-	}
-
-	if lastErr != nil {
-		if lastDetail != "" {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error signaling completion: %v: %s", lastErr, lastDetail)})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error signaling completion: %v", lastErr)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error signaling completion: %v", err)})
 		return
 	}
 
