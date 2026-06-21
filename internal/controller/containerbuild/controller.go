@@ -465,6 +465,16 @@ func (r *ContainerBuildReconciler) buildShipwrightBuildRun(
 		Values: buildArgValues,
 	})
 
+	if cb.Spec.UseServiceAccountAuth {
+		registryHost := extractRegistryHost(cb.Spec.Output)
+		if registryHost != "" {
+			paramValues = append(paramValues, shipwrightv1beta1.ParamValue{
+				Name:   "registries-insecure",
+				Values: []shipwrightv1beta1.SingleValue{{Value: &registryHost}},
+			})
+		}
+	}
+
 	// Build output
 	output := shipwrightv1beta1.Image{
 		Image: cb.Spec.Output,
@@ -509,6 +519,19 @@ func (r *ContainerBuildReconciler) buildShipwrightBuildRun(
 	}
 
 	return buildRun
+}
+
+func extractRegistryHost(imageRef string) string {
+	ref := strings.TrimPrefix(imageRef, "docker://")
+	slashIdx := strings.IndexByte(ref, '/')
+	if slashIdx < 0 {
+		return ""
+	}
+	host := ref[:slashIdx]
+	if strings.ContainsAny(host, ".:") {
+		return host
+	}
+	return ""
 }
 
 // SetupWithManager sets up the controller with the Manager.

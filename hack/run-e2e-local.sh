@@ -15,10 +15,11 @@ usage() {
   printf 'Usage: %s [OPTIONS] [LANE]\n\n' "$(basename "$0")"
   printf 'Run e2e tests against a local CRC/OpenShift cluster.\n\n'
   printf 'Lanes:\n'
-  printf '  operator  - operator health, Tekton tasks, Build API\n'
-  printf '  bootc     - bootc container build via caib\n'
-  printf '  auth      - OIDC authentication (OpenShift or Kind+Dex)\n'
-  printf '  all       - run all tests (default)\n\n'
+  printf '  operator        - operator health, Tekton tasks, Build API\n'
+  printf '  bootc           - bootc container build via caib\n'
+  printf '  container-build - Shipwright container build via caib\n'
+  printf '  auth            - OIDC authentication (OpenShift or Kind+Dex)\n'
+  printf '  all             - run all tests (default)\n\n'
   printf 'Options:\n'
   printf '  -h, --help    Show this help message and exit\n\n'
   printf 'Environment variables:\n'
@@ -37,7 +38,7 @@ esac
 
 E2E_LANE="${1:-}"
 case "$E2E_LANE" in
-  operator|bootc|auth)
+  operator|bootc|auth|container-build)
     E2E_MAKE_TARGET="test-e2e-${E2E_LANE}"
     ;;
   ""|all)
@@ -144,6 +145,80 @@ EOF
   info "OpenShift Pipelines is ready."
 }
 
+ensure_shipwright() {
+  local crds_ready=true
+  local crd
+
+  for crd in builds.shipwright.io buildruns.shipwright.io; do
+    if ! oc get crd "$crd" >/dev/null 2>&1; then
+      crds_ready=false
+      break
+    fi
+  done
+
+  if [[ "$crds_ready" == "true" ]]; then
+    info "OpenShift Builds (Shipwright) already installed."
+    return
+  fi
+
+  info "Installing OpenShift Builds (Shipwright)..."
+
+  cat <<EOF | oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-builds-operator
+  namespace: openshift-operators
+spec:
+  channel: latest
+  name: openshift-builds-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+EOF
+
+  info "Waiting for OpenShift Builds CSV to be Succeeded..."
+  local csv_name=""
+  local csv_phase=""
+  local csv_snapshot=""
+  for _ in {1..90}; do
+    csv_name="$(oc get csv -n openshift-operators \
+      -o jsonpath='{range .items[?(@.status.phase=="Succeeded")]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+      | awk '/^openshift-builds-operator/{print; exit}' || true)"
+    if [[ -n "$csv_name" ]]; then
+      csv_phase="Succeeded"
+      break
+    fi
+
+    csv_snapshot="$(oc get csv -n openshift-operators \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}' 2>/dev/null || true)"
+    csv_name="$(printf '%s\n' "$csv_snapshot" | awk -F'\t' '$1 ~ /^openshift-builds-operator/ {print $1; exit}')"
+    csv_phase="$(printf '%s\n' "$csv_snapshot" | awk -F'\t' '$1 ~ /^openshift-builds-operator/ {print $2; exit}')"
+    [[ "$csv_phase" == "Succeeded" ]] && break
+    sleep 10
+  done
+  [[ "$csv_phase" == "Succeeded" ]] || fail "OpenShift Builds CSV not ready (csv: ${csv_name:-unknown}, phase: ${csv_phase:-unknown})."
+
+  info "Creating ShipwrightBuild CR..."
+  cat <<EOF | oc apply -f -
+apiVersion: operator.shipwright.io/v1alpha1
+kind: ShipwrightBuild
+metadata:
+  name: openshift-builds
+spec:
+  targetNamespace: openshift-builds
+EOF
+
+  info "Waiting for Shipwright CRDs to be available..."
+  for crd in builds.shipwright.io buildruns.shipwright.io; do
+    for _ in {1..60}; do
+      oc get crd "$crd" >/dev/null 2>&1 && break
+      sleep 5
+    done
+    oc get crd "$crd" >/dev/null 2>&1 || fail "Shipwright CRD $crd not found after 5 minutes."
+  done
+  info "OpenShift Builds (Shipwright) is ready."
+}
+
 set_build_platform() {
   local cluster_arch
   cluster_arch="$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')"
@@ -209,6 +284,7 @@ info "Ensuring external registry route and client trust are configured..."
 bash hack/crc/04-expose-default-registry.sh
 
 ensure_tekton
+ensure_shipwright
 set_build_platform
 
 info "Building caib CLI..."

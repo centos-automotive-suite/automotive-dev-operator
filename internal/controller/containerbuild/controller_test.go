@@ -275,3 +275,67 @@ func TestBuildRunNamespacedStrategy(t *testing.T) {
 		t.Errorf("strategy kind = %v, want NamespacedBuildStrategy", *br.Spec.Build.Spec.Strategy.Kind)
 	}
 }
+
+func TestExtractRegistryHost(t *testing.T) {
+	tests := []struct {
+		imageRef string
+		want     string
+	}{
+		{"image-registry.openshift-image-registry.svc:5000/ns/img:tag", "image-registry.openshift-image-registry.svc:5000"},
+		{"quay.io/org/image:latest", "quay.io"},
+		{"registry.example.com/image:v1", "registry.example.com"},
+		{"docker://registry.example.com/image:v1", "registry.example.com"},
+		{"ubuntu:latest", ""},
+		{"localhost:5000/myimg:latest", "localhost:5000"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.imageRef, func(t *testing.T) {
+			got := extractRegistryHost(tt.imageRef)
+			if got != tt.want {
+				t.Errorf("extractRegistryHost(%q) = %q, want %q", tt.imageRef, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildRunInsecureRegistryForInternalPush(t *testing.T) {
+	r := &ContainerBuildReconciler{}
+	cb := newTestContainerBuild("test", automotivev1alpha1.ContainerBuildSpec{
+		Output:                "image-registry.openshift-image-registry.svc:5000/ns/img:latest",
+		UseServiceAccountAuth: true,
+		Timeout:               15,
+	})
+
+	br := r.buildShipwrightBuildRun(cb, "test-br", 5*time.Minute)
+
+	var insecureVals []string
+	for _, pv := range br.Spec.Build.Spec.ParamValues {
+		if pv.Name == "registries-insecure" {
+			for _, sv := range pv.Values {
+				if sv.Value != nil {
+					insecureVals = append(insecureVals, *sv.Value)
+				}
+			}
+		}
+	}
+	if len(insecureVals) != 1 || insecureVals[0] != "image-registry.openshift-image-registry.svc:5000" {
+		t.Errorf("registries-insecure = %v, want [image-registry.openshift-image-registry.svc:5000]", insecureVals)
+	}
+}
+
+func TestBuildRunNoInsecureRegistryForExternalPush(t *testing.T) {
+	r := &ContainerBuildReconciler{}
+	cb := newTestContainerBuild("test", automotivev1alpha1.ContainerBuildSpec{
+		Output:  "quay.io/org/image:latest",
+		Timeout: 15,
+	})
+
+	br := r.buildShipwrightBuildRun(cb, "test-br", 5*time.Minute)
+
+	for _, pv := range br.Spec.Build.Spec.ParamValues {
+		if pv.Name == "registries-insecure" {
+			t.Error("registries-insecure should not be set for external registry push")
+		}
+	}
+}

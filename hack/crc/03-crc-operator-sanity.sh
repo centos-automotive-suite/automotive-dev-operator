@@ -113,6 +113,17 @@ echo ""
 echo -e "${CYAN}=== OpenShift Pipelines Operator ===${NC}"
 check "Pipelines operator CSV succeeded" test "$(oc get csv -n openshift-operators -l operators.coreos.com/openshift-pipelines-operator-rh.openshift-operators= -o jsonpath='{.items[0].status.phase}' 2>/dev/null)" = "Succeeded"
 
+echo ""
+echo -e "${CYAN}=== OpenShift Builds (Shipwright) ===${NC}"
+if oc get crd builds.shipwright.io &>/dev/null; then
+    check "Shipwright CRD: builds.shipwright.io" oc get crd builds.shipwright.io
+    check "Shipwright CRD: buildruns.shipwright.io" oc get crd buildruns.shipwright.io
+    check "ShipwrightBuild CR exists" oc get shipwrightbuild openshift-builds
+    check "Builds operator CSV succeeded" test "$(oc get csv -n openshift-operators -l operators.coreos.com/openshift-builds-operator.openshift-operators= -o jsonpath='{.items[0].status.phase}' 2>/dev/null)" = "Succeeded"
+else
+    echo -e "  ${CYAN}SKIP${NC}  OpenShift Builds not installed (optional)"
+fi
+
 ###############################################################################
 # End-to-end build test (optional, pass --sanity to enable)
 ###############################################################################

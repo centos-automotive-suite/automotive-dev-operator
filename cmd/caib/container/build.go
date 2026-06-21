@@ -189,7 +189,7 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 	}
 	clilog.Infoln("Creating container build...")
 	var createResp *buildapitypes.ContainerBuildResponse
-	err := executeWithReauth(serverURL, &authToken, func(client *buildapiclient.Client) error {
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		resp, cerr := client.CreateContainerBuild(ctx, buildapitypes.ContainerBuildRequest{
 			Name:                buildName,
 			Output:              containerBuildPush,
@@ -318,7 +318,7 @@ func waitForContainerBuildUploadReady(ctx context.Context, name string) {
 			handleError(fmt.Errorf("timed out waiting for build to reach Uploading phase"))
 		case <-ticker.C:
 			var status *buildapitypes.ContainerBuildResponse
-			err := executeWithReauth(serverURL, &authToken, func(client *buildapiclient.Client) error {
+			err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 				s, serr := client.GetContainerBuild(ctx, name)
 				if serr != nil {
 					return serr
@@ -358,7 +358,7 @@ func uploadContainerBuildContext(ctx context.Context, name string, tarballPath s
 			handleError(fmt.Errorf("failed to open tarball: %w", err))
 		}
 
-		err = executeWithReauth(serverURL, &authToken, func(client *buildapiclient.Client) error {
+		err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 			// Seek to beginning in case of auth retries
 			_, seekErr := tarball.Seek(0, io.SeekStart)
 			if seekErr != nil {
@@ -392,7 +392,7 @@ func isContainerBuildTerminal(phase string) bool {
 // getContainerBuildStatus retrieves the current build status.
 func getContainerBuildStatus(ctx context.Context, name string) (*buildapitypes.ContainerBuildResponse, error) {
 	var status *buildapitypes.ContainerBuildResponse
-	err := executeWithReauth(serverURL, &authToken, func(client *buildapiclient.Client) error {
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		s, serr := client.GetContainerBuild(ctx, name)
 		if serr != nil {
 			return serr

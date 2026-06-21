@@ -29,7 +29,7 @@ fail()  { echo -e "${RED}❌  $*${NC}"; exit 1; }
 line()  { echo "========================================="; }
 
 STEP=0
-TOTAL_STEPS=6
+TOTAL_STEPS=7
 step()  { STEP=$((STEP + 1)); info "[Step ${STEP}/${TOTAL_STEPS}] $*"; }
 
 ###############################################################################
@@ -134,7 +134,69 @@ EOF
 fi
 
 ###############################################################################
-# Step 3 — Build & deploy the operator via OLM catalog
+# Step 3 — Install OpenShift Builds (Shipwright)
+###############################################################################
+step "Installing OpenShift Builds (Shipwright)..."
+
+SHIPWRIGHT_READY=true
+for crd in builds.shipwright.io buildruns.shipwright.io; do
+    if ! oc get crd "$crd" &>/dev/null; then
+        SHIPWRIGHT_READY=false
+        break
+    fi
+done
+
+if [[ "$SHIPWRIGHT_READY" == true ]]; then
+    ok "OpenShift Builds already installed (Shipwright CRDs present)."
+else
+    cat <<EOF | oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-builds-operator
+  namespace: openshift-operators
+spec:
+  channel: latest
+  name: openshift-builds-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+EOF
+
+    info "Waiting for OpenShift Builds CSV to succeed..."
+    CSV_PHASE=""
+    for _ in {1..90}; do
+        CSV_PHASE=$(oc get csv -n openshift-operators \
+            -l operators.coreos.com/openshift-builds-operator.openshift-operators= \
+            -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)
+        [[ "$CSV_PHASE" == "Succeeded" ]] && break
+        sleep 10
+    done
+    [[ "$CSV_PHASE" == "Succeeded" ]] \
+        || fail "OpenShift Builds CSV not ready after 15 minutes (phase: ${CSV_PHASE:-unknown})."
+
+    info "Creating ShipwrightBuild CR..."
+    cat <<EOF | oc apply -f -
+apiVersion: operator.shipwright.io/v1alpha1
+kind: ShipwrightBuild
+metadata:
+  name: openshift-builds
+spec:
+  targetNamespace: openshift-builds
+EOF
+
+    info "Waiting for Shipwright CRDs to be available..."
+    for crd in builds.shipwright.io buildruns.shipwright.io; do
+        for _ in {1..60}; do
+            oc get crd "$crd" &>/dev/null && break
+            sleep 5
+        done
+        oc get crd "$crd" &>/dev/null || fail "Shipwright CRD $crd not found after 5 minutes."
+    done
+    ok "OpenShift Builds ready (Shipwright CRDs installed)."
+fi
+
+###############################################################################
+# Step 4 — Build & deploy the operator via OLM catalog
 ###############################################################################
 step "Building and deploying the operator..."
 
@@ -157,14 +219,14 @@ if ! oc policy add-role-to-user system:image-puller "system:serviceaccount:${NAM
 fi
 
 ###############################################################################
-# Step 4 — Label nodes for build scheduling
+# Step 5 — Label nodes for build scheduling
 ###############################################################################
 step "Labeling nodes for build pod scheduling..."
 oc label nodes --all aib=true --overwrite || fail "Failed to label nodes."
 ok "Nodes labeled with aib=true."
 
 ###############################################################################
-# Step 5 — Patch OperatorConfig and wait for Ready
+# Step 6 — Patch OperatorConfig and wait for Ready
 ###############################################################################
 step "Patching OperatorConfig to use internal registry..."
 oc patch operatorconfig config -n "$NAMESPACE" --type=merge \
@@ -183,7 +245,7 @@ done
 ok "OperatorConfig reconciled (phase: Ready)."
 
 ###############################################################################
-# Step 6 — Verify
+# Step 7 — Verify
 ###############################################################################
 step "Verifying deployment..."
 BUILD_API_ROUTE=$(oc get route ado-build-api -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
