@@ -187,13 +187,8 @@ uninstall_operator() {
     echo "Deleting subscription (if exists)..."
     oc delete subscriptions.operators.coreos.com automotive-dev-operator -n ${NAMESPACE} --ignore-not-found=true
 
-    echo "Deleting CSVs (if exist)..."
-    oc delete csv -n ${NAMESPACE} -l operators.coreos.com/automotive-dev-operator.${NAMESPACE}= --ignore-not-found=true 2>/dev/null || true
-    # Also try by name pattern
-    CSVS=$(oc get csv -n ${NAMESPACE} -o name 2>/dev/null | grep automotive-dev-operator || true)
-    if [ -n "$CSVS" ]; then
-        echo "$CSVS" | xargs -r oc delete -n ${NAMESPACE} --ignore-not-found=true
-    fi
+    echo "Deleting all CSVs in namespace..."
+    oc delete csv --all -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
 
     echo "Deleting InstallPlans (if exist)..."
     oc delete installplan -n ${NAMESPACE} --all --ignore-not-found=true 2>/dev/null || true
