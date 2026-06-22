@@ -712,6 +712,13 @@ type OperatorConfigSpec struct {
 	// Tracing defines configuration for OpenTelemetry distributed tracing
 	// +optional
 	Tracing *TracingConfig `json:"tracing,omitempty"`
+
+	// FeatureGates allows enabling or disabling specific operator features.
+	// Each key is a feature name, and the boolean value enables (true) or disables (false) it.
+	// Alpha features default to disabled, Beta to enabled, GA features are always enabled.
+	// Unknown feature names are ignored.
+	// +optional
+	FeatureGates map[string]bool `json:"featureGates,omitempty"`
 }
 
 // OSBuildsConfig defines configuration for OS build operations

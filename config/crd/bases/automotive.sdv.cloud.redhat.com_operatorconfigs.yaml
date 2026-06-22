@@ -636,6 +636,15 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              featureGates:
+                additionalProperties:
+                  type: boolean
+                description: |-
+                  FeatureGates allows enabling or disabling specific operator features.
+                  Each key is a feature name, and the boolean value enables (true) or disables (false) it.
+                  Alpha features default to disabled, Beta to enabled, GA features are always enabled.
+                  Unknown feature names are ignored.
+                type: object
               images:
                 description: Images defines container image references used by the
                   operator
