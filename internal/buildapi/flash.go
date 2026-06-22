@@ -134,6 +134,8 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		}
 	}
 
+	leaseTags := BuildLeaseTags(operatorConfig.Spec.Jumpstarter.GetDefaultLeaseTags(), req.Name, req.LeaseTags)
+
 	// Build workspace bindings
 	workspaces := []tektonv1.WorkspaceBinding{
 		{
@@ -177,6 +179,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 				{Name: "flash-cmd", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: flashCmd}},
 				{Name: "lease-duration", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: leaseDuration}},
 				{Name: "lease-name", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: req.LeaseName}},
+				{Name: "lease-tags", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: leaseTags}},
 			},
 			Workspaces: workspaces,
 		},

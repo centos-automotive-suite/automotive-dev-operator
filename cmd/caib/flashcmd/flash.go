@@ -42,6 +42,7 @@ type Options struct {
 	LeaseDuration     *string
 	LeaseName         *string
 	FlashCmd          *string
+	LeaseTags         *[]string
 	WaitForBuild      *bool
 	FollowLogs        *bool
 	InsecureSkipTLS   *bool
@@ -149,6 +150,12 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 
 	clientConfigB64 := base64.StdEncoding.EncodeToString(clientInfo.Data)
 
+	leaseTags, err := caibcommon.ValidateAndJoinLeaseTags(h.opts.LeaseTags)
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
 	req := buildapitypes.FlashRequest{
 		Name:             *h.opts.FlashName,
 		ImageRef:         imageRef,
@@ -157,6 +164,7 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		ClientConfig:     clientConfigB64,
 		LeaseName:        *h.opts.LeaseName,
 		FlashCmd:         *h.opts.FlashCmd,
+		LeaseTags:        leaseTags,
 	}
 	if req.LeaseName == "" {
 		req.LeaseDuration = *h.opts.LeaseDuration

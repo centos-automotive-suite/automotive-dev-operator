@@ -42,6 +42,7 @@ func newTestDiskOpts() Options {
 		jumpstarterClient    string
 		leaseDuration        = "03:00:00"
 		leaseName            string
+		leaseTags            []string
 		useInternalRegistry  bool
 		internalRegImageName string
 		internalRegTag       string
@@ -85,6 +86,7 @@ func newTestDiskOpts() Options {
 		JumpstarterClient:         &jumpstarterClient,
 		LeaseDuration:             &leaseDuration,
 		LeaseName:                 &leaseName,
+		LeaseTags:                 &leaseTags,
 		UseInternalRegistry:       &useInternalRegistry,
 		InternalRegistryImageName: &internalRegImageName,
 		InternalRegistryTag:       &internalRegTag,

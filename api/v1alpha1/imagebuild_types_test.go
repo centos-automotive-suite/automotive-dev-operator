@@ -4,6 +4,43 @@ import (
 	"testing"
 )
 
+func TestGetFlashLeaseTags(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ImageBuildSpec
+		want string
+	}{
+		{
+			name: "returns tags when flash is set",
+			spec: ImageBuildSpec{
+				Flash: &FlashSpec{LeaseTags: "env=staging,team=platform"},
+			},
+			want: "env=staging,team=platform",
+		},
+		{
+			name: "returns empty when flash is nil",
+			spec: ImageBuildSpec{},
+			want: "",
+		},
+		{
+			name: "returns empty when tags are empty",
+			spec: ImageBuildSpec{
+				Flash: &FlashSpec{},
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.spec.GetFlashLeaseTags()
+			if got != tt.want {
+				t.Errorf("GetFlashLeaseTags() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGetManifest(t *testing.T) {
 	tests := []struct {
 		name string

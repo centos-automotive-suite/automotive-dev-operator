@@ -13,6 +13,7 @@ import (
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
@@ -1316,6 +1317,10 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 				Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: imageBuild.Spec.GetFlashLeaseName()},
 			},
 			tektonv1.Param{
+				Name:  "flash-lease-tags",
+				Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: buildapi.BuildLeaseTags(operatorConfig.Spec.Jumpstarter.GetDefaultLeaseTags(), imageBuild.Name, imageBuild.Spec.GetFlashLeaseTags())},
+			},
+			tektonv1.Param{
 				Name:  "jumpstarter-image",
 				Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: operatorConfig.Spec.Jumpstarter.GetJumpstarterImage()},
 			},
@@ -2039,6 +2044,10 @@ func (r *ImageBuildReconciler) createFlashTaskRun(
 		{
 			Name:  "lease-name",
 			Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: imageBuild.Spec.GetFlashLeaseName()},
+		},
+		{
+			Name:  "lease-tags",
+			Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: buildapi.BuildLeaseTags(operatorConfig.Spec.Jumpstarter.GetDefaultLeaseTags(), imageBuild.Name, imageBuild.Spec.GetFlashLeaseTags())},
 		},
 		{
 			Name:  "trace-id",

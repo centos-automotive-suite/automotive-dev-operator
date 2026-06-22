@@ -1260,6 +1260,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			LeaseName:             req.FlashLeaseName,
 			FlashCmd:              req.FlashCmd,
 			ExporterSelector:      req.FlashExporterSelector,
+			LeaseTags:             req.FlashLeaseTags,
 		}
 	}
 

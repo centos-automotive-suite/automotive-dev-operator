@@ -56,6 +56,7 @@ var (
 	leaseDuration     string
 	leaseName         string
 	flashCmdOverride  string
+	leaseTags         []string
 
 	// Internal registry options
 	useInternalRegistry       bool

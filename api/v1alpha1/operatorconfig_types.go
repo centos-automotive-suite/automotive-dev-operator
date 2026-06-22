@@ -51,6 +51,9 @@ const (
 	// DefaultFlashLeaseDuration is the default Jumpstarter lease duration in HH:MM:SS format
 	DefaultFlashLeaseDuration = "03:00:00"
 
+	// DefaultFlashLeaseTags is the fallback lease tags when none configured in OperatorConfig
+	DefaultFlashLeaseTags = "platform=caib"
+
 	// DefaultToolchainImage is the default container image for workspace toolchains
 	DefaultToolchainImage = "quay.io/rh-sdv-cloud/autosd-toolchain:latest"
 
@@ -234,6 +237,11 @@ type JumpstarterConfig struct {
 	// +optional
 	DefaultLeaseDuration string `json:"defaultLeaseDuration,omitempty"`
 
+	// DefaultLeaseTags are key=value tags applied to all Jumpstarter leases created by the operator
+	// Format: comma-separated key=value pairs (e.g. "platform=caib,env=prod")
+	// +optional
+	DefaultLeaseTags string `json:"defaultLeaseTags,omitempty"`
+
 	// TargetMappings maps build targets to Jumpstarter exporter configurations
 	// +optional
 	TargetMappings map[string]JumpstarterTargetMapping `json:"targetMappings,omitempty"`
@@ -253,6 +261,14 @@ func (c *JumpstarterConfig) GetDefaultLeaseDuration() string {
 		return c.DefaultLeaseDuration
 	}
 	return DefaultFlashLeaseDuration
+}
+
+// GetDefaultLeaseTags returns the default lease tags, falling back to "platform=caib"
+func (c *JumpstarterConfig) GetDefaultLeaseTags() string {
+	if c != nil && c.DefaultLeaseTags != "" {
+		return c.DefaultLeaseTags
+	}
+	return DefaultFlashLeaseTags
 }
 
 // BuildAPIConfig defines configuration for the Build API server

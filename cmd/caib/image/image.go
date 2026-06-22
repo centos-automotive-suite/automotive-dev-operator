@@ -65,6 +65,7 @@ type Options struct {
 	LeaseDuration     *string
 	LeaseName         *string
 	FlashCmd          *string
+	LeaseTags         *[]string
 
 	UseInternalRegistry       *bool
 	InternalRegistryImageName *string
@@ -163,6 +164,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	buildCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	buildCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	buildCmd.Flags().StringArrayVar(opts.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
 	// Secure build
 	buildCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "resolve tasks from signed Tekton Bundle (requires OperatorConfig taskBundleRef)")
 	buildCmd.Flags().StringVar(opts.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
@@ -224,6 +226,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	diskCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	diskCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	diskCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	diskCmd.Flags().StringArrayVar(opts.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
 	// Secure build
 	diskCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "resolve tasks from signed Tekton Bundle (requires OperatorConfig taskBundleRef)")
 	diskCmd.Flags().StringVar(opts.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
@@ -270,6 +273,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	buildDevCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
 	buildDevCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	buildDevCmd.Flags().StringArrayVar(opts.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
 	// Secure build
 	buildDevCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "resolve tasks from signed Tekton Bundle (requires OperatorConfig taskBundleRef)")
 	buildDevCmd.Flags().StringVar(opts.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
@@ -314,6 +318,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	flashCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration (HH:MM:SS)")
 	flashCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
 	flashCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	flashCmd.Flags().StringArrayVar(opts.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
 	flashCmd.Flags().StringVar(
 		opts.RegistryAuthFile,
 		"registry-auth-file",

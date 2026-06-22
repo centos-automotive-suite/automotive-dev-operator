@@ -151,6 +151,10 @@ type FlashSpec struct {
 	// When set, the target-based lookup is skipped entirely
 	// +optional
 	ExporterSelector string `json:"exporterSelector,omitempty"`
+
+	// LeaseTags are additional key=value tags for the Jumpstarter lease (comma-separated)
+	// +optional
+	LeaseTags string `json:"leaseTags,omitempty"`
 }
 
 // AIBSpec defines the automotive-image-builder configuration
@@ -550,6 +554,14 @@ func (s *ImageBuildSpec) GetFlashLeaseDuration() string {
 func (s *ImageBuildSpec) GetFlashLeaseName() string {
 	if s.Flash != nil {
 		return s.Flash.LeaseName
+	}
+	return ""
+}
+
+// GetFlashLeaseTags returns the user-provided lease tags, or empty string
+func (s *ImageBuildSpec) GetFlashLeaseTags() string {
+	if s.Flash != nil {
+		return s.Flash.LeaseTags
 	}
 	return ""
 }

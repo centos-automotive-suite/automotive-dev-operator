@@ -27,6 +27,27 @@ func TestGetUsePVCScratchVolumes_ExplicitFalse(t *testing.T) {
 	}
 }
 
+func TestGetDefaultLeaseTags_NilConfig(t *testing.T) {
+	var cfg *JumpstarterConfig
+	if cfg.GetDefaultLeaseTags() != DefaultFlashLeaseTags {
+		t.Fatal("nil JumpstarterConfig should return fallback")
+	}
+}
+
+func TestGetDefaultLeaseTags_EmptyDefault(t *testing.T) {
+	cfg := &JumpstarterConfig{}
+	if cfg.GetDefaultLeaseTags() != DefaultFlashLeaseTags {
+		t.Fatal("empty DefaultLeaseTags should return fallback")
+	}
+}
+
+func TestGetDefaultLeaseTags_ExplicitValue(t *testing.T) {
+	cfg := &JumpstarterConfig{DefaultLeaseTags: "platform=caib,cluster=prod"}
+	if cfg.GetDefaultLeaseTags() != "platform=caib,cluster=prod" {
+		t.Fatalf("got %q, want platform=caib,cluster=prod", cfg.GetDefaultLeaseTags())
+	}
+}
+
 func TestIsImageAllowed(t *testing.T) {
 	tests := []struct {
 		name        string

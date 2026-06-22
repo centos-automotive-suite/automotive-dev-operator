@@ -22,6 +22,19 @@ type httpError struct {
 	message string
 }
 
+// BuildLeaseTags merges OperatorConfig defaults, build name, and user-provided tags into a comma-separated string.
+func BuildLeaseTags(operatorConfigDefaults, buildName, userTags string) string {
+	parts := make([]string, 0, 3)
+	if operatorConfigDefaults != "" {
+		parts = append(parts, operatorConfigDefaults)
+	}
+	parts = append(parts, "build-name="+buildName)
+	if userTags != "" {
+		parts = append(parts, userTags)
+	}
+	return strings.Join(parts, ",")
+}
+
 // resolveFlashTargetConfig resolves exporter selector and flash command from request and OperatorConfig.
 func resolveFlashTargetConfig(req FlashRequest, operatorConfig *automotivev1alpha1.OperatorConfig) (string, string) {
 	exporterSelector := req.ExporterSelector
