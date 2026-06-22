@@ -13,6 +13,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/featuregates"
 	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
@@ -231,17 +232,23 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 		return nil, fmt.Errorf("image %q is not in the allowed images list", image)
 	}
 	if wsConfig != nil && wsConfig.ImageVerify {
-		pubKeyPEM, err := bundleverify.FetchCosignPublicKey(ctx, r.Client, wsConfig.ImageCosignKeyRef, ws.Namespace)
-		if err != nil {
-			return nil, fmt.Errorf("imageVerify is enabled but cosign key is unavailable: %w", err)
+		var configSpec *automotivev1alpha1.OperatorConfigSpec
+		if operatorConfig != nil {
+			configSpec = &operatorConfig.Spec
 		}
+		gates := featuregates.NewFromConfig(configSpec)
+		if wsConfig.ImageCosignKeyless != nil && !gates.Enabled(featuregates.KeylessSignatureVerification) {
+			return nil, fmt.Errorf("keyless signature verification is configured but the KeylessSignatureVerification feature gate is not enabled")
+		}
+
 		imagePullSecrets := resolveImagePullSecrets(ws, wsConfig)
 		keychain, err := bundleverify.KeychainFromPullSecrets(ctx, r.Client, ws.Namespace, imagePullSecrets)
 		if err != nil {
 			return nil, fmt.Errorf("building registry keychain: %w", err)
 		}
 		registryOpts := ociremote.WithRemoteOptions(remote.WithAuthFromKeychain(keychain))
-		if err := bundleverify.VerifyBundle(ctx, image, pubKeyPEM, registryOpts); err != nil {
+
+		if err := bundleverify.VerifyImage(ctx, image, wsConfig.ImageCosignKeyless, r.Client, wsConfig.ImageCosignKeyRef, ws.Namespace, registryOpts); err != nil {
 			return nil, fmt.Errorf("workspace image signature verification failed: %w", err)
 		}
 	}

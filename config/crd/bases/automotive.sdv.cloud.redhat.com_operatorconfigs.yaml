@@ -835,7 +835,7 @@ spec:
                     description: |-
                       TaskBundleCosignKeyRef references a ConfigMap key containing the cosign public key (PEM-encoded)
                       used to verify Tekton Bundle signatures.
-                      Required when TaskBundleVerify is true.
+                      Mutually exclusive with TaskBundleCosignKeyless.
                     properties:
                       key:
                         description: The key to select.
@@ -857,6 +857,75 @@ spec:
                     - key
                     type: object
                     x-kubernetes-map-type: atomic
+                  taskBundleCosignKeyless:
+                    description: |-
+                      TaskBundleCosignKeyless configures keyless (Fulcio/Rekor) signature verification
+                      for Tekton Bundle images. Uses certificate identity and OIDC issuer instead of a static key.
+                      Mutually exclusive with TaskBundleCosignKeyRef.
+                    properties:
+                      certificateIdentity:
+                        description: |-
+                          CertificateIdentity is the expected Subject Alternative Name (SAN) of the signing certificate.
+                          For Tekton Chains with a Kubernetes SA, this is typically the SA's OIDC URI
+                          (e.g., "https://kubernetes.io/namespaces/my-ns/serviceaccounts/my-sa").
+                          Supports regex when CertificateIdentityRegExp is used instead.
+                        type: string
+                      certificateIdentityRegExp:
+                        description: |-
+                          CertificateIdentityRegExp is a regular expression alternative to CertificateIdentity.
+                          Exactly one of CertificateIdentity or CertificateIdentityRegExp must be set.
+                        type: string
+                      certificateOIDCIssuer:
+                        description: |-
+                          CertificateOIDCIssuer is the expected OIDC issuer of the Fulcio-issued signing certificate.
+                          For Kubernetes SA tokens, this is the cluster's OIDC issuer URL.
+                          Supports regex when CertificateOIDCIssuerRegExp is used instead.
+                        type: string
+                      certificateOIDCIssuerRegExp:
+                        description: |-
+                          CertificateOIDCIssuerRegExp is a regular expression alternative to CertificateOIDCIssuer.
+                          Exactly one of CertificateOIDCIssuer or CertificateOIDCIssuerRegExp must be set.
+                        type: string
+                      fulcioRootCARef:
+                        description: |-
+                          FulcioRootCARef references a ConfigMap containing the Fulcio root CA certificate (PEM).
+                          When set, only signatures issued by this specific Fulcio instance are accepted,
+                          preventing trust of certificates from other Fulcio instances (e.g. public Sigstore).
+                          The ConfigMap key should contain PEM-encoded certificate data.
+                        properties:
+                          key:
+                            description: The key to select.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the ConfigMap or its key
+                              must be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      rekorURL:
+                        description: |-
+                          RekorURL is the Rekor transparency log URL for signature verification.
+                          Defaults to the public Sigstore instance (https://rekor.sigstore.dev) when empty.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: at least one of certificateIdentity or certificateIdentityRegExp
+                        must be set
+                      rule: has(self.certificateIdentity) || has(self.certificateIdentityRegExp)
+                    - message: at least one of certificateOIDCIssuer or certificateOIDCIssuerRegExp
+                        must be set
+                      rule: has(self.certificateOIDCIssuer) || has(self.certificateOIDCIssuerRegExp)
                   taskBundleRef:
                     description: |-
                       TaskBundleRef is the OCI reference to a signed Tekton Bundle containing task definitions.
@@ -939,10 +1008,13 @@ spec:
                 - enabled
                 type: object
                 x-kubernetes-validations:
-                - message: taskBundleCosignKeyRef is required when taskBundleVerify
-                    is true
+                - message: taskBundleCosignKeyRef or taskBundleCosignKeyless is required
+                    when taskBundleVerify is true
                   rule: '!has(self.taskBundleVerify) || !self.taskBundleVerify ||
-                    has(self.taskBundleCosignKeyRef)'
+                    has(self.taskBundleCosignKeyRef) || has(self.taskBundleCosignKeyless)'
+                - message: taskBundleCosignKeyRef and taskBundleCosignKeyless are
+                    mutually exclusive
+                  rule: '!has(self.taskBundleCosignKeyRef) || !has(self.taskBundleCosignKeyless)'
               tracing:
                 description: Tracing defines configuration for OpenTelemetry distributed
                   tracing
@@ -1007,7 +1079,7 @@ spec:
                     description: |-
                       ImageCosignKeyRef references a ConfigMap key containing the cosign public key
                       (PEM-encoded) used to verify workspace image signatures.
-                      Required when ImageVerify is true.
+                      Mutually exclusive with ImageCosignKeyless.
                     properties:
                       key:
                         description: The key to select.
@@ -1029,6 +1101,75 @@ spec:
                     - key
                     type: object
                     x-kubernetes-map-type: atomic
+                  imageCosignKeyless:
+                    description: |-
+                      ImageCosignKeyless configures keyless (Fulcio/Rekor) signature verification
+                      for workspace images. Uses certificate identity and OIDC issuer instead of a static key.
+                      Mutually exclusive with ImageCosignKeyRef.
+                    properties:
+                      certificateIdentity:
+                        description: |-
+                          CertificateIdentity is the expected Subject Alternative Name (SAN) of the signing certificate.
+                          For Tekton Chains with a Kubernetes SA, this is typically the SA's OIDC URI
+                          (e.g., "https://kubernetes.io/namespaces/my-ns/serviceaccounts/my-sa").
+                          Supports regex when CertificateIdentityRegExp is used instead.
+                        type: string
+                      certificateIdentityRegExp:
+                        description: |-
+                          CertificateIdentityRegExp is a regular expression alternative to CertificateIdentity.
+                          Exactly one of CertificateIdentity or CertificateIdentityRegExp must be set.
+                        type: string
+                      certificateOIDCIssuer:
+                        description: |-
+                          CertificateOIDCIssuer is the expected OIDC issuer of the Fulcio-issued signing certificate.
+                          For Kubernetes SA tokens, this is the cluster's OIDC issuer URL.
+                          Supports regex when CertificateOIDCIssuerRegExp is used instead.
+                        type: string
+                      certificateOIDCIssuerRegExp:
+                        description: |-
+                          CertificateOIDCIssuerRegExp is a regular expression alternative to CertificateOIDCIssuer.
+                          Exactly one of CertificateOIDCIssuer or CertificateOIDCIssuerRegExp must be set.
+                        type: string
+                      fulcioRootCARef:
+                        description: |-
+                          FulcioRootCARef references a ConfigMap containing the Fulcio root CA certificate (PEM).
+                          When set, only signatures issued by this specific Fulcio instance are accepted,
+                          preventing trust of certificates from other Fulcio instances (e.g. public Sigstore).
+                          The ConfigMap key should contain PEM-encoded certificate data.
+                        properties:
+                          key:
+                            description: The key to select.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the ConfigMap or its key
+                              must be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      rekorURL:
+                        description: |-
+                          RekorURL is the Rekor transparency log URL for signature verification.
+                          Defaults to the public Sigstore instance (https://rekor.sigstore.dev) when empty.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: at least one of certificateIdentity or certificateIdentityRegExp
+                        must be set
+                      rule: has(self.certificateIdentity) || has(self.certificateIdentityRegExp)
+                    - message: at least one of certificateOIDCIssuer or certificateOIDCIssuerRegExp
+                        must be set
+                      rule: has(self.certificateOIDCIssuer) || has(self.certificateOIDCIssuerRegExp)
                   imagePullSecrets:
                     description: ImagePullSecrets is a list of secret references for
                       pulling private workspace images
@@ -1241,8 +1382,12 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-validations:
-                - message: imageCosignKeyRef is required when imageVerify is true
-                  rule: '!has(self.imageVerify) || !self.imageVerify || has(self.imageCosignKeyRef)'
+                - message: imageCosignKeyRef or imageCosignKeyless is required when
+                    imageVerify is true
+                  rule: '!has(self.imageVerify) || !self.imageVerify || has(self.imageCosignKeyRef)
+                    || has(self.imageCosignKeyless)'
+                - message: imageCosignKeyRef and imageCosignKeyless are mutually exclusive
+                  rule: '!has(self.imageCosignKeyRef) || !has(self.imageCosignKeyless)'
             type: object
           status:
             description: OperatorConfigStatus defines the observed state of OperatorConfig

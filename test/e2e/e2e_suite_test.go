@@ -24,6 +24,8 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 	"github.com/onsi/gomega/format"
+
+	utils "github.com/centos-automotive-suite/automotive-dev-operator/test/utils"
 )
 
 // Run e2e tests using the Ginkgo runner.
@@ -38,6 +40,7 @@ var _ = BeforeSuite(func() {
 	testNamespace = resolveNamespace()
 	registryHost = os.Getenv("REGISTRY_HOST")
 	arch = detectArch()
+	openShiftCluster = utils.IsOpenShiftCluster()
 
 	_, _ = fmt.Fprintf(GinkgoWriter, "Test namespace: %s\n", testNamespace)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Registry host:  %s\n", registryHost)
