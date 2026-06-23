@@ -104,6 +104,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 				} else if streamState.LeaseID != "" {
 					leaseID = streamState.LeaseID
 				}
+				h.lastLeaseID = leaseID
 				if leaseID != "" && h.opts.Workspace != nil && *h.opts.Workspace != "" {
 					leaseCtx, cancelLease := context.WithTimeout(ctx, 10*time.Second)
 					leaseErr := api.SetWorkspaceLease(leaseCtx, *h.opts.Workspace, leaseID)
@@ -113,7 +114,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 					}
 				}
 
-				if !clilog.IsQuiet() {
+				if !clilog.IsQuiet() && !h.isStructuredOutput() {
 					if flashWasExecuted {
 						h.displayFlashCompletionBanner(leaseID)
 					} else {

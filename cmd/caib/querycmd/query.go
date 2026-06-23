@@ -3,7 +3,6 @@ package querycmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -14,10 +13,7 @@ import (
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
-
-const outputFormatTable = "table"
 
 // Options wires query handlers to caller-owned state and helper callbacks.
 type Options struct {
@@ -47,20 +43,8 @@ func (h *Handler) handleError(err error) {
 	panic(err)
 }
 
-// resolveOutputFormat normalises and validates the configured output format.
-// It returns the canonical lowercase format string or an error for unsupported values.
 func (h *Handler) resolveOutputFormat() (string, error) {
-	format := outputFormatTable
-	if h.opts.OutputFormat != nil && strings.TrimSpace(*h.opts.OutputFormat) != "" {
-		format = strings.ToLower(strings.TrimSpace(*h.opts.OutputFormat))
-	}
-
-	switch format {
-	case outputFormatTable, "json", "yaml", "yml":
-		return format, nil
-	default:
-		return "", fmt.Errorf("invalid output format %q (supported: table, json, yaml)", format)
-	}
+	return common.ResolveOutputFormat(h.opts.OutputFormat)
 }
 
 // RunList handles `caib image list`.
@@ -174,30 +158,8 @@ func (h *Handler) renderShow(format string, st *buildapitypes.BuildResponse) {
 	h.renderFormatted(format, st, func() error { return printBuildDetails(st) })
 }
 
-// renderFormatted outputs data in the given format, using tablePrinter for table output.
 func (h *Handler) renderFormatted(format string, data any, tablePrinter func() error) {
-	switch format {
-	case "json":
-		out, marshalErr := json.MarshalIndent(data, "", "  ")
-		if marshalErr != nil {
-			h.handleError(fmt.Errorf("error rendering JSON output: %w", marshalErr))
-			return
-		}
-		fmt.Println(string(out))
-	case "yaml", "yml":
-		out, marshalErr := yaml.Marshal(data)
-		if marshalErr != nil {
-			h.handleError(fmt.Errorf("error rendering YAML output: %w", marshalErr))
-			return
-		}
-		fmt.Print(string(out))
-	case outputFormatTable:
-		if err := tablePrinter(); err != nil {
-			h.handleError(fmt.Errorf("error writing table output: %w", err))
-		}
-	default:
-		h.handleError(fmt.Errorf("invalid output format %q (supported: table, json, yaml)", format))
-	}
+	common.RenderFormatted(format, data, tablePrinter, h.handleError)
 }
 
 func buildParametersFromTemplate(tpl *buildapitypes.BuildTemplateResponse) *buildapitypes.BuildParameters {
