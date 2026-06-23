@@ -12,8 +12,6 @@ import (
 	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
-	"github.com/containers/image/v5/docker"
-	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/types"
 	"github.com/fatih/color"
 	godigest "github.com/opencontainers/go-digest"
@@ -93,23 +91,14 @@ func (h *Handler) supportsColor() bool {
 func (h *Handler) RunInspect(_ *cobra.Command, args []string) {
 	ociRef := args[0]
 
-	sysCtx := &types.SystemContext{}
-	if h.opts.InsecureSkipTLS != nil && *h.opts.InsecureSkipTLS {
-		sysCtx.DockerInsecureSkipTLSVerify = types.OptionalBoolTrue
+	insecure := h.opts.InsecureSkipTLS != nil && *h.opts.InsecureSkipTLS
+	authFile := ""
+	if h.opts.RegistryAuthFile != nil {
+		authFile = *h.opts.RegistryAuthFile
 	}
+	sysCtx := caibcommon.NewRegistrySystemContext(ociRef, insecure, authFile)
 
-	_, username, password := registryauth.ExtractRegistryCredentials(ociRef, "")
-	if h.opts.RegistryAuthFile != nil && *h.opts.RegistryAuthFile != "" {
-		sysCtx.AuthFilePath = *h.opts.RegistryAuthFile
-	}
-	if username != "" && password != "" {
-		sysCtx.DockerAuthConfig = &types.DockerAuthConfig{
-			Username: username,
-			Password: password,
-		}
-	}
-
-	annotations, digest, err := readManifestAnnotations(ociRef, sysCtx)
+	annotations, digest, err := caibcommon.ReadManifestAnnotations(ociRef, sysCtx)
 	if err != nil {
 		h.handleError(fmt.Errorf("read manifest from %s: %w", ociRef, err))
 		return
@@ -138,11 +127,8 @@ func (h *Handler) RunInspect(_ *cobra.Command, args []string) {
 	}
 
 	if h.opts.OutputDir != nil && *h.opts.OutputDir != "" {
-		authFile := ""
-		if h.opts.RegistryAuthFile != nil {
-			authFile = *h.opts.RegistryAuthFile
-		}
-		h.downloadReferrers(ociRef, digest, referrers, *h.opts.OutputDir, username, password, authFile)
+		_, dlUsername, dlPassword := registryauth.ExtractRegistryCredentials(ociRef, "")
+		h.downloadReferrers(ociRef, digest, referrers, *h.opts.OutputDir, dlUsername, dlPassword, authFile)
 	}
 }
 
@@ -174,39 +160,6 @@ func (h *Handler) printStructured(format, ociRef, digest string, annotations map
 		return
 	}
 	fmt.Println(string(data))
-}
-
-func readManifestAnnotations(ociRef string, sysCtx *types.SystemContext) (map[string]string, string, error) {
-	ref, err := docker.ParseReference("//" + ociRef)
-	if err != nil {
-		return nil, "", fmt.Errorf("parse reference: %w", err)
-	}
-
-	ctx := context.Background()
-	src, err := ref.NewImageSource(ctx, sysCtx)
-	if err != nil {
-		return nil, "", fmt.Errorf("open image source: %w", err)
-	}
-	defer func() { _ = src.Close() }()
-
-	rawManifest, _, err := src.GetManifest(ctx, nil)
-	if err != nil {
-		return nil, "", fmt.Errorf("get manifest: %w", err)
-	}
-
-	digest, err := manifest.Digest(rawManifest)
-	if err != nil {
-		return nil, "", fmt.Errorf("compute digest: %w", err)
-	}
-
-	var parsed struct {
-		Annotations map[string]string `json:"annotations"`
-	}
-	if err := json.Unmarshal(rawManifest, &parsed); err != nil {
-		return nil, "", fmt.Errorf("parse manifest JSON: %w", err)
-	}
-
-	return parsed.Annotations, string(digest), nil
 }
 
 type referrerInfo struct {
