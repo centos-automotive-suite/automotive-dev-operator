@@ -117,15 +117,37 @@ var _ = Describe("OIDC Authentication", Label("auth"), Ordered, func() {
 			}
 
 			client := newInsecureHTTPClient()
-			req, err := http.NewRequest("GET", caibServer+"/v1/builds", nil)
-			Expect(err).NotTo(HaveOccurred())
-			req.Header.Set("Authorization", "Bearer "+token)
-
-			resp, err := client.Do(req)
-			Expect(err).NotTo(HaveOccurred())
-			defer func() { _ = resp.Body.Close() }()
-			Expect(resp.StatusCode).To(Equal(http.StatusOK),
-				fmt.Sprintf("expected 200 with valid token, got %d", resp.StatusCode))
+			// Use Eventually when Dex is the issuer: the OIDC authenticator fetches
+			// the JWKS in the background after config is applied, so the first
+			// validation attempt may fail until the key material is ready.
+			if dexAvailable {
+				EventuallyWithOffset(1, func() error {
+					req, reqErr := http.NewRequest("GET", caibServer+"/v1/builds", nil)
+					if reqErr != nil {
+						return reqErr
+					}
+					req.Header.Set("Authorization", "Bearer "+token)
+					resp, respErr := client.Do(req)
+					if respErr != nil {
+						return respErr
+					}
+					defer func() { _ = resp.Body.Close() }()
+					if resp.StatusCode != http.StatusOK {
+						return fmt.Errorf("expected 200 with valid Dex token, got %d", resp.StatusCode)
+					}
+					return nil
+				}, 2*time.Minute, 5*time.Second).Should(Succeed(),
+					"Build API did not accept valid Dex token in time")
+			} else {
+				req, err := http.NewRequest("GET", caibServer+"/v1/builds", nil)
+				Expect(err).NotTo(HaveOccurred())
+				req.Header.Set("Authorization", "Bearer "+token)
+				resp, err := client.Do(req)
+				Expect(err).NotTo(HaveOccurred())
+				defer func() { _ = resp.Body.Close() }()
+				Expect(resp.StatusCode).To(Equal(http.StatusOK),
+					fmt.Sprintf("expected 200 with valid token, got %d", resp.StatusCode))
+			}
 		})
 
 		It("should reject invalid token with 401", func() {

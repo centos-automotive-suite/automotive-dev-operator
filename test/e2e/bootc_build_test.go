@@ -32,10 +32,10 @@ import (
 const (
 	caibBuildManifest = "test/config/test-manifest.aib.yml"
 	caibBuildTimeout  = 30 * time.Minute
-	caibListTimeout   = 30 * time.Second
 )
 
 var _ = Describe("Bootc Container Build", Label("bootc"), Ordered, func() {
+	var actualBuildName string
 
 	BeforeAll(func() {
 		if registryHost == "" {
@@ -47,6 +47,15 @@ var _ = Describe("Bootc Container Build", Label("bootc"), Ordered, func() {
 		ensureCaibCredentials()
 	})
 
+	AfterAll(func() {
+		name := actualBuildName
+		if name == "" {
+			name = "e2e-test-build-image"
+		}
+		deleteImageBuildCR(name)
+	})
+
+	// #20 — Full lifecycle (Pending→Building→Completed) via caib CLI
 	It("should build a container image via caib", func() {
 		containerBuildName := "e2e-test-build-image"
 
@@ -67,14 +76,13 @@ var _ = Describe("Bootc Container Build", Label("bootc"), Ordered, func() {
 
 		By("launching bootc container build")
 		go func() {
-			cmd := utils.NewCaibCommand(ctx, caibEnv,
+			out, err := runCaibCommand(ctx,
 				"image", "build",
 				caibBuildManifest,
 				"--name", containerBuildName,
 				"--arch", arch,
 				"--push", fmt.Sprintf("%s:5000/%s/%s", registryHost, pushNamespace, artifactImageName),
-				"--follow")
-			out, err := utils.RunSafe(cmd)
+			)
 			containerCh <- buildResult{output: out, err: err}
 		}()
 
@@ -89,8 +97,36 @@ var _ = Describe("Bootc Container Build", Label("bootc"), Ordered, func() {
 			Fail(fmt.Sprintf("caib build did not complete within %v", caibBuildTimeout))
 		}
 
+		actualBuildName = getImageBuildCRName(containerBuildName)
+
+		By("verifying status fields are populated")
+		cmd := exec.Command("kubectl", "get", "imagebuild", actualBuildName,
+			"-n", testNamespace,
+			"-o", "jsonpath={.status.phase} {.status.startTime} {.status.completionTime} {.status.pipelineRunName}")
+		output, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+
+		fields := strings.Fields(strings.TrimSpace(string(output)))
+		Expect(len(fields)).To(BeNumerically(">=", 4),
+			fmt.Sprintf("expected at least 4 status fields, got: %s", string(output)))
+		Expect(fields[0]).To(Equal("Completed"))
+		Expect(fields[1]).NotTo(BeEmpty(), "startTime should be populated")
+		Expect(fields[2]).NotTo(BeEmpty(), "completionTime should be populated")
+		Expect(fields[3]).NotTo(BeEmpty(), "pipelineRunName should be populated")
+
 		By("verifying container build appears in caib list")
 		verifyCaibList(containerBuildName)
+	})
+
+	// #44 — caib image logs returns a response for a completed build
+	It("should retrieve logs for the completed build via caib", func() {
+		By("retrieving logs via caib CLI")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		output, err := runCaibCommand(ctx, "image", "logs", actualBuildName)
+		Expect(err).NotTo(HaveOccurred(),
+			fmt.Sprintf("caib image logs %s failed:\n%s", actualBuildName, string(output)))
 	})
 })
 
@@ -127,14 +163,13 @@ var _ = Describe("Internal Registry Build", Label("internal-registry"), Ordered,
 
 		By("launching build with --internal-registry")
 		go func() {
-			cmd := utils.NewCaibCommand(ctx, caibEnv,
+			out, err := runCaibCommand(ctx,
 				"image", "build",
 				caibBuildManifest,
 				"--name", buildName,
 				"--arch", arch,
 				"--internal-registry",
-				"--follow")
-			out, err := utils.RunSafe(cmd)
+			)
 			ch <- buildResult{output: out, err: err}
 		}()
 
@@ -153,23 +188,3 @@ var _ = Describe("Internal Registry Build", Label("internal-registry"), Ordered,
 		verifyCaibList(buildName)
 	})
 })
-
-func verifyCaibList(caibBuildName string) {
-	ctx, cancel := context.WithTimeout(context.Background(), caibListTimeout)
-	defer cancel()
-	listCmd := utils.NewCaibCommand(ctx, caibEnv,
-		"image", "list")
-	listOutput, listErr := utils.Run(listCmd)
-	Expect(listErr).NotTo(HaveOccurred())
-	lines := strings.Split(string(listOutput), "\n")
-	found := false
-	for _, line := range lines {
-		if strings.Contains(line, caibBuildName) {
-			Expect(line).To(ContainSubstring("Completed"))
-			found = true
-			break
-		}
-	}
-	Expect(found).To(BeTrue(),
-		fmt.Sprintf("build %q not found in caib list output:\n%s", caibBuildName, string(listOutput)))
-}

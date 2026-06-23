@@ -23,8 +23,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
-
-	utils "github.com/centos-automotive-suite/automotive-dev-operator/test/utils"
 )
 
 const (
@@ -44,13 +42,12 @@ var _ = Describe("Manifest Validation", Label("manifest-validation"), Ordered, f
 		ctx, cancel := context.WithTimeout(context.Background(), validationTimeout)
 		defer cancel()
 
-		cmd := utils.NewCaibCommand(ctx, caibEnv,
+		output, err := runCaibCommand(ctx,
 			"image", "build",
 			invalidManifest,
 			"--name", "e2e-invalid-manifest",
 			"--arch", arch,
 			"--push", "localhost:5000/test/invalid:latest")
-		output, err := utils.RunSafe(cmd)
 
 		_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib manifest validation ---\n%s\n", string(output))
 
