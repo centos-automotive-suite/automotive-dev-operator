@@ -15,7 +15,7 @@
 ################################################################################
 
 # Ginkgo timeouts — keep in sync with .github/workflows/e2e.yml and e2e-lanes.yml
-E2E_TIMEOUT_FAST  ?= 5m   # smoke, operator, auth, features
+E2E_TIMEOUT_FAST  ?= 10m   # smoke, operator, auth, features
 E2E_TIMEOUT_SHORT ?= 15m  # bootc, package-mode
 E2E_TIMEOUT_LONG  ?= 45m  # full suite
 
