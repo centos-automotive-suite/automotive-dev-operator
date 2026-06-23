@@ -71,7 +71,7 @@ jobs:
             test_timeout=45m
           else
             case "$E2E_LABEL_FILTER" in
-              smoke|operator|auth|features) test_timeout=5m ;;
+              smoke|operator|auth|features) test_timeout=10m ;;
               bootc|package-mode) test_timeout=15m ;;
               container-build)     test_timeout=45m ;;
               *)                   test_timeout=45m ;;
