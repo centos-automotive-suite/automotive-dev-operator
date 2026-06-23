@@ -429,8 +429,14 @@ This command connects to a Jumpstarter exporter to flash the specified disk imag
 onto physical hardware. The Jumpstarter client config is auto-detected from
 ~/.config/jumpstarter/ (or $JMP_CLIENT_CONFIG_HOME), or can be specified with --client.
 
+If --target and --exporter are both omitted, the target is auto-detected from the
+OCI image manifest annotations (set by the operator during image push).
+
 Examples:
-  # Flash using auto-detected client config
+  # Flash with auto-detected target (from image annotations)
+  caib image flash quay.io/org/disk:v1
+
+  # Flash with explicit target
   caib image flash quay.io/org/disk:v1 --target j784s4evm
 
   # Flash with explicit client config

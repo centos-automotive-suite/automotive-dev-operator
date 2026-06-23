@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
-	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
+	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/logstream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 	"github.com/spf13/cobra"
 )
 
@@ -46,7 +47,8 @@ type Options struct {
 	InsecureSkipTLS   *bool
 	RegistryAuthFile  *string
 
-	HandleError func(error)
+	HandleError      func(error)
+	AnnotationReader func(imageRef string) (map[string]string, error)
 }
 
 // Handler implements flash-related Cobra run functions.
@@ -64,8 +66,32 @@ func (h *Handler) handleError(err error) {
 		h.opts.HandleError(err)
 		return
 	}
-	fmt.Fprintln(os.Stderr, common.FormatError(err))
+	fmt.Fprintln(os.Stderr, caibcommon.FormatError(err))
 	os.Exit(1)
+}
+
+func (h *Handler) resolveTargetFromAnnotations(imageRef string) string {
+	var annotations map[string]string
+	var err error
+
+	if h.opts.AnnotationReader != nil {
+		annotations, err = h.opts.AnnotationReader(imageRef)
+	} else {
+		insecure := h.opts.InsecureSkipTLS != nil && *h.opts.InsecureSkipTLS
+		authFile := ""
+		if h.opts.RegistryAuthFile != nil {
+			authFile = *h.opts.RegistryAuthFile
+		}
+		sysCtx := caibcommon.NewRegistrySystemContext(imageRef, insecure, authFile)
+		annotations, _, err = caibcommon.ReadManifestAnnotations(imageRef, sysCtx)
+	}
+
+	if err != nil {
+		clilog.Warnf("Could not read image manifest for target auto-detection: %v\n", err)
+		return ""
+	}
+
+	return annotations[oci.Get().AnnotationKey("target")]
 }
 
 func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command, defaultWait, defaultFollow bool) {
@@ -91,17 +117,22 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 	}
 
 	// Resolve Jumpstarter client config (explicit path or auto-detect)
-	clientInfo, err := common.ResolveJumpstarterClient(strings.TrimSpace(*h.opts.JumpstarterClient))
+	clientInfo, err := caibcommon.ResolveJumpstarterClient(strings.TrimSpace(*h.opts.JumpstarterClient))
 	if err != nil {
 		h.handleError(err)
 		return
 	}
 	clilog.Infof("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
 
-	// Validate that either target or exporter is specified.
+	// Auto-detect target from OCI annotations if neither --target nor --exporter specified.
 	if strings.TrimSpace(*h.opts.Target) == "" && strings.TrimSpace(*h.opts.ExporterSelector) == "" {
-		h.handleError(fmt.Errorf("either --target or --exporter is required"))
-		return
+		if detected := h.resolveTargetFromAnnotations(imageRef); detected != "" {
+			*h.opts.Target = detected
+			clilog.Infof("Auto-detected target from image annotations: %s\n", detected)
+		} else {
+			h.handleError(fmt.Errorf("either --target or --exporter is required (target auto-detection from image annotations failed or annotation not present)"))
+			return
+		}
 	}
 
 	// Validate mutual exclusivity of --lease and --lease-duration
@@ -110,7 +141,7 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	api, err := common.CreateBuildAPIClient(server, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	api, err := caibcommon.CreateBuildAPIClient(server, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -229,7 +260,7 @@ func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.
 		case <-ticker.C:
 			reqCtx, cancelReq := context.WithTimeout(timeoutCtx, 2*time.Minute)
 			var st *buildapitypes.FlashResponse
-			err := common.ExecuteWithReauth(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS, func(api *buildapiclient.Client) error {
+			err := caibcommon.ExecuteWithReauth(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS, func(api *buildapiclient.Client) error {
 				var getErr error
 				st, getErr = api.GetFlash(reqCtx, name)
 				return getErr
