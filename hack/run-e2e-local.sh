@@ -15,11 +15,14 @@ usage() {
   printf 'Usage: %s [OPTIONS] [LANE]\n\n' "$(basename "$0")"
   printf 'Run e2e tests against a local CRC/OpenShift cluster.\n\n'
   printf 'Lanes:\n'
-  printf '  operator        - operator health, Tekton tasks, Build API\n'
-  printf '  bootc           - bootc container build via caib\n'
+  printf '  smoke         - quick smoke tests (CRDs, OperatorConfig, Build API, CR lifecycle)\n'
+  printf '  operator      - operator health, Tekton tasks, Build API\n'
+  printf '  bootc         - bootc container build via caib\n'
   printf '  container-build - Shipwright container build via caib\n'
-  printf '  auth            - OIDC authentication (OpenShift or Kind+Dex)\n'
-  printf '  all             - run all tests (default)\n\n'
+  printf '  auth          - OIDC authentication (OpenShift or Kind+Dex)\n'
+  printf '  package-mode  - package mode builds\n'
+  printf '  features      - TTL, image propagation, Build API logs\n'
+  printf '  all           - run all tests (default)\n\n'
   printf 'Options:\n'
   printf '  -h, --help    Show this help message and exit\n\n'
   printf 'Environment variables:\n'
@@ -38,7 +41,7 @@ esac
 
 E2E_LANE="${1:-}"
 case "$E2E_LANE" in
-  operator|bootc|auth|container-build)
+  smoke|operator|bootc|container-build|auth|package-mode|features)
     E2E_MAKE_TARGET="test-e2e-${E2E_LANE}"
     ;;
   ""|all)

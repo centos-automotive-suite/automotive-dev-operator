@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       label_filter:
-        description: 'Ginkgo label filter (e.g. "operator", "bootc", "auth"). Empty runs all.'
+        description: 'Ginkgo label filter (e.g. "smoke", "operator", "bootc", "container-build", "auth"). Empty runs all.'
         required: false
         default: ''
 
@@ -49,7 +49,7 @@ jobs:
       - name: Deploy Dex for OIDC tests
         if: >
           github.event.inputs.label_filter == 'auth' ||
-          github.event.inputs.label_filter == ''
+          (github.event.inputs.label_filter == '' && github.event_name != 'pull_request')
         run: hack/e2e/setup-dex.sh
 
       - name: Build caib CLI
@@ -64,16 +64,17 @@ jobs:
           REGISTRY_USERNAME: kind
           REGISTRY_PASSWORD: kind
           CAIB_SERVER: http://localhost:8080
-          E2E_LABEL_FILTER: ${{ github.event.inputs.label_filter || '' }}
-          E2E_NAMESPACE: ${{ github.event.inputs.label_filter && format('e2e-{0}', github.event.inputs.label_filter) || 'e2e-test-all' }}
+          E2E_LABEL_FILTER: ${{ github.event_name == 'pull_request' && 'smoke' || github.event.inputs.label_filter || '' }}
+          E2E_NAMESPACE: ${{ github.event_name == 'pull_request' && 'e2e-smoke' || (github.event.inputs.label_filter && format('e2e-{0}', github.event.inputs.label_filter) || 'e2e-test-all') }}
         run: |
           if [ -z "$E2E_LABEL_FILTER" ]; then
             test_timeout=45m
           else
             case "$E2E_LABEL_FILTER" in
-              operator|auth) test_timeout=15m ;;
-              bootc)         test_timeout=35m ;;
-              *)             test_timeout=45m ;;
+              smoke|operator|auth|features) test_timeout=5m ;;
+              bootc|package-mode) test_timeout=15m ;;
+              container-build)     test_timeout=45m ;;
+              *)                   test_timeout=45m ;;
             esac
           fi
           ginkgo_args=(-v -ginkgo.v -timeout "$test_timeout")

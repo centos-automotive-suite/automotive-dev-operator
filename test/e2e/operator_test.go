@@ -28,7 +28,7 @@ import (
 	utils "github.com/centos-automotive-suite/automotive-dev-operator/test/utils"
 )
 
-var _ = Describe("Operator Health", Label("operator"), Ordered, func() {
+var _ = Describe("Operator Health", Label("operator", "smoke"), Ordered, func() {
 	BeforeAll(func() {
 		ensureOperatorDeployed()
 	})

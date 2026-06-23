@@ -36,9 +36,25 @@ jobs:
           COMMENT: ${{ github.event.comment.body }}
         run: |
           case "$COMMENT" in
+            /e2e-smoke*)
+              echo "label_filter=smoke" >> "$GITHUB_OUTPUT"
+              echo "lane_name=smoke" >> "$GITHUB_OUTPUT"
+              ;;
             /e2e-operator*)
               echo "label_filter=operator" >> "$GITHUB_OUTPUT"
               echo "lane_name=operator" >> "$GITHUB_OUTPUT"
+              ;;
+            /e2e-package-mode*)
+              echo "label_filter=package-mode" >> "$GITHUB_OUTPUT"
+              echo "lane_name=package-mode" >> "$GITHUB_OUTPUT"
+              ;;
+            /e2e-features*)
+              echo "label_filter=features" >> "$GITHUB_OUTPUT"
+              echo "lane_name=features" >> "$GITHUB_OUTPUT"
+              ;;
+            /e2e-container-build*)
+              echo "label_filter=container-build" >> "$GITHUB_OUTPUT"
+              echo "lane_name=container-build" >> "$GITHUB_OUTPUT"
               ;;
             /e2e-bootc*)
               echo "label_filter=bootc" >> "$GITHUB_OUTPUT"
@@ -54,7 +70,7 @@ jobs:
               ;;
             *)
               printf 'Unknown e2e command: %s\n' "$COMMENT"
-              printf 'Supported: /e2e-operator, /e2e-bootc, /e2e-auth, /e2e-test-all\n'
+              printf 'Supported: /e2e-smoke, /e2e-operator, /e2e-package-mode, /e2e-features, /e2e-bootc, /e2e-container-build, /e2e-auth, /e2e-test-all\n'
               exit 1
               ;;
           esac
@@ -129,10 +145,10 @@ jobs:
           E2E_NAMESPACE: ${{ needs.parse-comment.outputs.lane_name == 'all' && 'e2e-test-all' || format('e2e-{0}', needs.parse-comment.outputs.lane_name) }}
         run: |
           case "${{ needs.parse-comment.outputs.lane_name }}" in
-            operator|auth) test_timeout=15m ;;
-            bootc)         test_timeout=35m ;;
-            all)           test_timeout=45m ;;
-            *)             echo "Unknown lane: ${{ needs.parse-comment.outputs.lane_name }}" >&2; exit 1 ;;
+            smoke|operator|auth|features) test_timeout=5m ;;
+            bootc|package-mode) test_timeout=15m ;;
+            container-build|all) test_timeout=45m ;;
+            *)                   echo "Unknown lane: ${{ needs.parse-comment.outputs.lane_name }}" >&2; exit 1 ;;
           esac
           ginkgo_args=(-v -ginkgo.v -timeout "$test_timeout")
           if [ -n "$E2E_LABEL_FILTER" ]; then

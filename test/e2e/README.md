@@ -80,27 +80,36 @@ If you want more control over the test environment:
 
 ## Test Lanes
 
-Tests are split into three independently-runnable lanes, each deployed into its own namespace:
+Tests are split into independently-runnable lanes, each deployed into its own namespace:
 
 | Lane | Label | Namespace | What it covers |
-|------|-------|-----------|---------------|
-| `operator` | `operator` | `e2e-operator` | Operator health, Tekton tasks/pipeline, Build API deployment |
+|------|-------|-----------|----------------|
+| `smoke` | `smoke` | `e2e-smoke` | CRDs, OperatorConfig, Build API endpoints, CR lifecycle, guard rails |
+| `operator` | `operator` | `e2e-operator` | Operator health, Tekton tasks/pipeline, Build API CRUD, ImageBuild lifecycle, error handling |
 | `bootc` | `bootc` | `e2e-bootc` | Bootc container build via caib CLI |
 | `auth` | `auth` | `e2e-auth` | OIDC authentication (OpenShift only) |
+| `package-mode` | `package-mode` | `e2e-package-mode` | Package mode disk image build (OpenShift only) |
+| `features` | `features` | `e2e-features` | TTL expiry, image propagation in Tekton Tasks, Build API log streaming |
 
 ### Running individual lanes
 
 ```bash
 # Via Makefile
+make test-e2e-smoke
 make test-e2e-operator
 make test-e2e-bootc
 make test-e2e-auth
+make test-e2e-package-mode
+make test-e2e-features
 make test-e2e              # all lanes
 
 # Via local runner (handles CRC/OpenShift setup)
+bash hack/run-e2e-local.sh smoke
 bash hack/run-e2e-local.sh operator
 bash hack/run-e2e-local.sh bootc
 bash hack/run-e2e-local.sh auth
+bash hack/run-e2e-local.sh package-mode
+bash hack/run-e2e-local.sh features
 bash hack/run-e2e-local.sh            # all lanes
 ```
 
@@ -110,19 +119,30 @@ Times measured on CRC (cluster already running):
 
 | Lane | macOS arm64 | Linux amd64 | `go test -timeout` |
 |------|-------------|-------------|-------------------|
-| `operator` | ~2 min | ~3 min | 15m |
-| `auth` | ~3 min | ~4 min | 15m |
-| `bootc` | ~7 min | ~33 min | 35m |
+| `smoke` | ~3 min | ~3 min | 5m |
+| `operator` | ~3 min | ~3 min | 5m |
+| `auth` | ~3 min | ~3 min | 5m |
+| `features` | ~4 min | ~4 min | 5m |
+| `bootc` | ~7 min | ~7 min | 15m |
+| `package-mode` | ~4 min | ~4 min | 15m |
 | all | ~8 min | ~36 min | 45m |
 
 ## Test Structure
 
 - `e2e_suite_test.go`: Suite setup, `BeforeSuite`/`AfterSuite`
-- `helpers_test.go`: Shared setup (`sync.Once`-based operator deploy, registry config, Build API access, caib credentials)
-- `operator_test.go`: Operator health lane (`Label("operator")`)
-- `bootc_build_test.go`: Bootc build lane (`Label("bootc")`)
-- `auth_test.go`: OIDC authentication lane (`Label("auth")`)
-- `../utils/`: Utility functions for test helpers
+- `helpers_test.go`: Shared helpers — `sync.Once`-based operator deploy, Build API access, caib credentials, and utility functions (`applyImageBuildCR`, `createBuildViaCaib`, `waitForImageBuildPhase`, etc.)
+- `operator_test.go`: Operator health checks (`Label("operator", "smoke")`)
+- `smoke_test.go`: CRD availability, OperatorConfig, Build API endpoints, CR lifecycle, negative/guard-rail tests (`Label("smoke")`)
+- `buildapi_test.go`: Build API CRUD via caib CLI and ownership enforcement (`Label("operator")`)
+- `imagebuild_lifecycle_test.go`: Export/push phase and build cancellation (`Label("operator")`)
+- `operatorconfig_e2e_test.go`: OperatorConfig osBuilds toggle (`Label("operator")`)
+- `error_handling_test.go`: Concurrent builds isolation (`Label("operator")`)
+- `bootc_build_test.go`: Bootc build and internal-registry build via caib (`Label("bootc")`, `Label("internal-registry")`)
+- `auth_test.go`: OIDC authentication (`Label("auth")`)
+- `package_build_test.go`: Package mode disk image build (`Label("package-mode")`)
+- `features_e2e_test.go`: TTL expiry, image propagation, Build API log streaming (`Label("features")`)
+- `manifest_validation_test.go`: caib manifest validation (`Label("manifest-validation")`)
+- `../utils/`: Utility functions for running commands and managing processes
 
 ## GitHub Actions
 
@@ -132,7 +152,7 @@ The e2e tests run automatically on:
 - Manual workflow dispatch (with optional `label_filter` input)
 
 Individual lanes can be triggered on PRs via comment commands:
-- `/e2e-operator`, `/e2e-bootc`, `/e2e-auth`, `/e2e-test-all`
+- `/e2e-smoke`, `/e2e-operator`, `/e2e-bootc`, `/e2e-auth`, `/e2e-package-mode`, `/e2e-features`, `/e2e-test-all`
 
 See `.github/workflows/e2e.yml` and `.github/workflows/e2e-lanes.yml` for the CI configuration.
 
