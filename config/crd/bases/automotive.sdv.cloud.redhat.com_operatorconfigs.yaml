@@ -676,6 +676,11 @@ spec:
                       Can be overridden per-ImageBuild via FlashSpec.LeaseDuration
                       Default: "03:00:00"
                     type: string
+                  defaultLeaseTags:
+                    description: |-
+                      DefaultLeaseTags are key=value tags applied to all Jumpstarter leases created by the operator
+                      Format: comma-separated key=value pairs (e.g. "platform=caib,env=prod")
+                    type: string
                   image:
                     default: quay.io/jumpstarter-dev/jumpstarter:latest
                     description: Image is the container image for Jumpstarter CLI

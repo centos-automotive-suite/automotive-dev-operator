@@ -55,6 +55,34 @@ func ValidateReproducibleRequiresSecure(reproducible, secureBuild bool) error {
 	return nil
 }
 
+// ValidateLeaseTags checks that each tag is in key=value format with no commas.
+func ValidateLeaseTags(tags []string) error {
+	for _, tag := range tags {
+		if strings.Contains(tag, ",") {
+			return fmt.Errorf("lease tag %q must not contain commas", tag)
+		}
+		if !strings.Contains(tag, "=") {
+			return fmt.Errorf("lease tag %q must be in key=value format", tag)
+		}
+		key := tag[:strings.Index(tag, "=")]
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("lease tag %q has empty key", tag)
+		}
+	}
+	return nil
+}
+
+// ValidateAndJoinLeaseTags validates tags and returns a comma-separated string.
+func ValidateAndJoinLeaseTags(tags *[]string) (string, error) {
+	if tags == nil || len(*tags) == 0 {
+		return "", nil
+	}
+	if err := ValidateLeaseTags(*tags); err != nil {
+		return "", err
+	}
+	return strings.Join(*tags, ","), nil
+}
+
 // ValidateManifestSuffix validates the manifest file extension.
 func ValidateManifestSuffix(filename string) error {
 	for _, suffix := range validManifestSuffix {

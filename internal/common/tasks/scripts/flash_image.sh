@@ -31,6 +31,16 @@ FLASH_CMD=$(echo "${FLASH_CMD}" | sed "s|{image_uri}|${IMAGE_REF}|g")
 
 LEASE_DURATION="${LEASE_DURATION:-03:00:00}"
 EXISTING_LEASE="${EXISTING_LEASE:-}"
+LEASE_TAGS="${LEASE_TAGS:-}"
+
+TAG_ARGS=()
+if [[ -n "${LEASE_TAGS}" ]]; then
+    IFS=',' read -ra TAG_PAIRS <<< "${LEASE_TAGS}"
+    for pair in "${TAG_PAIRS[@]}"; do
+        [[ -z "${pair}" ]] && continue
+        TAG_ARGS+=(--tag "${pair}")
+    done
+fi
 
 echo "Flash command: ${FLASH_CMD}"
 
@@ -42,10 +52,14 @@ if [[ -n "${EXISTING_LEASE}" ]]; then
     USER_PROVIDED_LEASE=true
 else
     echo "Lease duration: ${LEASE_DURATION}"
+    if [[ -n "${LEASE_TAGS}" ]]; then
+        echo "Lease tags: ${LEASE_TAGS}"
+    fi
     echo ""
     echo "Creating lease on exporter matching: ${EXPORTER_SELECTOR}"
+    echo "Running: jmp create lease --client-config ${JMP_CLIENT_CONFIG} -l ${EXPORTER_SELECTOR} --duration ${LEASE_DURATION} ${TAG_ARGS[*]} -o name"
 
-    LEASE_NAME=$(jmp create lease --client-config "${JMP_CLIENT_CONFIG}" -l "${EXPORTER_SELECTOR}" --duration "${LEASE_DURATION}" -o name)
+    LEASE_NAME=$(jmp create lease --client-config "${JMP_CLIENT_CONFIG}" -l "${EXPORTER_SELECTOR}" --duration "${LEASE_DURATION}" "${TAG_ARGS[@]}" -o name)
 
     if [[ -z "${LEASE_NAME}" ]]; then
         echo "ERROR: Failed to create lease"

@@ -75,6 +75,7 @@ type Options struct {
 	LeaseName              *string
 	FlashCmd               *string
 	ExporterSelector       *string
+	LeaseTags              *[]string
 
 	UseInternalRegistry       *bool
 	InternalRegistryImageName *string
@@ -454,6 +455,10 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 	}
 	req.FlashCmd = *h.opts.FlashCmd
 	req.FlashExporterSelector = *h.opts.ExporterSelector
+	req.FlashLeaseTags, err = common.ValidateAndJoinLeaseTags(h.opts.LeaseTags)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

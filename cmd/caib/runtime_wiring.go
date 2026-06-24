@@ -51,6 +51,7 @@ type runtimeState struct {
 	LeaseDuration     *string
 	LeaseName         *string
 	FlashCmd          *string
+	LeaseTags         *[]string
 
 	UseInternalRegistry       *bool
 	InternalRegistryImageName *string
@@ -116,6 +117,7 @@ func newRuntimeState() runtimeState {
 		LeaseDuration:     &leaseDuration,
 		LeaseName:         &leaseName,
 		FlashCmd:          &flashCmdOverride,
+		LeaseTags:         &leaseTags,
 
 		UseInternalRegistry:       &useInternalRegistry,
 		InternalRegistryImageName: &internalRegistryImageName,
@@ -189,6 +191,7 @@ func (s runtimeState) newHandlers() handlerSet {
 			LeaseName:                 s.LeaseName,
 			FlashCmd:                  s.FlashCmd,
 			ExporterSelector:          s.ExporterSelector,
+			LeaseTags:                 s.LeaseTags,
 			UseInternalRegistry:       s.UseInternalRegistry,
 			InternalRegistryImageName: s.InternalRegistryImageName,
 			InternalRegistryTag:       s.InternalRegistryTag,
@@ -224,6 +227,7 @@ func (s runtimeState) newHandlers() handlerSet {
 			LeaseDuration:     s.LeaseDuration,
 			LeaseName:         s.LeaseName,
 			FlashCmd:          s.FlashCmd,
+			LeaseTags:         s.LeaseTags,
 			WaitForBuild:      s.WaitForBuild,
 			FollowLogs:        s.FollowLogs,
 			InsecureSkipTLS:   s.InsecureSkipTLS,
@@ -321,6 +325,7 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		LeaseDuration:     s.LeaseDuration,
 		LeaseName:         s.LeaseName,
 		FlashCmd:          s.FlashCmd,
+		LeaseTags:         s.LeaseTags,
 
 		UseInternalRegistry:       s.UseInternalRegistry,
 		InternalRegistryImageName: s.InternalRegistryImageName,

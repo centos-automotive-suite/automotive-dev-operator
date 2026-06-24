@@ -1045,7 +1045,7 @@ func (r *OperatorConfigReconciler) cleanupWorkspaceInfra(ctx context.Context, co
 
 	scc := &securityv1.SecurityContextConstraints{}
 	scc.Name = workspaceSCCName
-	if err := r.Delete(ctx, scc); err != nil && !errors.IsNotFound(err) {
+	if err := r.Delete(ctx, scc); err != nil && !errors.IsNotFound(err) && !isNoMatchError(err) {
 		return fmt.Errorf("failed to delete workspace SCC: %w", err)
 	}
 

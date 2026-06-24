@@ -207,6 +207,7 @@ type BuildRequest struct {
 	FlashLeaseName        string `json:"flashLeaseName,omitempty"`        // Existing lease name (mutually exclusive with FlashLeaseDuration)
 	FlashCmd              string `json:"flashCmd,omitempty"`              // Override flash command from OperatorConfig
 	FlashExporterSelector string `json:"flashExporterSelector,omitempty"` // Override exporter selector from OperatorConfig
+	FlashLeaseTags        string `json:"flashLeaseTags,omitempty"`        // Additional lease tags (comma-separated key=value)
 }
 
 // RegistryCredentials contains authentication details for container registries.
@@ -250,6 +251,8 @@ type FlashRequest struct {
 	LeaseDuration string `json:"leaseDuration,omitempty"`
 	// LeaseName is an existing Jumpstarter lease name (mutually exclusive with LeaseDuration)
 	LeaseName string `json:"leaseName,omitempty"`
+	// LeaseTags are additional key=value tags for the lease (comma-separated)
+	LeaseTags string `json:"leaseTags,omitempty"`
 	// RegistryCredentials contains OCI registry auth for pulling the flash image on the exporter
 	RegistryCredentials *RegistryCredentials `json:"registryCredentials,omitempty"`
 }
