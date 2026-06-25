@@ -356,6 +356,224 @@ spec:
                   spec:
                     query: '(sum by (target) (rate(ado_flash_duration_seconds_sum{namespace="automotive-dev-operator-system"}[5m])) or vector(0)) / clamp_min(sum by (target) (rate(ado_flash_duration_seconds_count{namespace="automotive-dev-operator-system"}[5m])), 1)'
                     seriesNameFormat: "{{target}}"
+      buildsByFormat:
+        kind: Panel
+        spec:
+          display:
+            name: "Builds by Format"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "builds"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'round(sum by (format) (ado_build_total{namespace="automotive-dev-operator-system"})) or vector(0)'
+                    seriesNameFormat: "{{format}}"
+      avgFlashDuration:
+        kind: Panel
+        spec:
+          display:
+            name: "Avg Flash Duration"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "seconds"
+                decimalPlaces: 0
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(sum(ado_flash_duration_seconds_sum{namespace="automotive-dev-operator-system"}) or vector(0)) / clamp_min(sum(ado_flash_duration_seconds_count{namespace="automotive-dev-operator-system"}), 1)'
+      sealedCreateTotal:
+        kind: Panel
+        spec:
+          display:
+            name: "Sealed Create Requests"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "decimal"
+                decimalPlaces: 0
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'sum(ado_sealed_create_requests_total{namespace="automotive-dev-operator-system"}) or vector(0)'
+      sealedSuccessRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Sealed Success Rate"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "percent-decimal"
+                decimalPlaces: 1
+              thresholds:
+                steps:
+                  - value: 0
+                    color: "#e74c3c"
+                  - value: 0.8
+                    color: "#f39c12"
+                  - value: 0.95
+                    color: "#27ae60"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(sum(ado_sealed_create_requests_total{namespace="automotive-dev-operator-system",result="success"}) or vector(0)) / clamp_min(sum(ado_sealed_create_requests_total{namespace="automotive-dev-operator-system"}), 1)'
+      sealedRequestRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Sealed Request Rate"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "requests/sec"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'sum by (operation, result) (rate(ado_sealed_create_requests_total{namespace="automotive-dev-operator-system"}[5m]))'
+                    seriesNameFormat: "{{operation}} - {{result}}"
+      sealedByOperation:
+        kind: Panel
+        spec:
+          display:
+            name: "Sealed Requests by Operation"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "requests/sec"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'sum by (operation) (rate(ado_sealed_create_requests_total{namespace="automotive-dev-operator-system"}[5m]))'
+                    seriesNameFormat: "{{operation}}"
+      sealedSuccessByOperation:
+        kind: Panel
+        spec:
+          display:
+            name: "Sealed Success by Operation"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "success rate"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'sum by (operation) (rate(ado_sealed_create_requests_total{namespace="automotive-dev-operator-system",result="success"}[5m])) / clamp_min(sum by (operation) (rate(ado_sealed_create_requests_total{namespace="automotive-dev-operator-system"}[5m])), 0.001)'
+                    seriesNameFormat: "{{operation}}"
+      flashByTarget:
+        kind: Panel
+        spec:
+          display:
+            name: "Flashes by Target"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "flashes/sec"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'sum by (target) (rate(ado_flash_total{namespace="automotive-dev-operator-system"}[5m]))'
+                    seriesNameFormat: "{{target}}"
+      flashErrorRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Flash Error Rate"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "percent-decimal"
+                decimalPlaces: 1
+              thresholds:
+                steps:
+                  - value: 0
+                    color: "#27ae60"
+                  - value: 0.05
+                    color: "#f39c12"
+                  - value: 0.2
+                    color: "#e74c3c"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(sum(rate(ado_flash_request_duration_seconds_count{namespace="automotive-dev-operator-system",status_code!~"2.."}[5m])) or vector(0)) / clamp_min(sum(rate(ado_flash_request_duration_seconds_count{namespace="automotive-dev-operator-system"}[5m])), 0.001)'
+      flashRequestRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Flash Request Rate"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "requests/sec"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'sum by (endpoint, status_code) (rate(ado_flash_request_duration_seconds_count{namespace="automotive-dev-operator-system"}[5m]))'
+                    seriesNameFormat: "{{endpoint}} {{status_code}}"
     layouts:
       - kind: "Grid"
         spec:
@@ -397,8 +615,11 @@ spec:
               height: 4
               content:
                 $ref: "#/spec/panels/failedBuilds"
+      - kind: "Grid"
+        spec:
+          items:
             - x: 0
-              y: 4
+              y: 0
               width: 24
               height: 8
               content:
@@ -449,6 +670,12 @@ spec:
               height: 8
               content:
                 $ref: "#/spec/panels/buildsByArch"
+            - x: 0
+              y: 16
+              width: 24
+              height: 8
+              content:
+                $ref: "#/spec/panels/buildsByFormat"
       - kind: "Grid"
         spec:
           display:
@@ -469,6 +696,80 @@ spec:
             - x: 16
               y: 0
               width: 8
+              height: 4
+              content:
+                $ref: "#/spec/panels/avgFlashDuration"
+      - kind: "Grid"
+        spec:
+          items:
+            - x: 0
+              y: 0
+              width: 12
+              height: 8
+              content:
+                $ref: "#/spec/panels/flashByTarget"
+            - x: 12
+              y: 0
+              width: 12
               height: 8
               content:
                 $ref: "#/spec/panels/flashDuration"
+      - kind: "Grid"
+        spec:
+          items:
+            - x: 0
+              y: 0
+              width: 8
+              height: 4
+              content:
+                $ref: "#/spec/panels/flashErrorRate"
+            - x: 8
+              y: 0
+              width: 16
+              height: 4
+              content:
+                $ref: "#/spec/panels/flashRequestRate"
+      - kind: "Grid"
+        spec:
+          display:
+            title: "Sealed Operations"
+          items:
+            - x: 0
+              y: 0
+              width: 12
+              height: 4
+              content:
+                $ref: "#/spec/panels/sealedCreateTotal"
+            - x: 12
+              y: 0
+              width: 12
+              height: 4
+              content:
+                $ref: "#/spec/panels/sealedSuccessRate"
+      - kind: "Grid"
+        spec:
+          items:
+            - x: 0
+              y: 0
+              width: 24
+              height: 8
+              content:
+                $ref: "#/spec/panels/sealedRequestRate"
+      - kind: "Grid"
+        spec:
+          items:
+            - x: 0
+              y: 0
+              width: 24
+              height: 8
+              content:
+                $ref: "#/spec/panels/sealedByOperation"
+      - kind: "Grid"
+        spec:
+          items:
+            - x: 0
+              y: 0
+              width: 24
+              height: 8
+              content:
+                $ref: "#/spec/panels/sealedSuccessByOperation"
