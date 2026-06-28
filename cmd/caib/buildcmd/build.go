@@ -88,13 +88,15 @@ type Options struct {
 	TTL               *string
 
 	InsecureSkipTLS *bool
+	OutputFormat    *string
 
 	HandleError func(error)
 }
 
 // Handler implements image build command run functions.
 type Handler struct {
-	opts Options
+	opts        Options
+	lastLeaseID string
 }
 
 // NewHandler creates a build workflow handler.
@@ -115,15 +117,35 @@ func (h *Handler) supportsColorOutput() bool {
 	return common.SupportsColorOutput()
 }
 
-func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command, defaultWait, defaultFollow bool) {
+func (h *Handler) isStructuredOutput() bool {
+	return common.IsStructuredFormat(h.opts.OutputFormat)
+}
+
+// BuildResult is the machine-readable output emitted when --output-format is json or yaml.
+type BuildResult struct {
+	Name                    string `json:"name" yaml:"name"`
+	Phase                   string `json:"phase" yaml:"phase"`
+	Message                 string `json:"message,omitempty" yaml:"message,omitempty"`
+	ContainerImage          string `json:"containerImage,omitempty" yaml:"containerImage,omitempty"`
+	DiskImage               string `json:"diskImage,omitempty" yaml:"diskImage,omitempty"`
+	LeaseID                 string `json:"leaseId,omitempty" yaml:"leaseId,omitempty"`
+	RegistryCredentialsFile string `json:"registryCredentialsFile,omitempty" yaml:"registryCredentialsFile,omitempty"`
+	RegistryUsername        string `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty"`
+	RegistryToken           string `json:"registryToken,omitempty" yaml:"registryToken,omitempty"`
+}
+
+func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command, defaultWait bool) {
 	if cmd == nil {
 		return
+	}
+	if h.isStructuredOutput() {
+		clilog.SetQuiet(true)
 	}
 	if !cmd.Flags().Changed("wait") {
 		*h.opts.WaitForBuild = defaultWait
 	}
 	if !cmd.Flags().Changed("follow") {
-		*h.opts.FollowLogs = defaultFollow
+		*h.opts.FollowLogs = false
 	}
 }
 
@@ -348,26 +370,39 @@ func warnIfNotInList(accepted []string, field, value string) {
 // It queries the server for actual build status so that messages are only
 // shown for steps that actually succeeded.
 func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.Client, buildName string) {
-	labelColor := func(a ...any) string { return fmt.Sprint(a...) }
-	valueColor := func(a ...any) string { return fmt.Sprint(a...) }
-	if h.supportsColorOutput() {
-		labelColor = color.New(color.FgHiWhite, color.Bold).SprintFunc()
-		valueColor = color.New(color.FgHiGreen).SprintFunc()
-	}
-
 	st, err := api.GetBuild(ctx, buildName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to get build results for %s: %v\n", buildName, err)
 		return
 	}
 
+	credsFile := h.handleBuildArtifacts(st)
+
+	if h.isStructuredOutput() {
+		format, _ := common.ResolveOutputFormat(h.opts.OutputFormat)
+		result := BuildResult{
+			Name:                    st.Name,
+			Phase:                   st.Phase,
+			Message:                 st.Message,
+			ContainerImage:          st.ContainerImage,
+			DiskImage:               st.DiskImage,
+			LeaseID:                 h.lastLeaseID,
+			RegistryCredentialsFile: credsFile,
+		}
+		if credsFile == "" && st.RegistryToken != "" && *h.opts.UseInternalRegistry {
+			result.RegistryUsername = "serviceaccount"
+			result.RegistryToken = st.RegistryToken
+		}
+		common.RenderFormatted(format, result, nil, h.handleError)
+		return
+	}
+
+	h.displayBuildResultsText(st, credsFile)
+}
+
+// handleBuildArtifacts performs side effects (download, creds file) and returns the creds file path.
+func (h *Handler) handleBuildArtifacts(st *buildapitypes.BuildResponse) string {
 	if *h.opts.UseInternalRegistry {
-		if st.ContainerImage != "" {
-			fmt.Printf("%s %s\n", labelColor("Container image:"), valueColor(st.ContainerImage))
-		}
-		if st.DiskImage != "" {
-			fmt.Printf("%s %s\n", labelColor("Disk image:"), valueColor(st.DiskImage))
-		}
 		if st.RegistryToken != "" {
 			if *h.opts.OutputDir != "" && st.DiskImage != "" {
 				if err := common.PullOCIArtifact(
@@ -378,32 +413,20 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 					*h.opts.InsecureSkipTLS,
 				); err != nil {
 					h.handleError(fmt.Errorf("failed to download OCI artifact: %w", err))
-					return
+					return ""
 				}
 			} else {
 				credsFile, credsErr := common.WriteRegistryCredentialsFile(st.RegistryToken)
 				if credsErr != nil {
 					fmt.Fprintf(os.Stderr, "Warning: failed to write registry credentials file: %v\n", credsErr)
-					clilog.Infof("\n%s\n", labelColor("Registry credentials (valid ~4 hours):"))
-					clilog.Infof("  %s %s\n", labelColor("Username:"), valueColor("serviceaccount"))
-					clilog.Infof("  %s %s\n", labelColor("Token:"), valueColor(st.RegistryToken))
-				} else {
-					clilog.Infof("\n%s %s (valid ~4 hours)\n",
-						labelColor("Registry credentials written to:"),
-						valueColor(credsFile),
-					)
+					return ""
 				}
+				return credsFile
 			}
 		}
-		return
+		return ""
 	}
 
-	if st.ContainerImage != "" && *h.opts.ContainerPush != "" {
-		fmt.Printf("%s %s\n", labelColor("Container image pushed to:"), valueColor(*h.opts.ContainerPush))
-	}
-	if st.DiskImage != "" && *h.opts.ExportOCI != "" {
-		fmt.Printf("%s %s\n", labelColor("Disk image pushed to:"), valueColor(*h.opts.ExportOCI))
-	}
 	if *h.opts.OutputDir != "" && st.DiskImage != "" {
 		_, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(*h.opts.ContainerPush, *h.opts.ExportOCI)
 		if err := common.PullOCIArtifact(
@@ -414,8 +437,45 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 			*h.opts.InsecureSkipTLS,
 		); err != nil {
 			h.handleError(fmt.Errorf("failed to download OCI artifact: %w", err))
-			return
 		}
+	}
+	return ""
+}
+
+// displayBuildResultsText prints the human-readable (table) build results.
+func (h *Handler) displayBuildResultsText(st *buildapitypes.BuildResponse, credsFile string) {
+	labelColor := func(a ...any) string { return fmt.Sprint(a...) }
+	valueColor := func(a ...any) string { return fmt.Sprint(a...) }
+	if h.supportsColorOutput() {
+		labelColor = color.New(color.FgHiWhite, color.Bold).SprintFunc()
+		valueColor = color.New(color.FgHiGreen).SprintFunc()
+	}
+
+	if *h.opts.UseInternalRegistry {
+		if st.ContainerImage != "" {
+			fmt.Printf("%s %s\n", labelColor("Container image:"), valueColor(st.ContainerImage))
+		}
+		if st.DiskImage != "" {
+			fmt.Printf("%s %s\n", labelColor("Disk image:"), valueColor(st.DiskImage))
+		}
+		if credsFile != "" {
+			clilog.Infof("\n%s %s (valid ~4 hours)\n",
+				labelColor("Registry credentials written to:"),
+				valueColor(credsFile),
+			)
+		} else if st.RegistryToken != "" && *h.opts.OutputDir == "" {
+			clilog.Infof("\n%s\n", labelColor("Registry credentials (valid ~4 hours):"))
+			clilog.Infof("  %s %s\n", labelColor("Username:"), valueColor("serviceaccount"))
+			clilog.Infof("  %s %s\n", labelColor("Token:"), valueColor(st.RegistryToken))
+		}
+		return
+	}
+
+	if st.ContainerImage != "" && *h.opts.ContainerPush != "" {
+		fmt.Printf("%s %s\n", labelColor("Container image pushed to:"), valueColor(*h.opts.ContainerPush))
+	}
+	if st.DiskImage != "" && *h.opts.ExportOCI != "" {
+		fmt.Printf("%s %s\n", labelColor("Disk image pushed to:"), valueColor(*h.opts.ExportOCI))
 	}
 }
 
@@ -463,7 +523,7 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 }
 
 func (h *Handler) displayBuildLogsCommand(buildName string) {
-	if clilog.IsQuiet() {
+	if clilog.IsQuiet() || h.isStructuredOutput() {
 		return
 	}
 	labelColor := func(a ...any) string { return fmt.Sprint(a...) }
@@ -493,7 +553,7 @@ func (h *Handler) resolveCustomDefs() ([]string, error) {
 
 // RunBuild handles the main `caib image build` command.
 func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
-	h.applyWaitFollowDefaults(cmd, true, false)
+	h.applyWaitFollowDefaults(cmd, true)
 
 	ctx := context.Background()
 	manifestPath := args[0]
@@ -628,7 +688,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 
 // RunDisk handles `caib image disk`.
 func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
-	h.applyWaitFollowDefaults(cmd, false, false)
+	h.applyWaitFollowDefaults(cmd, false)
 
 	ctx := context.Background()
 	containerRef := args[0]
@@ -732,7 +792,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 
 // RunBuildDev handles `caib image build-dev` (traditional ostree/package builds).
 func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
-	h.applyWaitFollowDefaults(cmd, true, false)
+	h.applyWaitFollowDefaults(cmd, true)
 
 	ctx := context.Background()
 	manifestPath := args[0]

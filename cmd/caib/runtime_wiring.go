@@ -201,6 +201,7 @@ func (s runtimeState) newHandlers() handlerSet {
 			RestoreSourcesRef:         s.RestoreSourcesRef,
 			TTL:                       s.TTL,
 			InsecureSkipTLS:           s.InsecureSkipTLS,
+			OutputFormat:              s.OutputFormat,
 			HandleError:               handleError,
 		}),
 		query: querycmd.NewHandler(querycmd.Options{
