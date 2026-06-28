@@ -46,6 +46,7 @@ type Options struct {
 	CustomDefs             *[]string
 	DefineFiles            *[]string
 	AIBExtraArgs           *[]string
+	RootPassword           *string
 	ExtraRepos             *[]string
 	Workspace              *string
 	FollowLogs             *bool
@@ -151,6 +152,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
 	buildCmd.Flags().StringArrayVar(opts.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
 	buildCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
+	buildCmd.Flags().StringVar(opts.RootPassword, "root-password", "", "set hashed root password (env:VAR or file:PATH)")
 	buildCmd.Flags().StringArrayVar(opts.ExtraRepos, "extra-repo", []string{}, "serve RPMs from workspace as extra repo (workspace:path, can be repeated)")
 	buildCmd.Flags().StringVar(opts.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
 	buildCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
@@ -261,6 +263,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
 	buildDevCmd.Flags().StringArrayVar(opts.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
 	buildDevCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
+	buildDevCmd.Flags().StringVar(opts.RootPassword, "root-password", "", "set hashed root password (env:VAR or file:PATH)")
 	buildDevCmd.Flags().StringArrayVar(opts.ExtraRepos, "extra-repo", []string{}, "serve RPMs from workspace as extra repo (workspace:path, can be repeated)")
 	buildDevCmd.Flags().StringVar(opts.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
 	buildDevCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")

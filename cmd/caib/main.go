@@ -31,6 +31,7 @@ var (
 	customDefs             []string
 	defineFiles            []string
 	aibExtraArgs           []string
+	rootPassword           string
 	extraRepos             []string
 	workspaceName          string
 	followLogs             bool

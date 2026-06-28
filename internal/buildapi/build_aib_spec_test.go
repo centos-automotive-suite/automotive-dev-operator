@@ -22,6 +22,7 @@ func TestBuildAIBSpec(t *testing.T) {
 		wantContainerRef string
 		wantCustomDefs   []string
 		wantExtraArgs    []string
+		wantRootPassword string
 	}{
 		{
 			name: "basic build spec",
@@ -79,6 +80,23 @@ func TestBuildAIBSpec(t *testing.T) {
 			wantImage:        "quay.io/centos-sig-automotive/aib:v1",
 			wantBuilderImage: "quay.io/myorg/builder:latest",
 			wantInputFiles:   true,
+		},
+		{
+			name: "with root password",
+			req: &BuildRequest{
+				Distro:       "autosd",
+				Target:       "qemu",
+				Mode:         ModeBootc,
+				RootPassword: "$6$salt$hashvalue",
+			},
+			manifest:         "name: root-pw\n",
+			manifestFileName: "root-pw.aib.yml",
+			wantDistro:       "autosd",
+			wantTarget:       "qemu",
+			wantMode:         "bootc",
+			wantManifest:     "name: root-pw\n",
+			wantFileName:     "root-pw.aib.yml",
+			wantRootPassword: "$6$salt$hashvalue",
 		},
 		{
 			name: "empty manifest filename",
@@ -139,6 +157,10 @@ func TestBuildAIBSpec(t *testing.T) {
 						}
 					}
 				}
+			}
+
+			if got.RootPassword != tt.wantRootPassword {
+				t.Errorf("RootPassword = %q, want %q", got.RootPassword, tt.wantRootPassword)
 			}
 
 			// Check extra args

@@ -166,6 +166,7 @@ type BuildRequest struct {
 	StorageClass           string               `json:"storageClass"`
 	CustomDefs             []string             `json:"customDefs"`
 	AIBExtraArgs           []string             `json:"aibExtraArgs"`
+	RootPassword           string               `json:"rootPassword,omitempty"`
 	ExtraRepos             []string             `json:"extraRepos,omitempty"` // workspace-name:/path pairs
 	Workspace              string               `json:"workspace,omitempty"`  // workspace name for build caching and lease forwarding
 	Compression            Compression          `json:"compression,omitempty"`

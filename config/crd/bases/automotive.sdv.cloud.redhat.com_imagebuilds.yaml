@@ -98,6 +98,11 @@ spec:
                     description: RebuildBuilder forces rebuilding the bootc builder
                       image even if a cached version exists in the registry.
                     type: boolean
+                  rootPassword:
+                    description: |-
+                      RootPassword is a hashed root password passed to AIB's --root-password flag.
+                      See crypt(5) for supported hash formats.
+                    type: string
                   target:
                     description: Target specifies the build target platform (e.g.,
                       "qemu", "aws")
