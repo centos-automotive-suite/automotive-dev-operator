@@ -1,7 +1,7 @@
 name: Cleanup Kind E2E Environment
 description: >
-  Delete the Kind cluster, remove the local registry container, and clean up
-  host-level configuration (DNS entries, container registry config).
+  Delete e2e test namespaces, the Kind cluster, the local registry container,
+  and host-level configuration (DNS entries, container registry config).
 
 inputs:
   cluster-name:
@@ -13,10 +13,32 @@ inputs:
   registry-host:
     description: Registry hostname to remove from /etc/hosts
     default: image-registry.openshift-image-registry.svc
+  namespaces:
+    description: >
+      Space-separated e2e test namespaces to delete before tearing down the
+      cluster. Pass the exact namespace used for E2E_NAMESPACE (e.g.
+      e2e-test-all for the all lane, e2e-smoke for smoke). Non-existent
+      namespaces are silently skipped.
+    default: ""
 
 runs:
   using: composite
   steps:
+    - name: Delete e2e test namespaces
+      if: inputs.namespaces != ''
+      shell: bash
+      env:
+        NAMESPACES: ${{ inputs.namespaces }}
+      run: |
+        read -r -a namespaces_array <<< "$NAMESPACES"
+        for NS in "${namespaces_array[@]}"; do
+          if ! kubectl get ns "$NS" &>/dev/null; then
+            continue
+          fi
+          echo "Deleting namespace $NS..."
+          kubectl delete ns "$NS" --ignore-not-found=true --timeout=60s || true
+        done
+
     - name: Cleanup Kind cluster and registry
       shell: bash
       run: |

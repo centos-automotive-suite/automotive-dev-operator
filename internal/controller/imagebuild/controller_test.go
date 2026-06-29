@@ -6,15 +6,19 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	knativev1 "knative.dev/pkg/apis/duck/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestPipelineRunFailureMessage(t *testing.T) {
@@ -574,5 +578,63 @@ func TestSetImageBuildConditionsTransition(t *testing.T) {
 
 	if len(ib.Status.Conditions) != 2 {
 		t.Errorf("Expected 2 conditions after transitions, got %d", len(ib.Status.Conditions))
+	}
+}
+
+func TestEnsureImageStreamOwnerRefNoMatch(t *testing.T) {
+	testNS := "test-ns"
+	testBuildName := "test-build"
+	testStreamName := "test-stream"
+	imageStreamURL := tasks.DefaultInternalRegistryURL + "/" + testNS + "/" + testStreamName + ":latest"
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(automotivev1alpha1.AddToScheme(scheme))
+
+	imageBuild := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testBuildName,
+			Namespace: testNS,
+		},
+		Spec: automotivev1alpha1.ImageBuildSpec{
+			Export: &automotivev1alpha1.ExportSpec{
+				Container:             imageStreamURL,
+				UseServiceAccountAuth: true,
+			},
+		},
+	}
+
+	noMatchErr := &meta.NoKindMatchError{
+		GroupKind: schema.GroupKind{Group: "image.openshift.io", Kind: "ImageStream"},
+	}
+
+	getCalled := false
+	// Create a fake client that will return a NoMatch error for ImageStream lookups
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if obj.GetObjectKind().GroupVersionKind().Group == "image.openshift.io" &&
+					obj.GetObjectKind().GroupVersionKind().Kind == "ImageStream" {
+					getCalled = true
+					return noMatchErr
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+
+	reconciler := &ImageBuildReconciler{
+		Client: fakeClient,
+		Scheme: scheme,
+	}
+
+	// ensureImageStreamOwnerRef should return nil when encountering a NotFound/NoMatch error
+	// (which occurs when ImageStream is not found or the CRD is not available)
+	err := reconciler.ensureImageStreamOwnerRef(context.Background(), imageBuild)
+	if err != nil {
+		t.Errorf("ensureImageStreamOwnerRef returned error: %v, want nil", err)
+	}
+	if !getCalled {
+		t.Fatal("expected ImageStream lookup to be attempted")
 	}
 }

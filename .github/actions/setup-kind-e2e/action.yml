@@ -4,6 +4,9 @@ description: >
   and an NGINX ingress controller for running E2E tests.
 
 inputs:
+  helm-version:
+    description: Helm version to install
+    default: v3.17.0
   kind-version:
     description: Kind version to install
     default: v0.24.0
@@ -40,6 +43,29 @@ runs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libgpgme-dev jq
+
+    - name: Install Helm
+      shell: bash
+      run: |
+        HELM_REQUESTED="${{ inputs.helm-version }}"
+        install_helm() {
+          curl -fsSL https://get.helm.sh/helm-${{ inputs.helm-version }}-linux-${{ inputs.arch }}.tar.gz \
+            | tar xz --strip-components=1 -C /tmp linux-${{ inputs.arch }}/helm
+          sudo mv /tmp/helm /usr/local/bin/helm
+          echo "Installed Helm ${{ inputs.helm-version }}"
+        }
+        if command -v helm &>/dev/null; then
+          HELM_CURRENT=$(helm version --short 2>/dev/null | cut -d: -f2 | xargs)
+          if [ "$HELM_CURRENT" = "$HELM_REQUESTED" ]; then
+            echo "Helm $HELM_REQUESTED already installed"
+          else
+            echo "Helm version mismatch (current: $HELM_CURRENT, requested: $HELM_REQUESTED); installing requested version..."
+            install_helm
+          fi
+        else
+          install_helm
+        fi
+        helm version --short
 
     - name: Install kubectl
       shell: bash

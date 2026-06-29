@@ -83,12 +83,12 @@ deploy_dex() {
 
     helm repo add dex https://charts.dexidp.io 2>/dev/null || true
     helm repo update dex
-    helm upgrade --install --namespace dex --wait --version 0.21.0 \
+    helm upgrade --install --namespace dex --wait --timeout 5m0s --version 0.21.0 \
         -f "$SCRIPT_DIR/dex.values.yaml" dex dex/dex
 
     log_info "Waiting for Dex to be ready..."
     kubectl wait --namespace dex --for=condition=available \
-        deployment/dex --timeout=120s
+        deployment/dex --timeout=5m
 
     log_info "Dex deployed successfully"
 }

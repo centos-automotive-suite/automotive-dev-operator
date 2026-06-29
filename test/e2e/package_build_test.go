@@ -66,6 +66,7 @@ var _ = Describe("Package Mode Build", Label("package-mode"), Ordered, func() {
 		if openShiftCluster {
 			pushNamespace = testNamespace
 		}
+		pushURL := fmt.Sprintf("%s:5000/%s/%s", registryHost, pushNamespace, artifactImageName)
 
 		By("launching package mode build via caib build-dev")
 		go func() {
@@ -76,7 +77,8 @@ var _ = Describe("Package Mode Build", Label("package-mode"), Ordered, func() {
 				"--arch", arch,
 				"--mode", "package",
 				"--format", "qcow2",
-				"--push", fmt.Sprintf("%s:5000/%s/%s", registryHost, pushNamespace, artifactImageName),
+				"--push", pushURL,
+				"--follow",
 			)
 			ch <- buildResult{output: out, err: err}
 		}()

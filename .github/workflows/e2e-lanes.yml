@@ -35,6 +35,7 @@ jobs:
         env:
           COMMENT: ${{ github.event.comment.body }}
         run: |
+          COMMENT="$(echo "$COMMENT" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
           case "$COMMENT" in
             /e2e-smoke*)
               echo "label_filter=smoke" >> "$GITHUB_OUTPUT"
@@ -141,15 +142,19 @@ jobs:
           REGISTRY_USERNAME: kind
           REGISTRY_PASSWORD: kind
           CAIB_SERVER: http://localhost:8080
+          E2E_SKIP_CLEANUP: "true"
           E2E_LABEL_FILTER: ${{ needs.parse-comment.outputs.label_filter }}
           E2E_NAMESPACE: ${{ needs.parse-comment.outputs.lane_name == 'all' && 'e2e-test-all' || format('e2e-{0}', needs.parse-comment.outputs.lane_name) }}
+          E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs
         run: |
-          case "${{ needs.parse-comment.outputs.lane_name }}" in
-            smoke|operator|auth|features) test_timeout=10m ;;
-            bootc|package-mode) test_timeout=15m ;;
-            container-build|all) test_timeout=45m ;;
-            *)                   echo "Unknown lane: ${{ needs.parse-comment.outputs.lane_name }}" >&2; exit 1 ;;
-          esac
+          source hack/e2e/timeouts.env
+          mkdir -p "${E2E_LOG_DIR}/${E2E_NAMESPACE}"
+          _lane="${{ needs.parse-comment.outputs.lane_name }}"
+          _key="E2E_TIMEOUT_${_lane//-/_}"
+          test_timeout="${!_key}"
+          if [ -z "$test_timeout" ]; then
+            echo "Unknown lane: $_lane" >&2; exit 1
+          fi
           ginkgo_args=(-v -ginkgo.v -timeout "$test_timeout")
           if [ -n "$E2E_LABEL_FILTER" ]; then
             ginkgo_args+=(-ginkgo.label-filter="$E2E_LABEL_FILTER")
@@ -199,3 +204,4 @@ jobs:
           cluster-name: ${{ env.CLUSTER_NAME }}
           registry-name: ${{ env.REGISTRY_NAME }}
           registry-host: ${{ env.REGISTRY_HOST }}
+          namespaces: ${{ needs.parse-comment.outputs.lane_name == 'all' && 'e2e-test-all' || format('e2e-{0}', needs.parse-comment.outputs.lane_name) }}

@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -56,6 +57,10 @@ const (
 	caibImageCancelTimeout = 30 * time.Second
 	caibImageListTimeout   = 15 * time.Second
 	statusTrue             = "true"
+
+	caibLogFileName = "caib.log"
+
+	healthzPath = "/v1/healthz"
 )
 
 // Shared state populated lazily via sync.Once and consumed by test lanes.
@@ -74,6 +79,7 @@ var (
 	registryOnce  sync.Once
 	caibCredsOnce sync.Once
 	dexOnce       sync.Once
+	caibLogMu     sync.Mutex
 
 	// Error flags: set when a setup panic is caught so subsequent lanes fail fast.
 	operatorSetupErr  error
@@ -276,6 +282,23 @@ func patchForOpenShift() {
 	_, _ = utils.Run(cmd)
 }
 
+// repatchTasks re-applies the environment-specific Tekton Task overrides.
+// Call this after any operation that recreates the Tekton Tasks (e.g., toggling osBuilds).
+func repatchTasks() {
+	By("waiting for " + tektonTaskPushArtifactRegistry + " Task to exist before re-patching")
+	EventuallyWithOffset(1, func() error {
+		cmd := exec.Command("kubectl", "get", "task", tektonTaskPushArtifactRegistry, "-n", testNamespace)
+		_, err := utils.Run(cmd)
+		return err
+	}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+	if openShiftCluster {
+		patchForOpenShift()
+	} else {
+		patchForKind()
+	}
+}
+
 func patchForKind() {
 	var err error
 
@@ -292,7 +315,8 @@ func patchForKind() {
 }
 
 // ensureBuildAPIAccess sets up access to the Build API (route on OpenShift,
-// port-forward on Kind). Runs once per test run.
+// port-forward on Kind). Initial setup runs once; subsequent calls re-establish
+// the port-forward on Kind if it has died (e.g. after a Build API pod restart).
 func ensureBuildAPIAccess() {
 	buildAPIOnce.Do(func() {
 		defer func() {
@@ -310,20 +334,81 @@ func ensureBuildAPIAccess() {
 	if buildAPISetupErr != nil {
 		Fail("Build API access setup failed in a previous step; cannot proceed")
 	}
+	// On Kind the port-forward may have died (e.g. after a Build API pod restart
+	// triggered by an OperatorConfig change). Re-establish it if needed so every
+	// test suite starts with a working connection.
+	if !openShiftCluster {
+		ensurePortForwardAlive()
+	}
+}
+
+// ensurePortForwardAlive verifies the Build API port-forward is healthy and
+// restarts it if not. Safe to call from every test suite's BeforeAll.
+func ensurePortForwardAlive() {
+	httpClient := newInsecureHTTPClient()
+	resp, err := httpClient.Get("http://localhost:8080" + healthzPath)
+	if err == nil {
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return
+		}
+	}
+
+	By("restarting port-forward to Build API (previous instance is unresponsive)")
+	killPortForwardCmd(&portForwardCmd)
+	time.Sleep(1 * time.Second)
+
+	portForwardCmd = exec.Command("kubectl", "port-forward",
+		"-n", testNamespace, "svc/ado-build-api", "8080:8080")
+	ExpectWithOffset(1, portForwardCmd.Start()).NotTo(HaveOccurred())
+
+	By("waiting for Build API to respond after port-forward restart")
+	EventuallyWithOffset(1, func() error {
+		r, hErr := httpClient.Get("http://localhost:8080" + healthzPath)
+		if hErr != nil {
+			return hErr
+		}
+		_ = r.Body.Close()
+		if r.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected status %d from %s", r.StatusCode, healthzPath)
+		}
+		return nil
+	}, 2*time.Minute, 5*time.Second).Should(Succeed(),
+		"Build API did not recover after port-forward restart")
+
+	By("waiting for Build API config endpoint to be ready after port-forward restart")
+	EventuallyWithOffset(1, func() error {
+		r, hErr := httpClient.Get("http://localhost:8080/v1/config")
+		if hErr != nil {
+			return hErr
+		}
+		_ = r.Body.Close()
+		if r.StatusCode == http.StatusServiceUnavailable {
+			return fmt.Errorf("Build API /v1/config still returning 503 (OperatorConfig not yet ready)")
+		}
+		return nil
+	}, 2*time.Minute, 5*time.Second).Should(Succeed(),
+		"Build API config endpoint did not recover after port-forward restart")
+
+	caibServer = "http://localhost:8080"
 }
 
 func setupBuildAPIRoute() {
 	By("waiting for Build API route")
-	EventuallyWithOffset(1, func() string {
-		caibServer = utils.GetBuildAPIURL(testNamespace)
-		return caibServer
-	}, 2*time.Minute, 5*time.Second).ShouldNot(BeEmpty())
+	EventuallyWithOffset(1, func() error {
+		url := utils.GetBuildAPIURL(testNamespace)
+		if url == "" {
+			return fmt.Errorf("Build API route URL not yet available")
+		}
+		caibServer = url
+		return nil
+	}, 2*time.Minute, 5*time.Second).Should(Succeed())
 
 	httpClient := newInsecureHTTPClient()
 
 	By("waiting for Build API route to respond")
 	waitForBuildAPI := func() error {
-		resp, httpErr := httpClient.Get(caibServer + "/v1/healthz")
+		resp, httpErr := httpClient.Get(caibServer + healthzPath)
 		if httpErr != nil {
 			return httpErr
 		}
@@ -331,7 +416,7 @@ func setupBuildAPIRoute() {
 		if resp.StatusCode == http.StatusOK {
 			return nil
 		}
-		return fmt.Errorf("unexpected status %d from Build API /v1/healthz", resp.StatusCode)
+		return fmt.Errorf("unexpected status %d from Build API %s", resp.StatusCode, healthzPath)
 	}
 	EventuallyWithOffset(1, waitForBuildAPI, 2*time.Minute, 5*time.Second).Should(Succeed(),
 		"Build API route did not become ready")
@@ -369,7 +454,7 @@ func setupBuildAPIPortForward() {
 
 	By("waiting for Build API to respond on port-forward")
 	waitForBuildAPI := func() error {
-		resp, httpErr := httpClient.Get("http://localhost:8080/v1/healthz")
+		resp, httpErr := httpClient.Get("http://localhost:8080" + healthzPath)
 		if httpErr != nil {
 			return httpErr
 		}
@@ -377,7 +462,7 @@ func setupBuildAPIPortForward() {
 		if resp.StatusCode == http.StatusOK {
 			return nil
 		}
-		return fmt.Errorf("unexpected status %d from Build API /v1/healthz", resp.StatusCode)
+		return fmt.Errorf("unexpected status %d from Build API %s", resp.StatusCode, healthzPath)
 	}
 	EventuallyWithOffset(1, waitForBuildAPI, 30*time.Second, 1*time.Second).Should(Succeed(),
 		"Build API on localhost:8080 did not become ready")
@@ -659,10 +744,15 @@ func killPortForwardCmd(cmd **exec.Cmd) {
 }
 
 // teardownOperator cleans up all test resources. Called from AfterSuite.
+// When E2E_SKIP_CLEANUP=true the port-forwards and namespace are kept alive so
+// subsequent suites (e.g. in the /e2e-test-all lane) can still reach the API,
+// and CI can collect logs before the cluster is torn down.
 func teardownOperator() {
+	if os.Getenv("E2E_SKIP_CLEANUP") == "true" {
+		return
+	}
 	killPortForwardCmd(&portForwardCmd)
 	killPortForwardCmd(&dexPortFwdCmd)
-
 	if testNamespace != "" {
 		By("removing test namespace")
 		utils.CleanupNamespace(testNamespace)
@@ -883,7 +973,44 @@ spec:
 // runCaibCommand executes a caib CLI command with the shared caibEnv and returns its output.
 func runCaibCommand(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := utils.NewCaibCommand(ctx, caibEnv, args...)
-	return utils.RunSafe(cmd)
+	output, err := utils.RunSafe(cmd)
+	appendCaibCommandLog(args, output, err)
+	return output, err
+}
+
+// appendCaibCommandLog records caib stdout/stderr when E2E_LOG_DIR is set so the
+// collect-e2e-logs workflow action can upload it with other failure artifacts.
+func appendCaibCommandLog(args []string, output []byte, err error) {
+	logDir := strings.TrimSpace(os.Getenv("E2E_LOG_DIR"))
+	if logDir == "" || testNamespace == "" {
+		return
+	}
+
+	dir := filepath.Join(logDir, testNamespace)
+	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+		return
+	}
+
+	caibLogMu.Lock()
+	defer caibLogMu.Unlock()
+
+	f, openErr := os.OpenFile(filepath.Join(dir, caibLogFileName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if openErr != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	_, _ = fmt.Fprintf(f, "=== caib %s ===\n", strings.Join(args, " "))
+	if err != nil {
+		_, _ = fmt.Fprintf(f, "error: %v\n", err)
+	}
+	if len(output) > 0 {
+		_, _ = f.Write(output)
+		if output[len(output)-1] != '\n' {
+			_, _ = f.WriteString("\n")
+		}
+	}
+	_, _ = f.WriteString("\n")
 }
 
 // createBuildViaCaib creates a build via `caib image build-dev` and returns the server-assigned build name.

@@ -73,6 +73,7 @@ var _ = Describe("Bootc Container Build", Label("bootc"), Ordered, func() {
 		if openShiftCluster {
 			pushNamespace = testNamespace
 		}
+		pushURL := fmt.Sprintf("%s:5000/%s/%s", registryHost, pushNamespace, artifactImageName)
 
 		By("launching bootc container build")
 		go func() {
@@ -81,7 +82,8 @@ var _ = Describe("Bootc Container Build", Label("bootc"), Ordered, func() {
 				caibBuildManifest,
 				"--name", containerBuildName,
 				"--arch", arch,
-				"--push", fmt.Sprintf("%s:5000/%s/%s", registryHost, pushNamespace, artifactImageName),
+				"--push", pushURL,
+				"--follow",
 			)
 			containerCh <- buildResult{output: out, err: err}
 		}()
@@ -169,6 +171,7 @@ var _ = Describe("Internal Registry Build", Label("internal-registry"), Ordered,
 				"--name", buildName,
 				"--arch", arch,
 				"--internal-registry",
+				"--follow",
 			)
 			ch <- buildResult{output: out, err: err}
 		}()

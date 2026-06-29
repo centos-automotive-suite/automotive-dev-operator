@@ -308,7 +308,7 @@ func (r *ImageBuildReconciler) ensureImageStreamOwnerRef(
 		Name:      streamName,
 		Namespace: imageBuild.Namespace,
 	}, is); err != nil {
-		if errors.IsNotFound(err) {
+		if errors.IsNotFound(err) || meta.IsNoMatchError(err) {
 			log.Info("ImageStream not found, skipping owner ref", "imageStream", streamName)
 			return nil
 		}

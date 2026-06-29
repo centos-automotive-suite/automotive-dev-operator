@@ -37,6 +37,7 @@ const (
 	openshiftInternalRegistryDefault = "image-registry.openshift-image-registry.svc:5000"
 	buildToolPodman                  = "podman"
 	buildToolDocker                  = "docker"
+	caibBin                          = "bin/caib"
 )
 
 func getOpenshiftInternalRegistry() string {
@@ -210,9 +211,9 @@ func getTektonTaskStep(obj map[string]any, taskName string, stepIndex int) (map[
 func NewCaibCommand(ctx context.Context, env []string, args ...string) *exec.Cmd {
 	var cmd *exec.Cmd
 	if ctx != nil {
-		cmd = exec.CommandContext(ctx, "bin/caib", args...)
+		cmd = exec.CommandContext(ctx, caibBin, args...)
 	} else {
-		cmd = exec.Command("bin/caib", args...)
+		cmd = exec.Command(caibBin, args...)
 	}
 	cmd.Env = append([]string{}, env...)
 	return cmd
