@@ -36,6 +36,7 @@ var _ = Describe("Build API", Label("operator"), Ordered, func() {
 		ensureOperatorDeployed()
 		ensureBuildAPIAccess()
 		ensureCaibCredentials()
+		ensureRegistryConfigured()
 	})
 
 	// #41 — caib image build-dev creates an ImageBuild CR
@@ -124,7 +125,9 @@ var _ = Describe("Build API", Label("operator"), Ordered, func() {
 			}
 			filtered = append(filtered, tokenPrefix+token)
 			cmd := utils.NewCaibCommand(ctx, filtered, args...)
-			return utils.RunSafe(cmd)
+			output, err := utils.RunSafe(cmd)
+			appendCaibCommandLog(args, output, err)
+			return output, err
 		}
 
 		It("should return 403 when a different user tries to cancel or delete another user's build", func() {

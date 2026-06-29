@@ -38,6 +38,7 @@ var _ = Describe("ImageBuild Lifecycle", Label("operator"), Ordered, func() {
 			ensureOperatorDeployed()
 			ensureBuildAPIAccess()
 			ensureCaibCredentials()
+			ensureRegistryConfigured()
 		})
 
 		It("should cancel a running build and transition to Cancelled", func() {

@@ -98,14 +98,14 @@ var _ = Describe("Container Build (Shipwright)", Label("container-build"), Order
 		defer cancel()
 
 		By("launching container build with --internal-registry")
-		cmd := utils.NewCaibCommand(ctx, caibEnv,
+		output, err := runCaibCommand(ctx,
 			"container", "build",
 			"--containerfile", containerBuildContext+"/Containerfile",
 			"--name", buildName,
 			"--internal-registry",
 			"--arch", arch,
-			containerBuildContext)
-		output, err := utils.RunSafe(cmd)
+			containerBuildContext,
+		)
 
 		By("verifying container build completed successfully")
 		_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib container build (%s) ---\n%s\n",
@@ -124,15 +124,15 @@ var _ = Describe("Container Build (Shipwright)", Label("container-build"), Order
 		defer cancel()
 
 		By("launching container build with --build-arg and --internal-registry")
-		cmd := utils.NewCaibCommand(ctx, caibEnv,
+		output, err := runCaibCommand(ctx,
 			"container", "build",
 			"--containerfile", containerBuildContext+"/Containerfile",
 			"--name", buildName,
 			"--internal-registry",
 			"--build-arg", "VERSION=1.0-e2e",
 			"--arch", arch,
-			containerBuildContext)
-		output, err := utils.RunSafe(cmd)
+			containerBuildContext,
+		)
 
 		By("verifying build-arg container build completed successfully")
 		_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib container build with build-arg (%s) ---\n%s\n",

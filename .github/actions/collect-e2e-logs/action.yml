@@ -1,35 +1,95 @@
 name: Collect E2E Logs
 description: >
   Collect operator logs, pod status, TaskRuns, events, and custom resources
-  from e2e test namespaces for debugging failures.
+  from e2e test namespaces for debugging failures. Logs are written to files
+  and uploaded as a downloadable workflow artifact.
+  Always captures cluster-level state so at least one file is uploaded even
+  when tests fail before namespace creation.
 
 inputs:
   namespaces:
     description: >
-      Space-separated list of namespaces to collect logs from.
-      Non-existent namespaces are silently skipped.
-    default: e2e-test-all e2e-operator e2e-bootc e2e-auth
+      Space-separated e2e test namespaces to collect logs from. Pass the exact
+      namespace used for E2E_NAMESPACE (e.g. e2e-test-all for the all lane,
+      e2e-smoke for smoke). Non-existent namespaces are silently skipped.
+    default: ""
 
 runs:
   using: composite
   steps:
     - name: Collect logs from e2e namespaces
       shell: bash
+      env:
+        NAMESPACES: ${{ inputs.namespaces }}
       run: |
-        for NS in ${{ inputs.namespaces }}; do
-          if ! kubectl get ns "$NS" &>/dev/null; then continue; fi
-          echo "=== [$NS] Operator Logs ==="
-          kubectl logs -n "$NS" -l control-plane=operator --tail=200 || true
-          echo "=== [$NS] All Pods ==="
-          kubectl get pods -n "$NS" -o wide || true
-          echo "=== [$NS] TaskRuns ==="
-          kubectl get taskrun -n "$NS" -o yaml || true
-          echo "=== [$NS] PipelineRuns ==="
-          kubectl get pipelinerun -n "$NS" -o yaml || true
-          echo "=== [$NS] Events ==="
-          kubectl get events -n "$NS" --sort-by='.lastTimestamp' || true
-          echo "=== [$NS] OperatorConfig ==="
-          kubectl get operatorconfig -n "$NS" -o yaml || true
-          echo "=== [$NS] ImageBuilds ==="
-          kubectl get imagebuilds -n "$NS" -o yaml || true
-        done
+        LOG_DIR="${RUNNER_TEMP}/e2e-logs"
+        mkdir -p "$LOG_DIR"
+        echo "Collecting e2e logs into ${LOG_DIR}"
+
+        # Always collect cluster-level state so there is always at least one
+        # file to upload. This is especially useful when tests fail before the
+        # test namespace is created (e.g. a prior step like "Build caib CLI"
+        # fails, causing "Run E2E tests" to be skipped entirely).
+        kubectl get nodes -o wide > "$LOG_DIR/cluster-nodes.log" 2>&1 || true
+        kubectl get ns > "$LOG_DIR/cluster-namespaces.log" 2>&1 || true
+        kubectl get pods -n tekton-pipelines -o wide > "$LOG_DIR/tekton-pipelines-pods.log" 2>&1 || true
+        kubectl get events -n kube-system --sort-by='.lastTimestamp' > "$LOG_DIR/kube-system-events.log" 2>&1 || true
+
+        # Collect Dex logs when present (auth/all lanes deploy Dex via setup-dex.sh).
+        # Captured unconditionally so failures in the Dex setup step are diagnosable
+        # even when the test namespace was never created.
+        if kubectl get ns dex &>/dev/null; then
+          DEX_DIR="$LOG_DIR/dex"
+          mkdir -p "$DEX_DIR"
+          kubectl get pods -n dex -o wide > "$DEX_DIR/pods.log" 2>&1 || true
+          kubectl get events -n dex --sort-by='.lastTimestamp' > "$DEX_DIR/events.log" 2>&1 || true
+          kubectl get deployment dex -n dex -o yaml > "$DEX_DIR/deployment.yaml" 2>&1 || true
+          for POD in $(kubectl get pods -n dex -o name 2>/dev/null | cut -d/ -f2); do
+            kubectl logs -n dex "$POD" --all-containers=true --tail=-1 \
+              > "$DEX_DIR/${POD}.log" 2>&1 || true
+          done
+        fi
+
+        if [ -n "$NAMESPACES" ]; then
+          MISSING_NS=()
+          read -r -a namespaces_array <<< "$NAMESPACES"
+          for NS in "${namespaces_array[@]}"; do
+            if ! kubectl get ns "$NS" &>/dev/null; then
+              MISSING_NS+=("$NS")
+              continue
+            fi
+            NS_DIR="$LOG_DIR/$NS"
+            mkdir -p "$NS_DIR" "$NS_DIR/pod-logs"
+            # caib.log is written during tests when E2E_LOG_DIR is set.
+            kubectl logs -n "$NS" -l control-plane=operator --all-containers=true --tail=-1 \
+              > "$NS_DIR/operator.log" 2>&1 || true
+            kubectl logs -n "$NS" -l app.kubernetes.io/component=build-api --all-containers=true --tail=-1 \
+              > "$NS_DIR/build-api.log" 2>&1 || true
+            kubectl get pods -n "$NS" -o wide > "$NS_DIR/pods.log" 2>&1 || true
+            kubectl get taskrun -n "$NS" -o yaml > "$NS_DIR/taskruns.yaml" 2>&1 || true
+            kubectl get pipelinerun -n "$NS" -o yaml > "$NS_DIR/pipelineruns.yaml" 2>&1 || true
+            kubectl get events -n "$NS" --sort-by='.lastTimestamp' > "$NS_DIR/events.log" 2>&1 || true
+            kubectl get operatorconfig -n "$NS" -o yaml > "$NS_DIR/operatorconfig.yaml" 2>&1 || true
+            kubectl get imagebuild -n "$NS" > "$NS_DIR/imagebuilds.log" 2>&1 || true
+            kubectl get imagebuild -n "$NS" -o yaml > "$NS_DIR/imagebuilds.yaml" 2>&1 || true
+            for POD in $(kubectl get pods -n "$NS" -o name 2>/dev/null | cut -d/ -f2); do
+              kubectl logs -n "$NS" "$POD" --all-containers=true --tail=-1 \
+                > "$NS_DIR/pod-logs/${POD}.log" 2>&1 || true
+            done
+          done
+
+          if [ ${#MISSING_NS[@]} -gt 0 ]; then
+            printf '%s\n' "${MISSING_NS[@]}" > "$LOG_DIR/missing-namespaces.txt"
+            echo "Namespaces not found (tests may not have started): ${MISSING_NS[*]}"
+          fi
+        fi
+
+        echo "E2E log collection complete"
+
+    - name: Upload E2E logs as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: e2e-logs
+        path: ${{ runner.temp }}/e2e-logs
+        if-no-files-found: warn
+        compression-level: 9

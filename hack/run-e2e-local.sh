@@ -27,6 +27,7 @@ usage() {
   printf '  -h, --help    Show this help message and exit\n\n'
   printf 'Environment variables:\n'
   printf '  E2E_NAMESPACE          Override the test namespace (default: e2e-<lane> or e2e-test-all)\n'
+  printf '  E2E_LOG_DIR            Directory for caib CLI logs (default: ${TMPDIR:-/tmp}/e2e-logs)\n'
   printf '  CONTAINER_TOOL         Container runtime (default: podman)\n'
   printf '  REGISTRY_TLS_VERIFY    TLS verification for registry (default: false)\n'
   printf '  REGISTRY_HOST          Registry host (default: image-registry.openshift-image-registry.svc)\n'
@@ -305,6 +306,9 @@ if [ "$E2E_LANE" = "all" ]; then
 else
   export E2E_NAMESPACE="${E2E_NAMESPACE:-e2e-${E2E_LANE}}"
 fi
+export E2E_LOG_DIR="${E2E_LOG_DIR:-${TMPDIR:-/tmp}/e2e-logs}"
+mkdir -p "${E2E_LOG_DIR}/${E2E_NAMESPACE}"
+info "Caib command logs: ${E2E_LOG_DIR}/${E2E_NAMESPACE}/caib.log"
 unset KIND_CLUSTER
 make "${E2E_MAKE_TARGET}"
 

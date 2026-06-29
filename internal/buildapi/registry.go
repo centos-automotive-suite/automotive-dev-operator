@@ -10,6 +10,7 @@ import (
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -56,7 +57,7 @@ func getExternalRegistryRoute(ctx context.Context, k8sClient client.Client, name
 		Name:      "default-route",
 		Namespace: "openshift-image-registry",
 	}, route); err != nil {
-		if k8serrors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return "", fmt.Errorf("cannot determine external registry route: set clusterRegistryRoute in OperatorConfig or expose default-route in openshift-image-registry")
 		}
 		return "", fmt.Errorf("cannot determine external registry route: %w", err)
@@ -139,6 +140,9 @@ func ensureImageStream(ctx context.Context, k8sClient client.Client, namespace, 
 	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, is)
 	if err == nil {
 		return false, nil // already exists
+	}
+	if apimeta.IsNoMatchError(err) {
+		return false, nil // not an OpenShift cluster; ImageStreams are not needed
 	}
 	if !k8serrors.IsNotFound(err) {
 		return false, fmt.Errorf("error checking ImageStream %s: %w", name, err)

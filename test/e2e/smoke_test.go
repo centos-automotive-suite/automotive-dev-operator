@@ -120,9 +120,9 @@ var _ = Describe("Smoke: Build API Endpoints", Label("smoke"), Ordered, func() {
 	})
 
 	// #5
-	It("/v1/healthz should return 200", func() {
+	It(healthzPath+" should return 200", func() {
 		client := newInsecureHTTPClient()
-		resp, err := client.Get(caibServer + "/v1/healthz")
+		resp, err := client.Get(caibServer + healthzPath)
 		Expect(err).NotTo(HaveOccurred())
 		defer func() { _ = resp.Body.Close() }()
 		Expect(resp.StatusCode).To(Equal(http.StatusOK))

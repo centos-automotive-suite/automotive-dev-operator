@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       label_filter:
-        description: 'Ginkgo label filter (e.g. "smoke", "operator", "bootc", "container-build", "auth"). Empty runs all.'
+        description: 'Ginkgo label filter (e.g. "smoke", "operator", "bootc", "internal-registry", "package-mode", "container-build", "features", "manifest-validation", "auth"). Empty runs all.'
         required: false
         default: ''
 
@@ -64,18 +64,18 @@ jobs:
           REGISTRY_USERNAME: kind
           REGISTRY_PASSWORD: kind
           CAIB_SERVER: http://localhost:8080
+          E2E_SKIP_CLEANUP: "true"
           E2E_LABEL_FILTER: ${{ github.event_name == 'pull_request' && 'smoke' || github.event.inputs.label_filter || '' }}
           E2E_NAMESPACE: ${{ github.event_name == 'pull_request' && 'e2e-smoke' || (github.event.inputs.label_filter && format('e2e-{0}', github.event.inputs.label_filter) || 'e2e-test-all') }}
+          E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs
         run: |
+          source hack/e2e/timeouts.env
+          mkdir -p "${E2E_LOG_DIR}/${E2E_NAMESPACE}"
           if [ -z "$E2E_LABEL_FILTER" ]; then
-            test_timeout=45m
+            test_timeout=$E2E_TIMEOUT_all
           else
-            case "$E2E_LABEL_FILTER" in
-              smoke|operator|auth|features) test_timeout=10m ;;
-              bootc|package-mode) test_timeout=15m ;;
-              container-build)     test_timeout=45m ;;
-              *)                   test_timeout=45m ;;
-            esac
+            _key="E2E_TIMEOUT_${E2E_LABEL_FILTER//-/_}"
+            test_timeout="${!_key:-$E2E_TIMEOUT_all}"
           fi
           ginkgo_args=(-v -ginkgo.v -timeout "$test_timeout")
           if [ -n "$E2E_LABEL_FILTER" ]; then
@@ -86,6 +86,8 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         uses: ./.github/actions/collect-e2e-logs
+        with:
+          namespaces: ${{ github.event_name == 'pull_request' && 'e2e-smoke' || (github.event.inputs.label_filter != '' && format('e2e-{0}', github.event.inputs.label_filter) || 'e2e-test-all') }}
 
       - name: Cleanup
         if: always()
@@ -94,3 +96,4 @@ jobs:
           cluster-name: ${{ env.CLUSTER_NAME }}
           registry-name: ${{ env.REGISTRY_NAME }}
           registry-host: ${{ env.REGISTRY_HOST }}
+          namespaces: ${{ github.event_name == 'pull_request' && 'e2e-smoke' || (github.event.inputs.label_filter != '' && format('e2e-{0}', github.event.inputs.label_filter) || 'e2e-test-all') }}

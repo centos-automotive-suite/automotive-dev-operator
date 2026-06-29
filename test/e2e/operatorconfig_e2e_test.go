@@ -60,6 +60,8 @@ var _ = Describe("OperatorConfig E2E", Label("operator"), Ordered, func() {
 				}
 				return nil
 			}, 3*time.Minute, 5*time.Second).Should(Succeed())
+
+			repatchTasks()
 		})
 
 		By("disabling osBuilds")
@@ -126,6 +128,8 @@ var _ = Describe("OperatorConfig E2E", Label("operator"), Ordered, func() {
 
 		By("verifying Tekton resources are recreated")
 		verifyTektonResourcesExist()
+
+		repatchTasks()
 	})
 })
 

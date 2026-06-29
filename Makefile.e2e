@@ -14,10 +14,8 @@
 #                    Defaults to a specific suite namespace if not provided.
 ################################################################################
 
-# Ginkgo timeouts — keep in sync with .github/workflows/e2e.yml and e2e-lanes.yml
-E2E_TIMEOUT_FAST  ?= 10m   # smoke, operator, auth, features
-E2E_TIMEOUT_SHORT ?= 15m  # bootc, package-mode
-E2E_TIMEOUT_LONG  ?= 45m  # full suite
+# Ginkgo timeouts — sourced from hack/e2e/timeouts.env (single source of truth)
+include hack/e2e/timeouts.env
 
 # E2E test targets. Use test-e2e to run everything, or pick a lane:
 #   test-e2e-smoke        - quick smoke tests (CRDs, OperatorConfig, Build API, CR lifecycle)
@@ -30,32 +28,32 @@ E2E_TIMEOUT_LONG  ?= 45m  # full suite
 .PHONY: test-e2e
 # Full suite runs all labeled tests sequentially.
 test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v -timeout $(E2E_TIMEOUT_LONG)
+	go test ./test/e2e/ -v -ginkgo.v -timeout $(E2E_TIMEOUT_all)
 
 .PHONY: test-e2e-smoke
 test-e2e-smoke:
-	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-smoke} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="smoke" -timeout $(E2E_TIMEOUT_FAST)
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-smoke} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="smoke" -timeout $(E2E_TIMEOUT_smoke)
 
 .PHONY: test-e2e-operator
 test-e2e-operator:
-	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-operator} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="operator" -timeout $(E2E_TIMEOUT_FAST)
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-operator} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="operator" -timeout $(E2E_TIMEOUT_operator)
 
 .PHONY: test-e2e-bootc
 test-e2e-bootc:
-	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-bootc} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="bootc" -timeout $(E2E_TIMEOUT_SHORT)
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-bootc} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="bootc" -timeout $(E2E_TIMEOUT_bootc)
 
 .PHONY: test-e2e-container-build
 test-e2e-container-build:
-	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-container-build} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="container-build" -timeout $(E2E_TIMEOUT_LONG)
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-container-build} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="container-build" -timeout $(E2E_TIMEOUT_container_build)
 
 .PHONY: test-e2e-auth
 test-e2e-auth:
-	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-auth} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="auth" -timeout $(E2E_TIMEOUT_FAST)
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-auth} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="auth" -timeout $(E2E_TIMEOUT_auth)
 
 .PHONY: test-e2e-package-mode
 test-e2e-package-mode:
-	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-package-mode} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="package-mode" -timeout $(E2E_TIMEOUT_SHORT)
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-package-mode} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="package-mode" -timeout $(E2E_TIMEOUT_package_mode)
 
 .PHONY: test-e2e-features
 test-e2e-features:
-	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-features} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="features" -timeout $(E2E_TIMEOUT_FAST)
+	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-features} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="features" -timeout $(E2E_TIMEOUT_features)
