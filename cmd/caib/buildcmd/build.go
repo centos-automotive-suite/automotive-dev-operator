@@ -56,6 +56,7 @@ type Options struct {
 	CustomDefs             *[]string
 	DefineFiles            *[]string
 	AIBExtraArgs           *[]string
+	RootPassword           *string
 	ExtraRepos             *[]string
 	Workspace              *string
 	FollowLogs             *bool
@@ -551,6 +552,40 @@ func (h *Handler) resolveCustomDefs() ([]string, error) {
 	return defs, nil
 }
 
+func parseRootPassword(input string) (string, error) {
+	if input == "" {
+		return "", fmt.Errorf("root password value cannot be empty, must be env:VAR or file:PATH")
+	}
+	parts := strings.SplitN(input, ":", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid root password format %q, must be env:VAR or file:PATH", input)
+	}
+	prefix, value := parts[0], parts[1]
+	switch prefix {
+	case "env":
+		v, ok := os.LookupEnv(value)
+		if !ok {
+			return "", fmt.Errorf("environment variable %q not set", value)
+		}
+		return v, nil
+	case "file":
+		data, err := os.ReadFile(value)
+		if err != nil {
+			return "", fmt.Errorf("reading root password file: %w", err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	default:
+		return "", fmt.Errorf("unknown root password prefix %q, must be env or file", prefix)
+	}
+}
+
+func (h *Handler) resolveRootPassword() (string, error) {
+	if h.opts.RootPassword == nil || *h.opts.RootPassword == "" {
+		return "", nil
+	}
+	return parseRootPassword(*h.opts.RootPassword)
+}
+
 // RunBuild handles the main `caib image build` command.
 func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 	h.applyWaitFollowDefaults(cmd, true)
@@ -615,6 +650,12 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	rootPassword, err := h.resolveRootPassword()
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
 	req := buildapitypes.BuildRequest{
 		Name:                   *h.opts.BuildName,
 		Manifest:               string(manifestBytes),
@@ -628,6 +669,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		StorageClass:           *h.opts.StorageClass,
 		CustomDefs:             customDefs,
 		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		RootPassword:           rootPassword,
 		ExtraRepos:             *h.opts.ExtraRepos,
 		Workspace:              *h.opts.Workspace,
 		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),
@@ -873,6 +915,12 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	rootPassword, err := h.resolveRootPassword()
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
 	var parsedMode buildapitypes.Mode
 	switch *h.opts.Mode {
 	case "image":
@@ -902,6 +950,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		StorageClass:           *h.opts.StorageClass,
 		CustomDefs:             customDefs,
 		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		RootPassword:           rootPassword,
 		ExtraRepos:             *h.opts.ExtraRepos,
 		Workspace:              *h.opts.Workspace,
 		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),

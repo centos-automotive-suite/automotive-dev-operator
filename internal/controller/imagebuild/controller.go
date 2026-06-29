@@ -1566,6 +1566,9 @@ func (r *ImageBuildReconciler) createOrUpdateManifestConfigMap(
 		if extraArgs := imageBuild.Spec.GetAIBExtraArgs(); len(extraArgs) > 0 {
 			cm.Data["aib-extra-args.txt"] = strings.Join(extraArgs, "\n")
 		}
+		if rootPw := imageBuild.Spec.GetRootPassword(); rootPw != "" {
+			cm.Data["root-password.txt"] = rootPw
+		}
 
 		return controllerutil.SetControllerReference(imageBuild, cm, r.Scheme)
 	})

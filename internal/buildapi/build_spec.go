@@ -18,6 +18,7 @@ func buildAIBSpec(req *BuildRequest, manifest, manifestFileName string, inputFil
 		ContainerRef:     req.ContainerRef,
 		CustomDefs:       req.CustomDefs,
 		AIBExtraArgs:     req.AIBExtraArgs,
+		RootPassword:     req.RootPassword,
 	}
 }
 

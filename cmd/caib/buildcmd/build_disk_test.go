@@ -26,6 +26,7 @@ func newTestDiskOpts() Options {
 		timeout              = 60
 		waitForBuild         bool
 		customDefs           []string
+		rootPassword         string
 		aibExtraArgs         []string
 		followLogs           bool
 		compressionAlgo      = "gzip"
@@ -70,6 +71,7 @@ func newTestDiskOpts() Options {
 		WaitForBuild:              &waitForBuild,
 		CustomDefs:                &customDefs,
 		DefineFiles:               &defineFiles,
+		RootPassword:              &rootPassword,
 		AIBExtraArgs:              &aibExtraArgs,
 		FollowLogs:                &followLogs,
 		CompressionAlgo:           &compressionAlgo,

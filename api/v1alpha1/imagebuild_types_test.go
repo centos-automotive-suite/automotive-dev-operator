@@ -238,3 +238,42 @@ func TestGetAIBExtraArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestGetRootPassword(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ImageBuildSpec
+		want string
+	}{
+		{
+			name: "returns root password when set",
+			spec: ImageBuildSpec{
+				AIB: &AIBSpec{
+					RootPassword: "$6$salt$hashvalue",
+				},
+			},
+			want: "$6$salt$hashvalue",
+		},
+		{
+			name: "returns empty when AIB is nil",
+			spec: ImageBuildSpec{},
+			want: "",
+		},
+		{
+			name: "returns empty when root password is empty",
+			spec: ImageBuildSpec{
+				AIB: &AIBSpec{},
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.spec.GetRootPassword()
+			if got != tt.want {
+				t.Errorf("GetRootPassword() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

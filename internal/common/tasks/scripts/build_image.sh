@@ -222,6 +222,14 @@ else
   echo "No AIB extra args file found"
 fi
 
+# Load root password
+declare -a ROOT_PASSWORD_ARGS=()
+ROOT_PASSWORD_FILE="$(workspaces.manifest-config-workspace.path)/root-password.txt"
+if [ -f "$ROOT_PASSWORD_FILE" ] && [ -s "$ROOT_PASSWORD_FILE" ]; then
+  ROOT_PASSWORD_ARGS=("--root-password" "file:${ROOT_PASSWORD_FILE}")
+  echo "Root password override configured"
+fi
+
 arch="$(params.target-architecture)"
 case "$arch" in
   "arm64")
@@ -437,6 +445,7 @@ case "$BUILD_MODE" in
           "${BUILD_CONTAINER_ARGS[@]}"
           "${CUSTOM_DEFS_ARGS[@]}"
           "${AIB_EXTRA_ARGS[@]}"
+          "${ROOT_PASSWORD_ARGS[@]}"
           "$MANIFEST_FILE"
           "$BOOTC_CONTAINER_NAME"
         )
@@ -456,6 +465,7 @@ case "$BUILD_MODE" in
           "${BUILD_CONTAINER_ARGS[@]}"
           "${CUSTOM_DEFS_ARGS[@]}"
           "${AIB_EXTRA_ARGS[@]}"
+          "${ROOT_PASSWORD_ARGS[@]}"
           "$MANIFEST_FILE"
           "$BOOTC_CONTAINER_NAME"
           "${DISK_OUTPUT_ARGS[@]}"
@@ -585,6 +595,7 @@ PYEOF
         "${FORMAT_ARGS[@]}"
         "${COMMON_BUILD_ARGS[@]}"
         "${AIB_EXTRA_ARGS[@]}"
+        "${ROOT_PASSWORD_ARGS[@]}"
         "$MANIFEST_FILE"
         "/output/${exportFile}"
       )

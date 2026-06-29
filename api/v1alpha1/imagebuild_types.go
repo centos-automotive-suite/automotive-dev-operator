@@ -203,6 +203,10 @@ type AIBSpec struct {
 
 	// AIBExtraArgs are extra arguments to pass to automotive-image-builder
 	AIBExtraArgs []string `json:"aibExtraArgs,omitempty"`
+
+	// RootPassword is a hashed root password passed to AIB's --root-password flag.
+	// See crypt(5) for supported hash formats.
+	RootPassword string `json:"rootPassword,omitempty"`
 }
 
 // ExportSpec defines the configuration for exporting build artifacts
@@ -417,6 +421,14 @@ func (s *ImageBuildSpec) GetAIBExtraArgs() []string {
 		return s.AIB.AIBExtraArgs
 	}
 	return nil
+}
+
+// GetRootPassword returns the root password value from AIB spec
+func (s *ImageBuildSpec) GetRootPassword() string {
+	if s.AIB != nil {
+		return s.AIB.RootPassword
+	}
+	return ""
 }
 
 // GetExportFormat returns the export format, or "qcow2" as default
