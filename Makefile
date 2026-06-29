@@ -346,6 +346,10 @@ catalog-deploy: ## Build and deploy the catalog to OpenShift OperatorHub
 	./deploy-catalog.sh
 
 .PHONY: catalog-update
+# Fallback: when bundle image isn't pushed yet, render from local bundle/ dir.
+# opm emits image: "" for local dirs (no registry ref), so sed injects BUNDLE_IMG.
+# The leading YAML '---' separator from opm output is stripped to avoid duplicating
+# the one already emitted by the echo block.
 catalog-update: opm ## Generate catalog configuration for current version
 	@echo "Generating catalog configuration for version $(VERSION)..."
 	@mkdir -p catalog
@@ -361,7 +365,14 @@ catalog-update: opm ## Generate catalog configuration for current version
 		echo "entries:"; \
 		echo "  - name: automotive-dev-operator.v$(VERSION)"; \
 		echo "---"; \
-		$(OPM) render $(BUNDLE_IMG); \
+		rendered=$$( \
+			if $(OPM) render $(BUNDLE_IMG) -o yaml 2>/dev/null; then true; \
+			else \
+				echo "Note: Bundle image not available remotely, rendering from local bundle/ directory" >&2; \
+				$(OPM) render bundle/ -o yaml | \
+					sed 's|^image: ""|image: $(BUNDLE_IMG)|'; \
+			fi \
+		) && echo "$$rendered" | sed '1{/^---$$/d}'; \
 	} > catalog/automotive-dev-operator.yaml
 	@# Add openshift-pipelines dependency (opm render doesn't include it)
 	@awk '\
