@@ -7,7 +7,7 @@ require (
 	github.com/containers/storage v1.59.1
 	github.com/dlclark/regexp2 v1.12.0
 	github.com/docker/cli v29.4.0+incompatible
-	github.com/fatih/color v1.18.0
+	github.com/fatih/color v1.19.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-containerregistry v0.21.5
