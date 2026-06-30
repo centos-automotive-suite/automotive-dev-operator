@@ -59,9 +59,7 @@ generate_bundle() {
     log_info "Generating bundle for version $version..."
     log_info "Using image: $image_tag"
 
-    cd "$ROOT_DIR"
-
-    make bundle VERSION="$version" IMG="$image_tag"
+    make -C "$ROOT_DIR" bundle VERSION="$version" IMG="$image_tag"
 
     log_success "Bundle generated"
 }
@@ -69,52 +67,28 @@ generate_bundle() {
 validate_bundle() {
     log_info "Validating bundle for OperatorHub..."
 
-    cd "$ROOT_DIR"
-
-    # Standard validation
-    operator-sdk bundle validate ./bundle
-
-    # OperatorHub-specific validation
-    operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2
-    operator-sdk bundle validate ./bundle --select-optional name=capabilities
-    operator-sdk bundle validate ./bundle --select-optional name=categories
+    (
+        cd "$ROOT_DIR"
+        operator-sdk bundle validate ./bundle
+        operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2
+        operator-sdk bundle validate ./bundle --select-optional name=capabilities
+        operator-sdk bundle validate ./bundle --select-optional name=categories
+    )
     log_success "Bundle validation passed"
 }
 
 prepare_community_operators() {
     local version=$1
-    local output_dir="${COMMUNITY_OPERATORS_DIR:-$ROOT_DIR/community-operators-prod}"
-    local operator_dir="$output_dir/operators/automotive-dev-operator"
-    local version_dir="$operator_dir/$version"
 
     log_info "Preparing community-operators-prod structure..."
-    log_info "Output directory: $output_dir"
 
-    # Create directory structure
-    mkdir -p "$version_dir/manifests"
-    mkdir -p "$version_dir/metadata"
+    make -C "$ROOT_DIR" community-operators-bundle VERSION="$version"
 
-    # Copy manifests (CSVs and CRDs)
-    cp -r "$ROOT_DIR/bundle/manifests/"* "$version_dir/manifests/"
-
-    # Copy metadata
-    cp -r "$ROOT_DIR/bundle/metadata/"* "$version_dir/metadata/"
-
-    # Create ci.yaml if it doesn't exist
-    if [[ ! -f "$operator_dir/ci.yaml" ]]; then
-        cat > "$operator_dir/ci.yaml" << 'EOF'
-# Update graph mode for OLM
-# Options: semver-mode (default), semver-skippatch-mode, replaces-mode
-updateGraph: semver-mode
-EOF
-        log_info "Created ci.yaml with semver-mode"
-    fi
-
-    log_success "Community operators structure prepared at: $version_dir"
+    log_success "Community operators structure prepared"
     echo ""
     log_info "Next steps:"
     echo "  1. Fork https://github.com/redhat-openshift-ecosystem/community-operators-prod"
-    echo "  2. Copy $version_dir to your fork under operators/automotive-dev-operator/"
+    echo "  2. Copy community-operators-prod/ to your fork"
     echo "  3. Create a PR with title: operator automotive-dev-operator ($version)"
 }
 
@@ -122,8 +96,7 @@ update_catalog() {
     local version=$1
     log_info "Updating catalog configuration for version $version..."
 
-    cd "$ROOT_DIR"
-    make catalog-update VERSION="$version"
+    make -C "$ROOT_DIR" catalog-update VERSION="$version"
 
     log_success "Catalog updated"
 }
@@ -146,12 +119,21 @@ bump_dev_version() {
     echo "  git commit -m 'chore: bump version to $dev_version for next development cycle'"
 }
 
-# Generate release notes template
+# Generate release notes with changelog from git log
 generate_release_notes() {
     local version=$1
     local notes_file="$ROOT_DIR/RELEASE_NOTES_v${version}.md"
 
-    log_info "Generating release notes template..."
+    log_info "Generating release notes..."
+
+    local prev_tag
+    prev_tag=$(git -C "$ROOT_DIR" describe --tags --abbrev=0 2>/dev/null || echo "")
+    local changelog=""
+    if [[ -n "$prev_tag" ]]; then
+        changelog=$(git -C "$ROOT_DIR" log --pretty=format:"- %s" "$prev_tag"..HEAD --no-merges)
+    else
+        changelog=$(git -C "$ROOT_DIR" log --pretty=format:"- %s" --no-merges)
+    fi
 
     cat > "$notes_file" << EOF
 # Automotive Dev Operator v${version}
@@ -162,11 +144,7 @@ generate_release_notes() {
 
 ## Changes
 
-<!-- List changes here, e.g.:
-- Added support for bootc container builds
-- Improved build performance
-- Fixed issue with artifact cleanup
--->
+${changelog}
 
 ## Breaking Changes
 

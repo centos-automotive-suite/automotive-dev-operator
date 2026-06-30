@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -107,9 +110,9 @@ else
 fi
 
 # Check for uncommitted changes
-if [[ -n $(git status --porcelain) ]]; then
+if [[ -n $(git status --porcelain -uno) ]]; then
     log_error "Uncommitted changes found. Please commit or stash them first."
-    git status --short
+    git status --short -uno
     exit 1
 fi
 
@@ -130,19 +133,13 @@ if [[ $(git rev-list HEAD...origin/$RELEASE_BRANCH --count) -gt 0 ]]; then
     git pull origin "$RELEASE_BRANCH"
 fi
 
-# Update VERSION in Makefile
-log_info "Updating VERSION in Makefile to $VERSION"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS sed syntax
-    sed -i '' "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
-else
-    # Linux sed syntax
-    sed -i "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
-fi
+# Update VERSION file
+log_info "Updating VERSION file to $VERSION"
+echo "$VERSION" > "$ROOT_DIR/VERSION"
 
 # Verify the change
-if ! grep -q "VERSION ?= $VERSION" Makefile; then
-    log_error "Failed to update VERSION in Makefile"
+if [[ "$(cat "$ROOT_DIR/VERSION")" != "$VERSION" ]]; then
+    log_error "Failed to update VERSION file"
     exit 1
 fi
 
@@ -156,10 +153,10 @@ fi
 
 # Commit the version update
 log_info "Committing version update..."
-git add Makefile
+git add "$ROOT_DIR/VERSION"
 git commit -m "Release $VERSION
 
-- Update VERSION in Makefile to $VERSION
+- Update VERSION file to $VERSION
 - Patch release $VERSION"
 
 # Create and push the tag
