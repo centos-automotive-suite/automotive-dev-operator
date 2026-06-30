@@ -243,6 +243,7 @@ func printBuildDetails(st *buildapitypes.BuildResponse) error {
 		{"Container Image", valueOrDash(st.ContainerImage)},
 		{"Disk Image", valueOrDash(st.DiskImage)},
 		{"Warning", valueOrDash(st.Warning)},
+		{"Trace ID", valueOrDash(st.TraceID)},
 	}
 
 	if st.Parameters != nil {

@@ -3,6 +3,7 @@ package querycmd
 import (
 	"encoding/json"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -263,6 +264,40 @@ func TestFormatOutputYAML_Show(t *testing.T) {
 	}
 	if parsed["name"] != "test-build" {
 		t.Errorf("expected name test-build, got %v", parsed["name"])
+	}
+}
+
+func TestPrintBuildDetails_TraceID(t *testing.T) {
+	resp := &buildapitypes.BuildResponse{
+		Name:    "test-build",
+		Phase:   "Succeeded",
+		TraceID: "a39035cd440a23aaf86986f35d468674",
+	}
+
+	out := captureStdout(t, func() {
+		_ = printBuildDetails(resp)
+	})
+
+	if !strings.Contains(out, "Trace ID") {
+		t.Errorf("expected 'Trace ID' label in output, got: %s", out)
+	}
+	if !strings.Contains(out, "a39035cd440a23aaf86986f35d468674") {
+		t.Errorf("expected trace ID value in output, got: %s", out)
+	}
+}
+
+func TestPrintBuildDetails_TraceIDEmpty(t *testing.T) {
+	resp := &buildapitypes.BuildResponse{
+		Name:  "test-build",
+		Phase: "Running",
+	}
+
+	out := captureStdout(t, func() {
+		_ = printBuildDetails(resp)
+	})
+
+	if !regexp.MustCompile(`(?m)^Trace ID\s+-$`).MatchString(out) {
+		t.Errorf("expected Trace ID row to render a dash, got: %s", out)
 	}
 }
 
