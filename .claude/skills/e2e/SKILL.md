@@ -254,7 +254,7 @@ Fully wired lanes (use as models):
 
 | Label | File | Make / PR lane | Timeout |
 |-------|------|----------------|---------|
-| `smoke` | `smoke_test.go` | `test-e2e-smoke` / `/e2e-smoke` | 10m |
+| `smoke` | `smoke_test.go` | `test-e2e-smoke` / `/e2e-smoke` | 15m |
 | `operator` | `operator_test.go` | `test-e2e-operator` / `/e2e-operator` | 10m |
 | `auth` | `auth_test.go` | `test-e2e-auth` / `/e2e-auth` | 10m |
 | `features` | `features_e2e_test.go` | `test-e2e-features` / `/e2e-features` | 10m |

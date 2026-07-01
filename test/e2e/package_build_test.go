@@ -30,7 +30,7 @@ import (
 
 // Test #23 from e2e-test-coverage-proposal.md.
 
-var _ = Describe("Package Mode Build", Label("package-mode"), Ordered, func() {
+var _ = Describe("Package Mode Build", Label("package-mode", "smoke"), Ordered, func() {
 
 	BeforeAll(func() {
 		if registryHost == "" {
