@@ -72,7 +72,7 @@ jobs:
             *)
               printf 'Unknown e2e command: %s\n' "$COMMENT"
               printf 'Supported: /e2e-smoke, /e2e-operator, /e2e-package-mode, /e2e-features, /e2e-bootc, /e2e-container-build, /e2e-auth, /e2e-test-all\n'
-              exit 1
+              exit 2
               ;;
           esac
 
