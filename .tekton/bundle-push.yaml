@@ -7,14 +7,14 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: "false"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main"
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: automotive-dev-operator
     appstudio.openshift.io/component: bundle
     pipelines.appstudio.openshift.io/type: build
   name: bundle-on-push
-  namespace: default-tenant
+  namespace: automotive-dev-operator-tenant
 spec:
   params:
   - name: git-url
@@ -288,62 +288,83 @@ spec:
 
             cd /var/workdir/source
 
-            echo "=== Building linux/arm64 (native) ==="
-            buildah build \
-              --platform linux/arm64 \
-              --build-arg TARGETARCH=arm64 \
-              --build-arg TARGETOS=linux \
-              --build-arg BUILDPLATFORM=linux/arm64 \
-              --authfile "${AUTHFILE}" \
-              -t "${IMAGE_BASE}:${IMAGE_TAG}-arm64" \
-              -f "${DOCKERFILE}" .
-            buildah push --authfile "${AUTHFILE}" "${IMAGE_BASE}:${IMAGE_TAG}-arm64"
-
-            echo "=== Building linux/amd64 (cross-compilation) ==="
-            NATIVE_ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+            echo "=== Building single-arch linux/amd64 (bundle must not be a manifest list) ==="
             buildah build \
               --platform linux/amd64 \
-              --build-arg TARGETARCH=amd64 \
-              --build-arg TARGETOS=linux \
-              --build-arg BUILDPLATFORM=linux/${NATIVE_ARCH} \
               --authfile "${AUTHFILE}" \
-              -t "${IMAGE_BASE}:${IMAGE_TAG}-amd64" \
+              -t "${IMAGE_FULL}" \
               -f "${DOCKERFILE}" .
-            buildah push --authfile "${AUTHFILE}" "${IMAGE_BASE}:${IMAGE_TAG}-amd64"
 
-            echo "=== Creating manifest: ${IMAGE_BASE}:${IMAGE_TAG} ==="
-            buildah manifest rm multiarch 2>/dev/null || true
-            buildah manifest create multiarch
-            buildah manifest add multiarch "${IMAGE_BASE}:${IMAGE_TAG}-arm64"
-            buildah manifest add multiarch "${IMAGE_BASE}:${IMAGE_TAG}-amd64"
-            buildah manifest push --all multiarch \
+            buildah push \
               --authfile "${AUTHFILE}" \
-              "docker://${IMAGE_BASE}:${IMAGE_TAG}"
+              --digestfile /tmp/image-digest.txt \
+              "${IMAGE_FULL}"
+            DIGEST=$(cat /tmp/image-digest.txt)
+            if [ -z "${DIGEST}" ]; then
+              echo "ERROR: Failed to extract image digest" >&2
+              exit 1
+            fi
 
             if [ "${PUSH_LATEST}" = "true" ]; then
-              echo "=== Tagging as :latest, :latest-arm64, :latest-amd64 ==="
+              echo "=== Tagging as :latest ==="
               buildah push --authfile "${AUTHFILE}" \
-                "${IMAGE_BASE}:${IMAGE_TAG}-arm64" \
-                "docker://${IMAGE_BASE}:latest-arm64"
-              buildah push --authfile "${AUTHFILE}" \
-                "${IMAGE_BASE}:${IMAGE_TAG}-amd64" \
-                "docker://${IMAGE_BASE}:latest-amd64"
-              buildah manifest rm latest-manifest 2>/dev/null || true
-              buildah manifest create latest-manifest
-              buildah manifest add latest-manifest "${IMAGE_BASE}:${IMAGE_TAG}-arm64"
-              buildah manifest add latest-manifest "${IMAGE_BASE}:${IMAGE_TAG}-amd64"
-              buildah manifest push --all latest-manifest \
-                --authfile "${AUTHFILE}" \
+                "${IMAGE_FULL}" \
                 "docker://${IMAGE_BASE}:latest"
             fi
 
-            DIGEST=$(buildah manifest inspect multiarch \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('digest',''))" 2>/dev/null || echo "")
             echo -n "${IMAGE_BASE}:${IMAGE_TAG}" > $(results.IMAGE_URL.path)
             echo -n "${DIGEST}" > $(results.IMAGE_DIGEST.path)
         volumes:
         - name: workdir
           emptyDir: {}
+    - name: clair-scan
+      params:
+      - name: image-digest
+        value: $(tasks.build-multiarch.results.IMAGE_DIGEST)
+      - name: image-url
+        value: $(tasks.build-multiarch.results.IMAGE_URL)
+      runAfter:
+      - build-multiarch
+      taskRef:
+        params:
+        - name: name
+          value: clair-scan
+        - name: bundle
+          value: quay.io/konflux-ci/tekton-catalog/task-clair-scan:0.3@sha256:312fb4d135e351bde38bcb14a7897b238d0aac19703b4e507c105f12b57836f1
+        - name: kind
+          value: task
+        resolver: bundles
+      when:
+      - input: $(params.skip-checks)
+        operator: in
+        values:
+        - "false"
+    - name: push-dockerfile
+      params:
+      - name: IMAGE
+        value: $(tasks.build-multiarch.results.IMAGE_URL)
+      - name: IMAGE_DIGEST
+        value: $(tasks.build-multiarch.results.IMAGE_DIGEST)
+      - name: DOCKERFILE
+        value: $(params.dockerfile)
+      - name: SOURCE_ARTIFACT
+        value: $(tasks.prefetch-dependencies.results.SOURCE_ARTIFACT)
+      runAfter:
+      - build-multiarch
+      taskRef:
+        params:
+        - name: name
+          value: push-dockerfile-oci-ta
+        - name: bundle
+          value: quay.io/konflux-ci/tekton-catalog/task-push-dockerfile-oci-ta:0.1@sha256:e56a9b6a707f1d5465750db7ee194fdec619f57f6ad874a615d89f77288aea41
+        - name: kind
+          value: task
+        resolver: bundles
+      when:
+      - input: $(params.skip-checks)
+        operator: in
+        values:
+        - "false"
     - name: deprecated-base-image-check
       params:
       - name: IMAGE_URL
