@@ -84,10 +84,10 @@ if ! git rev-parse --verify main > /dev/null 2>&1; then
     exit 1
 fi
 
-# Check for uncommitted changes
-if [[ -n $(git status --porcelain) ]]; then
+# Check for uncommitted changes (ignore untracked files)
+if [[ -n $(git status --porcelain -uno) ]]; then
     log_error "Uncommitted changes found. Please commit or stash them first."
-    git status --short
+    git status --short -uno
     exit 1
 fi
 

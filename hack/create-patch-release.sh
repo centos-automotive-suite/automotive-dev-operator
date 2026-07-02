@@ -130,19 +130,13 @@ if [[ $(git rev-list HEAD...origin/$RELEASE_BRANCH --count) -gt 0 ]]; then
     git pull origin "$RELEASE_BRANCH"
 fi
 
-# Update VERSION in Makefile
-log_info "Updating VERSION in Makefile to $VERSION"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS sed syntax
-    sed -i '' "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
-else
-    # Linux sed syntax
-    sed -i "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
-fi
+# Update VERSION file
+log_info "Updating VERSION file to $VERSION"
+echo "$VERSION" > VERSION
 
 # Verify the change
-if ! grep -q "VERSION ?= $VERSION" Makefile; then
-    log_error "Failed to update VERSION in Makefile"
+if [[ "$(cat VERSION)" != "$VERSION" ]]; then
+    log_error "Failed to update VERSION file"
     exit 1
 fi
 
@@ -156,10 +150,10 @@ fi
 
 # Commit the version update
 log_info "Committing version update..."
-git add Makefile
+git add VERSION
 git commit -m "Release $VERSION
 
-- Update VERSION in Makefile to $VERSION
+- Update VERSION file to $VERSION
 - Patch release $VERSION"
 
 # Create and push the tag
