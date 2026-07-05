@@ -31,6 +31,8 @@ type BuildConfig struct {
 	UsePVCScratchVolumes        bool
 	TaskResolver                string // TaskResolverCluster (default) or TaskResolverBundle
 	TaskBundleRef               string // OCI bundle ref when TaskResolver is TaskResolverBundle
+	UseOCIVolumes               bool
+	OrasImage                   string
 }
 
 const (
@@ -183,6 +185,13 @@ const workspaceNameShared = "shared-workspace"
 // Tekton resolves this at runtime to the actual volume name in the pod spec.
 const workspaceVolumeRef = "$(workspaces." + workspaceNameShared + ".volume)"
 
+const (
+	ociVolumeNameOras = "oras-tools"
+	// OCIToolsMountBase is the root mount path for OCI tool volumes in task containers.
+	OCIToolsMountBase = "/oci-tools"
+	ociMountPathOras  = OCIToolsMountBase + "/oras"
+)
+
 // DefaultTrustedCABundleConfigMap is the default ConfigMap name for trusted CA bundles.
 // Exported so the controller can detect divergence when using bundle-resolved tasks.
 const DefaultTrustedCABundleConfigMap = "rhivos-ca-bundle"
@@ -225,7 +234,7 @@ func trustedCABundleVolumeSource(buildConfig *BuildConfig) corev1.VolumeSource {
 
 // GeneratePushArtifactRegistryTask creates a Tekton Task for pushing artifacts to a registry
 func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
-	return &tektonv1.Task{
+	task := &tektonv1.Task{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
 			Kind:       "Task",
@@ -461,6 +470,10 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 			},
 		},
 	}
+
+	applyOCIVolumeMounts(task, buildConfig)
+
+	return task
 }
 
 // GenerateBuildAutomotiveImageTask creates a Tekton Task for building automotive images
@@ -885,7 +898,52 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 		task.Spec.Volumes = filtered
 	}
 
+	applyOCIVolumeMounts(task, buildConfig)
+
 	return task
+}
+
+// applyOCIVolumeMounts conditionally adds OCI volume mounts to task steps when
+// the OCIVolumes feature gate is enabled. The actual volume definition must be
+// placed in the PipelineRun/TaskRun podTemplate (not the Task spec) because
+// Tekton's Task CRD schema prunes the corev1.ImageVolumeSource field, while
+// podTemplate has PreserveUnknownFields and passes it through to the pod.
+func applyOCIVolumeMounts(task *tektonv1.Task, buildConfig *BuildConfig) {
+	if buildConfig == nil || !buildConfig.UseOCIVolumes || buildConfig.OrasImage == "" {
+		return
+	}
+
+	for i := range task.Spec.Steps {
+		step := &task.Spec.Steps[i]
+		step.VolumeMounts = append(step.VolumeMounts, corev1.VolumeMount{
+			Name:      ociVolumeNameOras,
+			MountPath: ociMountPathOras,
+			ReadOnly:  true,
+		})
+	}
+}
+
+// OCIVolumes returns the OCI image volumes to inject via podTemplate. Returns
+// nil when OCI volumes are disabled. The caller must add these to the
+// PipelineRun or TaskRun podTemplate.Volumes.
+// Requires the Kubernetes ImageVolume feature gate on the cluster (beta in 1.33+,
+// GA in OpenShift 4.20) and a compatible container runtime (CRI-O >= 1.31).
+func OCIVolumes(buildConfig *BuildConfig) []corev1.Volume {
+	if buildConfig == nil || !buildConfig.UseOCIVolumes || buildConfig.OrasImage == "" {
+		return nil
+	}
+
+	return []corev1.Volume{
+		{
+			Name: ociVolumeNameOras,
+			VolumeSource: corev1.VolumeSource{
+				Image: &corev1.ImageVolumeSource{
+					Reference:  buildConfig.OrasImage,
+					PullPolicy: corev1.PullIfNotPresent,
+				},
+			},
+		},
+	}
 }
 
 // GenerateTektonPipeline creates a Tekton Pipeline for automotive building process
@@ -2103,7 +2161,7 @@ func GenerateSealedTaskForOperation(namespace, operation string, buildConfig ...
 	if len(buildConfig) > 0 {
 		cfg = buildConfig[0]
 	}
-	return &tektonv1.Task{
+	task := &tektonv1.Task{
 		TypeMeta: metav1.TypeMeta{APIVersion: "tekton.dev/v1", Kind: "Task"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      SealedTaskName(operation),
@@ -2115,6 +2173,8 @@ func GenerateSealedTaskForOperation(namespace, operation string, buildConfig ...
 		},
 		Spec: sealedTaskSpec(operation, cfg),
 	}
+
+	return task
 }
 
 // GenerateSealedTasks returns all four sealed-operation Tasks for the given namespace (for OperatorConfig).

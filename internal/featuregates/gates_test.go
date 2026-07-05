@@ -158,6 +158,29 @@ func TestKnown(t *testing.T) {
 	}
 }
 
+func TestOCIVolumesRegistered(t *testing.T) {
+	if !Known(OCIVolumes) {
+		t.Fatal("OCIVolumes feature should be registered")
+	}
+	if DefaultStage(OCIVolumes) != Alpha {
+		t.Fatalf("OCIVolumes should be Alpha, got %s", DefaultStage(OCIVolumes))
+	}
+	g := New(nil)
+	if g.Enabled(OCIVolumes) {
+		t.Fatal("OCIVolumes (Alpha) should be disabled by default")
+	}
+}
+
+func TestOCIVolumesEnabledViaOverride(t *testing.T) {
+	spec := &automotivev1alpha1.OperatorConfigSpec{
+		FeatureGates: map[string]bool{string(OCIVolumes): true},
+	}
+	g := NewFromConfig(spec)
+	if !g.Enabled(OCIVolumes) {
+		t.Fatal("OCIVolumes should be enabled when overridden to true")
+	}
+}
+
 func TestRegisterPanicsOnDuplicate(t *testing.T) {
 	setupTestFeatures(t)
 

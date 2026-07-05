@@ -21,9 +21,20 @@ type FeatureSpec struct {
 	Stage Stage
 }
 
+// Feature gate constants.
+const (
+	// OCIVolumes enables mounting OCI images as read-only volumes in build
+	// pods, eliminating runtime tool downloads (e.g. ORAS).
+	// Requires the ImageVolume feature gate on the cluster (k8s 1.31+ alpha,
+	// 1.33+ beta, OpenShift 4.20 GA).
+	OCIVolumes FeatureName = "OCIVolumes"
+)
+
 // defaultFeatures is the compile-time registry of known features and their
 // default stages. Each feature PR adds its own entry here.
-var defaultFeatures = map[FeatureName]FeatureSpec{}
+var defaultFeatures = map[FeatureName]FeatureSpec{
+	OCIVolumes: {Stage: Alpha},
+}
 
 // Register adds a feature to the default registry. Intended for use in init()
 // functions within the package that implements the feature, or directly in this
