@@ -26,6 +26,109 @@ if [[ -n "${ADO_TRACE_ID:-}" ]]; then
   echo "{\"traceID\":\"${ADO_TRACE_ID}\",\"msg\":\"task started\",\"hostname\":\"${HOSTNAME:-unknown}\"}"
 fi
 
+# Add OCI volume tool paths when mounted (OCIVolumes feature gate)
+OCI_TOOLS_BASE="/oci-tools"
+if [ -d "$OCI_TOOLS_BASE/oras/bin" ]; then
+  export PATH="$OCI_TOOLS_BASE/oras/bin:$PATH"
+fi
+
+# --- ORAS install ---
+
+# install_oras downloads and checksum-verifies the ORAS CLI binary.
+# Sets ORAS_BIN to the installed path and adds it to PATH.
+# Skips if oras is already available (e.g. via OCI volume mount).
+install_oras() {
+  if command -v oras >/dev/null 2>&1; then
+    ORAS_BIN="$(command -v oras)"
+    echo "ORAS already available at $ORAS_BIN"
+    return 0
+  fi
+
+  if [ -d "$OCI_TOOLS_BASE/oras" ]; then
+    echo "WARN: OCI volume mounted at $OCI_TOOLS_BASE/oras but oras binary not found on PATH, falling back to download" >&2
+  fi
+
+  ORAS_VERSION="1.2.0"
+  case "$(uname -m)" in
+    x86_64) ORAS_ARCH="amd64" ;;
+    aarch64|arm64) ORAS_ARCH="arm64" ;;
+    *)
+      echo "ERROR: Unsupported architecture: $(uname -m)" >&2
+      return 1
+      ;;
+  esac
+  ORAS_TARBALL="oras_${ORAS_VERSION}_linux_${ORAS_ARCH}.tar.gz"
+  ORAS_BASE_URL="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}"
+  ORAS_CHECKSUMS="oras_${ORAS_VERSION}_checksums.txt"
+
+  _cleanup_oras_files() {
+    rm -f "$ORAS_TARBALL" "$ORAS_CHECKSUMS" oras
+  }
+
+  trap _cleanup_oras_files EXIT
+
+  echo "Downloading ORAS ${ORAS_VERSION} with integrity verification..."
+
+  curl -LO "${ORAS_BASE_URL}/${ORAS_TARBALL}" || {
+    echo "ERROR: Failed to download ORAS tarball" >&2
+    return 1
+  }
+
+  curl -LO "${ORAS_BASE_URL}/${ORAS_CHECKSUMS}" || {
+    echo "ERROR: Failed to download ORAS checksums" >&2
+    return 1
+  }
+
+  expected_checksum=$(grep "${ORAS_TARBALL}" "${ORAS_CHECKSUMS}" | cut -d' ' -f1)
+  if [ -z "$expected_checksum" ]; then
+    echo "ERROR: Could not find checksum for ${ORAS_TARBALL} in checksums file" >&2
+    return 1
+  fi
+
+  if command -v sha256sum >/dev/null; then
+    actual_checksum=$(sha256sum "${ORAS_TARBALL}" | cut -d' ' -f1)
+  elif command -v shasum >/dev/null; then
+    actual_checksum=$(shasum -a 256 "${ORAS_TARBALL}" | cut -d' ' -f1)
+  else
+    echo "ERROR: Neither sha256sum nor shasum available for checksum verification" >&2
+    return 1
+  fi
+
+  if [ "$expected_checksum" != "$actual_checksum" ]; then
+    echo "ERROR: Checksum verification failed for ${ORAS_TARBALL}" >&2
+    echo "  Expected: $expected_checksum" >&2
+    echo "  Actual:   $actual_checksum" >&2
+    return 1
+  fi
+
+  echo "Checksum verification passed: $expected_checksum"
+
+  tar -zxf "$ORAS_TARBALL" oras || {
+    echo "ERROR: Failed to extract ORAS from tarball" >&2
+    return 1
+  }
+
+  ORAS_INSTALL_DIR="${HOME:-/tmp}/bin"
+  if [ "$ORAS_INSTALL_DIR" = "//bin" ] || [ "$ORAS_INSTALL_DIR" = "/bin" ]; then
+    ORAS_INSTALL_DIR="/tmp/bin"
+  fi
+  mkdir -p "$ORAS_INSTALL_DIR"
+  mv oras "$ORAS_INSTALL_DIR/" || {
+    echo "ERROR: Failed to install ORAS binary" >&2
+    return 1
+  }
+
+  if ! echo "$PATH" | grep -q "$ORAS_INSTALL_DIR"; then
+    export PATH="$ORAS_INSTALL_DIR:$PATH"
+  fi
+
+  _cleanup_oras_files
+  trap - EXIT
+
+  ORAS_BIN="$ORAS_INSTALL_DIR/oras"
+  echo "ORAS ${ORAS_VERSION} installed successfully"
+}
+
 # --- Validation ---
 
 validate_container_ref() {

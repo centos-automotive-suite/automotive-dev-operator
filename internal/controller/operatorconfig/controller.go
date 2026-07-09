@@ -34,6 +34,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 )
 
 const (
@@ -704,6 +705,8 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		if config.Spec.OSBuilds.TaskBundleRef != "" {
 			buildConfig.TaskBundleRef = config.Spec.OSBuilds.TaskBundleRef
 		}
+
+		controllerutils.ApplyOCIVolumesConfig(buildConfig, &config.Spec)
 	}
 
 	// Create target defaults ConfigMap (architecture, partition rules, etc.)

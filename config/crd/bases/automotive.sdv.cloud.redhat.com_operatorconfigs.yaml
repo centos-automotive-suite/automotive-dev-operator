@@ -661,6 +661,11 @@ spec:
                     description: Operator is the operator container image (overridden
                       by OPERATOR_IMAGE env var when set)
                     type: string
+                  oras:
+                    description: |-
+                      Oras is the ORAS CLI image mounted as an OCI volume in build pods.
+                      Only used when the OCIVolumes feature gate is enabled.
+                    type: string
                   yqHelper:
                     description: YQHelper is the yq helper image used in Tekton task
                       steps

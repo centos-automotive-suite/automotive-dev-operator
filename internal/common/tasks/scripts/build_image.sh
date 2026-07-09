@@ -92,31 +92,7 @@ RESTORE_SOURCES_REF="$(params.restore-sources-ref)"
 if [ -n "$RESTORE_SOURCES_REF" ]; then
   echo "=== Restoring sources from $RESTORE_SOURCES_REF ==="
 
-  ORAS_VERSION="1.2.0"
-  case "$(uname -m)" in
-    x86_64) ORAS_ARCH="amd64" ;;
-    aarch64|arm64) ORAS_ARCH="arm64" ;;
-    *) echo "ERROR: Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-  esac
-  ORAS_TARBALL="oras_${ORAS_VERSION}_linux_${ORAS_ARCH}.tar.gz"
-  ORAS_BASE_URL="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}"
-  ORAS_CHECKSUMS="oras_${ORAS_VERSION}_checksums.txt"
-  curl -sLO "${ORAS_BASE_URL}/${ORAS_TARBALL}"
-  curl -sLO "${ORAS_BASE_URL}/${ORAS_CHECKSUMS}"
-  expected_checksum=$(grep "${ORAS_TARBALL}" "${ORAS_CHECKSUMS}" | cut -d' ' -f1)
-  if command -v sha256sum >/dev/null; then
-    actual_checksum=$(sha256sum "${ORAS_TARBALL}" | cut -d' ' -f1)
-  else
-    actual_checksum=$(shasum -a 256 "${ORAS_TARBALL}" | cut -d' ' -f1)
-  fi
-  if [ "$expected_checksum" != "$actual_checksum" ]; then
-    echo "ERROR: ORAS checksum verification failed" >&2; exit 1
-  fi
-  tar -zxf "$ORAS_TARBALL" oras
-  mkdir -p "$HOME/bin"
-  mv oras "$HOME/bin/"
-  rm -f "$ORAS_TARBALL" "$ORAS_CHECKSUMS"
-  export PATH="$HOME/bin:$PATH"
+  install_oras || exit 1
 
   ORAS_AUTH_FLAGS=()
   if [ -n "$REGISTRY_AUTH_FILE" ] && [ -f "$REGISTRY_AUTH_FILE" ]; then

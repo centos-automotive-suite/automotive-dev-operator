@@ -1,81 +1,7 @@
 # shellcheck shell=bash
 # NOTE: common.sh is prepended to this script at embed time.
 
-ORAS_VERSION="1.2.0"
-# Detect container architecture
-case "$(uname -m)" in
-  x86_64) ORAS_ARCH="amd64" ;;
-  aarch64|arm64) ORAS_ARCH="arm64" ;;
-  *)
-    echo "ERROR: Unsupported architecture: $(uname -m)" >&2
-    exit 1
-    ;;
-esac
-ORAS_TARBALL="oras_${ORAS_VERSION}_linux_${ORAS_ARCH}.tar.gz"
-ORAS_BASE_URL="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}"
-ORAS_CHECKSUMS="oras_${ORAS_VERSION}_checksums.txt"
-
-cleanup_oras_files() {
-  rm -f "$ORAS_TARBALL" "$ORAS_CHECKSUMS" oras
-}
-
-trap cleanup_oras_files EXIT
-
-echo "Downloading ORAS ${ORAS_VERSION} with integrity verification..."
-
-curl -LO "${ORAS_BASE_URL}/${ORAS_TARBALL}" || {
-  echo "ERROR: Failed to download ORAS tarball" >&2
-  exit 1
-}
-
-curl -LO "${ORAS_BASE_URL}/${ORAS_CHECKSUMS}" || {
-  echo "ERROR: Failed to download ORAS checksums" >&2
-  exit 1
-}
-
-expected_checksum=$(grep "${ORAS_TARBALL}" "${ORAS_CHECKSUMS}" | cut -d' ' -f1)
-if [ -z "$expected_checksum" ]; then
-  echo "ERROR: Could not find checksum for ${ORAS_TARBALL} in checksums file" >&2
-  exit 1
-fi
-
-if command -v sha256sum >/dev/null; then
-  actual_checksum=$(sha256sum "${ORAS_TARBALL}" | cut -d' ' -f1)
-elif command -v shasum >/dev/null; then
-  actual_checksum=$(shasum -a 256 "${ORAS_TARBALL}" | cut -d' ' -f1)
-else
-  echo "ERROR: Neither sha256sum nor shasum available for checksum verification" >&2
-  exit 1
-fi
-
-if [ "$expected_checksum" != "$actual_checksum" ]; then
-  echo "ERROR: Checksum verification failed for ${ORAS_TARBALL}" >&2
-  echo "  Expected: $expected_checksum" >&2
-  echo "  Actual:   $actual_checksum" >&2
-  exit 1
-fi
-
-echo "Checksum verification passed: $expected_checksum"
-
-tar -zxf "$ORAS_TARBALL" oras || {
-  echo "ERROR: Failed to extract ORAS from tarball" >&2
-  exit 1
-}
-
-mkdir -p "$HOME/bin"
-mv oras "$HOME/bin/" || {
-  echo "ERROR: Failed to install ORAS binary" >&2
-  exit 1
-}
-
-if ! echo "$PATH" | grep -q "$HOME/bin"; then
-  export PATH="$HOME/bin:$PATH"
-fi
-
-cleanup_oras_files
-trap - EXIT
-
-echo "ORAS ${ORAS_VERSION} installed successfully"
+install_oras || exit 1
 
 # Get media type based on file format and compression
 get_media_type() {
@@ -369,7 +295,7 @@ EOF
   # Push with multi-layer manifest using annotation file
   # Files are pushed from current directory (parts_dir) so they extract flat
   set -o pipefail
-  "$HOME/bin/oras" push "${ORAS_EXTRA_ARGS[@]}" --disable-path-validation \
+  "$ORAS_BIN" push "${ORAS_EXTRA_ARGS[@]}" --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${artifact_type}" \
     --annotation-file "$annotations_file" \
@@ -438,7 +364,7 @@ PYEOF
   echo "  Annotations: distro=${distro}, target=${target}, arch=${arch}"
 
   set -o pipefail
-  "$HOME/bin/oras" push "${ORAS_EXTRA_ARGS[@]}" --disable-path-validation \
+  "$ORAS_BIN" push "${ORAS_EXTRA_ARGS[@]}" --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${media_type}" \
     --annotation-file "$single_annotations_file" \
@@ -474,7 +400,7 @@ echo -n "${DISK_DIGEST}" > /workspace/shared/.chains/disk/digest
 OSBUILD_MANIFEST="/workspace/shared/image.json"
 if [ -f "$OSBUILD_MANIFEST" ] && [ -n "$DISK_DIGEST" ]; then
   echo "Attaching osbuild manifest to ${repo_url}@${DISK_DIGEST}"
-  if ! "$HOME/bin/oras" attach --disable-path-validation "${ORAS_EXTRA_ARGS[@]}" \
+  if ! "$ORAS_BIN" attach --disable-path-validation "${ORAS_EXTRA_ARGS[@]}" \
     --artifact-type "$OCI_REFERRER_TYPE_OSBUILD_MANIFEST" \
     "${repo_url}@${DISK_DIGEST}" \
     "${OSBUILD_MANIFEST}:${OCI_REFERRER_TYPE_OSBUILD_MANIFEST}" 2>&1; then
@@ -497,7 +423,7 @@ attach_referrer() {
     exit 1
   fi
   echo "Attaching $label ($(du -sh "$file" | cut -f1)) to ${repo_url}@${DISK_DIGEST}"
-  if ! "$HOME/bin/oras" attach "${ORAS_EXTRA_ARGS[@]}" \
+  if ! "$ORAS_BIN" attach "${ORAS_EXTRA_ARGS[@]}" \
     --artifact-type "$artifact_type" \
     "${repo_url}@${DISK_DIGEST}" \
     "${file}:${artifact_type}"; then

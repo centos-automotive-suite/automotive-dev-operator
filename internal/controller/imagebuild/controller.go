@@ -901,6 +901,9 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			UsePVCScratchVolumes:        operatorConfig.Spec.OSBuilds.GetUsePVCScratchVolumes(),
 		}
 		controllerutils.ApplyTrustedCABundleFromOSBuilds(buildConfig, operatorConfig.Spec.OSBuilds)
+
+		controllerutils.ApplyOCIVolumesConfig(buildConfig, &operatorConfig.Spec)
+
 		if imageBuild.Spec.SecureBuild {
 			// Use the digest-pinned ref snapshotted on the CR by the Build API,
 			// not the current OperatorConfig value (which may have changed).
@@ -942,6 +945,10 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			if buildConfig.UsePVCScratchVolumes {
 				r.emitEventf(imageBuild, corev1.EventTypeWarning, "SecureBuildConfigDrift",
 					"OperatorConfig.usePVCScratchVolumes is enabled but bundle tasks use emptyDir; PVC scratch will not apply to this build")
+			}
+			if buildConfig.UseOCIVolumes {
+				r.emitEventf(imageBuild, corev1.EventTypeWarning, "SecureBuildConfigDrift",
+					"OperatorConfig has OCIVolumes enabled but bundle tasks do not include OCI volume mounts; ORAS will be downloaded at runtime")
 			}
 		}
 	}
@@ -1455,6 +1462,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		log.Info("Setting RuntimeClassName from ImageBuild spec", "runtimeClassName", imageBuild.Spec.RuntimeClassName)
 		podTemplate.RuntimeClassName = &imageBuild.Spec.RuntimeClassName
 	}
+	podTemplate.Volumes = append(podTemplate.Volumes, tasks.OCIVolumes(buildConfig)...)
 	pipelineRunSpec := tektonv1.PipelineRunSpec{
 		Params:     params,
 		Workspaces: pipelineWorkspaces,
@@ -1740,6 +1748,10 @@ func (r *ImageBuildReconciler) createPushTaskRun(ctx context.Context, imageBuild
 		},
 	}
 
+	var pushPodTemplate *pod.PodTemplate
+	if ociVols := tasks.OCIVolumes(pushBuildConfig); len(ociVols) > 0 {
+		pushPodTemplate = &pod.PodTemplate{Volumes: ociVols}
+	}
 	taskRun := &tektonv1.TaskRun{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: safeDerivedName(imageBuild.Name, "-push-"),
@@ -1756,9 +1768,10 @@ func (r *ImageBuildReconciler) createPushTaskRun(ctx context.Context, imageBuild
 			},
 		},
 		Spec: tektonv1.TaskRunSpec{
-			TaskSpec:   &pushTask.Spec,
-			Params:     params,
-			Workspaces: workspaces,
+			TaskSpec:    &pushTask.Spec,
+			Params:      params,
+			Workspaces:  workspaces,
+			PodTemplate: pushPodTemplate,
 		},
 	}
 
@@ -2583,6 +2596,9 @@ func (r *ImageBuildReconciler) resolveBuildConfig(ctx context.Context) *tasks.Bu
 		bc.FlashTimeoutMinutes = operatorConfig.Spec.OSBuilds.GetFlashTimeoutMinutes()
 		controllerutils.ApplyTrustedCABundleFromOSBuilds(bc, operatorConfig.Spec.OSBuilds)
 	}
+
+	controllerutils.ApplyOCIVolumesConfig(bc, &operatorConfig.Spec)
+
 	return bc
 }
 

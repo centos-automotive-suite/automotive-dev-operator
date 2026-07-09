@@ -54,6 +54,9 @@ const (
 	// DefaultFlashLeaseTags is the fallback lease tags when none configured in OperatorConfig
 	DefaultFlashLeaseTags = "platform=caib"
 
+	// DefaultOrasImage is the default ORAS CLI image mounted as an OCI volume
+	DefaultOrasImage = "ghcr.io/oras-project/oras:v1.2.0"
+
 	// DefaultToolchainImage is the default container image for workspace toolchains
 	DefaultToolchainImage = "quay.io/rh-sdv-cloud/autosd-toolchain:latest"
 
@@ -97,6 +100,11 @@ type ImagesConfig struct {
 	// Operator is the operator container image (overridden by OPERATOR_IMAGE env var when set)
 	// +optional
 	Operator string `json:"operator,omitempty"`
+
+	// Oras is the ORAS CLI image mounted as an OCI volume in build pods.
+	// Only used when the OCIVolumes feature gate is enabled.
+	// +optional
+	Oras string `json:"oras,omitempty"`
 }
 
 // GetAutomotiveImageBuilderImage returns the AIB image, falling back to the default
@@ -129,6 +137,14 @@ func (c *ImagesConfig) GetOperatorImage() string {
 		return c.Operator
 	}
 	return DefaultOperatorImage
+}
+
+// GetOrasImage returns the ORAS CLI image, falling back to the default
+func (c *ImagesConfig) GetOrasImage() string {
+	if c != nil && c.Oras != "" {
+		return c.Oras
+	}
+	return DefaultOrasImage
 }
 
 // BuildAPIResourcesConfig defines resource requirements for Build API components
