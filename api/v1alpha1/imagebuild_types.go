@@ -207,6 +207,11 @@ type AIBSpec struct {
 	// RootPassword is a hashed root password passed to AIB's --root-password flag.
 	// See crypt(5) for supported hash formats.
 	RootPassword string `json:"rootPassword,omitempty"`
+
+	// OCIRepoImages is a list of OCI image references containing RPM repositories.
+	// Each image is mounted as an image volume and exposed to AIB as a file:// extra repo.
+	// +optional
+	OCIRepoImages []string `json:"ociRepoImages,omitempty"`
 }
 
 // ExportSpec defines the configuration for exporting build artifacts

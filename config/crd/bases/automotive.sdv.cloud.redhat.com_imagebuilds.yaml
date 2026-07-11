@@ -94,6 +94,13 @@ spec:
                     - bootc
                     - disk
                     type: string
+                  ociRepoImages:
+                    description: |-
+                      OCIRepoImages is a list of OCI image references containing RPM repositories.
+                      Each image is mounted as an image volume and exposed to AIB as a file:// extra repo.
+                    items:
+                      type: string
+                    type: array
                   rebuildBuilder:
                     description: RebuildBuilder forces rebuilding the bootc builder
                       image even if a cached version exists in the registry.

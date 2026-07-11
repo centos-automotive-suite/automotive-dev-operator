@@ -167,8 +167,9 @@ type BuildRequest struct {
 	CustomDefs             []string             `json:"customDefs"`
 	AIBExtraArgs           []string             `json:"aibExtraArgs"`
 	RootPassword           string               `json:"rootPassword,omitempty"`
-	ExtraRepos             []string             `json:"extraRepos,omitempty"` // workspace-name:/path pairs
-	Workspace              string               `json:"workspace,omitempty"`  // workspace name for build caching and lease forwarding
+	ExtraRepos             []string             `json:"extraRepos,omitempty"`    // workspace-name:/path pairs
+	OCIRepoImages          []string             `json:"ociRepoImages,omitempty"` // OCI image refs containing RPM repos
+	Workspace              string               `json:"workspace,omitempty"`     // workspace name for build caching and lease forwarding
 	Compression            Compression          `json:"compression,omitempty"`
 	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`
 	PushRepository         string               `json:"pushRepository,omitempty"`
