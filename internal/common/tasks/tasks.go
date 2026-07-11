@@ -183,6 +183,14 @@ const workspaceNameShared = "shared-workspace"
 // Tekton resolves this at runtime to the actual volume name in the pod spec.
 const workspaceVolumeRef = "$(workspaces." + workspaceNameShared + ".volume)"
 
+// OCIRepoVolumeCount is the number of pre-declared OCI repository volume slots.
+// These EmptyDir volumes can be overridden at PipelineRun time via PodTemplate
+// merge-by-name to inject OCI image volumes containing RPM repositories.
+const OCIRepoVolumeCount = 4
+
+// OCIRepoVolumeMountBase is the base mount path for OCI repo volumes.
+const OCIRepoVolumeMountBase = "/extra-repos"
+
 // DefaultTrustedCABundleConfigMap is the default ConfigMap name for trusted CA bundles.
 // Exported so the controller can detect divergence when using bundle-resolved tasks.
 const DefaultTrustedCABundleConfigMap = "rhivos-ca-bundle"
@@ -824,6 +832,34 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 				},
 			},
 		},
+	}
+
+	// Add pre-declared OCI repo volume slots. These are harmless EmptyDir
+	// volumes when unused, but can be overridden at PipelineRun time via
+	// PodTemplate merge-by-name to inject OCI image volumes with RPM repos.
+	for i := 0; i < OCIRepoVolumeCount; i++ {
+		name := fmt.Sprintf("oci-repo-%d", i)
+		task.Spec.Volumes = append(task.Spec.Volumes, corev1.Volume{
+			Name: name,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+	}
+
+	// Add corresponding read-only VolumeMounts to the build-image step.
+	for i := range task.Spec.Steps {
+		if task.Spec.Steps[i].Name == "build-image" {
+			for j := 0; j < OCIRepoVolumeCount; j++ {
+				name := fmt.Sprintf("oci-repo-%d", j)
+				task.Spec.Steps[i].VolumeMounts = append(task.Spec.Steps[i].VolumeMounts, corev1.VolumeMount{
+					Name:      name,
+					MountPath: fmt.Sprintf("%s/%s", OCIRepoVolumeMountBase, name),
+					ReadOnly:  true,
+				})
+			}
+			break
+		}
 	}
 
 	if buildConfig != nil && buildConfig.UseMemoryVolumes {

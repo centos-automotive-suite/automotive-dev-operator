@@ -448,7 +448,7 @@ func TestReproducibleParams_BuildScript_References(t *testing.T) {
 
 	var buildStep string
 	for _, s := range task.Spec.Steps {
-		if s.Name == "build-image" {
+		if s.Name == buildImageStepName {
 			buildStep = s.Script
 			break
 		}
