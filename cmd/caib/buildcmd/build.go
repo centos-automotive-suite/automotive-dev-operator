@@ -586,6 +586,24 @@ func (h *Handler) resolveRootPassword() (string, error) {
 	return parseRootPassword(*h.opts.RootPassword)
 }
 
+// splitExtraRepos separates --extra-repo values into workspace repos and OCI image refs.
+// Entries with the "oci:" prefix are OCI image references (stripped of the prefix);
+// all other entries are workspace repos passed through unchanged.
+func splitExtraRepos(repos []string) (workspaceRepos []string, ociImages []string, err error) {
+	for _, repo := range repos {
+		if strings.HasPrefix(repo, "oci:") {
+			ref := strings.TrimPrefix(repo, "oci:")
+			if ref == "" {
+				return nil, nil, fmt.Errorf("--extra-repo oci: requires an image reference (e.g. oci:quay.io/org/rpms:latest)")
+			}
+			ociImages = append(ociImages, ref)
+		} else {
+			workspaceRepos = append(workspaceRepos, repo)
+		}
+	}
+	return workspaceRepos, ociImages, nil
+}
+
 // RunBuild handles the main `caib image build` command.
 func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 	h.applyWaitFollowDefaults(cmd, true)
@@ -656,6 +674,12 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	workspaceRepos, ociRepoImages, err := splitExtraRepos(*h.opts.ExtraRepos)
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
 	req := buildapitypes.BuildRequest{
 		Name:                   *h.opts.BuildName,
 		Manifest:               string(manifestBytes),
@@ -670,7 +694,8 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		CustomDefs:             customDefs,
 		AIBExtraArgs:           *h.opts.AIBExtraArgs,
 		RootPassword:           rootPassword,
-		ExtraRepos:             *h.opts.ExtraRepos,
+		ExtraRepos:             workspaceRepos,
+		OCIRepoImages:          ociRepoImages,
 		Workspace:              *h.opts.Workspace,
 		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),
 		ContainerPush:          *h.opts.ContainerPush,
@@ -937,6 +962,12 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	workspaceRepos, ociRepoImages, err := splitExtraRepos(*h.opts.ExtraRepos)
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
 	req := buildapitypes.BuildRequest{
 		Name:                   *h.opts.BuildName,
 		Manifest:               string(manifestBytes),
@@ -951,7 +982,8 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		CustomDefs:             customDefs,
 		AIBExtraArgs:           *h.opts.AIBExtraArgs,
 		RootPassword:           rootPassword,
-		ExtraRepos:             *h.opts.ExtraRepos,
+		ExtraRepos:             workspaceRepos,
+		OCIRepoImages:          ociRepoImages,
 		Workspace:              *h.opts.Workspace,
 		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),
 		ExportOCI:              *h.opts.ExportOCI,
