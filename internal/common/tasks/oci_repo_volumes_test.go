@@ -41,8 +41,8 @@ func TestOCIRepoVolumes_MountedReadOnlyOnBuildStep(t *testing.T) {
 		found := 0
 		for _, vm := range step.VolumeMounts {
 			for i := 0; i < OCIRepoVolumeCount; i++ {
-				name := fmt.Sprintf("oci-repo-%d", i)
-				expectedPath := fmt.Sprintf("%s/%s", OCIRepoVolumeMountBase, name)
+				name := OCIRepoVolumeName(i)
+				expectedPath := OCIRepoMountBase + name
 				if vm.Name == name {
 					if vm.MountPath != expectedPath {
 						t.Fatalf("volume mount %q: expected mountPath %q, got %q", name, expectedPath, vm.MountPath)

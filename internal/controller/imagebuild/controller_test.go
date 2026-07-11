@@ -638,3 +638,178 @@ func TestEnsureImageStreamOwnerRefNoMatch(t *testing.T) {
 		t.Fatal("expected ImageStream lookup to be attempted")
 	}
 }
+
+func TestOCIRepoTaskRunSpec(t *testing.T) {
+	tests := []struct {
+		name           string
+		ociRepoImages  []string
+		wantOK         bool
+		wantVolCount   int
+		wantTaskName   string
+		wantVolNames   []string
+		wantImageRefs  []string
+		wantPullPolicy corev1.PullPolicy
+	}{
+		{
+			name:          "no OCI repos returns false",
+			ociRepoImages: nil,
+			wantOK:        false,
+		},
+		{
+			name:          "empty slice returns false",
+			ociRepoImages: []string{},
+			wantOK:        false,
+		},
+		{
+			name:           "single OCI repo",
+			ociRepoImages:  []string{"quay.io/org/rpms:v1"},
+			wantOK:         true,
+			wantVolCount:   1,
+			wantTaskName:   tasks.PipelineTaskBuildImage,
+			wantVolNames:   []string{"oci-repo-0"},
+			wantImageRefs:  []string{"quay.io/org/rpms:v1"},
+			wantPullPolicy: corev1.PullIfNotPresent,
+		},
+		{
+			name: "three OCI repos",
+			ociRepoImages: []string{
+				"quay.io/org/rpms-base:v1",
+				"quay.io/org/rpms-extra:latest",
+				"registry.example.com:5000/rpms:v2",
+			},
+			wantOK:       true,
+			wantVolCount: 3,
+			wantTaskName: tasks.PipelineTaskBuildImage,
+			wantVolNames: []string{"oci-repo-0", "oci-repo-1", "oci-repo-2"},
+			wantImageRefs: []string{
+				"quay.io/org/rpms-base:v1",
+				"quay.io/org/rpms-extra:latest",
+				"registry.example.com:5000/rpms:v2",
+			},
+			wantPullPolicy: corev1.PullIfNotPresent,
+		},
+		{
+			name: "max four OCI repos",
+			ociRepoImages: []string{
+				"quay.io/a:1",
+				"quay.io/b:2",
+				"quay.io/c:3",
+				"quay.io/d:4",
+			},
+			wantOK:       true,
+			wantVolCount: 4,
+			wantTaskName: tasks.PipelineTaskBuildImage,
+			wantVolNames: []string{"oci-repo-0", "oci-repo-1", "oci-repo-2", "oci-repo-3"},
+			wantImageRefs: []string{
+				"quay.io/a:1",
+				"quay.io/b:2",
+				"quay.io/c:3",
+				"quay.io/d:4",
+			},
+			wantPullPolicy: corev1.PullIfNotPresent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, ok := ociRepoTaskRunSpec(tt.ociRepoImages)
+			if ok != tt.wantOK {
+				t.Fatalf("ociRepoTaskRunSpec() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+
+			if spec.PipelineTaskName != tt.wantTaskName {
+				t.Errorf("PipelineTaskName = %q, want %q", spec.PipelineTaskName, tt.wantTaskName)
+			}
+			if spec.PodTemplate == nil {
+				t.Fatal("PodTemplate is nil")
+			}
+			if len(spec.PodTemplate.Volumes) != tt.wantVolCount {
+				t.Fatalf("volume count = %d, want %d", len(spec.PodTemplate.Volumes), tt.wantVolCount)
+			}
+
+			for i, vol := range spec.PodTemplate.Volumes {
+				if vol.Name != tt.wantVolNames[i] {
+					t.Errorf("volume[%d].Name = %q, want %q", i, vol.Name, tt.wantVolNames[i])
+				}
+				if vol.VolumeSource.Image == nil {
+					t.Fatalf("volume[%d].Image is nil", i)
+				}
+				if vol.VolumeSource.Image.Reference != tt.wantImageRefs[i] {
+					t.Errorf("volume[%d].Image.Reference = %q, want %q",
+						i, vol.VolumeSource.Image.Reference, tt.wantImageRefs[i])
+				}
+				if vol.VolumeSource.Image.PullPolicy != tt.wantPullPolicy {
+					t.Errorf("volume[%d].Image.PullPolicy = %q, want %q",
+						i, vol.VolumeSource.Image.PullPolicy, tt.wantPullPolicy)
+				}
+			}
+		})
+	}
+}
+
+func TestOCIRepoTaskRunSpecVolumeSourceType(t *testing.T) {
+	// Verify that OCI volumes use ImageVolumeSource, not EmptyDir or any other type
+	spec, ok := ociRepoTaskRunSpec([]string{"quay.io/test/rpms:v1"})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	vol := spec.PodTemplate.Volumes[0]
+	if vol.VolumeSource.EmptyDir != nil {
+		t.Error("OCI repo volume should not use EmptyDir")
+	}
+	if vol.VolumeSource.Image == nil {
+		t.Fatal("OCI repo volume must use ImageVolumeSource")
+	}
+}
+
+func TestGetOCIRepoImages(t *testing.T) {
+	tests := []struct {
+		name string
+		spec automotivev1alpha1.ImageBuildSpec
+		want []string
+	}{
+		{
+			name: "nil AIB returns nil",
+			spec: automotivev1alpha1.ImageBuildSpec{AIB: nil},
+			want: nil,
+		},
+		{
+			name: "empty OCIRepoImages returns nil",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{
+					Distro: "autosd",
+					Target: "qemu",
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "returns OCI repo images",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{
+					Distro:        "autosd",
+					Target:        "qemu",
+					OCIRepoImages: []string{"quay.io/org/rpms:v1", "quay.io/org/extra:v2"},
+				},
+			},
+			want: []string{"quay.io/org/rpms:v1", "quay.io/org/extra:v2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.spec.GetOCIRepoImages()
+			if len(got) != len(tt.want) {
+				t.Fatalf("GetOCIRepoImages() len = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("GetOCIRepoImages()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

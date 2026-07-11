@@ -183,13 +183,24 @@ const workspaceNameShared = "shared-workspace"
 // Tekton resolves this at runtime to the actual volume name in the pod spec.
 const workspaceVolumeRef = "$(workspaces." + workspaceNameShared + ".volume)"
 
-// OCIRepoVolumeCount is the number of pre-declared OCI repository volume slots.
+// OCIRepoVolumeCount is the number of pre-declared OCI repo volume slots in the Tekton Task.
 // These EmptyDir volumes can be overridden at PipelineRun time via PodTemplate
 // merge-by-name to inject OCI image volumes containing RPM repositories.
 const OCIRepoVolumeCount = 4
 
-// OCIRepoVolumeMountBase is the base mount path for OCI repo volumes.
-const OCIRepoVolumeMountBase = "/extra-repos"
+// OCIRepoVolumePrefix is the name prefix for OCI repo volume slots (oci-repo-0, oci-repo-1, ...).
+const OCIRepoVolumePrefix = "oci-repo-"
+
+// OCIRepoMountBase is the base mount path for OCI repo volumes inside the build pod.
+const OCIRepoMountBase = "/extra-repos/"
+
+// PipelineTaskBuildImage is the pipeline task name for the build step.
+const PipelineTaskBuildImage = "build-image"
+
+// OCIRepoVolumeName returns the volume name for the given OCI repo slot index.
+func OCIRepoVolumeName(index int) string {
+	return fmt.Sprintf("%s%d", OCIRepoVolumePrefix, index)
+}
 
 // DefaultTrustedCABundleConfigMap is the default ConfigMap name for trusted CA bundles.
 // Exported so the controller can detect divergence when using bundle-resolved tasks.
@@ -838,7 +849,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 	// volumes when unused, but can be overridden at PipelineRun time via
 	// PodTemplate merge-by-name to inject OCI image volumes with RPM repos.
 	for i := 0; i < OCIRepoVolumeCount; i++ {
-		name := fmt.Sprintf("oci-repo-%d", i)
+		name := OCIRepoVolumeName(i)
 		task.Spec.Volumes = append(task.Spec.Volumes, corev1.Volume{
 			Name: name,
 			VolumeSource: corev1.VolumeSource{
@@ -851,10 +862,10 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 	for i := range task.Spec.Steps {
 		if task.Spec.Steps[i].Name == "build-image" {
 			for j := 0; j < OCIRepoVolumeCount; j++ {
-				name := fmt.Sprintf("oci-repo-%d", j)
+				name := OCIRepoVolumeName(j)
 				task.Spec.Steps[i].VolumeMounts = append(task.Spec.Steps[i].VolumeMounts, corev1.VolumeMount{
 					Name:      name,
-					MountPath: fmt.Sprintf("%s/%s", OCIRepoVolumeMountBase, name),
+					MountPath: OCIRepoMountBase + name,
 					ReadOnly:  true,
 				})
 			}
