@@ -183,6 +183,23 @@ const workspaceNameShared = "shared-workspace"
 // Tekton resolves this at runtime to the actual volume name in the pod spec.
 const workspaceVolumeRef = "$(workspaces." + workspaceNameShared + ".volume)"
 
+// OCIRepoVolumeCount is the number of pre-declared OCI repo volume slots in the Tekton Task.
+const OCIRepoVolumeCount = 4
+
+// OCIRepoVolumePrefix is the name prefix for OCI repo volume slots (oci-repo-0, oci-repo-1, ...).
+const OCIRepoVolumePrefix = "oci-repo-"
+
+// OCIRepoMountBase is the base mount path for OCI repo volumes inside the build pod.
+const OCIRepoMountBase = "/extra-repos/"
+
+// PipelineTaskBuildImage is the pipeline task name for the build step.
+const PipelineTaskBuildImage = "build-image"
+
+// OCIRepoVolumeName returns the volume name for the given OCI repo slot index.
+func OCIRepoVolumeName(index int) string {
+	return fmt.Sprintf("%s%d", OCIRepoVolumePrefix, index)
+}
+
 // DefaultTrustedCABundleConfigMap is the default ConfigMap name for trusted CA bundles.
 // Exported so the controller can detect divergence when using bundle-resolved tasks.
 const DefaultTrustedCABundleConfigMap = "rhivos-ca-bundle"
