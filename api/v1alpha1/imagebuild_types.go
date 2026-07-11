@@ -207,6 +207,13 @@ type AIBSpec struct {
 	// RootPassword is a hashed root password passed to AIB's --root-password flag.
 	// See crypt(5) for supported hash formats.
 	RootPassword string `json:"rootPassword,omitempty"`
+
+	// OCIRepoImages are OCI image references containing RPM repositories.
+	// Each image is mounted as a read-only volume via ImageVolumeSource in the build pod,
+	// providing RPM repos at file:///extra-repos/oci-repo-N paths.
+	// +optional
+	// +kubebuilder:validation:MaxItems=4
+	OCIRepoImages []string `json:"ociRepoImages,omitempty"`
 }
 
 // ExportSpec defines the configuration for exporting build artifacts
@@ -411,6 +418,14 @@ func (s *ImageBuildSpec) GetContainerRef() string {
 func (s *ImageBuildSpec) GetCustomDefs() []string {
 	if s.AIB != nil {
 		return s.AIB.CustomDefs
+	}
+	return nil
+}
+
+// GetOCIRepoImages returns the OCI image references for RPM repo volumes
+func (s *ImageBuildSpec) GetOCIRepoImages() []string {
+	if s.AIB != nil {
+		return s.AIB.OCIRepoImages
 	}
 	return nil
 }

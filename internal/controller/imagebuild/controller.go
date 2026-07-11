@@ -1464,6 +1464,13 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		},
 	}
 
+	// If OCI repo images are specified, add per-task PodTemplate with ImageVolumeSource
+	// volumes targeting the build-image pipeline task. These override the pre-declared
+	// EmptyDir slots in the Tekton Task via merge-by-name semantics.
+	if taskRunSpec, ok := ociRepoTaskRunSpec(imageBuild.Spec.GetOCIRepoImages()); ok {
+		pipelineRunSpec.TaskRunSpecs = append(pipelineRunSpec.TaskRunSpecs, taskRunSpec)
+	}
+
 	if buildConfig != nil && buildConfig.TaskResolver == tasks.TaskResolverBundle {
 		pipelineRunSpec.PipelineRef = &tektonv1.PipelineRef{
 			ResolverRef: tektonv1.ResolverRef{
@@ -2951,6 +2958,33 @@ func extractFlashCredentials(secret *corev1.Secret, registryURL string, log logr
 	}
 	log.Error(nil, "No matching credentials found in docker config", "secret", secret.Name, "registry", registryURL)
 	return nil, nil
+}
+
+// ociRepoTaskRunSpec builds a PipelineTaskRunSpec targeting the build-image task
+// with ImageVolumeSource volumes for each OCI repo image reference.
+// Returns (spec, true) when ociRepoImages is non-empty, or (zero, false) when empty.
+func ociRepoTaskRunSpec(ociRepoImages []string) (tektonv1.PipelineTaskRunSpec, bool) {
+	if len(ociRepoImages) == 0 {
+		return tektonv1.PipelineTaskRunSpec{}, false
+	}
+	volumes := make([]corev1.Volume, len(ociRepoImages))
+	for i, imageRef := range ociRepoImages {
+		volumes[i] = corev1.Volume{
+			Name: tasks.OCIRepoVolumeName(i),
+			VolumeSource: corev1.VolumeSource{
+				Image: &corev1.ImageVolumeSource{
+					Reference:  imageRef,
+					PullPolicy: corev1.PullIfNotPresent,
+				},
+			},
+		}
+	}
+	return tektonv1.PipelineTaskRunSpec{
+		PipelineTaskName: tasks.PipelineTaskBuildImage,
+		PodTemplate: &pod.PodTemplate{
+			Volumes: volumes,
+		},
+	}, true
 }
 
 func decodeAuthEntry(auth string, log logr.Logger) ([]byte, []byte) {
