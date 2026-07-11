@@ -1,0 +1,35 @@
+name: container
+
+content:
+  rpms:
+    - openssh-server
+    - rsync
+    - chrony
+    - iproute
+    - dnf
+  systemd:
+    enabled_services:
+      - sshd.service
+  add_files:
+    - path: /usr/share/hello.txt
+      text: |
+        hello! 1
+    - path: /usr/share/Makefile
+      source_path: Makefile
+image:
+  sealed: false
+  image_size: 8 GiB
+  partitions:
+    var_qm:
+      relative_size: 0.1
+qm:
+  content:
+    rpms:
+      - vim
+
+auth:
+  # "password"
+  root_password: $6$xoLqEUz0cGGJRx01$H3H/bFm0myJPULNMtbSsOFd/2BnHqHkMD92Sfxd.EKM9hXTWSmELG8cf205l6dktomuTcgKGGtGDgtvHVXSWU.
+  sshd_config:
+    PermitRootLogin: true
+    PasswordAuthentication: true
