@@ -186,7 +186,7 @@ const workspaceVolumeRef = "$(workspaces." + workspaceNameShared + ".volume)"
 // OCIRepoVolumeCount is the number of pre-declared OCI repo volume slots in the Tekton Task.
 // These EmptyDir volumes can be overridden at PipelineRun time via PodTemplate
 // merge-by-name to inject OCI image volumes containing RPM repositories.
-const OCIRepoVolumeCount = 4
+const OCIRepoVolumeCount = 1
 
 // OCIRepoVolumePrefix is the name prefix for OCI repo volume slots (oci-repo-0, oci-repo-1, ...).
 const OCIRepoVolumePrefix = "oci-repo-"
@@ -845,20 +845,10 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 		},
 	}
 
-	// Add pre-declared OCI repo volume slots. These are harmless EmptyDir
-	// volumes when unused, but can be overridden at PipelineRun time via
-	// PodTemplate merge-by-name to inject OCI image volumes with RPM repos.
-	for i := 0; i < OCIRepoVolumeCount; i++ {
-		name := OCIRepoVolumeName(i)
-		task.Spec.Volumes = append(task.Spec.Volumes, corev1.Volume{
-			Name: name,
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		})
-	}
-
-	// Add corresponding read-only VolumeMounts to the build-image step.
+	// Add read-only VolumeMounts for OCI repo volumes to the build-image step.
+	// The actual Volume definitions (EmptyDir or ImageVolumeSource) are provided
+	// at PipelineRun time via PodTemplate to avoid Tekton's duplicate-name
+	// validation when overriding volume sources.
 	for i := range task.Spec.Steps {
 		if task.Spec.Steps[i].Name == "build-image" {
 			for j := 0; j < OCIRepoVolumeCount; j++ {

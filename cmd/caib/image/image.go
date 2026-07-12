@@ -48,6 +48,7 @@ type Options struct {
 	AIBExtraArgs           *[]string
 	RootPassword           *string
 	ExtraRepos             *[]string
+	LocalRepo              *string
 	Workspace              *string
 	FollowLogs             *bool
 	CompressionAlgo        *string
@@ -154,6 +155,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
 	buildCmd.Flags().StringVar(opts.RootPassword, "root-password", "", "set hashed root password (env:VAR or file:PATH)")
 	buildCmd.Flags().StringArrayVar(opts.ExtraRepos, "extra-repo", []string{}, "extra RPM repo (workspace:path or oci:image-ref, can be repeated)")
+	buildCmd.Flags().StringVar(opts.LocalRepo, "local-repo", "", "OCI image with RPM repo to use as primary package source (preferred over network repos)")
 	buildCmd.Flags().StringVar(opts.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
 	buildCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
 	buildCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", true, "wait for build to complete")
@@ -265,6 +267,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
 	buildDevCmd.Flags().StringVar(opts.RootPassword, "root-password", "", "set hashed root password (env:VAR or file:PATH)")
 	buildDevCmd.Flags().StringArrayVar(opts.ExtraRepos, "extra-repo", []string{}, "extra RPM repo (workspace:path or oci:image-ref, can be repeated)")
+	buildDevCmd.Flags().StringVar(opts.LocalRepo, "local-repo", "", "OCI image with RPM repo to use as primary package source (preferred over network repos)")
 	buildDevCmd.Flags().StringVar(opts.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
 	buildDevCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
 	buildDevCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", false, "wait for build to complete")

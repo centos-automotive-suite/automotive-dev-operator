@@ -886,7 +886,7 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 }
 
 // maxOCIRepoImages is the maximum number of OCI RPM repo images per build.
-const maxOCIRepoImages = 4
+const maxOCIRepoImages = 1
 
 // resolveOCIRepoImages validates OCI repo image refs and injects file:// extra_repos
 // entries into CustomDefs. If workspace extra_repos already exist in CustomDefs, the
@@ -900,8 +900,9 @@ func resolveOCIRepoImages(req *BuildRequest) error {
 	}
 
 	type repoEntry struct {
-		ID      string `json:"id"`
-		BaseURL string `json:"baseurl"`
+		ID       string `json:"id"`
+		BaseURL  string `json:"baseurl"`
+		Priority *int   `json:"priority,omitempty"`
 	}
 
 	ociRepos := make([]repoEntry, 0, len(req.OCIRepoImages))
@@ -910,10 +911,15 @@ func resolveOCIRepoImages(req *BuildRequest) error {
 		if ref == "" {
 			return fmt.Errorf("OCI repo image at index %d is empty", i)
 		}
-		ociRepos = append(ociRepos, repoEntry{
+		entry := repoEntry{
 			ID:      fmt.Sprintf("oci-repo-%d", i),
 			BaseURL: fmt.Sprintf("file:///extra-repos/oci-repo-%d", i),
-		})
+		}
+		if req.LocalRepo {
+			p := 1
+			entry.Priority = &p
+		}
+		ociRepos = append(ociRepos, entry)
 	}
 
 	// Check if extra_repos already exists in CustomDefs (from workspace repos).

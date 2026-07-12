@@ -1455,6 +1455,12 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		log.Info("Setting RuntimeClassName from ImageBuild spec", "runtimeClassName", imageBuild.Spec.RuntimeClassName)
 		podTemplate.RuntimeClassName = &imageBuild.Spec.RuntimeClassName
 	}
+	// OCI repo volumes are provided via the pipeline-level PodTemplate rather
+	// than per-task TaskRunSpecs, because Tekton appends PodTemplate volumes to
+	// Task volumes without deduplication. The Task declares only VolumeMounts;
+	// the actual Volume definitions live here.
+	podTemplate.Volumes = append(podTemplate.Volumes, ociRepoVolumes(imageBuild.Spec.GetOCIRepoImages())...)
+
 	pipelineRunSpec := tektonv1.PipelineRunSpec{
 		Params:     params,
 		Workspaces: pipelineWorkspaces,
@@ -1462,13 +1468,6 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			PodTemplate:        podTemplate,
 			ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
 		},
-	}
-
-	// If OCI repo images are specified, add per-task PodTemplate with ImageVolumeSource
-	// volumes targeting the build-image pipeline task. These override the pre-declared
-	// EmptyDir slots in the Tekton Task via merge-by-name semantics.
-	if taskRunSpec, ok := ociRepoTaskRunSpec(imageBuild.Spec.GetOCIRepoImages()); ok {
-		pipelineRunSpec.TaskRunSpecs = append(pipelineRunSpec.TaskRunSpecs, taskRunSpec)
 	}
 
 	if buildConfig != nil && buildConfig.TaskResolver == tasks.TaskResolverBundle {
@@ -2960,31 +2959,27 @@ func extractFlashCredentials(secret *corev1.Secret, registryURL string, log logr
 	return nil, nil
 }
 
-// ociRepoTaskRunSpec builds a PipelineTaskRunSpec targeting the build-image task
-// with ImageVolumeSource volumes for each OCI repo image reference.
-// Returns (spec, true) when ociRepoImages is non-empty, or (zero, false) when empty.
-func ociRepoTaskRunSpec(ociRepoImages []string) (tektonv1.PipelineTaskRunSpec, bool) {
-	if len(ociRepoImages) == 0 {
-		return tektonv1.PipelineTaskRunSpec{}, false
-	}
-	volumes := make([]corev1.Volume, len(ociRepoImages))
-	for i, imageRef := range ociRepoImages {
-		volumes[i] = corev1.Volume{
-			Name: tasks.OCIRepoVolumeName(i),
-			VolumeSource: corev1.VolumeSource{
+// ociRepoVolumes returns the OCI repo volume definitions for the PipelineRun
+// PodTemplate. Slots backed by an OCI image ref use ImageVolumeSource; unused
+// slots use EmptyDir so the Task's VolumeMounts always resolve.
+func ociRepoVolumes(ociRepoImages []string) []corev1.Volume {
+	vols := make([]corev1.Volume, tasks.OCIRepoVolumeCount)
+	for i := range vols {
+		vols[i].Name = tasks.OCIRepoVolumeName(i)
+		if i < len(ociRepoImages) {
+			vols[i].VolumeSource = corev1.VolumeSource{
 				Image: &corev1.ImageVolumeSource{
-					Reference:  imageRef,
-					PullPolicy: corev1.PullIfNotPresent,
+					Reference:  ociRepoImages[i],
+					PullPolicy: corev1.PullAlways,
 				},
-			},
+			}
+		} else {
+			vols[i].VolumeSource = corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			}
 		}
 	}
-	return tektonv1.PipelineTaskRunSpec{
-		PipelineTaskName: tasks.PipelineTaskBuildImage,
-		PodTemplate: &pod.PodTemplate{
-			Volumes: volumes,
-		},
-	}, true
+	return vols
 }
 
 func decodeAuthEntry(auth string, log logr.Logger) ([]byte, []byte) {

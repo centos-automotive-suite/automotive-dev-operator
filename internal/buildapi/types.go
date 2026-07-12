@@ -169,6 +169,7 @@ type BuildRequest struct {
 	RootPassword           string               `json:"rootPassword,omitempty"`
 	ExtraRepos             []string             `json:"extraRepos,omitempty"`    // workspace-name:/path pairs
 	OCIRepoImages          []string             `json:"ociRepoImages,omitempty"` // OCI image refs containing RPM repos
+	LocalRepo              bool                 `json:"localRepo,omitempty"`     // prefer OCI repo over network repos (priority=1)
 	Workspace              string               `json:"workspace,omitempty"`     // workspace name for build caching and lease forwarding
 	Compression            Compression          `json:"compression,omitempty"`
 	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`

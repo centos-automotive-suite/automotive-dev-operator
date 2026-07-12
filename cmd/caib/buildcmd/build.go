@@ -58,6 +58,7 @@ type Options struct {
 	AIBExtraArgs           *[]string
 	RootPassword           *string
 	ExtraRepos             *[]string
+	LocalRepo              *string
 	Workspace              *string
 	FollowLogs             *bool
 	CompressionAlgo        *string
@@ -586,7 +587,41 @@ func (h *Handler) resolveRootPassword() (string, error) {
 	return parseRootPassword(*h.opts.RootPassword)
 }
 
+// resolveRepoFlags processes --extra-repo and --local-repo into workspace repos,
+// OCI image refs, and whether local-repo mode is active.
+func resolveRepoFlags(extraRepos []string, localRepoFlag string) (workspaceRepos []string, ociImages []string, isLocalRepo bool, err error) {
+	workspaceRepos, ociImages, err = splitExtraRepos(extraRepos)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	localRef := strings.TrimSpace(localRepoFlag)
+	if localRef == "" {
+		return workspaceRepos, ociImages, false, nil
+	}
+
+	localRef = strings.TrimPrefix(localRef, "oci:")
+	if localRef == "" {
+		return nil, nil, false, fmt.Errorf("--local-repo requires an OCI image reference (e.g. quay.io/org/rpms:latest)")
+	}
+	if len(ociImages) > 0 {
+		return nil, nil, false, fmt.Errorf("--local-repo and --extra-repo oci: are mutually exclusive")
+	}
+	return workspaceRepos, []string{localRef}, true, nil
+}
+
 // splitExtraRepos separates --extra-repo values into workspace repos and OCI image refs.
+func parseDevMode(mode string) (buildapitypes.Mode, error) {
+	switch mode {
+	case "image":
+		return buildapitypes.ModeImage, nil
+	case "package":
+		return buildapitypes.ModePackage, nil
+	default:
+		return "", fmt.Errorf("invalid --mode %q (expected: %q or %q)", mode, buildapitypes.ModeImage, buildapitypes.ModePackage)
+	}
+}
+
 // Entries with the "oci:" prefix are OCI image references (stripped of the prefix);
 // all other entries are workspace repos passed through unchanged.
 func splitExtraRepos(repos []string) (workspaceRepos []string, ociImages []string, err error) {
@@ -674,7 +709,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	workspaceRepos, ociRepoImages, err := splitExtraRepos(*h.opts.ExtraRepos)
+	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(*h.opts.ExtraRepos, *h.opts.LocalRepo)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -696,6 +731,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		RootPassword:           rootPassword,
 		ExtraRepos:             workspaceRepos,
 		OCIRepoImages:          ociRepoImages,
+		LocalRepo:              localRepo,
 		Workspace:              *h.opts.Workspace,
 		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),
 		ContainerPush:          *h.opts.ContainerPush,
@@ -946,23 +982,13 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	var parsedMode buildapitypes.Mode
-	switch *h.opts.Mode {
-	case "image":
-		parsedMode = buildapitypes.ModeImage
-	case "package":
-		parsedMode = buildapitypes.ModePackage
-	default:
-		h.handleError(fmt.Errorf(
-			"invalid --mode %q (expected: %q or %q)",
-			*h.opts.Mode,
-			buildapitypes.ModeImage,
-			buildapitypes.ModePackage,
-		))
+	parsedMode, err := parseDevMode(*h.opts.Mode)
+	if err != nil {
+		h.handleError(err)
 		return
 	}
 
-	workspaceRepos, ociRepoImages, err := splitExtraRepos(*h.opts.ExtraRepos)
+	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(*h.opts.ExtraRepos, *h.opts.LocalRepo)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -984,6 +1010,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		RootPassword:           rootPassword,
 		ExtraRepos:             workspaceRepos,
 		OCIRepoImages:          ociRepoImages,
+		LocalRepo:              localRepo,
 		Workspace:              *h.opts.Workspace,
 		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),
 		ExportOCI:              *h.opts.ExportOCI,

@@ -62,15 +62,14 @@ tar -zxf "$ORAS_TARBALL" oras || {
   exit 1
 }
 
-mkdir -p "$HOME/bin"
-mv oras "$HOME/bin/" || {
+ORAS_BIN_DIR="/workspace/shared/.oras-bin"
+mkdir -p "$ORAS_BIN_DIR"
+mv oras "$ORAS_BIN_DIR/" || {
   echo "ERROR: Failed to install ORAS binary" >&2
   exit 1
 }
 
-if ! echo "$PATH" | grep -q "$HOME/bin"; then
-  export PATH="$HOME/bin:$PATH"
-fi
+export PATH="$ORAS_BIN_DIR:$PATH"
 
 cleanup_oras_files
 trap - EXIT
@@ -369,7 +368,7 @@ EOF
   # Push with multi-layer manifest using annotation file
   # Files are pushed from current directory (parts_dir) so they extract flat
   set -o pipefail
-  "$HOME/bin/oras" push "${ORAS_EXTRA_ARGS[@]}" --disable-path-validation \
+  oras push "${ORAS_EXTRA_ARGS[@]}" --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${artifact_type}" \
     --annotation-file "$annotations_file" \
@@ -438,7 +437,7 @@ PYEOF
   echo "  Annotations: distro=${distro}, target=${target}, arch=${arch}"
 
   set -o pipefail
-  "$HOME/bin/oras" push "${ORAS_EXTRA_ARGS[@]}" --disable-path-validation \
+  oras push "${ORAS_EXTRA_ARGS[@]}" --disable-path-validation \
     --image-spec v1.1 \
     --artifact-type "${media_type}" \
     --annotation-file "$single_annotations_file" \
@@ -474,7 +473,7 @@ echo -n "${DISK_DIGEST}" > /workspace/shared/.chains/disk/digest
 OSBUILD_MANIFEST="/workspace/shared/image.json"
 if [ -f "$OSBUILD_MANIFEST" ] && [ -n "$DISK_DIGEST" ]; then
   echo "Attaching osbuild manifest to ${repo_url}@${DISK_DIGEST}"
-  if ! "$HOME/bin/oras" attach --disable-path-validation "${ORAS_EXTRA_ARGS[@]}" \
+  if ! oras attach --disable-path-validation "${ORAS_EXTRA_ARGS[@]}" \
     --artifact-type "$OCI_REFERRER_TYPE_OSBUILD_MANIFEST" \
     "${repo_url}@${DISK_DIGEST}" \
     "${OSBUILD_MANIFEST}:${OCI_REFERRER_TYPE_OSBUILD_MANIFEST}" 2>&1; then
@@ -497,7 +496,7 @@ attach_referrer() {
     exit 1
   fi
   echo "Attaching $label ($(du -sh "$file" | cut -f1)) to ${repo_url}@${DISK_DIGEST}"
-  if ! "$HOME/bin/oras" attach "${ORAS_EXTRA_ARGS[@]}" \
+  if ! oras attach "${ORAS_EXTRA_ARGS[@]}" \
     --artifact-type "$artifact_type" \
     "${repo_url}@${DISK_DIGEST}" \
     "${file}:${artifact_type}"; then

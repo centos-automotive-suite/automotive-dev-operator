@@ -7,26 +7,18 @@ import (
 
 const buildImageStepName = "build-image"
 
-func TestOCIRepoVolumes_PresentAsEmptyDir(t *testing.T) {
+func TestOCIRepoVolumes_NotDeclaredInTask(t *testing.T) {
 	task := GenerateBuildAutomotiveImageTask("test-ns", &BuildConfig{}, "")
 
-	found := 0
-	for _, vol := range task.Spec.Volumes {
-		for i := 0; i < OCIRepoVolumeCount; i++ {
-			name := fmt.Sprintf("oci-repo-%d", i)
-			if vol.Name == name {
-				if vol.EmptyDir == nil {
-					t.Fatalf("volume %q should be EmptyDir", name)
-				}
-				if vol.EmptyDir.Medium != "" {
-					t.Fatalf("volume %q should be disk-backed (no medium), got %q", name, vol.EmptyDir.Medium)
-				}
-				found++
-			}
-		}
+	ociNames := make(map[string]bool)
+	for i := 0; i < OCIRepoVolumeCount; i++ {
+		ociNames[fmt.Sprintf("oci-repo-%d", i)] = true
 	}
-	if found != OCIRepoVolumeCount {
-		t.Fatalf("expected %d oci-repo volumes, found %d", OCIRepoVolumeCount, found)
+
+	for _, vol := range task.Spec.Volumes {
+		if ociNames[vol.Name] {
+			t.Fatalf("Task should not declare volume %q — volumes are provided at PipelineRun time", vol.Name)
+		}
 	}
 }
 
@@ -85,71 +77,68 @@ func TestOCIRepoVolumes_NotOnOtherSteps(t *testing.T) {
 func TestOCIRepoVolumes_NilBuildConfig(t *testing.T) {
 	task := GenerateBuildAutomotiveImageTask("test-ns", nil, "")
 
-	found := 0
-	for _, vol := range task.Spec.Volumes {
-		for i := 0; i < OCIRepoVolumeCount; i++ {
-			if vol.Name == fmt.Sprintf("oci-repo-%d", i) {
-				if vol.EmptyDir == nil {
-					t.Fatalf("oci-repo-%d should be EmptyDir with nil config", i)
-				}
-				found++
-			}
-		}
+	ociNames := make(map[string]bool)
+	for i := 0; i < OCIRepoVolumeCount; i++ {
+		ociNames[fmt.Sprintf("oci-repo-%d", i)] = true
 	}
-	if found != OCIRepoVolumeCount {
-		t.Fatalf("expected %d oci-repo volumes with nil config, found %d", OCIRepoVolumeCount, found)
+
+	for _, vol := range task.Spec.Volumes {
+		if ociNames[vol.Name] {
+			t.Fatalf("Task should not declare volume %q even with nil config", vol.Name)
+		}
 	}
 }
 
-func TestOCIRepoVolumes_UntouchedByMemoryVolumes(t *testing.T) {
+func TestOCIRepoVolumes_NotAffectedByMemoryVolumes(t *testing.T) {
 	task := GenerateBuildAutomotiveImageTask("test-ns", &BuildConfig{
 		UseMemoryVolumes: true,
 		MemoryVolumeSize: "8Gi",
 	}, "")
 
+	ociNames := make(map[string]bool)
+	for i := 0; i < OCIRepoVolumeCount; i++ {
+		ociNames[fmt.Sprintf("oci-repo-%d", i)] = true
+	}
+
 	for _, vol := range task.Spec.Volumes {
-		for i := 0; i < OCIRepoVolumeCount; i++ {
-			name := fmt.Sprintf("oci-repo-%d", i)
-			if vol.Name == name {
-				if vol.EmptyDir == nil {
-					t.Fatalf("oci-repo volume %q should remain EmptyDir", name)
-				}
-				if vol.EmptyDir.Medium != "" {
-					t.Fatalf("oci-repo volume %q should not get memory medium, got %q", name, vol.EmptyDir.Medium)
-				}
-				if vol.EmptyDir.SizeLimit != nil {
-					t.Fatalf("oci-repo volume %q should not get sizeLimit", name)
-				}
-			}
+		if ociNames[vol.Name] {
+			t.Fatalf("oci-repo volume %q should not be declared in Task with memory volumes", vol.Name)
 		}
 	}
-}
 
-func TestOCIRepoVolumes_UntouchedByPVCScratch(t *testing.T) {
-	task := GenerateBuildAutomotiveImageTask("test-ns", &BuildConfig{
-		UsePVCScratchVolumes: true,
-	}, "")
-
-	found := 0
-	for _, vol := range task.Spec.Volumes {
-		for i := 0; i < OCIRepoVolumeCount; i++ {
-			name := fmt.Sprintf("oci-repo-%d", i)
-			if vol.Name == name {
-				if vol.EmptyDir == nil {
-					t.Fatalf("oci-repo volume %q should remain EmptyDir when PVC scratch is on", name)
+	for _, step := range task.Spec.Steps {
+		if step.Name != buildImageStepName {
+			continue
+		}
+		found := 0
+		for _, vm := range step.VolumeMounts {
+			if ociNames[vm.Name] {
+				if !vm.ReadOnly {
+					t.Fatalf("oci-repo mount %q should be readOnly", vm.Name)
 				}
 				found++
 			}
 		}
+		if found != OCIRepoVolumeCount {
+			t.Fatalf("expected %d oci-repo mounts, found %d", OCIRepoVolumeCount, found)
+		}
 	}
-	if found != OCIRepoVolumeCount {
-		t.Fatalf("expected %d oci-repo volumes preserved with PVC scratch, found %d", OCIRepoVolumeCount, found)
-	}
+}
 
-	// Volume mounts on build-image should still reference oci-repo volumes directly
+func TestOCIRepoVolumes_NotAffectedByPVCScratch(t *testing.T) {
+	task := GenerateBuildAutomotiveImageTask("test-ns", &BuildConfig{
+		UsePVCScratchVolumes: true,
+	}, "")
+
 	ociNames := make(map[string]bool)
 	for i := 0; i < OCIRepoVolumeCount; i++ {
 		ociNames[fmt.Sprintf("oci-repo-%d", i)] = true
+	}
+
+	for _, vol := range task.Spec.Volumes {
+		if ociNames[vol.Name] {
+			t.Fatalf("oci-repo volume %q should not be declared in Task with PVC scratch", vol.Name)
+		}
 	}
 
 	for _, step := range task.Spec.Steps {
@@ -181,17 +170,14 @@ func TestOCIRepoVolumes_CombinedMemoryAndPVCScratch(t *testing.T) {
 		MemoryVolumeSize:     "8Gi",
 	}, "")
 
+	ociNames := make(map[string]bool)
+	for i := 0; i < OCIRepoVolumeCount; i++ {
+		ociNames[fmt.Sprintf("oci-repo-%d", i)] = true
+	}
+
 	for _, vol := range task.Spec.Volumes {
-		for i := 0; i < OCIRepoVolumeCount; i++ {
-			name := fmt.Sprintf("oci-repo-%d", i)
-			if vol.Name == name {
-				if vol.EmptyDir == nil {
-					t.Fatalf("oci-repo volume %q should remain EmptyDir", name)
-				}
-				if vol.EmptyDir.Medium != "" {
-					t.Fatalf("oci-repo volume %q should not get memory medium even with both flags", name)
-				}
-			}
+		if ociNames[vol.Name] {
+			t.Fatalf("oci-repo volume %q should not be declared in Task even with both flags", vol.Name)
 		}
 	}
 }
