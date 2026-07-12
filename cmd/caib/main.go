@@ -33,6 +33,7 @@ var (
 	aibExtraArgs           []string
 	rootPassword           string
 	extraRepos             []string
+	localRepo              string
 	workspaceName          string
 	followLogs             bool
 	version                string

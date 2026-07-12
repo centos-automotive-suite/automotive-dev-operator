@@ -192,6 +192,15 @@ const (
 	ociMountPathOras  = OCIToolsMountBase + "/oras"
 )
 
+const (
+	// OCIRepoVolumeName is the volume name for the OCI RPM repo volume.
+	OCIRepoVolumeName = "oci-repo"
+	// OCIRepoMountPath is the mount path for the OCI RPM repo volume.
+	OCIRepoMountPath = "/extra-repos/oci-repo"
+	// PipelineTaskBuildImage is the pipeline task name for the build step.
+	PipelineTaskBuildImage = "build-image"
+)
+
 // DefaultTrustedCABundleConfigMap is the default ConfigMap name for trusted CA bundles.
 // Exported so the controller can detect divergence when using bundle-resolved tasks.
 const DefaultTrustedCABundleConfigMap = "rhivos-ca-bundle"
@@ -719,7 +728,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					},
 				},
 				{
-					Name:  "build-image",
+					Name:  PipelineTaskBuildImage,
 					Image: "$(params.automotive-image-builder)",
 					SecurityContext: &corev1.SecurityContext{
 						Privileged: ptr.To(true),
@@ -837,6 +846,19 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 				},
 			},
 		},
+	}
+
+	// Add read-only VolumeMount for OCI repo volume to the build-image step.
+	// The actual Volume definition is provided at PipelineRun time via PodTemplate.
+	for i := range task.Spec.Steps {
+		if task.Spec.Steps[i].Name == PipelineTaskBuildImage {
+			task.Spec.Steps[i].VolumeMounts = append(task.Spec.Steps[i].VolumeMounts, corev1.VolumeMount{
+				Name:      OCIRepoVolumeName,
+				MountPath: OCIRepoMountPath,
+				ReadOnly:  true,
+			})
+			break
+		}
 	}
 
 	if buildConfig != nil && buildConfig.UseMemoryVolumes {
@@ -1309,7 +1331,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 			},
 			Tasks: []tektonv1.PipelineTask{
 				{
-					Name:    "build-image",
+					Name:    PipelineTaskBuildImage,
 					TaskRef: buildTaskRef("build-automotive-image", namespace, buildConfig),
 					Params: append(
 						[]tektonv1.Param{
@@ -1478,7 +1500,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
 						{Name: workspaceNameShared, Workspace: workspaceNameShared},
 					},
-					RunAfter: []string{"build-image"},
+					RunAfter: []string{PipelineTaskBuildImage},
 					When: []tektonv1.WhenExpression{
 						{
 							Input:    "$(params.export-oci)",

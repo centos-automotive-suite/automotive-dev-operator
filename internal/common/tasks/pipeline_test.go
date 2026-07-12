@@ -374,7 +374,7 @@ func TestReproducibleParams_Pipeline(t *testing.T) {
 func TestReproducibleParams_BuildImageBinding(t *testing.T) {
 	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
 
-	buildTask := findPipelineTask(pipeline.Spec.Tasks, "build-image")
+	buildTask := findPipelineTask(pipeline.Spec.Tasks, PipelineTaskBuildImage)
 	if buildTask == nil {
 		t.Fatal("pipeline missing build-image task")
 	}
@@ -448,7 +448,7 @@ func TestReproducibleParams_BuildScript_References(t *testing.T) {
 
 	var buildStep string
 	for _, s := range task.Spec.Steps {
-		if s.Name == "build-image" {
+		if s.Name == buildImageStepName {
 			buildStep = s.Script
 			break
 		}

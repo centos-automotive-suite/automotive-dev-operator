@@ -19,6 +19,7 @@ func buildAIBSpec(req *BuildRequest, manifest, manifestFileName string, inputFil
 		CustomDefs:       req.CustomDefs,
 		AIBExtraArgs:     req.AIBExtraArgs,
 		RootPassword:     req.RootPassword,
+		OCIRepoImages:    req.OCIRepoImages,
 	}
 }
 
