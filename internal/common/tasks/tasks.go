@@ -485,6 +485,156 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 	return task
 }
 
+// GeneratePushArtifactS3Task creates a Tekton Task for pushing artifacts to S3-compatible storage
+func GeneratePushArtifactS3Task(namespace string, buildConfig *BuildConfig) *tektonv1.Task {
+	return &tektonv1.Task{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1",
+			Kind:       "Task",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "push-artifact-s3",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "automotive-dev-operator",
+				"app.kubernetes.io/part-of":    "automotive-dev",
+			},
+		},
+		Spec: tektonv1.TaskSpec{
+			Params: []tektonv1.ParamSpec{
+				{
+					Name:        "yq-helper-image",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Container image with yq and other utilities",
+				},
+				{
+					Name:        "trace-id",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Trace ID for distributed tracing",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "s3-bucket",
+					Type:        tektonv1.ParamTypeString,
+					Description: "S3 bucket name",
+				},
+				{
+					Name:        "s3-prefix",
+					Type:        tektonv1.ParamTypeString,
+					Description: "S3 key prefix (path within bucket)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "s3-endpoint",
+					Type:        tektonv1.ParamTypeString,
+					Description: "S3 endpoint URL (optional, for MinIO/Ceph)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "s3-region",
+					Type:        tektonv1.ParamTypeString,
+					Description: "S3 region",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "us-east-1",
+					},
+				},
+				{
+					Name:        "s3-insecure-skip-tls-verify",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Skip TLS certificate verification for the S3 endpoint (true/false)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "false",
+					},
+				},
+				{
+					Name:        "artifact-filename",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Filename of the artifact to push",
+				},
+				{
+					Name:        "distro",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Distribution name (for logging)",
+				},
+				{
+					Name:        "target",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Build target (for logging)",
+				},
+				{
+					Name:        "arch",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Target architecture (for logging)",
+				},
+			},
+			Results: []tektonv1.TaskResult{
+				{
+					Name:        "S3_URL",
+					Description: "S3 URL where artifact was uploaded",
+				},
+			},
+			Workspaces: []tektonv1.WorkspaceDeclaration{
+				{
+					Name:        workspaceNameShared,
+					Description: "Workspace containing the build artifacts",
+					MountPath:   "/workspace/shared",
+				},
+				{
+					Name:        "s3-auth",
+					Description: "Workspace containing S3 credentials (optional)",
+					Optional:    true,
+					MountPath:   "/workspace/s3-auth",
+				},
+			},
+			Steps: []tektonv1.Step{
+				{
+					Name:  "push-to-s3",
+					Image: "$(params.yq-helper-image)",
+					Env: []corev1.EnvVar{
+						traceIDEnvVar(),
+						{Name: "S3_BUCKET", Value: "$(params.s3-bucket)"},
+						{Name: "S3_PREFIX", Value: "$(params.s3-prefix)"},
+						{Name: "S3_ENDPOINT", Value: "$(params.s3-endpoint)"},
+						{Name: "S3_REGION", Value: "$(params.s3-region)"},
+						{Name: "S3_INSECURE", Value: "$(params.s3-insecure-skip-tls-verify)"},
+						{Name: "ARTIFACT_FILE", Value: "$(params.artifact-filename)"},
+					},
+					Script:     PushArtifactS3Script,
+					WorkingDir: "/workspace/shared",
+					SecurityContext: &corev1.SecurityContext{
+						RunAsUser:  ptr.To(int64(0)), // Run as root to access files created by build task
+						RunAsGroup: ptr.To(int64(0)),
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "custom-ca",
+							MountPath: "/etc/pki/ca-trust/custom",
+							ReadOnly:  true,
+						},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name:         "custom-ca",
+					VolumeSource: trustedCABundleVolumeSource(buildConfig),
+				},
+			},
+		},
+	}
+}
+
 // GenerateBuildAutomotiveImageTask creates a Tekton Task for building automotive images
 func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig, envSecretRef string) *tektonv1.Task {
 	task := &tektonv1.Task{
@@ -1102,6 +1252,51 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					},
 				},
 				{
+					Name:        "s3-bucket",
+					Type:        tektonv1.ParamTypeString,
+					Description: "S3 bucket name for artifact push",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "s3-prefix",
+					Type:        tektonv1.ParamTypeString,
+					Description: "S3 key prefix (path within bucket)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "s3-endpoint",
+					Type:        tektonv1.ParamTypeString,
+					Description: "S3 endpoint URL (for MinIO, Ceph, etc)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "s3-region",
+					Type:        tektonv1.ParamTypeString,
+					Description: "S3 region",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "us-east-1",
+					},
+				},
+				{
+					Name:        "s3-insecure-skip-tls-verify",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Skip TLS certificate verification for the S3 endpoint (true/false)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "false",
+					},
+				},
+				{
 					Name:        "builder-image",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Custom builder image (skips auto-build if set)",
@@ -1279,6 +1474,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 				{Name: workspaceNameShared},
 				{Name: "manifest-config-workspace"},
 				{Name: "registry-auth", Optional: true},
+				{Name: "s3-auth", Optional: true},
 				{Name: "flash-oci-auth", Optional: true},
 				{Name: "jumpstarter-client", Optional: true},
 			},
@@ -1509,6 +1705,95 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 						},
 						{
 							Input:    "$(params.secret-ref)",
+							Operator: "notin",
+							Values:   []string{"", "null"},
+						},
+					},
+				},
+				{
+					Name:    "push-disk-artifact-s3",
+					TaskRef: buildTaskRef("push-artifact-s3", namespace, buildConfig),
+					Params: []tektonv1.Param{
+						{
+							Name: "yq-helper-image",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.yq-helper-image)",
+							},
+						},
+						traceIDPipelineParam(),
+						{
+							Name: "s3-bucket",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.s3-bucket)",
+							},
+						},
+						{
+							Name: "s3-prefix",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.s3-prefix)",
+							},
+						},
+						{
+							Name: "s3-endpoint",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.s3-endpoint)",
+							},
+						},
+						{
+							Name: "s3-region",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.s3-region)",
+							},
+						},
+						{
+							Name: "s3-insecure-skip-tls-verify",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.s3-insecure-skip-tls-verify)",
+							},
+						},
+						{
+							Name: "artifact-filename",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(tasks.build-image.results.artifact-filename)",
+							},
+						},
+						{
+							Name: "distro",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.distro)",
+							},
+						},
+						{
+							Name: "target",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.target)",
+							},
+						},
+						{
+							Name: "arch",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.arch)",
+							},
+						},
+					},
+					Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
+						{Name: workspaceNameShared, Workspace: workspaceNameShared},
+						{Name: "s3-auth", Workspace: "s3-auth"},
+					},
+					RunAfter: []string{"build-image"},
+					When: []tektonv1.WhenExpression{
+						{
+							Input:    "$(params.s3-bucket)",
 							Operator: "notin",
 							Values:   []string{"", "null"},
 						},

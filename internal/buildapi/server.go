@@ -1348,6 +1348,12 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		}
 	}
 
+	if status, err := resolveS3Credentials(ctx, k8sClient, &req, namespace); err != nil {
+		spanError(span, err)
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
 	traceID := extractTraceID(ctx)
 	annotations := map[string]string{
 		automotivev1alpha1.AnnotationRequestedBy: requestedBy,
@@ -1383,6 +1389,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 	if err := k8sClient.Create(ctx, imageBuild); err != nil {
 		spanError(span, err)
+		cleanupInlineS3Secret(ctx, k8sClient, &req, namespace)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating ImageBuild: %v", err)})
 		return
 	}
@@ -1414,6 +1421,17 @@ func (a *APIServer) createBuild(c *gin.Context) {
 				"WARNING: failed to set owner reference on flash client secret %s: %v "+
 					"(cleanup may require manual intervention)",
 				flashSecretName, err,
+			)
+		}
+	}
+
+	// Set owner reference only on secrets we created (not pre-existing ones)
+	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
+		if err := setSecretOwnerRef(ctx, k8sClient, namespace, req.S3CredentialsSecretName, imageBuild); err != nil {
+			log.Printf(
+				"WARNING: failed to set owner reference on S3 secret %s: %v "+
+					"(cleanup may require manual intervention)",
+				req.S3CredentialsSecretName, err,
 			)
 		}
 	}
