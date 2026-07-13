@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -273,6 +274,117 @@ func TestGetRootPassword(t *testing.T) {
 			got := tt.spec.GetRootPassword()
 			if got != tt.want {
 				t.Errorf("GetRootPassword() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetS3InsecureSkipTLSVerify(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ImageBuildSpec
+		want bool
+	}{
+		{
+			name: "returns true when set",
+			spec: ImageBuildSpec{
+				Export: &ExportSpec{
+					Disk: &DiskExport{
+						S3: &S3Export{
+							Bucket:                "my-bucket",
+							InsecureSkipTLSVerify: true,
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "returns false when not set",
+			spec: ImageBuildSpec{
+				Export: &ExportSpec{
+					Disk: &DiskExport{
+						S3: &S3Export{
+							Bucket: "my-bucket",
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "returns false when S3 is nil",
+			spec: ImageBuildSpec{
+				Export: &ExportSpec{
+					Disk: &DiskExport{},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "returns false when Disk is nil",
+			spec: ImageBuildSpec{
+				Export: &ExportSpec{},
+			},
+			want: false,
+		},
+		{
+			name: "returns false when Export is nil",
+			spec: ImageBuildSpec{},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.spec.GetS3InsecureSkipTLSVerify()
+			if got != tt.want {
+				t.Errorf("GetS3InsecureSkipTLSVerify() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetS3InsecureSkipTLSVerifyFormatsForTekton(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ImageBuildSpec
+		want string
+	}{
+		{
+			name: "formats true for Tekton param",
+			spec: ImageBuildSpec{
+				Export: &ExportSpec{
+					Disk: &DiskExport{
+						S3: &S3Export{InsecureSkipTLSVerify: true},
+					},
+				},
+			},
+			want: "true",
+		},
+		{
+			name: "formats false for Tekton param",
+			spec: ImageBuildSpec{
+				Export: &ExportSpec{
+					Disk: &DiskExport{
+						S3: &S3Export{},
+					},
+				},
+			},
+			want: "false",
+		},
+		{
+			name: "formats false when S3 is nil",
+			spec: ImageBuildSpec{},
+			want: "false",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fmt.Sprintf("%t", tt.spec.GetS3InsecureSkipTLSVerify())
+			if got != tt.want {
+				t.Errorf("fmt.Sprintf(\"%%t\", GetS3InsecureSkipTLSVerify()) = %q, want %q", got, tt.want)
 			}
 		})
 	}

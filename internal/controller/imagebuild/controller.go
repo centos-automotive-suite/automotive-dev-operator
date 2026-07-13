@@ -1027,6 +1027,41 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			},
 		},
 		{
+			Name: "s3-bucket",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: imageBuild.Spec.GetS3Bucket(),
+			},
+		},
+		{
+			Name: "s3-prefix",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: s3Prefix(imageBuild),
+			},
+		},
+		{
+			Name: "s3-endpoint",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: imageBuild.Spec.GetS3Endpoint(),
+			},
+		},
+		{
+			Name: "s3-region",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: imageBuild.Spec.GetS3Region(),
+			},
+		},
+		{
+			Name: "s3-insecure-skip-tls-verify",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: fmt.Sprintf("%t", imageBuild.Spec.GetS3InsecureSkipTLSVerify()),
+			},
+		},
+		{
 			Name: "builder-image",
 			Value: tektonv1.ParamValue{
 				Type:      tektonv1.ParamTypeString,
@@ -1408,6 +1443,15 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			Name: "registry-auth",
 			Secret: &corev1.SecretVolumeSource{
 				SecretName: imageBuild.Spec.SecretRef,
+			},
+		})
+	}
+
+	if imageBuild.Spec.GetS3CredentialsSecret() != "" {
+		pipelineWorkspaces = append(pipelineWorkspaces, tektonv1.WorkspaceBinding{
+			Name: "s3-auth",
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: imageBuild.Spec.GetS3CredentialsSecret(),
 			},
 		})
 	}
@@ -2393,6 +2437,13 @@ func extractLeaseID(pipelineRun *tektonv1.PipelineRun) string {
 		}
 	}
 	return ""
+}
+
+func s3Prefix(imageBuild *automotivev1alpha1.ImageBuild) string {
+	if p := imageBuild.Spec.GetS3Prefix(); p != "" {
+		return p
+	}
+	return "builds/" + imageBuild.Name
 }
 
 func isTaskRunSuccessful(taskRun *tektonv1.TaskRun) bool {

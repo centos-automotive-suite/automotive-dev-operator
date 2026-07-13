@@ -242,14 +242,51 @@ type ExportSpec struct {
 }
 
 // DiskExport defines where to export the disk image
-// Currently supports OCI registries, extensible for future storage types
+// Currently supports OCI registries and S3-compatible storage
 type DiskExport struct {
 	// OCI is the registry URL to push the disk image as an OCI artifact
 	OCI string `json:"oci,omitempty"`
 
+	// S3 contains configuration for pushing to S3-compatible storage
+	S3 *S3Export `json:"s3,omitempty"`
+
 	// Future storage options:
-	// S3 *S3Export `json:"s3,omitempty"`
 	// PVC *PVCExport `json:"pvc,omitempty"`
+}
+
+// S3Export defines S3 storage configuration
+type S3Export struct {
+	// Bucket is the S3 bucket name
+	// +kubebuilder:validation:Required
+	Bucket string `json:"bucket"`
+
+	// Prefix is the S3 key prefix (path within bucket)
+	// Defaults to "builds/<build-name>" if not specified
+	// +optional
+	Prefix string `json:"prefix,omitempty"`
+
+	// Endpoint is the S3 endpoint URL (for MinIO, Ceph, etc.)
+	// Leave empty for AWS S3
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// Region is the S3 region
+	// +kubebuilder:default="us-east-1"
+	// +optional
+	Region string `json:"region,omitempty"`
+
+	// CredentialsSecret is the name of a secret containing AWS credentials
+	// Should have keys: access-key-id, secret-access-key
+	// If not provided, the build pod will use IAM role or environment credentials, allows users to grant write access
+	// to the operator AWS IAM User + Role, instead of providing credentials with every request.
+	// +optional
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+
+	// InsecureSkipTLSVerify disables TLS certificate verification for the S3 endpoint.
+	// Only relevant when Endpoint is set. When false (default), the operator's
+	// trusted CA bundle is used to verify the endpoint certificate.
+	// +optional
+	InsecureSkipTLSVerify bool `json:"insecureSkipTLSVerify,omitempty"`
 }
 
 // ImageBuildStatus defines the observed state of ImageBuild
@@ -489,6 +526,51 @@ func (s *ImageBuildSpec) GetExportOCI() string {
 		return s.Export.Disk.OCI
 	}
 	return ""
+}
+
+// GetS3Bucket returns the S3 bucket name for artifact push
+func (s *ImageBuildSpec) GetS3Bucket() string {
+	if s.Export != nil && s.Export.Disk != nil && s.Export.Disk.S3 != nil {
+		return s.Export.Disk.S3.Bucket
+	}
+	return ""
+}
+
+// GetS3Prefix returns the S3 key prefix for artifact push
+func (s *ImageBuildSpec) GetS3Prefix() string {
+	if s.Export != nil && s.Export.Disk != nil && s.Export.Disk.S3 != nil {
+		return s.Export.Disk.S3.Prefix
+	}
+	return ""
+}
+
+// GetS3Endpoint returns the S3 endpoint URL for artifact push
+func (s *ImageBuildSpec) GetS3Endpoint() string {
+	if s.Export != nil && s.Export.Disk != nil && s.Export.Disk.S3 != nil {
+		return s.Export.Disk.S3.Endpoint
+	}
+	return ""
+}
+
+// GetS3Region returns the S3 region for artifact push
+func (s *ImageBuildSpec) GetS3Region() string {
+	if s.Export != nil && s.Export.Disk != nil && s.Export.Disk.S3 != nil {
+		return s.Export.Disk.S3.Region
+	}
+	return "us-east-1" // default region
+}
+
+// GetS3CredentialsSecret returns the S3 credentials secret name
+func (s *ImageBuildSpec) GetS3CredentialsSecret() string {
+	if s.Export != nil && s.Export.Disk != nil && s.Export.Disk.S3 != nil {
+		return s.Export.Disk.S3.CredentialsSecret
+	}
+	return ""
+}
+
+// GetS3InsecureSkipTLSVerify returns whether TLS verification should be skipped for the S3 endpoint
+func (s *ImageBuildSpec) GetS3InsecureSkipTLSVerify() bool {
+	return s.Export != nil && s.Export.Disk != nil && s.Export.Disk.S3 != nil && s.Export.Disk.S3.InsecureSkipTLSVerify
 }
 
 // GetUseServiceAccountAuth returns whether service account auth is enabled for registry push

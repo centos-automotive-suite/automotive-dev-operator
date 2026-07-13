@@ -211,6 +211,15 @@ type BuildRequest struct {
 	FlashCmd              string `json:"flashCmd,omitempty"`              // Override flash command from OperatorConfig
 	FlashExporterSelector string `json:"flashExporterSelector,omitempty"` // Override exporter selector from OperatorConfig
 	FlashLeaseTags        string `json:"flashLeaseTags,omitempty"`        // Additional lease tags (comma-separated key=value)
+
+	// S3 configuration for pushing disk artifacts to S3-compatible storage
+	S3Bucket                string         `json:"s3Bucket,omitempty"`                // S3 bucket name
+	S3Prefix                string         `json:"s3Prefix,omitempty"`                // S3 key prefix (path within bucket)
+	S3Endpoint              string         `json:"s3Endpoint,omitempty"`              // S3 endpoint URL (for MinIO/Ceph, empty for AWS)
+	S3Region                string         `json:"s3Region,omitempty"`                // S3 region (default: us-east-1)
+	S3Credentials           *S3Credentials `json:"s3Credentials,omitempty"`           // S3 access credentials (creates new secret)
+	S3CredentialsSecretName string         `json:"s3CredentialsSecretName,omitempty"` // Use existing K8s secret (alternative to s3Credentials)
+	S3InsecureSkipTLSVerify bool           `json:"s3InsecureSkipTLSVerify,omitempty"` // Skip TLS verification for S3 endpoint
 }
 
 // RegistryCredentials contains authentication details for container registries.
@@ -222,6 +231,12 @@ type RegistryCredentials struct {
 	Password     string `json:"password"`
 	Token        string `json:"token"`
 	DockerConfig string `json:"dockerConfig"`
+}
+
+// S3Credentials contains S3 authentication details
+type S3Credentials struct {
+	AccessKeyID     string `json:"accessKeyId"`
+	SecretAccessKey string `json:"secretAccessKey"`
 }
 
 // JumpstarterInfo contains information about Jumpstarter device flashing availability
