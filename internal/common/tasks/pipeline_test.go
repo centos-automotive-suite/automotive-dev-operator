@@ -508,6 +508,244 @@ func TestPushTask_ParamSpec_Defaults(t *testing.T) {
 	}
 }
 
+// --- GeneratePushArtifactS3Task tests ---
+
+const (
+	pushDiskArtifactS3TaskName = "push-disk-artifact-s3"
+	s3AuthWorkspaceName        = "s3-auth"
+)
+
+func TestGeneratePushArtifactS3Task_EnvVars(t *testing.T) {
+	task := GeneratePushArtifactS3Task("test-ns", nil)
+
+	if len(task.Spec.Steps) == 0 {
+		t.Fatal("push-artifact-s3 task has no steps")
+	}
+	step := task.Spec.Steps[0]
+
+	envMap := make(map[string]string)
+	for _, e := range step.Env {
+		envMap[e.Name] = e.Value
+	}
+
+	expected := map[string]string{
+		"S3_BUCKET":     "$(params.s3-bucket)",
+		"S3_PREFIX":     "$(params.s3-prefix)",
+		"S3_ENDPOINT":   "$(params.s3-endpoint)",
+		"S3_REGION":     "$(params.s3-region)",
+		"S3_INSECURE":   "$(params.s3-insecure-skip-tls-verify)",
+		"ARTIFACT_FILE": "$(params.artifact-filename)",
+	}
+	for name, wantVal := range expected {
+		got, ok := envMap[name]
+		if !ok {
+			t.Errorf("step env missing %q", name)
+			continue
+		}
+		if got != wantVal {
+			t.Errorf("step env %s = %q, want %q", name, got, wantVal)
+		}
+	}
+}
+
+func TestGeneratePushArtifactS3Task_ScriptNoParamsExpansion(t *testing.T) {
+	task := GeneratePushArtifactS3Task("test-ns", nil)
+
+	if len(task.Spec.Steps) == 0 {
+		t.Fatal("push-artifact-s3 task has no steps")
+	}
+	script := task.Spec.Steps[0].Script
+
+	forbidden := []string{
+		"$(params.s3-bucket)",
+		"$(params.s3-prefix)",
+		"$(params.s3-endpoint)",
+		"$(params.s3-region)",
+		"$(params.s3-insecure-skip-tls-verify)",
+		"$(params.artifact-filename)",
+	}
+	for _, ref := range forbidden {
+		if strings.Contains(script, ref) {
+			t.Errorf("script should not contain %q (params must be passed via env)", ref)
+		}
+	}
+}
+
+func TestGeneratePushArtifactS3Task_OptionalS3AuthWorkspace(t *testing.T) {
+	task := GeneratePushArtifactS3Task("test-ns", nil)
+
+	for _, ws := range task.Spec.Workspaces {
+		if ws.Name == s3AuthWorkspaceName {
+			if !ws.Optional {
+				t.Error("s3-auth workspace should be optional")
+			}
+			return
+		}
+	}
+	t.Fatal("push-artifact-s3 task should declare s3-auth workspace")
+}
+
+func TestGeneratePushArtifactS3Task_S3URLResult(t *testing.T) {
+	task := GeneratePushArtifactS3Task("test-ns", nil)
+
+	for _, r := range task.Spec.Results {
+		if r.Name == "S3_URL" {
+			return
+		}
+	}
+	t.Fatal("push-artifact-s3 task should have S3_URL result")
+}
+
+func TestGeneratePushArtifactS3Task_Params(t *testing.T) {
+	task := GeneratePushArtifactS3Task("test-ns", nil)
+
+	required := []string{
+		"s3-bucket", "s3-prefix", "s3-endpoint", "s3-region",
+		"s3-insecure-skip-tls-verify", "artifact-filename",
+		"yq-helper-image", "trace-id",
+		"distro", "target", "arch",
+	}
+	for _, name := range required {
+		if !hasParam(task.Spec.Params, name) {
+			t.Errorf("push-artifact-s3 task missing param %q", name)
+		}
+	}
+}
+
+// --- Pipeline push-disk-artifact-s3 wiring tests ---
+
+func TestPipeline_S3Task_WhenGate(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	s3Task := findPipelineTask(pipeline.Spec.Tasks, pushDiskArtifactS3TaskName)
+	if s3Task == nil {
+		t.Fatal("pipeline missing push-disk-artifact-s3 task")
+	}
+
+	var found bool
+	for _, w := range s3Task.When {
+		if w.Input == "$(params.s3-bucket)" {
+			found = true
+			if w.Operator != "notin" {
+				t.Errorf("s3-bucket when operator = %q, want notin", w.Operator)
+			}
+			hasEmpty := false
+			for _, v := range w.Values {
+				if v == "" || v == "null" {
+					hasEmpty = true
+				}
+			}
+			if !hasEmpty {
+				t.Error("s3-bucket when gate should exclude empty/null values")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("push-disk-artifact-s3 should have when gate on s3-bucket param")
+	}
+}
+
+func TestPipeline_S3Task_RunAfterBuildImage(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	s3Task := findPipelineTask(pipeline.Spec.Tasks, pushDiskArtifactS3TaskName)
+	if s3Task == nil {
+		t.Fatal("pipeline missing push-disk-artifact-s3 task")
+	}
+
+	var afterBuild bool
+	for _, dep := range s3Task.RunAfter {
+		if dep == PipelineTaskBuildImage {
+			afterBuild = true
+			break
+		}
+	}
+	if !afterBuild {
+		t.Error("push-disk-artifact-s3 should run after build-image")
+	}
+}
+
+func TestPipeline_S3Task_ParamForwarding(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	s3Task := findPipelineTask(pipeline.Spec.Tasks, pushDiskArtifactS3TaskName)
+	if s3Task == nil {
+		t.Fatal("pipeline missing push-disk-artifact-s3 task")
+	}
+
+	expectedBindings := map[string]string{
+		"s3-bucket":                   "$(params.s3-bucket)",
+		"s3-prefix":                   "$(params.s3-prefix)",
+		"s3-endpoint":                 "$(params.s3-endpoint)",
+		"s3-region":                   "$(params.s3-region)",
+		"s3-insecure-skip-tls-verify": "$(params.s3-insecure-skip-tls-verify)",
+		"artifact-filename":           "$(tasks.build-image.results.artifact-filename)",
+		"yq-helper-image":             "$(params.yq-helper-image)",
+		"distro":                      "$(params.distro)",
+		"target":                      "$(params.target)",
+		"arch":                        "$(params.arch)",
+	}
+	for param, wantVal := range expectedBindings {
+		got, ok := taskParamBinding(s3Task, param)
+		if !ok {
+			t.Errorf("push-disk-artifact-s3 missing param binding %q", param)
+			continue
+		}
+		if got != wantVal {
+			t.Errorf("push-disk-artifact-s3 %s = %q, want %q", param, got, wantVal)
+		}
+	}
+}
+
+func TestPipeline_S3Task_S3AuthWorkspaceBinding(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	s3Task := findPipelineTask(pipeline.Spec.Tasks, pushDiskArtifactS3TaskName)
+	if s3Task == nil {
+		t.Fatal("pipeline missing push-disk-artifact-s3 task")
+	}
+
+	var found bool
+	for _, ws := range s3Task.Workspaces {
+		if ws.Name == s3AuthWorkspaceName && ws.Workspace == s3AuthWorkspaceName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("push-disk-artifact-s3 should bind s3-auth workspace")
+	}
+}
+
+func TestPipeline_S3Params_Declared(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	s3Params := []string{
+		"s3-bucket", "s3-prefix", "s3-endpoint", "s3-region",
+		"s3-insecure-skip-tls-verify",
+	}
+	for _, name := range s3Params {
+		if !hasParam(pipeline.Spec.Params, name) {
+			t.Errorf("pipeline missing S3 param %q", name)
+		}
+	}
+}
+
+func TestPipeline_S3AuthWorkspace_Optional(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	for _, ws := range pipeline.Spec.Workspaces {
+		if ws.Name == s3AuthWorkspaceName {
+			if !ws.Optional {
+				t.Error("pipeline s3-auth workspace should be optional")
+			}
+			return
+		}
+	}
+	t.Fatal("pipeline should declare s3-auth workspace")
+}
+
 // TestImagesResultFormat verifies the image@digest format Chains expects
 func TestImagesResultFormat(t *testing.T) {
 	// Simulate what the collect-images script produces
