@@ -1395,6 +1395,17 @@ func (a *APIServer) createBuild(c *gin.Context) {
 
 	setBuildSecretOwnerRefs(ctx, k8sClient, namespace, imageBuild, envSecretRef, pushSecretName, flashSecretName, &req)
 
+	// Set owner reference only on secrets we created (not pre-existing ones)
+	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
+		if err := setSecretOwnerRef(ctx, k8sClient, namespace, req.S3CredentialsSecretName, imageBuild); err != nil {
+			log.Printf(
+				"WARNING: failed to set owner reference on S3 secret %s: %v "+
+					"(cleanup may require manual intervention)",
+				req.S3CredentialsSecretName, err,
+			)
+		}
+	}
+
 	writeJSON(c, http.StatusAccepted, BuildResponse{
 		Name:        req.Name,
 		Phase:       phaseBuilding,
