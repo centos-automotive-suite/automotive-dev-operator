@@ -15,7 +15,6 @@ metadata:
     appstudio.openshift.io/component: catalog
     pipelines.appstudio.openshift.io/type: build
   name: catalog-on-pull-request
-  namespace: default-tenant
 spec:
   params:
   - name: git-url
@@ -503,7 +502,7 @@ spec:
     - name: netrc
       optional: true
   taskRunTemplate:
-    serviceAccountName: build-pipeline
+    serviceAccountName: appstudio-pipeline
   workspaces:
   - name: git-auth
     secret:
