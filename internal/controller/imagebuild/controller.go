@@ -1463,6 +1463,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		podTemplate.RuntimeClassName = &imageBuild.Spec.RuntimeClassName
 	}
 	podTemplate.Volumes = append(podTemplate.Volumes, tasks.OCIVolumes(buildConfig)...)
+	podTemplate.Volumes = append(podTemplate.Volumes, ociRepoVolumes(imageBuild.Spec.GetOCIRepoImages())...)
 	pipelineRunSpec := tektonv1.PipelineRunSpec{
 		Params:     params,
 		Workspaces: pipelineWorkspaces,
@@ -2244,9 +2245,9 @@ func pipelineRunFailureMessage(pipelineRun *tektonv1.PipelineRun) string {
 
 // pipelineTaskLabel maps pipeline task names to user-friendly labels for error messages.
 var pipelineTaskLabel = map[string]string{
-	"build-image":        "Image build failed",
-	"push-disk-artifact": "Disk image push failed",
-	"flash-image":        "Flash failed",
+	tasks.PipelineTaskBuildImage: "Image build failed",
+	"push-disk-artifact":         "Disk image push failed",
+	"flash-image":                "Flash failed",
 }
 
 func (r *ImageBuildReconciler) pipelineRunFailureDetail(ctx context.Context, pipelineRun *tektonv1.PipelineRun) string {
@@ -2967,6 +2968,26 @@ func extractFlashCredentials(secret *corev1.Secret, registryURL string, log logr
 	}
 	log.Error(nil, "No matching credentials found in docker config", "secret", secret.Name, "registry", registryURL)
 	return nil, nil
+}
+
+// ociRepoVolumes returns the OCI repo volume for the PipelineRun PodTemplate.
+// If an OCI image ref is provided, uses ImageVolumeSource; otherwise EmptyDir
+// so the Task's VolumeMount always resolves.
+func ociRepoVolumes(ociRepoImages []string) []corev1.Volume {
+	vol := corev1.Volume{Name: tasks.OCIRepoVolumeName}
+	if len(ociRepoImages) > 0 {
+		vol.VolumeSource = corev1.VolumeSource{
+			Image: &corev1.ImageVolumeSource{
+				Reference:  ociRepoImages[0],
+				PullPolicy: corev1.PullAlways,
+			},
+		}
+	} else {
+		vol.VolumeSource = corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		}
+	}
+	return []corev1.Volume{vol}
 }
 
 func decodeAuthEntry(auth string, log logr.Logger) ([]byte, []byte) {

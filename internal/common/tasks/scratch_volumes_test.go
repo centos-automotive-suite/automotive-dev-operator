@@ -244,7 +244,7 @@ func TestPVCScratchVolumes_BuildStepRewritten(t *testing.T) {
 
 	// The build-image step should have workspace volume mounts
 	for _, step := range task.Spec.Steps {
-		if step.Name != "build-image" {
+		if step.Name != PipelineTaskBuildImage {
 			continue
 		}
 		found := 0

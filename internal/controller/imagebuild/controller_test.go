@@ -248,7 +248,7 @@ func TestPipelineRunFailureDetail(t *testing.T) {
 				Status: tektonv1.PipelineRunStatus{
 					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
 						ChildReferences: []tektonv1.ChildStatusReference{
-							{Name: "pr-1-build-run", PipelineTaskName: "build-image"},
+							{Name: "pr-1-build-run", PipelineTaskName: tasks.PipelineTaskBuildImage},
 							{Name: "pr-1-push-run", PipelineTaskName: "push-disk-artifact"},
 						},
 					},
@@ -266,7 +266,7 @@ func TestPipelineRunFailureDetail(t *testing.T) {
 				Status: tektonv1.PipelineRunStatus{
 					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
 						ChildReferences: []tektonv1.ChildStatusReference{
-							{Name: "pr-2-build-run", PipelineTaskName: "build-image"},
+							{Name: "pr-2-build-run", PipelineTaskName: tasks.PipelineTaskBuildImage},
 							{Name: "pr-2-push-run", PipelineTaskName: "push-disk-artifact"},
 						},
 					},
@@ -285,7 +285,7 @@ func TestPipelineRunFailureDetail(t *testing.T) {
 				Status: tektonv1.PipelineRunStatus{
 					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
 						ChildReferences: []tektonv1.ChildStatusReference{
-							{Name: "pr-3-build-run", PipelineTaskName: "build-image"},
+							{Name: "pr-3-build-run", PipelineTaskName: tasks.PipelineTaskBuildImage},
 							{Name: "pr-3-push-run", PipelineTaskName: "push-disk-artifact"},
 							{Name: "pr-3-flash-run", PipelineTaskName: "flash-image"},
 						},
@@ -331,7 +331,7 @@ func TestPipelineRunFailureDetail(t *testing.T) {
 					PipelineRunStatusFields: tektonv1.PipelineRunStatusFields{
 						ChildReferences: []tektonv1.ChildStatusReference{
 							// TaskRun not in fake client — simulates missing/deleted pod
-							{Name: "pr-5-gone-run", PipelineTaskName: "build-image"},
+							{Name: "pr-5-gone-run", PipelineTaskName: tasks.PipelineTaskBuildImage},
 						},
 					},
 				},
@@ -636,5 +636,109 @@ func TestEnsureImageStreamOwnerRefNoMatch(t *testing.T) {
 	}
 	if !getCalled {
 		t.Fatal("expected ImageStream lookup to be attempted")
+	}
+}
+
+func TestOCIRepoVolumes(t *testing.T) {
+	tests := []struct {
+		name          string
+		ociRepoImages []string
+		wantImage     bool
+	}{
+		{
+			name:          "no OCI repos — EmptyDir",
+			ociRepoImages: nil,
+			wantImage:     false,
+		},
+		{
+			name:          "empty slice — EmptyDir",
+			ociRepoImages: []string{},
+			wantImage:     false,
+		},
+		{
+			name:          "single OCI repo — ImageVolumeSource",
+			ociRepoImages: []string{"quay.io/org/rpms:v1"},
+			wantImage:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vols := ociRepoVolumes(tt.ociRepoImages)
+			if len(vols) != 1 {
+				t.Fatalf("volume count = %d, want 1", len(vols))
+			}
+			vol := vols[0]
+			if vol.Name != tasks.OCIRepoVolumeName {
+				t.Errorf("volume name = %q, want %q", vol.Name, tasks.OCIRepoVolumeName)
+			}
+			if tt.wantImage {
+				if vol.Image == nil {
+					t.Fatal("expected ImageVolumeSource, got nil")
+				}
+				if vol.Image.Reference != tt.ociRepoImages[0] {
+					t.Errorf("Image.Reference = %q, want %q", vol.Image.Reference, tt.ociRepoImages[0])
+				}
+				if vol.Image.PullPolicy != corev1.PullAlways {
+					t.Errorf("Image.PullPolicy = %q, want PullAlways", vol.Image.PullPolicy)
+				}
+			} else {
+				if vol.EmptyDir == nil {
+					t.Fatal("expected EmptyDir, got nil")
+				}
+				if vol.Image != nil {
+					t.Error("should not have Image when EmptyDir is set")
+				}
+			}
+		})
+	}
+}
+
+func TestGetOCIRepoImages(t *testing.T) {
+	tests := []struct {
+		name string
+		spec automotivev1alpha1.ImageBuildSpec
+		want []string
+	}{
+		{
+			name: "nil AIB returns nil",
+			spec: automotivev1alpha1.ImageBuildSpec{AIB: nil},
+			want: nil,
+		},
+		{
+			name: "empty OCIRepoImages returns nil",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{
+					Distro: "autosd",
+					Target: "qemu",
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "returns OCI repo images",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{
+					Distro:        "autosd",
+					Target:        "qemu",
+					OCIRepoImages: []string{"quay.io/org/rpms:v1", "quay.io/org/extra:v2"},
+				},
+			},
+			want: []string{"quay.io/org/rpms:v1", "quay.io/org/extra:v2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.spec.GetOCIRepoImages()
+			if len(got) != len(tt.want) {
+				t.Fatalf("GetOCIRepoImages() len = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("GetOCIRepoImages()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }

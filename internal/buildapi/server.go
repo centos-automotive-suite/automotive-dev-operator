@@ -43,6 +43,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -885,6 +886,73 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 	return nil
 }
 
+// resolveOCIRepoImages validates the OCI repo image ref and injects a file:// extra_repos
+// entry into CustomDefs. If workspace extra_repos already exist in CustomDefs, the
+// OCI entry is merged into the same JSON array.
+func resolveOCIRepoImages(req *BuildRequest) error {
+	if len(req.OCIRepoImages) == 0 {
+		return nil
+	}
+	if len(req.OCIRepoImages) > 1 {
+		return fmt.Errorf("too many OCI repo images: %d exceeds maximum of 1", len(req.OCIRepoImages))
+	}
+
+	type repoEntry struct {
+		ID       string `json:"id"`
+		BaseURL  string `json:"baseurl"`
+		Priority *int   `json:"priority,omitempty"`
+	}
+
+	ref := strings.TrimSpace(req.OCIRepoImages[0])
+	if ref == "" {
+		return fmt.Errorf("OCI repo image ref is empty")
+	}
+	entry := repoEntry{
+		ID:      tasks.OCIRepoVolumeName,
+		BaseURL: "file://" + tasks.OCIRepoMountPath,
+	}
+	if req.LocalRepo {
+		p := 1
+		entry.Priority = &p
+	}
+	ociRepos := []repoEntry{entry}
+
+	// Check if extra_repos already exists in CustomDefs (from workspace repos).
+	// If so, merge OCI entries into the existing array.
+	const prefix = "extra_repos="
+	mergedIdx := -1
+	for i, def := range req.CustomDefs {
+		if strings.HasPrefix(def, prefix) {
+			mergedIdx = i
+			break
+		}
+	}
+
+	if mergedIdx >= 0 {
+		// Parse existing extra_repos JSON and append OCI entries
+		existingJSON := req.CustomDefs[mergedIdx][len(prefix):]
+		var existing []repoEntry
+		if err := json.Unmarshal([]byte(existingJSON), &existing); err != nil {
+			return fmt.Errorf("parsing existing extra_repos: %w", err)
+		}
+		merged := append(existing, ociRepos...)
+		mergedJSON, err := json.Marshal(merged)
+		if err != nil {
+			return fmt.Errorf("marshaling merged extra_repos: %w", err)
+		}
+		req.CustomDefs[mergedIdx] = prefix + string(mergedJSON)
+	} else {
+		// No existing extra_repos — create a new entry
+		reposJSON, err := json.Marshal(ociRepos)
+		if err != nil {
+			return fmt.Errorf("marshaling OCI extra_repos: %w", err)
+		}
+		req.CustomDefs = append(req.CustomDefs, prefix+string(reposJSON))
+	}
+
+	return nil
+}
+
 // resolveWorkspaceForBuild resolves a workspace reference for a build:
 // - Finds the workspace or auto-creates it if it doesn't exist
 // - Creates/finds a build-cache PVC for osbuild checkpoint persistence
@@ -1125,6 +1193,22 @@ func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span tr
 	return true
 }
 
+// applyAllExtraRepos resolves workspace extra repos and OCI RPM repo images,
+// merging both into a single extra_repos CustomDef entry.
+func (a *APIServer) applyAllExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *BuildRequest) bool {
+	if len(req.ExtraRepos) > 0 {
+		if !a.applyExtraRepos(ctx, c, span, k8sClient, req) {
+			return false
+		}
+	}
+	if err := resolveOCIRepoImages(req); err != nil {
+		spanError(span, err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return false
+	}
+	return true
+}
+
 func (a *APIServer) createBuild(c *gin.Context) {
 	ctx, span := apiTracer.Start(c.Request.Context(), "createBuild")
 	defer span.End()
@@ -1170,10 +1254,10 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
-	if len(req.ExtraRepos) > 0 {
-		if !a.applyExtraRepos(ctx, c, span, k8sClient, &req) {
-			return
-		}
+	// Resolve workspace extra repos and OCI RPM repo images.
+	// OCI resolution runs second so it can merge into the same extra_repos array.
+	if !a.applyAllExtraRepos(ctx, c, span, k8sClient, &req) {
+		return
 	}
 
 	// Append a short random suffix to ensure unique names for parallel builds

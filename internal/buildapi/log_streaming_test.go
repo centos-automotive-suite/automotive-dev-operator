@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 )
 
 var _ = Describe("Log Streaming", func() {
@@ -173,10 +174,10 @@ var _ = Describe("Log Streaming", func() {
 			pod := corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   "my-pod",
-					Labels: map[string]string{"tekton.dev/pipelineTask": "build-image"},
+					Labels: map[string]string{"tekton.dev/pipelineTask": tasks.PipelineTaskBuildImage},
 				},
 			}
-			Expect(podTaskName(pod)).To(Equal("build-image"))
+			Expect(podTaskName(pod)).To(Equal(tasks.PipelineTaskBuildImage))
 		})
 
 		It("falls back to pod name when label missing", func() {
@@ -189,7 +190,7 @@ var _ = Describe("Log Streaming", func() {
 
 	Describe("logStreamHeader", func() {
 		It("formats header with task and container name", func() {
-			header := logStreamHeader("build-image", "step-build")
+			header := logStreamHeader(tasks.PipelineTaskBuildImage, "step-build")
 			Expect(header).To(Equal("\n===== Logs from build-image/build =====\n\n"))
 		})
 
