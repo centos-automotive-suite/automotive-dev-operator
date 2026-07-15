@@ -23,12 +23,12 @@ spec:
     value: '{{revision}}'
   - name: output-image
     value: quay.io/rh-sdv-cloud/automotive-dev-operator-catalog:on-pr-{{revision}}
-  - name: image-expires-after
-    value: 5d
   - name: dockerfile
     value: catalog.Dockerfile
   - name: bundle-image
     value: quay.io/rh-sdv-cloud/automotive-dev-operator-bundle:on-pr-{{revision}}
+  - name: image-expires-after
+    value: 3d
   - name: skip-checks
     value: "false"
   taskRunSpecs:

@@ -29,8 +29,6 @@ spec:
     value: quay.io/rh-sdv-cloud/automotive-dev-operator:{{revision}}
   - name: skip-checks
     value: "false"
-  - name: image-expires-after
-    value: 7d
   taskRunSpecs:
   - pipelineTaskName: build-multiarch
     computeResources:
