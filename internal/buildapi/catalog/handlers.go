@@ -30,21 +30,22 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 )
 
-const (
-	defaultNamespace = "default"
-)
-
 // Handler handles catalog API requests
 type Handler struct {
-	client client.Client
-	log    logr.Logger
+	client           client.Client
+	log              logr.Logger
+	defaultNamespace string
 }
 
 // NewHandler creates a new catalog API handler
-func NewHandler(client client.Client, log logr.Logger) *Handler {
+func NewHandler(client client.Client, log logr.Logger, defaultNamespace string) *Handler {
+	if defaultNamespace == "" {
+		defaultNamespace = "default"
+	}
 	return &Handler{
-		client: client,
-		log:    log.WithName("catalog-handler"),
+		client:           client,
+		log:              log.WithName("catalog-handler"),
+		defaultNamespace: defaultNamespace,
 	}
 }
 
@@ -62,10 +63,12 @@ func (h *Handler) HandleListCatalogImages(c *gin.Context) {
 	// Build list options
 	listOpts := []client.ListOption{}
 
-	// Namespace filtering
-	if params.Namespace != "" {
-		listOpts = append(listOpts, client.InNamespace(params.Namespace))
+	// Namespace filtering — always scope to a namespace
+	ns := params.Namespace
+	if ns == "" {
+		ns = h.defaultNamespace
 	}
+	listOpts = append(listOpts, client.InNamespace(ns))
 
 	// Build label selector for filtering
 	labelRequirements := []string{}
@@ -145,7 +148,7 @@ func (h *Handler) HandleGetCatalogImage(c *gin.Context) {
 	namespace := c.Query("namespace")
 
 	if namespace == "" {
-		namespace = defaultNamespace
+		namespace = h.defaultNamespace
 	}
 
 	catalogImage := &automotivev1alpha1.CatalogImage{}
@@ -159,13 +162,6 @@ func (h *Handler) HandleGetCatalogImage(c *gin.Context) {
 		return
 	}
 
-	// Increment access count (best effort, don't fail the request on error)
-	catalogImage.Status.AccessCount++
-	if err := h.client.Status().Update(ctx, catalogImage); err != nil {
-		h.log.V(1).Info("failed to update access count", "name", name, "error", err)
-		// Continue with response even if access count update fails
-	}
-
 	response := ToCatalogImageResponse(catalogImage)
 	c.JSON(http.StatusOK, response)
 }
@@ -175,7 +171,7 @@ func (h *Handler) HandleCreateCatalogImage(c *gin.Context) {
 	ctx := context.Background()
 	namespace := c.Query("namespace")
 	if namespace == "" {
-		namespace = defaultNamespace
+		namespace = h.defaultNamespace
 	}
 
 	var req CreateCatalogImageRequest
@@ -247,7 +243,7 @@ func (h *Handler) HandleDeleteCatalogImage(c *gin.Context) {
 	namespace := c.Query("namespace")
 
 	if namespace == "" {
-		namespace = defaultNamespace
+		namespace = h.defaultNamespace
 	}
 
 	catalogImage := &automotivev1alpha1.CatalogImage{}
@@ -278,7 +274,7 @@ func (h *Handler) HandleVerifyCatalogImage(c *gin.Context) {
 	namespace := c.Query("namespace")
 
 	if namespace == "" {
-		namespace = defaultNamespace
+		namespace = h.defaultNamespace
 	}
 
 	catalogImage := &automotivev1alpha1.CatalogImage{}

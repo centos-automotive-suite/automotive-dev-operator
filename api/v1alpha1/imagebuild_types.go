@@ -48,6 +48,8 @@ func IsTerminalBuildPhase(phase string) bool {
 // ImageBuildSpec defines the desired state of ImageBuild
 // +kubebuilder:printcolumn:name="StorageClass",type=string,JSONPath=`.spec.storageClass`
 // +kubebuilder:validation:XValidation:rule="!has(self.reproducible) || !self.reproducible || self.secureBuild",message="reproducible builds require secureBuild to be true"
+// +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.disk) && has(self.export.disk.oci) && size(self.export.disk.oci) > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)",message="secretRef is required when export.disk.oci is set (unless useServiceAccountAuth is true)"
+// +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.container) && size(self.export.container) > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)",message="secretRef is required when export.container is set (unless useServiceAccountAuth is true)"
 type ImageBuildSpec struct {
 	// ─── Common fields ───
 
@@ -218,8 +220,9 @@ type AIBSpec struct {
 
 // ExportSpec defines the configuration for exporting build artifacts
 type ExportSpec struct {
-	// Format specifies the disk image output format (e.g., raw, qcow2, simg, or any AIB-supported format)
-	// +kubebuilder:default=qcow2
+	// Format specifies the disk image output format (e.g., raw, qcow2, simg, or any AIB-supported format).
+	// When omitted, the controller resolves the format from the aib-target-defaults ConfigMap,
+	// falling back to qcow2 if no target default is configured.
 	Format string `json:"format,omitempty"`
 
 	// Compression specifies the compression algorithm for artifacts
@@ -313,6 +316,12 @@ type ImageBuildStatus struct {
 	// Used to determine whether an expired build originally succeeded or failed.
 	// +optional
 	PreviousPhase string `json:"previousPhase,omitempty"`
+
+	// ResolvedExportFormat is the export format resolved at build creation time.
+	// Persisted so the push task uses the same format even if the
+	// aib-target-defaults ConfigMap changes between build and push.
+	// +optional
+	ResolvedExportFormat string `json:"resolvedExportFormat,omitempty"`
 }
 
 // +kubebuilder:object:root=true

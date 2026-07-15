@@ -74,15 +74,23 @@ type CatalogImageListResponse struct {
 //
 //nolint:revive // Name intentionally includes package name for clarity in CLI context
 type CatalogImageResponse struct {
-	Name         string   `json:"name"`
-	Namespace    string   `json:"namespace"`
-	RegistryURL  string   `json:"registryUrl"`
-	Phase        string   `json:"phase"`
-	Architecture string   `json:"architecture,omitempty"`
-	Distro       string   `json:"distro,omitempty"`
-	Targets      []Target `json:"targets,omitempty"`
-	SizeBytes    int64    `json:"sizeBytes,omitempty"`
-	CreatedAt    string   `json:"createdAt"`
+	Name             string            `json:"name"`
+	Namespace        string            `json:"namespace"`
+	RegistryURL      string            `json:"registryUrl"`
+	Phase            string            `json:"phase"`
+	Architecture     string            `json:"architecture,omitempty"`
+	Distro           string            `json:"distro,omitempty"`
+	Targets          []Target          `json:"targets,omitempty"`
+	Tags             []string          `json:"tags,omitempty"`
+	SourceType       string            `json:"sourceType,omitempty"`
+	SourceImageBuild string            `json:"sourceImageBuild,omitempty"`
+	BuildMode        string            `json:"buildMode,omitempty"`
+	ExportFormat     string            `json:"exportFormat,omitempty"`
+	Labels           map[string]string `json:"labels,omitempty"`
+	SizeBytes        int64             `json:"sizeBytes,omitempty"`
+	CreatedAt        string            `json:"createdAt"`
+	StatusReason     string            `json:"statusReason,omitempty"`
+	StatusMessage    string            `json:"statusMessage,omitempty"`
 }
 
 // Target mirrors target info from API
@@ -202,7 +210,7 @@ func printTable(items []CatalogImageResponse) {
 		}
 	}()
 
-	if _, err := fmt.Fprintln(w, "NAME\tREGISTRY\tARCHITECTURE\tDISTRO\tTARGET\tPHASE\tAGE"); err != nil {
+	if _, err := fmt.Fprintln(w, "NAME\tSOURCE\tARCH\tDISTRO\tTARGET\tFORMAT\tTAGS\tPHASE\tIMAGE\tCREATED"); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to write header: %v\n", err)
 		return
 	}
@@ -213,19 +221,18 @@ func printTable(items []CatalogImageResponse) {
 			target = img.Targets[0].Name
 		}
 
-		// Truncate registry URL for display
-		registryDisplay := img.RegistryURL
-		if len(registryDisplay) > 50 {
-			registryDisplay = registryDisplay[:47] + "..."
-		}
+		tags := strings.Join(img.Tags, ",")
 
-		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			img.Name,
-			registryDisplay,
+			img.SourceType,
 			img.Architecture,
 			img.Distro,
 			target,
+			img.ExportFormat,
+			tags,
 			img.Phase,
+			img.RegistryURL,
 			img.CreatedAt,
 		); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to write row: %v\n", err)

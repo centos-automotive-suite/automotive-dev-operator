@@ -23,8 +23,8 @@ import (
 )
 
 // RegisterRoutes registers catalog API routes on the given router group
-func RegisterRoutes(group *gin.RouterGroup, k8sClient client.Client, log logr.Logger) {
-	handler := NewHandler(k8sClient, log)
+func RegisterRoutes(group *gin.RouterGroup, k8sClient client.Client, log logr.Logger, defaultNamespace string) {
+	handler := NewHandler(k8sClient, log, defaultNamespace)
 
 	// Catalog image routes
 	catalogGroup := group.Group("/catalog")

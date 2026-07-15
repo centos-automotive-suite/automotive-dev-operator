@@ -434,7 +434,7 @@ func (a *APIServer) createRouter() *gin.Engine {
 			a.log.Error(err, "failed to create catalog client, catalog routes will not be available")
 		} else if catalogClient != nil {
 			a.log.Info("registering catalog routes")
-			catalog.RegisterRoutes(v1, catalogClient, a.log)
+			catalog.RegisterRoutes(v1, catalogClient, a.log, resolveNamespace())
 		}
 	}
 

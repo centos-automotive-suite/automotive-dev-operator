@@ -1,0 +1,55 @@
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: ScheduledImageBuild
+metadata:
+  name: nightly-autosd-qemu
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 1
+  publishToCatalog:
+    enabled: true
+    tags:
+      - nightly
+      - autosd
+      - qemu
+  imageBuildTemplate:
+    metadata:
+      labels:
+        team: platform
+        image-type: qa
+    spec:
+      architecture: x86_64
+      aib:
+        distro: autosd
+        target: qemu
+        mode: image
+        manifest: |
+          name: qa
+          content:
+            rpms:
+              - openssh-server
+              - chrony
+              - iproute
+              - vim
+            systemd:
+              enabled_services:
+                - sshd.service
+          qm:
+            content:
+              rpms:
+                - vim
+          image:
+            image_size: 8 GiB
+            sealed: false
+            partitions:
+              var_qm:
+                relative_size: 0.1
+          auth:
+            root_password: "$6$xoLqEUz0cGGJRx01$H3H/bFm0myJPULNMtbSsOFd/2BnHqHkMD92Sfxd.EKM9hXTWSmELG8cf205l6dktomuTcgKGGtGDgtvHVXSWU."
+            sshd_config:
+              PermitRootLogin: true
+              PasswordAuthentication: true
+      export:
+        format: qcow2
+        container: registry.example.com/autosd/nightly:latest

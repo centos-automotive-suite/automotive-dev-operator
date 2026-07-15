@@ -156,6 +156,13 @@ func printImageDetails(img CatalogImageResponse) {
 		{"Targets", target},
 		{"Created At", img.CreatedAt},
 	}
+	if img.StatusReason != "" {
+		reason := img.StatusReason
+		if img.StatusMessage != "" {
+			reason += ": " + img.StatusMessage
+		}
+		rows = append(rows, [2]string{"Status Reason", reason})
+	}
 	if img.SizeBytes > 0 {
 		rows = append(rows, [2]string{"Size", fmt.Sprintf("%d bytes", img.SizeBytes)})
 	}

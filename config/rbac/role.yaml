@@ -124,6 +124,7 @@ rules:
   - imagereseals
   - images
   - operatorconfigs
+  - scheduledimagebuilds
   - workspaces
   verbs:
   - create
@@ -142,6 +143,7 @@ rules:
   - imagereseals/finalizers
   - images/finalizers
   - operatorconfigs/finalizers
+  - scheduledimagebuilds/finalizers
   - workspaces/finalizers
   verbs:
   - update
@@ -154,6 +156,7 @@ rules:
   - imagereseals/status
   - images/status
   - operatorconfigs/status
+  - scheduledimagebuilds/status
   - workspaces/status
   verbs:
   - get

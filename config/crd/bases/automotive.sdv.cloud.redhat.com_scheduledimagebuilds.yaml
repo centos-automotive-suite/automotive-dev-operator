@@ -1,0 +1,582 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: scheduledimagebuilds.automotive.sdv.cloud.redhat.com
+spec:
+  group: automotive.sdv.cloud.redhat.com
+  names:
+    kind: ScheduledImageBuild
+    listKind: ScheduledImageBuildList
+    plural: scheduledimagebuilds
+    singular: scheduledimagebuild
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspend
+      type: boolean
+    - jsonPath: .status.lastScheduleTime
+      name: Last Schedule
+      type: date
+    - jsonPath: .status.lastSuccessfulTime
+      name: Last Success
+      type: date
+    - jsonPath: .status.lastFailedTime
+      name: Last Failure
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ScheduledImageBuild defines a cron schedule for creating ImageBuild CRs
+          with optional automatic publishing to the catalog.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ScheduledImageBuildSpec defines the desired state of ScheduledImageBuild
+            properties:
+              concurrencyPolicy:
+                default: Forbid
+                description: ConcurrencyPolicy specifies how to treat concurrent builds.
+                enum:
+                - Allow
+                - Forbid
+                - Replace
+                type: string
+              failedBuildsHistoryLimit:
+                default: 1
+                description: FailedBuildsHistoryLimit is the number of failed finished
+                  builds to retain.
+                format: int32
+                minimum: 0
+                type: integer
+              imageBuildTemplate:
+                description: ImageBuildTemplate is the template for creating ImageBuild
+                  CRs.
+                properties:
+                  metadata:
+                    description: Metadata contains labels and annotations to apply
+                      to created ImageBuilds.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: Annotations to set on created ImageBuilds.
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: Labels to set on created ImageBuilds.
+                        type: object
+                    type: object
+                  spec:
+                    description: Spec is the ImageBuildSpec used as the template for
+                      child ImageBuilds.
+                    properties:
+                      aib:
+                        description: AIB contains automotive-image-builder specific
+                          configuration
+                        properties:
+                          aibExtraArgs:
+                            description: AIBExtraArgs are extra arguments to pass
+                              to automotive-image-builder
+                            items:
+                              type: string
+                            type: array
+                          builderImage:
+                            description: |-
+                              BuilderImage specifies a custom osbuild builder container image
+                              If not specified for bootc builds, one is automatically built and cached
+                            type: string
+                          containerRef:
+                            description: |-
+                              ContainerRef is the reference to an existing bootc container image
+                              Required when mode=disk to create a disk image from an existing container
+                            type: string
+                          customDefs:
+                            description: CustomDefs are custom environment variable
+                              definitions for the build
+                            items:
+                              type: string
+                            type: array
+                          distro:
+                            description: Distro specifies the distribution to build
+                              for (e.g., "autosd")
+                            type: string
+                          image:
+                            description: |-
+                              Image specifies the automotive-image-builder container image to use
+                              If not specified, the default from OperatorConfig is used
+                            type: string
+                          inputFilesServer:
+                            description: |-
+                              InputFilesServer indicates if an upload server should be created for local file references
+                              When true, the build waits in "Uploading" phase until files are uploaded
+                            type: boolean
+                          manifest:
+                            description: Manifest holds the inline AIB manifest YAML
+                              content
+                            type: string
+                          manifestFileName:
+                            description: |-
+                              ManifestFileName is the original filename of the manifest, used for naming the file
+                              when writing it to disk before invoking automotive-image-builder
+                            type: string
+                          mode:
+                            default: image
+                            description: Mode specifies the build mode
+                            enum:
+                            - package
+                            - image
+                            - bootc
+                            - disk
+                            type: string
+                          ociRepoImages:
+                            description: |-
+                              OCIRepoImages are OCI image references containing RPM repositories.
+                              Each image is mounted as a read-only volume via ImageVolumeSource in the build pod,
+                              providing RPM repos at file:///extra-repos/oci-repo-N paths.
+                            items:
+                              type: string
+                            maxItems: 1
+                            type: array
+                          rebuildBuilder:
+                            description: RebuildBuilder forces rebuilding the bootc
+                              builder image even if a cached version exists in the
+                              registry.
+                            type: boolean
+                          rootPassword:
+                            description: |-
+                              RootPassword is a hashed root password passed to AIB's --root-password flag.
+                              See crypt(5) for supported hash formats.
+                            type: string
+                          target:
+                            description: Target specifies the build target platform
+                              (e.g., "qemu", "aws")
+                            type: string
+                        required:
+                        - distro
+                        - target
+                        type: object
+                      architecture:
+                        description: Architecture specifies the target architecture
+                          (e.g., "amd64", "arm64")
+                        type: string
+                      buildCachePVC:
+                        description: |-
+                          BuildCachePVC is the name of a PVC to mount as the osbuild build cache directory.
+                          When set, the build pod mounts this PVC and passes --build-dir to AIB,
+                          enabling osbuild checkpoint reuse and dnf cache persistence across builds.
+                        type: string
+                      export:
+                        description: Export contains configuration for exporting build
+                          artifacts
+                        properties:
+                          buildDiskImage:
+                            description: BuildDiskImage indicates whether to build
+                              a disk image from the bootc container
+                            type: boolean
+                          compression:
+                            default: gzip
+                            description: Compression specifies the compression algorithm
+                              for artifacts
+                            enum:
+                            - lz4
+                            - gzip
+                            - xz
+                            type: string
+                          container:
+                            description: Container is the OCI registry URL to push
+                              the bootc container image
+                            type: string
+                          disk:
+                            description: Disk contains configuration for disk image
+                              export
+                            properties:
+                              oci:
+                                description: OCI is the registry URL to push the disk
+                                  image as an OCI artifact
+                                type: string
+                            type: object
+                          format:
+                            description: |-
+                              Format specifies the disk image output format (e.g., raw, qcow2, simg, or any AIB-supported format).
+                              When omitted, the controller resolves the format from the aib-target-defaults ConfigMap,
+                              falling back to qcow2 if no target default is configured.
+                            type: string
+                          useServiceAccountAuth:
+                            description: |-
+                              UseServiceAccountAuth indicates the build should authenticate to the registry
+                              using a service account token instead of explicit credentials
+                            type: boolean
+                        type: object
+                      flash:
+                        description: Flash contains configuration for flashing the
+                          built image to hardware via Jumpstarter
+                        properties:
+                          clientConfigSecretRef:
+                            description: |-
+                              ClientConfigSecretRef is the name of the secret containing the Jumpstarter client config
+                              The secret should have a key "client.yaml" with the config contents
+                              If set, flash is enabled automatically
+                            type: string
+                          exporterSelector:
+                            description: |-
+                              ExporterSelector overrides the exporter selector from OperatorConfig target mappings
+                              When set, the target-based lookup is skipped entirely
+                            type: string
+                          flashCmd:
+                            description: FlashCmd overrides the flash command from
+                              OperatorConfig target mappings
+                            type: string
+                          leaseDuration:
+                            default: "03:00:00"
+                            description: LeaseDuration is the duration for the device
+                              lease in HH:MM:SS format
+                            type: string
+                          leaseName:
+                            description: |-
+                              LeaseName is an existing Jumpstarter lease name to use instead of creating a new one
+                              Mutually exclusive with LeaseDuration
+                            type: string
+                          leaseTags:
+                            description: LeaseTags are additional key=value tags for
+                              the Jumpstarter lease (comma-separated)
+                            type: string
+                        type: object
+                      pushSecretRef:
+                        description: |-
+                          PushSecretRef is the name of the kubernetes.io/dockerconfigjson secret for pushing artifacts
+                          This is separate from SecretRef because push operations require docker config format
+                        type: string
+                      reproducible:
+                        description: |-
+                          Reproducible enables full build provenance: saves RPMs, AIB manifest,
+                          and task bundle ref as OCI referrers for future reproduction.
+                          Requires SecureBuild to be true for task bundle pinning.
+                        type: boolean
+                      restoreSourcesRef:
+                        description: |-
+                          RestoreSourcesRef is the OCI image reference from a prior reproducible build.
+                          The build pod will pull the sources archive (OCI referrer) attached to this
+                          image and pre-populate the osbuild store, ensuring identical RPM inputs.
+                        type: string
+                      runtimeClassName:
+                        description: RuntimeClassName specifies the runtime class
+                          to use for the build pod
+                        type: string
+                      secretRef:
+                        description: |-
+                          SecretRef is the name of the secret containing credentials for registry operations
+                          The secret should contain keys like REGISTRY_AUTH_FILE for authentication
+                        type: string
+                      secureBuild:
+                        description: |-
+                          SecureBuild enables supply chain security for this build.
+                          When true, pipeline tasks are resolved from the signed Tekton Bundle
+                          specified in TaskBundleRef instead of cluster-installed tasks.
+                        type: boolean
+                      storageClass:
+                        description: StorageClass is the name of the storage class
+                          to use for the build PVC
+                        type: string
+                      taskBundleRef:
+                        description: |-
+                          TaskBundleRef is the digest-pinned OCI reference to the Tekton Bundle
+                          used for this build. Set automatically by the Build API from the
+                          OperatorConfig at request time to prevent TOCTOU races.
+                        type: string
+                      ttl:
+                        description: |-
+                          TTL is the time-to-live for this build. After this duration past its
+                          completion, the build transitions to the Expired phase and its resources
+                          (PipelineRuns, TaskRuns, PVCs, registry images) are cleaned up.
+                          The ImageBuild CR itself is preserved. In-progress builds never expire.
+                          Uses Go duration format (e.g. "24h", "72h", "168h").
+                          Empty uses the OperatorConfig default. Set to "0" to disable expiry.
+                        type: string
+                      workspace:
+                        description: |-
+                          Workspace is the name of the Workspace CR this build belongs to.
+                          When set, the controller writes the acquired lease back to the workspace
+                          on completion so subsequent builds can reuse it.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: reproducible builds require secureBuild to be true
+                      rule: '!has(self.reproducible) || !self.reproducible || self.secureBuild'
+                    - message: secretRef is required when export.disk.oci is set (unless
+                        useServiceAccountAuth is true)
+                      rule: '!(has(self.export) && has(self.export.disk) && has(self.export.disk.oci)
+                        && size(self.export.disk.oci) > 0) || size(self.secretRef)
+                        > 0 || (has(self.export) && has(self.export.useServiceAccountAuth)
+                        && self.export.useServiceAccountAuth)'
+                    - message: secretRef is required when export.container is set
+                        (unless useServiceAccountAuth is true)
+                      rule: '!(has(self.export) && has(self.export.container) && size(self.export.container)
+                        > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth)
+                        && self.export.useServiceAccountAuth)'
+                required:
+                - spec
+                type: object
+              matrix:
+                description: |-
+                  Matrix defines a build matrix that creates multiple ImageBuilds per schedule tick.
+                  Each tick creates one ImageBuild for each combination of the specified dimensions,
+                  overriding the corresponding fields in the imageBuildTemplate.
+                properties:
+                  architectures:
+                    description: |-
+                      Architectures lists target architectures to build for.
+                      Each value overrides imageBuildTemplate.spec.architecture.
+                    items:
+                      type: string
+                    maxItems: 4
+                    type: array
+                  distros:
+                    description: |-
+                      Distros lists distributions to build for.
+                      Each value overrides imageBuildTemplate.spec.aib.distro.
+                    items:
+                      type: string
+                    maxItems: 4
+                    type: array
+                  targets:
+                    description: |-
+                      Targets lists hardware targets to build for.
+                      Each value overrides imageBuildTemplate.spec.aib.target.
+                    items:
+                      type: string
+                    maxItems: 4
+                    type: array
+                type: object
+              publishToCatalog:
+                description: PublishToCatalog configures automatic publishing of completed
+                  builds to the catalog.
+                properties:
+                  authSecretRef:
+                    description: |-
+                      AuthSecretRef references a secret containing registry credentials
+                      for verifying the published image.
+                    properties:
+                      name:
+                        description: Name is the name of the secret containing registry
+                          credentials
+                        type: string
+                      namespace:
+                        description: Namespace is the namespace of the secret (defaults
+                          to CatalogImage namespace)
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  enabled:
+                    description: Enabled controls whether completed builds are automatically
+                      published to the catalog.
+                    type: boolean
+                  tags:
+                    description: Tags are category tags to apply to the CatalogImage.
+                    items:
+                      type: string
+                    type: array
+                required:
+                - enabled
+                type: object
+              schedule:
+                description: |-
+                  Schedule is a cron expression defining when builds should run (5-field standard format).
+                  Examples: "0 2 * * *" (daily at 2am), "0 */6 * * *" (every 6 hours)
+                minLength: 9
+                pattern: ^([-0-9*/,]+\s+){4}[-0-9*/,]+$
+                type: string
+              startingDeadlineSeconds:
+                description: |-
+                  StartingDeadlineSeconds is the deadline in seconds for starting a build
+                  if it misses its scheduled time. Missed builds beyond this window are skipped.
+                format: int64
+                minimum: 0
+                type: integer
+              successfulBuildsHistoryLimit:
+                default: 3
+                description: SuccessfulBuildsHistoryLimit is the number of successful
+                  finished builds to retain.
+                format: int32
+                minimum: 0
+                type: integer
+              suspend:
+                description: |-
+                  Suspend tells the controller to suspend subsequent executions.
+                  Existing running builds will not be affected.
+                type: boolean
+            required:
+            - imageBuildTemplate
+            - schedule
+            type: object
+            x-kubernetes-validations:
+            - message: matrix distros requires aib in imageBuildTemplate
+              rule: '!has(self.matrix) || !has(self.matrix.distros) || size(self.matrix.distros)
+                == 0 || has(self.imageBuildTemplate.spec.aib)'
+            - message: matrix targets requires aib in imageBuildTemplate
+              rule: '!has(self.matrix) || !has(self.matrix.targets) || size(self.matrix.targets)
+                == 0 || has(self.imageBuildTemplate.spec.aib)'
+          status:
+            description: ScheduledImageBuildStatus defines the observed state of ScheduledImageBuild
+            properties:
+              active:
+                description: Active is a list of currently running ImageBuild references.
+                items:
+                  description: ObjectReference contains enough information to let
+                    you inspect or modify the referred object.
+                  properties:
+                    apiVersion:
+                      description: API version of the referent.
+                      type: string
+                    fieldPath:
+                      description: |-
+                        If referring to a piece of an object instead of an entire object, this string
+                        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                        For example, if the object reference is to a container within a pod, this would take on a value like:
+                        "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                        the event) or if no container name is specified "spec.containers[2]" (container with
+                        index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                        referencing a part of an object.
+                      type: string
+                    kind:
+                      description: |-
+                        Kind of the referent.
+                        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                      type: string
+                    name:
+                      description: |-
+                        Name of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                      type: string
+                    resourceVersion:
+                      description: |-
+                        Specific resourceVersion to which this reference is made, if any.
+                        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                      type: string
+                    uid:
+                      description: |-
+                        UID of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastFailedTime:
+                description: LastFailedTime is when the last build failed.
+                format: date-time
+                type: string
+              lastScheduleTime:
+                description: LastScheduleTime is when the last build was created.
+                format: date-time
+                type: string
+              lastSuccessfulTime:
+                description: LastSuccessfulTime is when the last build completed successfully.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: Phase represents the current state of the schedule.
+                enum:
+                - Active
+                - Suspended
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
