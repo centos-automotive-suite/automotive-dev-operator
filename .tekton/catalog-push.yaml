@@ -280,11 +280,14 @@ spec:
         - name: build-and-push
           image: quay.io/buildah/stable:latest
           securityContext:
-            privileged: true
+            capabilities:
+              add:
+              - SETFCAP
           script: |
             #!/usr/bin/env bash
             set -euo pipefail
 
+            export STORAGE_DRIVER=vfs
             IMAGE_FULL="$(params.IMAGE)"
             IMAGE_BASE=$(echo "${IMAGE_FULL}" | sed 's/:[^/:]*$//')
             IMAGE_TAG="${IMAGE_FULL##*:}"
@@ -296,12 +299,14 @@ spec:
 
             echo "=== Building single-arch linux/amd64 (FBC base images may lack other arches; IIB generates multi-arch index at release time) ==="
             buildah build \
+              --storage-driver vfs \
               --platform linux/amd64 \
               --authfile "${AUTHFILE}" \
               -t "${IMAGE_FULL}" \
               -f "${DOCKERFILE}" .
 
             buildah push \
+              --storage-driver vfs \
               --authfile "${AUTHFILE}" \
               --digestfile /tmp/image-digest.txt \
               "${IMAGE_FULL}"
