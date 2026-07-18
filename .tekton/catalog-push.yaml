@@ -234,7 +234,7 @@ spec:
             mountPath: /var/workdir
         steps:
         - name: fetch-source
-          image: ghcr.io/oras-project/oras:v1.2.0
+          image: ghcr.io/oras-project/oras:v1.3.3
           script: |
             #!/usr/bin/env sh
             set -e
