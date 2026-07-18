@@ -248,7 +248,7 @@ spec:
               "${ARTIFACT}" \
               --output - | tar xz -C /var/workdir/source
         - name: prepare-catalog
-          image: registry.access.redhat.com/ubi9/go-toolset:1.25.9
+          image: registry.access.redhat.com/ubi9/go-toolset:9.8-1784190466
           securityContext:
             runAsUser: 0
           script: |
