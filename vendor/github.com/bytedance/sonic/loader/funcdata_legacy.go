@@ -1,3 +1,6 @@
+//go:build go1.18 && !go1.26
+// +build go1.18,!go1.26
+
 /*
  * Copyright 2021 ByteDance Inc.
  *
@@ -14,29 +17,8 @@
  * limitations under the License.
  */
 
-package rt
+package loader
 
-import (
-	"unsafe"
-)
-
-// NoEscape hides a pointer from escape analysis. NoEscape is
-// the identity function but escape analysis doesn't think the
-// output depends on the input. NoEscape is inlined and currently
-// compiles down to zero instructions.
-// USE CAREFULLY!
-//
-//go:nosplit
-//goland:noinspection GoVetUnsafePointer
-func NoEscape(p unsafe.Pointer) unsafe.Pointer {
-	x := uintptr(p)
-	return unsafe.Pointer(x ^ 0)
-}
-
-//go:nosplit
-func MoreStack(size uintptr)
-
-//go:nosplit
-func Add(ptr unsafe.Pointer, off uintptr) unsafe.Pointer {
-	return unsafe.Pointer(uintptr(ptr) + off)
+func setEpclntab(mod *moduledata, val uintptr) {
+    // No-op for versions < 1.26
 }
