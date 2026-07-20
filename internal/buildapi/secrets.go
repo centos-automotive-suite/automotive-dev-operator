@@ -326,6 +326,31 @@ func createS3Secret(
 	return secretName, nil
 }
 
+// setBuildSecretOwnerRefs sets owner references on all secrets created for a
+// build so they are garbage-collected when the ImageBuild is deleted. Failures
+// are logged but do not block the build.
+func setBuildSecretOwnerRefs(
+	ctx context.Context, k8sClient client.Client,
+	namespace string, owner *automotivev1alpha1.ImageBuild,
+	envSecretRef, pushSecretName, flashSecretName string,
+	req *BuildRequest,
+) {
+	for _, name := range []string{envSecretRef, pushSecretName, flashSecretName} {
+		if name == "" {
+			continue
+		}
+		if err := setSecretOwnerRef(ctx, k8sClient, namespace, name, owner); err != nil {
+			log.Printf("WARNING: failed to set owner reference on secret %s: %v (cleanup may require manual intervention)", name, err)
+		}
+	}
+	// Only set owner ref on S3 secrets we created from inline credentials
+	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
+		if err := setSecretOwnerRef(ctx, k8sClient, namespace, req.S3CredentialsSecretName, owner); err != nil {
+			log.Printf("WARNING: failed to set owner reference on S3 secret %s: %v (cleanup may require manual intervention)", req.S3CredentialsSecretName, err)
+		}
+	}
+}
+
 // cleanupInlineS3Secret deletes an S3 secret that was generated from inline
 // credentials. It is a best-effort operation used on failure paths to avoid
 // orphaned secrets.
