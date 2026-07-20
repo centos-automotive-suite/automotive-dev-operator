@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "ignorePaths": [
+    "**/vendor/**"
+  ],
+  "gomod": {
+    "postUpdateOptions": [
+      "gomodUpdateImportPaths",
+      "gomodTidy",
+      "gomodVendor"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Disable Renovate for self-referential operator images",
+      "matchPackageNames": [
+        "quay.io/rh-sdv-cloud/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Migrate UBI9 Go toolset to UBI10",
+      "matchPackageNames": [
+        "registry.access.redhat.com/ubi9/go-toolset"
+      ],
+      "replacementName": "registry.access.redhat.com/ubi10/go-toolset"
+    }
+  ]
+}
