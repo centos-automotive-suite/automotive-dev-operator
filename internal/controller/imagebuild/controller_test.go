@@ -742,3 +742,61 @@ func TestGetOCIRepoImages(t *testing.T) {
 		})
 	}
 }
+
+func TestS3Prefix(t *testing.T) {
+	tests := []struct {
+		name  string
+		build *automotivev1alpha1.ImageBuild
+		want  string
+	}{
+		{
+			name: "uses explicit prefix",
+			build: &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-build"},
+				Spec: automotivev1alpha1.ImageBuildSpec{
+					Export: &automotivev1alpha1.ExportSpec{
+						Disk: &automotivev1alpha1.DiskExport{
+							S3: &automotivev1alpha1.S3Export{
+								Bucket: "bucket",
+								Prefix: "custom/path",
+							},
+						},
+					},
+				},
+			},
+			want: "custom/path",
+		},
+		{
+			name: "defaults to builds/<name> when prefix empty",
+			build: &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-build"},
+				Spec: automotivev1alpha1.ImageBuildSpec{
+					Export: &automotivev1alpha1.ExportSpec{
+						Disk: &automotivev1alpha1.DiskExport{
+							S3: &automotivev1alpha1.S3Export{
+								Bucket: "bucket",
+							},
+						},
+					},
+				},
+			},
+			want: "builds/my-build",
+		},
+		{
+			name: "defaults to builds/<name> when no S3 export",
+			build: &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-build"},
+				Spec:       automotivev1alpha1.ImageBuildSpec{},
+			},
+			want: "builds/my-build",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s3Prefix(tt.build)
+			if got != tt.want {
+				t.Errorf("s3Prefix() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

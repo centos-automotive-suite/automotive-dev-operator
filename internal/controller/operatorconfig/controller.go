@@ -719,6 +719,7 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 	tektonTasks := []*tektonv1.Task{
 		tasks.GenerateBuildAutomotiveImageTask(config.Namespace, buildConfig, ""),
 		tasks.GeneratePushArtifactRegistryTask(config.Namespace, buildConfig),
+		tasks.GeneratePushArtifactS3Task(config.Namespace, buildConfig),
 		tasks.GenerateFlashTask(config.Namespace, buildConfig),
 	}
 	tektonTasks = append(tektonTasks, tasks.GenerateSealedTasks(config.Namespace, buildConfig)...)
@@ -929,7 +930,7 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 
 	// Delete Tekton tasks
 	taskNames := []string{
-		"build-automotive-image", "push-artifact-registry", "prepare-builder", "flash-image",
+		"build-automotive-image", "push-artifact-registry", "push-artifact-s3", "prepare-builder", "flash-image",
 		"sealed-prepare-reseal", "sealed-reseal", "sealed-extract-for-signing", "sealed-inject-signed",
 	}
 	for _, taskName := range taskNames {

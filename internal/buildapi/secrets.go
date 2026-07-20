@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -243,4 +245,123 @@ func setupBuildSecrets(
 	}
 
 	return envSecretRef, pushSecretName, nil
+}
+
+func resolveS3Credentials(
+	ctx context.Context,
+	k8sClient client.Client,
+	req *BuildRequest,
+	namespace string,
+) (int, error) {
+	if req.S3Bucket == "" {
+		return 0, nil
+	}
+	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
+		return http.StatusBadRequest, fmt.Errorf("cannot specify both s3Credentials and s3CredentialsSecretName")
+	}
+	if req.S3Credentials != nil {
+		if req.S3Credentials.AccessKeyID == "" || req.S3Credentials.SecretAccessKey == "" {
+			return http.StatusBadRequest, fmt.Errorf("S3 access key ID and secret access key are required")
+		}
+		s3SecretName, err := createS3Secret(ctx, k8sClient, req.Name, namespace, req.S3Credentials)
+		if err != nil {
+			return http.StatusInternalServerError, fmt.Errorf("error creating S3 secret: %w", err)
+		}
+		req.S3CredentialsSecretName = s3SecretName
+		return 0, nil
+	}
+	if req.S3CredentialsSecretName != "" {
+		secret := &corev1.Secret{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{
+			Name:      req.S3CredentialsSecretName,
+			Namespace: namespace,
+		}, secret); err != nil {
+			return http.StatusBadRequest, fmt.Errorf("S3 credentials secret %s not found: %w", req.S3CredentialsSecretName, err)
+		}
+		return 0, nil
+	}
+	return 0, nil
+}
+
+// createS3Secret creates a secret containing S3 credentials
+func createS3Secret(
+	ctx context.Context,
+	k8sClient client.Client,
+	buildName, namespace string,
+	creds *S3Credentials,
+) (string, error) {
+	if creds == nil {
+		return "", nil
+	}
+
+	if creds.AccessKeyID == "" || creds.SecretAccessKey == "" {
+		return "", fmt.Errorf("S3 access key ID and secret access key are required")
+	}
+
+	secretName := fmt.Sprintf("%s-s3-auth", buildName)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				labels.ManagedBy:    labels.ValueBuildAPI,
+				labels.PartOf:       labels.ValueAutomotiveDev,
+				labels.CreatedBy:    labels.ValueBuildAPICreator,
+				labels.ResourceType: "s3-auth",
+				labels.BuildName:    buildName,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"access-key-id":     []byte(creds.AccessKeyID),
+			"secret-access-key": []byte(creds.SecretAccessKey),
+		},
+	}
+
+	if err := k8sClient.Create(ctx, secret); err != nil {
+		return "", fmt.Errorf("failed to create S3 secret: %w", err)
+	}
+
+	return secretName, nil
+}
+
+// setBuildSecretOwnerRefs sets owner references on all secrets created for a
+// build so they are garbage-collected when the ImageBuild is deleted. Failures
+// are logged but do not block the build.
+func setBuildSecretOwnerRefs(
+	ctx context.Context, k8sClient client.Client,
+	namespace string, owner *automotivev1alpha1.ImageBuild,
+	envSecretRef, pushSecretName, flashSecretName string,
+	req *BuildRequest,
+) {
+	for _, name := range []string{envSecretRef, pushSecretName, flashSecretName} {
+		if name == "" {
+			continue
+		}
+		if err := setSecretOwnerRef(ctx, k8sClient, namespace, name, owner); err != nil {
+			log.Printf("WARNING: failed to set owner reference on secret %s: %v (cleanup may require manual intervention)", name, err)
+		}
+	}
+	// Only set owner ref on S3 secrets we created from inline credentials
+	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
+		if err := setSecretOwnerRef(ctx, k8sClient, namespace, req.S3CredentialsSecretName, owner); err != nil {
+			log.Printf("WARNING: failed to set owner reference on S3 secret %s: %v (cleanup may require manual intervention)", req.S3CredentialsSecretName, err)
+		}
+	}
+}
+
+// cleanupInlineS3Secret deletes an S3 secret that was generated from inline
+// credentials. It is a best-effort operation used on failure paths to avoid
+// orphaned secrets.
+func cleanupInlineS3Secret(ctx context.Context, k8sClient client.Client, req *BuildRequest, namespace string) {
+	if req.S3Credentials == nil || req.S3CredentialsSecretName == "" {
+		return
+	}
+	orphan := &corev1.Secret{}
+	orphan.Name = req.S3CredentialsSecretName
+	orphan.Namespace = namespace
+	if err := k8sClient.Delete(ctx, orphan); err != nil {
+		log.Printf("WARNING: failed to clean up S3 secret %s: %v", req.S3CredentialsSecretName, err)
+	}
 }

@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"time"
 
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
@@ -107,6 +110,208 @@ var _ = Describe("APIServer", func() {
 
 				Expect(w.Code).To(Equal(http.StatusUnauthorized))
 			}
+		})
+	})
+
+	Context("createBuild S3 validation", func() {
+		var (
+			originalGetClientFromRequestFn func(*gin.Context) (ctrlclient.Client, error)
+			originalLoadOperatorConfigFn   func(context.Context, ctrlclient.Client, string) (*automotivev1alpha1.OperatorConfig, error)
+			originalNamespace              string
+			hasOriginalNamespace           bool
+		)
+
+		BeforeEach(func() {
+			originalGetClientFromRequestFn = getClientFromRequestFn
+			originalLoadOperatorConfigFn = loadOperatorConfigFn
+			originalNamespace, hasOriginalNamespace = os.LookupEnv("BUILD_API_NAMESPACE")
+			Expect(os.Setenv("BUILD_API_NAMESPACE", "test-ns")).To(Succeed())
+			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+				return nil, k8serrors.NewNotFound(schema.GroupResource{}, "config")
+			}
+		})
+
+		AfterEach(func() {
+			getClientFromRequestFn = originalGetClientFromRequestFn
+			loadOperatorConfigFn = originalLoadOperatorConfigFn
+			if hasOriginalNamespace {
+				Expect(os.Setenv("BUILD_API_NAMESPACE", originalNamespace)).To(Succeed())
+			} else {
+				Expect(os.Unsetenv("BUILD_API_NAMESPACE")).To(Succeed())
+			}
+		})
+
+		newCreateBuildFakeClient := func(objs ...ctrlclient.Object) ctrlclient.Client {
+			scheme := runtime.NewScheme()
+			Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			for _, obj := range objs {
+				builder = builder.WithObjects(obj)
+			}
+			return builder.Build()
+		}
+
+		It("should return 400 when both s3Credentials and s3CredentialsSecretName are set", func() {
+			fakeClient := newCreateBuildFakeClient()
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			body := `{
+				"name": "test-build",
+				"manifest": "name: test",
+				"s3Bucket": "my-bucket",
+				"s3Credentials": {"accessKeyId": "AKIA...", "secretAccessKey": "secret"},
+				"s3CredentialsSecretName": "existing-secret"
+			}`
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds", strings.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			server.createBuild(c)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).To(ContainSubstring("cannot specify both"))
+		})
+
+		It("should accept s3Bucket without credentials for IAM-based auth", func() {
+			fakeClient := newCreateBuildFakeClient()
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			body := `{
+				"name": "test-build",
+				"manifest": "name: test",
+				"s3Bucket": "my-bucket"
+			}`
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds", strings.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			server.createBuild(c)
+
+			Expect(w.Code).To(Equal(http.StatusAccepted))
+		})
+
+		It("should clean up inline S3 secret when ImageBuild creation fails", func() {
+			scheme := runtime.NewScheme()
+			Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Create: func(ctx context.Context, c ctrlclient.WithWatch, obj ctrlclient.Object, opts ...ctrlclient.CreateOption) error {
+						if _, ok := obj.(*automotivev1alpha1.ImageBuild); ok {
+							return fmt.Errorf("simulated ImageBuild creation failure")
+						}
+						return c.Create(ctx, obj, opts...)
+					},
+				}).
+				Build()
+
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			body := `{
+				"name": "test-build",
+				"manifest": "name: test",
+				"s3Bucket": "my-bucket",
+				"s3Credentials": {"accessKeyId": "AKIA_TEST", "secretAccessKey": "secret_test"}
+			}`
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds", strings.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			server.createBuild(c)
+
+			Expect(w.Code).To(Equal(http.StatusInternalServerError))
+
+			// Verify the generated S3 secret was cleaned up
+			secretList := &corev1.SecretList{}
+			Expect(fakeClient.List(context.Background(), secretList)).To(Succeed())
+			for _, s := range secretList.Items {
+				Expect(s.Labels).NotTo(HaveKeyWithValue(labels.ResourceType, "s3-auth"),
+					"inline S3 secret should have been deleted after ImageBuild creation failure")
+			}
+		})
+
+		It("should create ImageBuild with insecureSkipTLSVerify set to true", func() {
+			scheme := runtime.NewScheme()
+			Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			body := `{
+				"name": "test-tls-build",
+				"manifest": "name: test",
+				"s3Bucket": "my-bucket",
+				"s3Endpoint": "https://minio.example.com",
+				"s3InsecureSkipTLSVerify": true,
+				"s3Credentials": {"accessKeyId": "AKIA", "secretAccessKey": "secret"}
+			}`
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds", strings.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			server.createBuild(c)
+
+			Expect(w.Code).To(Equal(http.StatusAccepted))
+
+			// Verify the created ImageBuild has insecureSkipTLSVerify set
+			buildList := &automotivev1alpha1.ImageBuildList{}
+			Expect(fakeClient.List(context.Background(), buildList)).To(Succeed())
+			Expect(buildList.Items).To(HaveLen(1))
+			created := buildList.Items[0]
+			Expect(created.Spec.Export.Disk.S3).NotTo(BeNil())
+			Expect(created.Spec.Export.Disk.S3.InsecureSkipTLSVerify).To(BeTrue())
+			Expect(created.Spec.Export.Disk.S3.Endpoint).To(Equal("https://minio.example.com"))
+		})
+
+		It("should create ImageBuild with insecureSkipTLSVerify defaulting to false", func() {
+			scheme := runtime.NewScheme()
+			Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			body := `{
+				"name": "test-tls-default",
+				"manifest": "name: test",
+				"s3Bucket": "my-bucket",
+				"s3Credentials": {"accessKeyId": "AKIA", "secretAccessKey": "secret"}
+			}`
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds", strings.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			server.createBuild(c)
+
+			Expect(w.Code).To(Equal(http.StatusAccepted))
+
+			buildList := &automotivev1alpha1.ImageBuildList{}
+			Expect(fakeClient.List(context.Background(), buildList)).To(Succeed())
+			Expect(buildList.Items).To(HaveLen(1))
+			created := buildList.Items[0]
+			Expect(created.Spec.Export.Disk.S3).NotTo(BeNil())
+			Expect(created.Spec.Export.Disk.S3.InsecureSkipTLSVerify).To(BeFalse())
 		})
 	})
 

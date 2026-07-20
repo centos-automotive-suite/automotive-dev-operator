@@ -157,6 +157,43 @@ spec:
                         description: OCI is the registry URL to push the disk image
                           as an OCI artifact
                         type: string
+                      s3:
+                        description: S3 contains configuration for pushing to S3-compatible
+                          storage
+                        properties:
+                          bucket:
+                            description: Bucket is the S3 bucket name
+                            type: string
+                          credentialsSecret:
+                            description: |-
+                              CredentialsSecret is the name of a secret containing AWS credentials
+                              Should have keys: access-key-id, secret-access-key
+                              If not provided, the build pod will use IAM role or environment credentials, allows users to grant write access
+                              to the operator AWS IAM User + Role, instead of providing credentials with every request.
+                            type: string
+                          endpoint:
+                            description: |-
+                              Endpoint is the S3 endpoint URL (for MinIO, Ceph, etc.)
+                              Leave empty for AWS S3
+                            type: string
+                          insecureSkipTLSVerify:
+                            description: |-
+                              InsecureSkipTLSVerify disables TLS certificate verification for the S3 endpoint.
+                              Only relevant when Endpoint is set. When false (default), the operator's
+                              trusted CA bundle is used to verify the endpoint certificate.
+                            type: boolean
+                          prefix:
+                            description: |-
+                              Prefix is the S3 key prefix (path within bucket)
+                              Defaults to "builds/<build-name>" if not specified
+                            type: string
+                          region:
+                            default: us-east-1
+                            description: Region is the S3 region
+                            type: string
+                        required:
+                        - bucket
+                        type: object
                     type: object
                   format:
                     default: qcow2
