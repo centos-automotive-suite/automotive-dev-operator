@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"sort"
@@ -1394,47 +1393,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
-	// Set owner references for cascading deletion
-	if envSecretRef != "" {
-		if err := setSecretOwnerRef(ctx, k8sClient, namespace, envSecretRef, imageBuild); err != nil {
-			log.Printf(
-				"WARNING: failed to set owner reference on registry secret %s: %v "+
-					"(cleanup may require manual intervention)",
-				envSecretRef, err,
-			)
-		}
-	}
-
-	if pushSecretName != "" {
-		if err := setSecretOwnerRef(ctx, k8sClient, namespace, pushSecretName, imageBuild); err != nil {
-			log.Printf(
-				"WARNING: failed to set owner reference on push secret %s: %v "+
-					"(cleanup may require manual intervention)",
-				pushSecretName, err,
-			)
-		}
-	}
-
-	if flashSecretName != "" {
-		if err := setSecretOwnerRef(ctx, k8sClient, namespace, flashSecretName, imageBuild); err != nil {
-			log.Printf(
-				"WARNING: failed to set owner reference on flash client secret %s: %v "+
-					"(cleanup may require manual intervention)",
-				flashSecretName, err,
-			)
-		}
-	}
-
-	// Set owner reference only on secrets we created (not pre-existing ones)
-	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
-		if err := setSecretOwnerRef(ctx, k8sClient, namespace, req.S3CredentialsSecretName, imageBuild); err != nil {
-			log.Printf(
-				"WARNING: failed to set owner reference on S3 secret %s: %v "+
-					"(cleanup may require manual intervention)",
-				req.S3CredentialsSecretName, err,
-			)
-		}
-	}
+	setBuildSecretOwnerRefs(ctx, k8sClient, namespace, imageBuild, envSecretRef, pushSecretName, flashSecretName, &req)
 
 	writeJSON(c, http.StatusAccepted, BuildResponse{
 		Name:        req.Name,
