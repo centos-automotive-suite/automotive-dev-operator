@@ -16,6 +16,7 @@ require (
 	github.com/onsi/gomega v1.39.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/shipwright-io/build v0.18.3
 	github.com/sigstore/cosign/v3 v3.0.6
@@ -26,7 +27,7 @@ require (
 	k8s.io/apiserver v0.35.2
 	k8s.io/client-go v0.35.3
 	knative.dev/pkg v0.0.0-20260318013857-98d5a706d4fd
-	oras.land/oras-go/v2 v2.6.0
+	oras.land/oras-go/v2 v2.6.2
 	sigs.k8s.io/controller-runtime v0.22.5
 )
 
@@ -154,7 +155,7 @@ require (
 	go.opentelemetry.io/otel/exporters/prometheus v0.64.0 // indirect
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.42.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.44.0 // indirect
-	go.yaml.in/yaml/v2 v2.4.3 // indirect
+	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/arch v0.21.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect

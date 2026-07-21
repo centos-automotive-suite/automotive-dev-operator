@@ -53,6 +53,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/imagebuild"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/imagereseal"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/operatorconfig"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/scheduledimagebuild"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/workspace"
 	// +kubebuilder:scaffold:imports
 )
@@ -62,6 +63,20 @@ const (
 	modePlatform = "platform"
 	modeBuild    = "build"
 )
+
+type catalogPublisherAdapter struct {
+	publisher *catalogimage.Publisher
+}
+
+func (a *catalogPublisherAdapter) PublishFromImageBuild(
+	ctx context.Context,
+	imageBuild *automotivev1alpha1.ImageBuild,
+	catalogName string,
+	tags []string,
+	authSecretRef *automotivev1alpha1.AuthSecretReference,
+) (*catalogimage.PublishResult, error) {
+	return a.publisher.PublishFromImageBuild(ctx, imageBuild, catalogName, tags, authSecretRef, catalogimage.PublishSourceScheduled)
+}
 
 var (
 	scheme   = runtime.NewScheme()
@@ -309,6 +324,24 @@ func main() {
 		}
 		if err = workspaceReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "Workspace")
+			os.Exit(1)
+		}
+
+		sibPublisher := catalogimage.NewPublisher(
+			mgr.GetClient(),
+			catalogimage.NewRegistryClient(),
+			nil,
+			ctrl.Log.WithName("controllers").WithName("ScheduledImageBuild"),
+		)
+		scheduledImageBuildReconciler := &scheduledimagebuild.Reconciler{
+			Client:    mgr.GetClient(),
+			Scheme:    mgr.GetScheme(),
+			Log:       ctrl.Log.WithName("controllers").WithName("ScheduledImageBuild"),
+			Recorder:  mgr.GetEventRecorderFor("scheduledimagebuild-controller"),
+			Publisher: &catalogPublisherAdapter{publisher: sibPublisher},
+		}
+		if err = scheduledImageBuildReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "ScheduledImageBuild")
 			os.Exit(1)
 		}
 	}

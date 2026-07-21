@@ -37,6 +37,7 @@ const (
 	defaultVerificationInterval = 1 * time.Hour
 	retryInterval               = 30 * time.Second
 	unavailableRetryInterval    = 5 * time.Minute
+	maxVerificationFailures     = 5
 )
 
 // CatalogImageReconciler reconciles a CatalogImage object
@@ -182,6 +183,7 @@ func (r *CatalogImageReconciler) handleVerifyingPhase(
 	// Update status with metadata and transition to Available
 	catalogImage.Status.RegistryMetadata = metadata
 	catalogImage.Status.LastVerificationTime = GetCurrentTime()
+	catalogImage.Status.VerificationFailures = 0
 
 	// Set Published timestamp if not already set
 	if catalogImage.Status.PublishedAt == nil {
@@ -312,9 +314,20 @@ func (r *CatalogImageReconciler) transitionToUnavailable(
 	r.setCondition(catalogImage, automotivev1alpha1.CatalogImageConditionAvailable, metav1.ConditionFalse, reason, message)
 	r.setCondition(catalogImage, automotivev1alpha1.CatalogImageConditionReady, metav1.ConditionFalse, reason, message)
 
-	catalogImage.Status.Phase = automotivev1alpha1.CatalogImagePhaseUnavailable
+	catalogImage.Status.VerificationFailures++
 	catalogImage.Status.ObservedGeneration = catalogImage.Generation
 
+	if catalogImage.Status.VerificationFailures >= maxVerificationFailures {
+		catalogImage.Status.Phase = automotivev1alpha1.CatalogImagePhaseFailed
+		r.setCondition(catalogImage, automotivev1alpha1.CatalogImageConditionReady, metav1.ConditionFalse, reason,
+			fmt.Sprintf("%s (gave up after %d attempts)", message, catalogImage.Status.VerificationFailures))
+		if err := r.Status().Update(ctx, catalogImage); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	catalogImage.Status.Phase = automotivev1alpha1.CatalogImagePhaseUnavailable
 	if err := r.Status().Update(ctx, catalogImage); err != nil {
 		return ctrl.Result{}, err
 	}

@@ -7,6 +7,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -636,6 +637,271 @@ func TestEnsureImageStreamOwnerRefNoMatch(t *testing.T) {
 	}
 	if !getCalled {
 		t.Fatal("expected ImageStream lookup to be attempted")
+	}
+}
+
+func TestResolveExportFormat(t *testing.T) {
+	tests := []struct {
+		name       string
+		spec       automotivev1alpha1.ImageBuildSpec
+		configMap  *corev1.ConfigMap
+		wantFormat string
+	}{
+		{
+			name: "user-specified format wins",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB:    &automotivev1alpha1.AIBSpec{Target: "ebbr"},
+				Export: &automotivev1alpha1.ExportSpec{Format: "raw"},
+			},
+			wantFormat: "raw",
+		},
+		{
+			name: "target-defaults ConfigMap provides format",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{Target: "ebbr"},
+			},
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "aib-target-defaults",
+					Namespace: controllerutils.OperatorNamespace(),
+				},
+				Data: map[string]string{
+					"target-defaults.yaml": "targets:\n  ebbr:\n    defaultFormat: simg\n  qemu:\n    defaultFormat: raw\n",
+				},
+			},
+			wantFormat: "simg",
+		},
+		{
+			name: "target not in ConfigMap falls back to qcow2",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{Target: "unknown-board"},
+			},
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "aib-target-defaults",
+					Namespace: controllerutils.OperatorNamespace(),
+				},
+				Data: map[string]string{
+					"target-defaults.yaml": "targets:\n  ebbr:\n    defaultFormat: simg\n",
+				},
+			},
+			wantFormat: "qcow2",
+		},
+		{
+			name: "no ConfigMap falls back to qcow2",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{Target: "ebbr"},
+			},
+			wantFormat: "qcow2",
+		},
+		{
+			name:       "no target falls back to qcow2",
+			spec:       automotivev1alpha1.ImageBuildSpec{},
+			wantFormat: "qcow2",
+		},
+		{
+			name: "user-specified format overrides ConfigMap",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB:    &automotivev1alpha1.AIBSpec{Target: "ebbr"},
+				Export: &automotivev1alpha1.ExportSpec{Format: "qcow2"},
+			},
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "aib-target-defaults",
+					Namespace: controllerutils.OperatorNamespace(),
+				},
+				Data: map[string]string{
+					"target-defaults.yaml": "targets:\n  ebbr:\n    defaultFormat: simg\n",
+				},
+			},
+			wantFormat: "qcow2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newTestSchemeWithTekton()
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			if tt.configMap != nil {
+				builder = builder.WithObjects(tt.configMap)
+			}
+			r := &ImageBuildReconciler{Client: builder.Build(), Scheme: scheme}
+
+			ib := &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: "test-ns"},
+				Spec:       tt.spec,
+			}
+
+			got := r.resolveExportFormat(context.Background(), ib)
+			if got != tt.wantFormat {
+				t.Errorf("resolveExportFormat() = %q, want %q", got, tt.wantFormat)
+			}
+		})
+	}
+}
+
+func TestResolveExtraArgs(t *testing.T) {
+	tests := []struct {
+		name      string
+		spec      automotivev1alpha1.ImageBuildSpec
+		configMap *corev1.ConfigMap
+		wantArgs  []string
+	}{
+		{
+			name: "user-specified extra args win",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{
+					Target:       "ride4_sa8775p_sx",
+					AIBExtraArgs: []string{"--custom-flag"},
+				},
+			},
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "aib-target-defaults",
+					Namespace: controllerutils.OperatorNamespace(),
+				},
+				Data: map[string]string{
+					"target-defaults.yaml": "targets:\n  ride4_sa8775p_sx:\n    extraArgs:\n      - --separate-partitions\n",
+				},
+			},
+			wantArgs: []string{"--custom-flag"},
+		},
+		{
+			name: "ConfigMap provides extra args",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{Target: "ride4_sa8775p_sx"},
+			},
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "aib-target-defaults",
+					Namespace: controllerutils.OperatorNamespace(),
+				},
+				Data: map[string]string{
+					"target-defaults.yaml": "targets:\n  ride4_sa8775p_sx:\n    extraArgs:\n      - --separate-partitions\n",
+				},
+			},
+			wantArgs: []string{"--separate-partitions"},
+		},
+		{
+			name: "target without extra args returns nil",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{Target: "qemu"},
+			},
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "aib-target-defaults",
+					Namespace: controllerutils.OperatorNamespace(),
+				},
+				Data: map[string]string{
+					"target-defaults.yaml": "targets:\n  qemu:\n    defaultFormat: raw\n",
+				},
+			},
+			wantArgs: nil,
+		},
+		{
+			name: "no ConfigMap returns nil",
+			spec: automotivev1alpha1.ImageBuildSpec{
+				AIB: &automotivev1alpha1.AIBSpec{Target: "ride4_sa8775p_sx"},
+			},
+			wantArgs: nil,
+		},
+		{
+			name:     "no target returns nil",
+			spec:     automotivev1alpha1.ImageBuildSpec{},
+			wantArgs: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newTestSchemeWithTekton()
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			if tt.configMap != nil {
+				builder = builder.WithObjects(tt.configMap)
+			}
+			r := &ImageBuildReconciler{Client: builder.Build(), Scheme: scheme}
+
+			ib := &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: "test-ns"},
+				Spec:       tt.spec,
+			}
+
+			got := r.resolveExtraArgs(context.Background(), ib)
+			if len(got) != len(tt.wantArgs) {
+				t.Errorf("resolveExtraArgs() = %v, want %v", got, tt.wantArgs)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.wantArgs[i] {
+					t.Errorf("resolveExtraArgs()[%d] = %q, want %q", i, got[i], tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPushUsesPersistedExportFormat(t *testing.T) {
+	tests := []struct {
+		name            string
+		statusFormat    string
+		configMapFormat string
+		wantUsedByPush  string
+	}{
+		{
+			name:            "uses persisted format from status",
+			statusFormat:    "simg",
+			configMapFormat: "raw",
+			wantUsedByPush:  "simg",
+		},
+		{
+			name:            "falls back to resolve when status empty",
+			statusFormat:    "",
+			configMapFormat: "raw",
+			wantUsedByPush:  "raw",
+		},
+		{
+			name:            "falls back to qcow2 when both empty",
+			statusFormat:    "",
+			configMapFormat: "",
+			wantUsedByPush:  "qcow2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newTestSchemeWithTekton()
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			if tt.configMapFormat != "" {
+				builder = builder.WithObjects(&corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "aib-target-defaults",
+						Namespace: controllerutils.OperatorNamespace(),
+					},
+					Data: map[string]string{
+						"target-defaults.yaml": "targets:\n  ebbr:\n    defaultFormat: " + tt.configMapFormat + "\n",
+					},
+				})
+			}
+			r := &ImageBuildReconciler{Client: builder.Build(), Scheme: scheme}
+
+			ib := &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: "test-ns"},
+				Spec: automotivev1alpha1.ImageBuildSpec{
+					AIB: &automotivev1alpha1.AIBSpec{Target: "ebbr"},
+				},
+				Status: automotivev1alpha1.ImageBuildStatus{
+					ResolvedExportFormat: tt.statusFormat,
+				},
+			}
+
+			got := ib.Status.ResolvedExportFormat
+			if got == "" {
+				got = r.resolveExportFormat(context.Background(), ib)
+			}
+			if got != tt.wantUsedByPush {
+				t.Errorf("push format = %q, want %q", got, tt.wantUsedByPush)
+			}
+		})
 	}
 }
 

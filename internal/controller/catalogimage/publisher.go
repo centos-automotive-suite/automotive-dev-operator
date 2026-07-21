@@ -38,6 +38,8 @@ const (
 	PublishSourceExternal PublishSource = "External"
 	// PublishSourceManual indicates the image was manually added via API
 	PublishSourceManual PublishSource = "Manual"
+	// PublishSourceScheduled indicates the image was published from a scheduled build
+	PublishSourceScheduled PublishSource = "Scheduled"
 )
 
 // PublishOptions contains options for publishing an image to the catalog
@@ -153,12 +155,14 @@ func (p *Publisher) Publish(ctx context.Context, opts PublishOptions) (*PublishR
 	}, nil
 }
 
-// PublishFromImageBuild creates a CatalogImage from a completed ImageBuild
+// PublishFromImageBuild creates a CatalogImage from a completed ImageBuild.
 func (p *Publisher) PublishFromImageBuild(
 	ctx context.Context,
 	imageBuild *automotivev1alpha1.ImageBuild,
 	catalogName string,
 	tags []string,
+	authSecretRef *automotivev1alpha1.AuthSecretReference,
+	source PublishSource,
 ) (*PublishResult, error) {
 	log := p.log.WithValues("imageBuild", imageBuild.Name, "namespace", imageBuild.Namespace)
 
@@ -179,10 +183,17 @@ func (p *Publisher) PublishFromImageBuild(
 	}
 
 	// Build metadata from ImageBuild
+	exportFormat := resolvedExportFormat(imageBuild)
+	if imageBuild.Spec.GetContainerPush() != "" {
+		exportFormat = "oci"
+	}
+
 	metadata := &automotivev1alpha1.CatalogImageMetadata{
 		Architecture: NormalizeArchitecture(imageBuild.Spec.Architecture),
 		Distro:       imageBuild.Spec.GetDistro(),
 		BuildMode:    imageBuild.Spec.GetMode(),
+		ExportFormat: exportFormat,
+		Bootc:        imageBuild.Spec.GetMode() == "bootc",
 	}
 
 	// Add hardware target if specified
@@ -192,7 +203,12 @@ func (p *Publisher) PublishFromImageBuild(
 		}
 	}
 
-	log.Info("Publishing ImageBuild to catalog", "catalogName", catalogName, "registryURL", registryURL)
+	publishSource := source
+	if publishSource == "" {
+		publishSource = PublishSourceImageBuild
+	}
+
+	log.Info("Publishing ImageBuild to catalog", "catalogName", catalogName, "registryURL", registryURL, "source", publishSource)
 
 	return p.Publish(ctx, PublishOptions{
 		Name:                 catalogName,
@@ -200,7 +216,8 @@ func (p *Publisher) PublishFromImageBuild(
 		RegistryURL:          registryURL,
 		Tags:                 tags,
 		Metadata:             metadata,
-		Source:               PublishSourceImageBuild,
+		AuthSecretRef:        authSecretRef,
+		Source:               publishSource,
 		SourceImageBuildName: imageBuild.Name,
 		VerifyAccessibility:  true,
 	})
@@ -338,4 +355,11 @@ func (p *Publisher) Unpublish(ctx context.Context, name, namespace string) error
 
 	log.Info("Successfully removed CatalogImage from catalog")
 	return nil
+}
+
+func resolvedExportFormat(imageBuild *automotivev1alpha1.ImageBuild) string {
+	if imageBuild.Status.ResolvedExportFormat != "" {
+		return imageBuild.Status.ResolvedExportFormat
+	}
+	return imageBuild.Spec.GetExportFormat()
 }

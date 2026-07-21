@@ -348,6 +348,12 @@ spec:
                 description: SourceImageBuild references the ImageBuild that created
                   this catalog entry
                 type: string
+              verificationFailures:
+                description: |-
+                  VerificationFailures counts consecutive verification failures.
+                  After the max is reached the phase transitions to Failed.
+                format: int32
+                type: integer
             type: object
         type: object
     served: true
