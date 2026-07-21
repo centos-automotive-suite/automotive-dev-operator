@@ -26,7 +26,7 @@ require (
 	k8s.io/apiserver v0.35.2
 	k8s.io/client-go v0.35.3
 	knative.dev/pkg v0.0.0-20260318013857-98d5a706d4fd
-	oras.land/oras-go/v2 v2.6.0
+	oras.land/oras-go/v2 v2.6.2
 	sigs.k8s.io/controller-runtime v0.22.5
 )
 

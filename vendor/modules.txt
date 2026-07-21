@@ -1953,8 +1953,8 @@ knative.dev/pkg/observability/tracing
 knative.dev/pkg/ptr
 knative.dev/pkg/tracker
 knative.dev/pkg/webhook/resourcesemantics
-# oras.land/oras-go/v2 v2.6.0
-## explicit; go 1.23.0
+# oras.land/oras-go/v2 v2.6.2
+## explicit; go 1.25.0
 oras.land/oras-go/v2/content
 oras.land/oras-go/v2/errdef
 oras.land/oras-go/v2/internal/cas
