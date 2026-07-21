@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "ignorePaths": [
+    "**/vendor/**"
+  ],
+  "gomod": {
+    "postUpdateOptions": [
+      "gomodUpdateImportPaths",
+      "gomodTidy",
+      "gomodVendor"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Disable Renovate for self-referential operator images",
+      "matchPackageNames": [
+        "quay.io/rh-sdv-cloud/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Migrate UBI9 images to UBI10",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "/^registry\\.access\\.redhat\\.com\\/ubi9\\//"
+      ],
+      "replacementNameTemplate": "{{{replace 'ubi9' 'ubi10' packageName}}}"
+    }
+  ]
+}
