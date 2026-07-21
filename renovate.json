@@ -19,11 +19,14 @@
       "enabled": false
     },
     {
-      "description": "Migrate UBI9 Go toolset to UBI10",
-      "matchPackageNames": [
-        "registry.access.redhat.com/ubi9/go-toolset"
+      "description": "Migrate UBI9 images to UBI10",
+      "matchDatasources": [
+        "docker"
       ],
-      "replacementName": "registry.access.redhat.com/ubi10/go-toolset"
+      "matchPackageNames": [
+        "/^registry\\.access\\.redhat\\.com\\/ubi9\\//"
+      ],
+      "replacementNameTemplate": "{{{replace 'ubi9' 'ubi10' packageName}}}"
     }
   ]
 }
