@@ -758,22 +758,17 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 			return ctrl.Result{}, err
 		}
 
-		// Re-read for metrics and post-completion work
-		fresh := &automotivev1alpha1.ImageBuild{}
-		if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
-			return ctrl.Result{}, err
-		}
-		recordBuildMetrics(fresh, pipelineRun, buildStatusSuccess)
-		if fresh.Spec.IsFlashEnabled() {
-			r.recordPipelineFlashMetrics(ctx, fresh, pipelineRun, buildStatusSuccess)
+		recordBuildMetrics(imageBuild, pipelineRun, buildStatusSuccess)
+		if imageBuild.Spec.IsFlashEnabled() {
+			r.recordPipelineFlashMetrics(ctx, imageBuild, pipelineRun, buildStatusSuccess)
 		}
 
 		// Cleanup transient secrets
 		cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
 
 		// Write lease back to workspace for reuse by subsequent builds
-		if fresh.Spec.Workspace != "" && fresh.Status.LeaseID != "" {
-			r.updateWorkspaceLease(ctx, fresh, log)
+		if imageBuild.Spec.Workspace != "" && imageBuild.Status.LeaseID != "" {
+			r.updateWorkspaceLease(ctx, imageBuild, log)
 		}
 
 		if cleanupErr != nil {
@@ -2671,6 +2666,7 @@ func (r *ImageBuildReconciler) updateStatus(
 	if err := r.Status().Patch(ctx, fresh, patch); err != nil {
 		return err
 	}
+	fresh.DeepCopyInto(imageBuild)
 	adjustActiveBuildsGauge(oldPhase, phase)
 	if oldPhase != phase || oldMessage != message {
 		r.emitEventf(
