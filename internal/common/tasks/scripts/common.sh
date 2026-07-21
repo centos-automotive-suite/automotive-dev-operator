@@ -155,8 +155,9 @@ validate_custom_def() {
 setup_container_config() {
   mkdir -p /etc/containers
   cat > /etc/containers/registries.conf << EOF
-[registries.insecure]
-registries = ['$INTERNAL_REGISTRY']
+[[registry]]
+location = "$INTERNAL_REGISTRY"
+insecure = true
 EOF
 
   echo "Configuring kernel overlay storage driver"
@@ -314,6 +315,7 @@ read_registry_creds() {
   [ -f "$auth_dir/REGISTRY_PASSWORD" ] && REGISTRY_PASSWORD=$(cat "$auth_dir/REGISTRY_PASSWORD") && echo "DEBUG: Found REGISTRY_PASSWORD"
   [ -f "$auth_dir/REGISTRY_TOKEN" ] && REGISTRY_TOKEN=$(cat "$auth_dir/REGISTRY_TOKEN") && echo "DEBUG: Found REGISTRY_TOKEN"
   [ -f "$auth_dir/REGISTRY_AUTH_FILE_CONTENT" ] && REGISTRY_AUTH_FILE_CONTENT=$(cat "$auth_dir/REGISTRY_AUTH_FILE_CONTENT") && echo "DEBUG: Found REGISTRY_AUTH_FILE_CONTENT"
+  [ -z "$REGISTRY_AUTH_FILE_CONTENT" ] && [ -f "$auth_dir/.dockerconfigjson" ] && REGISTRY_AUTH_FILE_CONTENT=$(cat "$auth_dir/.dockerconfigjson") && echo "DEBUG: Found .dockerconfigjson"
   echo "DEBUG: Registry creds read completed"
 }
 
@@ -328,6 +330,16 @@ setup_registry_auth() {
   if [ -n "$REGISTRY_AUTH_FILE_CONTENT" ]; then
     echo "Using provided registry auth file content"
     echo "$REGISTRY_AUTH_FILE_CONTENT" > "$auth_file"
+    if [ -n "${TOKEN:-}" ] && [ -n "${REGISTRY:-}" ]; then
+      python3 -c "
+import json, sys
+f = sys.argv[1]
+with open(f) as fh: d = json.load(fh)
+d.setdefault('auths', {})[sys.argv[2]] = {'auth': sys.argv[3]}
+with open(f, 'w') as fh: json.dump(d, fh)
+" "$auth_file" "$REGISTRY" "$(echo -n "serviceaccount:$TOKEN" | base64 -w0)"
+      echo "Merged cluster registry auth into provided credentials"
+    fi
   elif [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ] && [ -n "$REGISTRY_URL" ]; then
     echo "Creating registry auth from username/password for $REGISTRY_URL"
     create_auth_json "$auth_file" "$REGISTRY_URL" "$(echo -n "$REGISTRY_USERNAME:$REGISTRY_PASSWORD" | base64 -w0)"

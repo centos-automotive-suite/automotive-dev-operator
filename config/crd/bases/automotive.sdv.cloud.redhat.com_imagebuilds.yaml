@@ -159,9 +159,10 @@ spec:
                         type: string
                     type: object
                   format:
-                    default: qcow2
-                    description: Format specifies the disk image output format (e.g.,
-                      raw, qcow2, simg, or any AIB-supported format)
+                    description: |-
+                      Format specifies the disk image output format (e.g., raw, qcow2, simg, or any AIB-supported format).
+                      When omitted, the controller resolves the format from the aib-target-defaults ConfigMap,
+                      falling back to qcow2 if no target default is configured.
                     type: string
                   useServiceAccountAuth:
                     description: |-
@@ -264,6 +265,16 @@ spec:
             x-kubernetes-validations:
             - message: reproducible builds require secureBuild to be true
               rule: '!has(self.reproducible) || !self.reproducible || self.secureBuild'
+            - message: secretRef is required when export.disk.oci is set (unless useServiceAccountAuth
+                is true)
+              rule: '!(has(self.export) && has(self.export.disk) && has(self.export.disk.oci)
+                && size(self.export.disk.oci) > 0) || size(self.secretRef) > 0 ||
+                (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)'
+            - message: secretRef is required when export.container is set (unless
+                useServiceAccountAuth is true)
+              rule: '!(has(self.export) && has(self.export.container) && size(self.export.container)
+                > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth)
+                && self.export.useServiceAccountAuth)'
           status:
             description: ImageBuildStatus defines the observed state of ImageBuild
             properties:
@@ -390,6 +401,12 @@ spec:
               pvcName:
                 description: PVCName is the name of the PVC where the artifact is
                   stored
+                type: string
+              resolvedExportFormat:
+                description: |-
+                  ResolvedExportFormat is the export format resolved at build creation time.
+                  Persisted so the push task uses the same format even if the
+                  aib-target-defaults ConfigMap changes between build and push.
                 type: string
               startTime:
                 description: StartTime is when the build started

@@ -172,6 +172,11 @@ type CatalogImageStatus struct {
 	// +optional
 	PublishedAt *metav1.Time `json:"publishedAt,omitempty"`
 
+	// VerificationFailures counts consecutive verification failures.
+	// After the max is reached the phase transitions to Failed.
+	// +optional
+	VerificationFailures int32 `json:"verificationFailures,omitempty"`
+
 	// SourceImageBuild references the ImageBuild that created this catalog entry
 	// +optional
 	SourceImageBuild string `json:"sourceImageBuild,omitempty"`

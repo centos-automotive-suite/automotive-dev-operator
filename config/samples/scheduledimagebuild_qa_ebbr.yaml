@@ -1,0 +1,373 @@
+apiVersion: automotive.sdv.cloud.redhat.com/v1alpha1
+kind: ScheduledImageBuild
+metadata:
+  name: nightly-qa-ebbr
+spec:
+  schedule: "23 17 * * *"
+  concurrencyPolicy: Forbid
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 1
+  startingDeadlineSeconds: 3600
+  publishToCatalog:
+    enabled: true
+    tags:
+      - nightly
+      - qa
+      - ebbr
+  imageBuildTemplate:
+    metadata:
+      labels:
+        team: qa
+        schedule: nightly
+        target: ebbr
+    spec:
+      architecture: aarch64
+      aib:
+        distro: autosd
+        target: ebbr
+        mode: image
+        image: quay.io/centos-sig-automotive/automotive-image-builder:1.3.2
+        manifest: |
+          name: qa
+
+          content:
+            add_files:
+              - path: /etc/sysctl.d/99-custom-networking.conf
+                text: |
+                  net.ipv4.conf.all.arp_ignore=1
+                  net.ipv4.conf.all.arp_announce=2
+                  net.ipv4.conf.all.rp_filter=2
+              - path: /etc/systemd/system/fixup.service
+                text: |
+                  [Unit]
+                  Description=One-time config fixup
+                  After=local-fs.target
+
+                  [Service]
+                  Type=oneshot
+                  ExecStart=/usr/bin/sed -i 's/.*LOGIN_TIMEOUT.*/LOGIN_TIMEOUT  600/' /etc/login.defs
+                  ExecStartPost=/usr/bin/systemctl disable fixup.service
+
+                  [Install]
+                  WantedBy=multi-user.target
+
+            repos:
+              - id: EPEL
+                metalink: https://mirrors.fedoraproject.org/metalink?repo=epel-10&arch=$arch
+
+            rpms:
+              - openssh-server
+              - chrony
+              - CUnit
+              - NetworkManager-libreswan
+              - NetworkManager-ovs
+              - aardvark-dns
+              - annobin-annocheck
+              - asciidoc
+              - audit
+              - augeas-libs
+              - automotive-image-builder
+              - avahi-libs
+              - bash
+              - bash-completion
+              - bc
+              - bcc
+              - bcc-tools
+              - beakerlib
+              - bind
+              - bind-dnssec-utils
+              - bind-utils
+              - binutils
+              - blktrace
+              - bluechi-agent
+              - bluechi-controller
+              - bluechi-ctl
+              - bluechi-is-online
+              - bluechi-selinux
+              - boost
+              - bpftool
+              - bpftrace
+              - bridge-utils
+              - btrfs-progs
+              - buildah
+              - busybox
+              - byacc
+              - bzip2
+              - c-ares
+              - catatonit
+              - checkpolicy
+              - chrpath
+              - cifs-utils
+              - clang
+              - cmake
+              - conntrack-tools
+              - container-tools
+              - createrepo_c
+              - criu
+              - criu-libs
+              - cronie
+              - crypto-policies-scripts
+              - cryptsetup
+              - cups-lpd
+              - dbench
+              - dblatex
+              - dejagnu
+              - device-mapper-multipath
+              - dfuzzer
+              - dhcp-common
+              - dialog
+              - dnsmasq
+              - docbook-style-xsl
+              - docbook5-style-xsl
+              - dosfstools
+              - doxygen
+              - duperemove
+              - dwarves
+              - e2fsprogs
+              - erofs-utils
+              - ethtool
+              - exfatprogs
+              - expect
+              - findutils
+              - fio
+              - fio-engine-libaio
+              - fusa-gcc-plugin
+              - fuse
+              - gcc
+              - gcc-c++
+              - gcc-gfortran
+              - gdb
+              - genisoimage
+              - geolite2-city
+              - geolite2-country
+              - git
+              - glibc-static
+              - glibc-utils
+              - gnu-efi
+              - golang
+              - gperf
+              - graphviz
+              - guestfs-tools
+              - hdparm
+              - hostapd
+              - httpd
+              - httpd-tools
+              - indent
+              - integritysetup
+              - ipcalc
+              - iperf3
+              - iproute
+              - iproute-tc
+              - iputils
+              - irqbalance
+              - kabi-dw
+              - kernel-automotive-devel
+              - kernel-automotive-modules-extra
+              - kernel-automotive-modules-internal
+              - kernel-automotive-selftests-internal
+              - kernel-headers
+              - kernel-rpm-macros
+              - kernel-tools
+              - kexec-tools
+              - ksh
+              - libdhash
+              - libgccjit
+              - libgfortran
+              - libitm
+              - libldb
+              - liblsan
+              - libsss_certmap
+              - libsss_idmap
+              - libsss_nss_idmap
+              - libsss_sudo
+              - libstdc++-docs
+              - libstdc++-static
+              - libtalloc
+              - libtdb
+              - libtevent
+              - libtool
+              - libtsan
+              - liburing-devel
+              - libuuid-devel
+              - lld
+              - llvm
+              - lm_sensors-libs
+              - lshw
+              - lsof
+              - lsscsi
+              - ltrace
+              - lvm2
+              - make
+              - man
+              - man-pages
+              - mdadm
+              - meson
+              - mold
+              - nasm
+              - nc
+              - net-tools
+              - netlabel_tools
+              - netperf
+              - netronome-firmware
+              - netsniff-ng
+              - nmap
+              - nmap-ncat
+              - nmstate
+              - nss_db
+              - nss_hesiod
+              - ntfs-3g-libs
+              - ntfsprogs
+              - numactl
+              - nvme-cli
+              - patch
+              - patchutils
+              - pciutils
+              - pcp-conf
+              - pcp-libs
+              - perf
+              - perl
+              - perl-Net-DNS-Nameserver
+              - perl-generators
+              - pesign
+              - podman
+              - policycoreutils
+              - policycoreutils-python-utils
+              - postfix
+              - procmail
+              - procps-ng
+              - psmisc
+              - python
+              - python3-augeas
+              - python3-click
+              - python3-cryptography
+              - python3-docutils
+              - python3-gobject-base
+              - python3-jinja2
+              - python3-jsonschema
+              - python3-libnmstate
+              - python3-libsemanage
+              - python3-lxml
+              - python3-pefile
+              - python3-pexpect
+              - python3-pip
+              - python3-ply
+              - python3-policycoreutils
+              - python3-psycopg2
+              - python3-scapy
+              - python3-sphinx
+              - python3-sss
+              - python3-sssdconfig
+              - python3-test
+              - qemu-kvm
+              - realtime-tests
+              - rpcgen
+              - rpmdevtools
+              - rsync
+              - rsyslog
+              - rtla
+              - screen
+              - selinux-policy-mls
+              - selinux-policy-targeted
+              - setools
+              - setools-console
+              - sharutils
+              - skopeo
+              - slirp4netns
+              - socat
+              - sqlite
+              - sshpass
+              - sssd-client
+              - sssd-common
+              - sssd-dbus
+              - sssd-nfs-idmap
+              - sssd-tools
+              - stalld
+              - strace
+              - stress-ng
+              - subscription-manager
+              - sudo
+              - sysstat
+              - systemd-boot-unsigned
+              - systemd-container
+              - systemd-journal-remote
+              - systemd-oomd
+              - systemd-ukify
+              - systemtap
+              - tcpdump
+              - tcsh
+              - telnet
+              - telnet-server
+              - texinfo
+              - texinfo-tex
+              - texlive-collection-latex
+              - tmux
+              - toolbox
+              - tpm-tools
+              - trace-cmd
+              - traceroute
+              - tree
+              - trousers-lib
+              - tuna
+              - /usr/bin/flock
+              - unifdef
+              - util-linux-user
+              - valgrind
+              - veritysetup
+              - vim
+              - vim-minimal
+              - virt-what
+              - vsftpd
+              - wget
+              - wireguard-tools
+              - xfsdump
+              - xfsprogs
+              - xfsprogs-xfs_scrub
+              - xmlsec1-openssl
+              - xmlto
+              - yum
+              - zlib-static
+
+            systemd:
+              enabled_services:
+                - sshd.service
+                - fixup.service
+
+          qm:
+            content:
+              rpms:
+                - stress-ng
+
+          image:
+            sealed: false
+            image_size: 10GiB
+            partitions:
+              var_qm:
+                size: 1GiB
+
+          auth:
+            root_password: "$6$xoLqEUz0cGGJRx01$H3H/bFm0myJPULNMtbSsOFd/2BnHqHkMD92Sfxd.EKM9hXTWSmELG8cf205l6dktomuTcgKGGtGDgtvHVXSWU."
+            root_ssh_keys:
+              - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILKx5O9oCqfSyOZQP/VNMIlK4o/ru0TxJmFwpD3Bc43B auto-qe"
+            sshd_config:
+              PermitRootLogin: true
+              PasswordAuthentication: true
+            users:
+              guest:
+                uid: 2000
+                gid: 2000
+                password: "$6$xoLqEUz0cGGJRx01$H3H/bFm0myJPULNMtbSsOFd/2BnHqHkMD92Sfxd.EKM9hXTWSmELG8cf205l6dktomuTcgKGGtGDgtvHVXSWU."
+                groups:
+                  - guest
+            groups:
+              guest:
+                gid: 2000
+
+          experimental:
+            internal_defines:
+              grow_rootfs: false
+              use_module_sig_enforce: false
+              use_transient_etc: false
+      export:
+        format: simg
+        disk:
+          oci: quay.io/bzlotnik/ebbr:disk

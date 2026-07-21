@@ -133,6 +133,13 @@ spec:
       kind: OperatorConfig
       name: operatorconfigs.automotive.sdv.cloud.redhat.com
       version: v1alpha1
+    - description: |-
+        ScheduledImageBuild defines a cron schedule for creating ImageBuild CRs
+        with optional automatic publishing to the catalog.
+      displayName: Scheduled Image Build
+      kind: ScheduledImageBuild
+      name: scheduledimagebuilds.automotive.sdv.cloud.redhat.com
+      version: v1alpha1
   description: |
     The CentOS Automotive Suite Operator enables building automotive OS images on OpenShift clusters.
 

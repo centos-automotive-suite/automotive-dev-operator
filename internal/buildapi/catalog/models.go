@@ -20,6 +20,7 @@ import (
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // CatalogImageResponse represents a catalog image in API responses
@@ -43,12 +44,17 @@ type CatalogImageResponse struct {
 	PublishedAt      *time.Time            `json:"publishedAt,omitempty"`
 	CreatedAt        time.Time             `json:"createdAt"`
 	SourceImageBuild string                `json:"sourceImageBuild,omitempty"`
+	SourceType       string                `json:"sourceType,omitempty"`
+	BuildMode        string                `json:"buildMode,omitempty"`
+	ExportFormat     string                `json:"exportFormat,omitempty"`
 	Labels           map[string]string     `json:"labels,omitempty"`
 	ArtifactRefs     []ArtifactRefInfo     `json:"artifactRefs,omitempty"`
 	DownloadURL      string                `json:"downloadUrl,omitempty"`
 	IsMultiArch      bool                  `json:"isMultiArch,omitempty"`
 	PlatformVariants []PlatformVariantInfo `json:"platformVariants,omitempty"`
 	AccessCount      int64                 `json:"accessCount,omitempty"`
+	StatusReason     string                `json:"statusReason,omitempty"`
+	StatusMessage    string                `json:"statusMessage,omitempty"`
 }
 
 // ArtifactRefInfo represents artifact reference information in responses
@@ -144,6 +150,8 @@ func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) Catal
 		response.Distro = catalogImage.Spec.Metadata.Distro
 		response.DistroVersion = catalogImage.Spec.Metadata.DistroVersion
 		response.Bootc = catalogImage.Spec.Metadata.Bootc
+		response.BuildMode = catalogImage.Spec.Metadata.BuildMode
+		response.ExportFormat = catalogImage.Spec.Metadata.ExportFormat
 
 		for _, target := range catalogImage.Spec.Metadata.Targets {
 			response.Targets = append(response.Targets, HardwareTargetInfo{
@@ -152,6 +160,11 @@ func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) Catal
 				Notes:    target.Notes,
 			})
 		}
+	}
+
+	// Extract source type from label
+	if sourceType, ok := catalogImage.Labels[automotivev1alpha1.LabelSourceType]; ok {
+		response.SourceType = sourceType
 	}
 
 	// Extract registry metadata
@@ -184,6 +197,17 @@ func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) Catal
 
 	response.SourceImageBuild = catalogImage.Status.SourceImageBuild
 	response.AccessCount = catalogImage.Status.AccessCount
+
+	if catalogImage.Status.Phase == automotivev1alpha1.CatalogImagePhaseUnavailable ||
+		catalogImage.Status.Phase == automotivev1alpha1.CatalogImagePhaseFailed {
+		for _, c := range catalogImage.Status.Conditions {
+			if c.Type == automotivev1alpha1.CatalogImageConditionAvailable && c.Status == metav1.ConditionFalse {
+				response.StatusReason = c.Reason
+				response.StatusMessage = c.Message
+				break
+			}
+		}
+	}
 
 	// Extract artifact references
 	for _, ref := range catalogImage.Status.ArtifactRefs {

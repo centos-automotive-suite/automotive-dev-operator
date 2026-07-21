@@ -42,6 +42,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/yaml"
 )
 
 var ibTracer = otel.Tracer("imagebuild-controller")
@@ -873,6 +874,8 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 	log := r.buildLogger(imageBuild)
 	log.Info("Creating PipelineRun for ImageBuild")
 
+	exportFormat := r.resolveExportFormat(ctx, imageBuild)
+
 	// Fetch OperatorConfig from the operator namespace to get build configuration
 	operatorConfig := &automotivev1alpha1.OperatorConfig{}
 	err := r.Get(ctx, types.NamespacedName{Name: "config", Namespace: controllerutils.OperatorNamespace()}, operatorConfig)
@@ -988,7 +991,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			Name: "export-format",
 			Value: tektonv1.ParamValue{
 				Type:      tektonv1.ParamTypeString,
-				StringVal: imageBuild.Spec.GetExportFormat(),
+				StringVal: exportFormat,
 			},
 		},
 		{
@@ -1100,7 +1103,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			Name: "aib-extra-args",
 			Value: tektonv1.ParamValue{
 				Type:      tektonv1.ParamTypeString,
-				StringVal: strings.Join(imageBuild.Spec.GetAIBExtraArgs(), "\n"),
+				StringVal: strings.Join(r.resolveExtraArgs(ctx, imageBuild), "\n"),
 			},
 		},
 		{
@@ -1518,6 +1521,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 	}
 
 	fresh.Status.PipelineRunName = pipelineRun.Name
+	fresh.Status.ResolvedExportFormat = exportFormat
 	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update ImageBuild with PipelineRun name: %w", err)
 	}
@@ -1572,7 +1576,7 @@ func (r *ImageBuildReconciler) createOrUpdateManifestConfigMap(
 		if customDefs := imageBuild.Spec.GetCustomDefs(); len(customDefs) > 0 {
 			cm.Data["custom-definitions.env"] = strings.Join(customDefs, "\n")
 		}
-		if extraArgs := imageBuild.Spec.GetAIBExtraArgs(); len(extraArgs) > 0 {
+		if extraArgs := r.resolveExtraArgs(ctx, imageBuild); len(extraArgs) > 0 {
 			cm.Data["aib-extra-args.txt"] = strings.Join(extraArgs, "\n")
 		}
 		if rootPw := imageBuild.Spec.GetRootPassword(); rootPw != "" {
@@ -1615,10 +1619,9 @@ func (r *ImageBuildReconciler) createPushTaskRun(ctx context.Context, imageBuild
 		return fmt.Errorf("target is required for push: aib.target must be set")
 	}
 
-	exportFormat := imageBuild.Spec.GetExportFormat()
-	// exportFormat has a default of "qcow2", but validate anyway
+	exportFormat := imageBuild.Status.ResolvedExportFormat
 	if exportFormat == "" {
-		return fmt.Errorf("export format is required for push")
+		exportFormat = r.resolveExportFormat(ctx, imageBuild)
 	}
 
 	pushSecretRef := imageBuild.Spec.GetPushSecretRef()
@@ -1728,7 +1731,7 @@ func (r *ImageBuildReconciler) createPushTaskRun(ctx context.Context, imageBuild
 			Name: "aib-extra-args",
 			Value: tektonv1.ParamValue{
 				Type:      tektonv1.ParamTypeString,
-				StringVal: strings.Join(imageBuild.Spec.GetAIBExtraArgs(), "\n"),
+				StringVal: strings.Join(r.resolveExtraArgs(ctx, imageBuild), "\n"),
 			},
 		},
 		{
@@ -2154,43 +2157,54 @@ func (r *ImageBuildReconciler) cleanupTransientSecrets(
 			firstErr = err
 		}
 	}
+	uid := imageBuild.UID
 	if imageBuild.Spec.SecretRef != "" {
-		collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Spec.SecretRef, "registry auth", log))
+		collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Spec.SecretRef, "registry auth", log, uid))
 	}
 	if imageBuild.Spec.PushSecretRef != "" {
-		collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Spec.PushSecretRef, "push auth", log))
+		collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Spec.PushSecretRef, "push auth", log, uid))
 	}
 	if flashSecretRef := imageBuild.Spec.GetFlashClientConfigSecretRef(); flashSecretRef != "" {
-		collect(r.deleteSecret(ctx, imageBuild.Namespace, flashSecretRef, "flash client config", log))
+		collect(r.deleteSecret(ctx, imageBuild.Namespace, flashSecretRef, "flash client config", log, uid))
 	}
-	collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Name+"-flash-oci-auth", "flash OCI auth", log))
+	collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Name+"-flash-oci-auth", "flash OCI auth", log, uid))
 	return firstErr
 }
 
-// deleteSecret attempts to delete a secret. Returns nil on success or if
-// the secret is already gone (NotFound). Returns the error on transient
-// failure so the caller can schedule a retry.
+// deleteSecret deletes a secret only if it is owned by the given ImageBuild
+// (i.e. has a matching controller owner reference). User-provided shared
+// secrets are left untouched. Returns nil on success, if the secret is
+// already gone, or if it is not owned by this build.
 func (r *ImageBuildReconciler) deleteSecret(
 	ctx context.Context,
 	namespace, secretName, secretType string,
 	log logr.Logger,
+	ownerUID types.UID,
 ) error {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: namespace,
-		},
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		log.Error(err, "Failed to get "+secretType+" secret (will retry)", "secret", secretName)
+		return err
 	}
-	err := r.Delete(ctx, secret)
-	if err == nil {
-		log.Info("Deleted "+secretType+" secret", "secret", secretName)
+
+	owner := metav1.GetControllerOf(secret)
+	if owner == nil || owner.UID != ownerUID {
+		log.V(1).Info("Skipping deletion of "+secretType+" secret not owned by this build", "secret", secretName)
 		return nil
 	}
-	if errors.IsNotFound(err) {
-		return nil
+
+	if err := r.Delete(ctx, secret, client.Preconditions{UID: &secret.UID}); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		log.Error(err, "Failed to delete "+secretType+" secret (will retry)", "secret", secretName)
+		return err
 	}
-	log.Error(err, "Failed to delete "+secretType+" secret (will retry)", "secret", secretName)
-	return err
+	log.Info("Deleted "+secretType+" secret", "secret", secretName)
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -2601,6 +2615,71 @@ func (r *ImageBuildReconciler) resolveBuildConfig(ctx context.Context) *tasks.Bu
 	controllerutils.ApplyOCIVolumesConfig(bc, &operatorConfig.Spec)
 
 	return bc
+}
+
+type targetDefaults struct {
+	DefaultFormat string   `yaml:"defaultFormat"`
+	ExtraArgs     []string `yaml:"extraArgs"`
+}
+
+func (r *ImageBuildReconciler) getTargetDefaults(ctx context.Context, target string) *targetDefaults {
+	if target == "" {
+		return nil
+	}
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      "aib-target-defaults",
+		Namespace: controllerutils.OperatorNamespace(),
+	}, cm); err != nil {
+		if !errors.IsNotFound(err) {
+			r.Log.Error(err, "Failed to read aib-target-defaults ConfigMap, falling back to defaults")
+		}
+		return nil
+	}
+	data, ok := cm.Data["target-defaults.yaml"]
+	if !ok {
+		return nil
+	}
+	var parsed struct {
+		Targets map[string]targetDefaults `yaml:"targets"`
+	}
+	if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
+		return nil
+	}
+	if t, ok := parsed.Targets[target]; ok {
+		return &t
+	}
+	return nil
+}
+
+// resolveExportFormat returns the effective export format for a build.
+// Priority: user-specified Export.Format > target-defaults ConfigMap defaultFormat > "qcow2".
+func (r *ImageBuildReconciler) resolveExportFormat(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild) string {
+	if imageBuild.Spec.Export != nil && imageBuild.Spec.Export.Format != "" {
+		return imageBuild.Spec.Export.Format
+	}
+	target := imageBuild.Spec.GetTarget()
+	if td := r.getTargetDefaults(ctx, target); td != nil && td.DefaultFormat != "" {
+		r.buildLogger(imageBuild).Info("Resolved export format from target-defaults",
+			"target", target, "format", td.DefaultFormat)
+		return td.DefaultFormat
+	}
+	return "qcow2"
+}
+
+// resolveExtraArgs returns the effective AIB extra args for a build.
+// Priority: user-specified AIBExtraArgs > target-defaults ConfigMap extraArgs > empty.
+func (r *ImageBuildReconciler) resolveExtraArgs(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild) []string {
+	if specArgs := imageBuild.Spec.GetAIBExtraArgs(); len(specArgs) > 0 {
+		return specArgs
+	}
+	target := imageBuild.Spec.GetTarget()
+	if td := r.getTargetDefaults(ctx, target); td != nil && len(td.ExtraArgs) > 0 {
+		r.buildLogger(imageBuild).Info("Resolved extra args from target-defaults",
+			"target", target, "extraArgs", td.ExtraArgs)
+		return td.ExtraArgs
+	}
+	return nil
 }
 
 func (r *ImageBuildReconciler) updateStatus(
