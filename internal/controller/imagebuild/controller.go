@@ -737,58 +737,36 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 	}
 
 	if isPipelineRunSuccessful(pipelineRun) {
+		aibImageUsed, builderImageUsed := extractProvenance(pipelineRun, imageBuild.Spec.GetAIBImage())
+		leaseID := ""
+		if imageBuild.Spec.IsFlashEnabled() {
+			leaseID = extractLeaseID(pipelineRun)
+		}
+
+		msg := "Build completed successfully"
+		if imageBuild.Spec.IsFlashEnabled() {
+			msg = "Build and flash completed successfully"
+		}
+
+		if err := r.updateStatus(ctx, imageBuild, phaseCompleted, msg, func(ib *automotivev1alpha1.ImageBuild) {
+			ib.Status.AIBImageUsed = aibImageUsed
+			ib.Status.BuilderImageUsed = builderImageUsed
+			if leaseID != "" {
+				ib.Status.LeaseID = leaseID
+			}
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Re-read for metrics and post-completion work
 		fresh := &automotivev1alpha1.ImageBuild{}
-		nsName := types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}
-		if err := r.Get(ctx, nsName, fresh); err != nil {
+		if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
 			return ctrl.Result{}, err
 		}
-
-		patch := client.MergeFrom(fresh.DeepCopy())
-
-		// Extract and populate build provenance
-		aibImageUsed, builderImageUsed := extractProvenance(pipelineRun, fresh.Spec.GetAIBImage())
-		fresh.Status.AIBImageUsed = aibImageUsed
-		fresh.Status.BuilderImageUsed = builderImageUsed
-
-		// Extract lease ID if flash was enabled
-		if fresh.Spec.IsFlashEnabled() {
-			fresh.Status.LeaseID = extractLeaseID(pipelineRun)
-		}
-
-		// Pipeline includes push-disk-artifact and flash-image tasks (when enabled)
-		// Pipeline completion means everything succeeded
-		fresh.Status.Phase = phaseCompleted
-		if fresh.Spec.IsFlashEnabled() {
-			fresh.Status.Message = "Build and flash completed successfully"
-		} else {
-			fresh.Status.Message = "Build completed successfully"
-		}
-		if fresh.Status.CompletionTime == nil {
-			now := metav1.Now()
-			fresh.Status.CompletionTime = &now
-		}
-
-		if err := r.Status().Patch(ctx, fresh, patch); err != nil {
-			log.Error(err, "Failed to patch status to Completed")
-			return ctrl.Result{}, err
-		}
-		adjustActiveBuildsGauge(phaseBuilding, phaseCompleted)
 		recordBuildMetrics(fresh, pipelineRun, buildStatusSuccess)
 		if fresh.Spec.IsFlashEnabled() {
 			r.recordPipelineFlashMetrics(ctx, fresh, pipelineRun, buildStatusSuccess)
 		}
-
-		r.emitEventf(
-			fresh,
-			corev1.EventTypeNormal,
-			eventReasonBuildCompleted,
-			"Build completed successfully: mode=%s target=%s arch=%s toDisk=%t pipelineRun=%s",
-			fresh.Spec.GetMode(),
-			fresh.Spec.GetTarget(),
-			fresh.Spec.Architecture,
-			fresh.Spec.GetBuildDiskImage(),
-			pipelineRun.Name,
-		)
 
 		// Cleanup transient secrets
 		cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
@@ -1857,40 +1835,21 @@ func (r *ImageBuildReconciler) handlePushingState(
 	// Push completed - cleanup transient secrets and update status
 	cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, log)
 
-	fresh := &automotivev1alpha1.ImageBuild{}
-	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	patch := client.MergeFrom(fresh.DeepCopy())
-
 	if isTaskRunSuccessful(taskRun) {
-		// Check if flash is enabled
-		if fresh.Spec.IsFlashEnabled() {
-			fresh.Status.Phase = "Flashing"
-			fresh.Status.Message = "Flashing image to device"
-			if err := r.Status().Patch(ctx, fresh, patch); err != nil {
-				log.Error(err, "Failed to patch status to Flashing")
+		if imageBuild.Spec.IsFlashEnabled() {
+			if err := r.updateStatus(ctx, imageBuild, "Flashing", "Flashing image to device"); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{Requeue: true}, nil
 		}
 
-		fresh.Status.Phase = phaseCompleted
-		fresh.Status.Message = "Build and push completed successfully"
+		if err := r.updateStatus(ctx, imageBuild, phaseCompleted, "Build and push completed successfully"); err != nil {
+			return ctrl.Result{}, err
+		}
 	} else {
-		fresh.Status.Phase = phaseFailed
-		fresh.Status.Message = "Push to registry failed"
-	}
-
-	if fresh.Status.CompletionTime == nil {
-		now := metav1.Now()
-		fresh.Status.CompletionTime = &now
-	}
-
-	if err := r.Status().Patch(ctx, fresh, patch); err != nil {
-		log.Error(err, "Failed to patch status after push completion")
-		return ctrl.Result{}, err
+		if err := r.updateStatus(ctx, imageBuild, phaseFailed, "Push to registry failed"); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	if cleanupErr != nil {
@@ -1948,35 +1907,16 @@ func (r *ImageBuildReconciler) handleFlashingState(
 	// Flash completed - cleanup and update status
 	cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, log)
 
-	fresh := &automotivev1alpha1.ImageBuild{}
-	if err := r.Get(ctx, types.NamespacedName{Name: imageBuild.Name, Namespace: imageBuild.Namespace}, fresh); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	patch := client.MergeFrom(fresh.DeepCopy())
-
 	flashSucceeded := isTaskRunSuccessful(taskRun)
 	if flashSucceeded {
-		fresh.Status.Phase = phaseCompleted
-		fresh.Status.Message = "Build, push, and flash completed successfully"
-	} else {
-		fresh.Status.Phase = phaseFailed
-		fresh.Status.Message = taskRunFailureMessage(taskRun, "Flash to device failed")
-	}
-
-	if fresh.Status.CompletionTime == nil {
-		now := metav1.Now()
-		fresh.Status.CompletionTime = &now
-	}
-
-	if err := r.Status().Patch(ctx, fresh, patch); err != nil {
-		log.Error(err, "Failed to patch status after flash completion")
-		return ctrl.Result{}, err
-	}
-
-	if flashSucceeded {
+		if err := r.updateStatus(ctx, imageBuild, phaseCompleted, "Build, push, and flash completed successfully"); err != nil {
+			return ctrl.Result{}, err
+		}
 		recordFlashMetrics(imageBuild, taskRun, buildStatusSuccess)
 	} else {
+		if err := r.updateStatus(ctx, imageBuild, phaseFailed, taskRunFailureMessage(taskRun, "Flash to device failed")); err != nil {
+			return ctrl.Result{}, err
+		}
 		recordFlashMetrics(imageBuild, taskRun, buildStatusFailure)
 	}
 
@@ -2686,6 +2626,7 @@ func (r *ImageBuildReconciler) updateStatus(
 	ctx context.Context,
 	imageBuild *automotivev1alpha1.ImageBuild,
 	phase, message string,
+	mutations ...func(*automotivev1alpha1.ImageBuild),
 ) error {
 	fresh := &automotivev1alpha1.ImageBuild{}
 	if err := r.Get(ctx, types.NamespacedName{
@@ -2705,6 +2646,10 @@ func (r *ImageBuildReconciler) updateStatus(
 	patch := client.MergeFrom(fresh.DeepCopy())
 	oldPhase := fresh.Status.Phase
 	oldMessage := fresh.Status.Message
+
+	for _, fn := range mutations {
+		fn(fresh)
+	}
 
 	if phase == automotivev1alpha1.ImageBuildPhaseExpired {
 		fresh.Status.PreviousPhase = fresh.Status.Phase
