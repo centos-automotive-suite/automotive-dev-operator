@@ -15,10 +15,15 @@ if [[ ! -f "${JMP_CLIENT_CONFIG}" ]]; then
     exit 1
 fi
 
+# Copy config to writable path so jmp can persist refreshed tokens
+cp "${JMP_CLIENT_CONFIG}" /tmp/client.yaml
+export JMP_CLIENT_CONFIG=/tmp/client.yaml
+export JMP_CLIENT_CONFIG_HOME=/tmp
+
 echo "Using client config: ${JMP_CLIENT_CONFIG}"
 
 echo "refreshing jumpstarter token"
-if ! jmp login --client-config "${JMP_CLIENT_CONFIG}" 2>&1; then
+if ! timeout 30 jmp login --nointeractive --client-config "${JMP_CLIENT_CONFIG}" 2>&1; then
     echo "WARNING: jmp login failed, continuing with existing credentials"
 fi
 
