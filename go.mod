@@ -5,7 +5,7 @@ go 1.25.7
 require (
 	github.com/containers/image/v5 v5.36.2
 	github.com/containers/storage v1.59.1
-	github.com/dlclark/regexp2 v1.12.0
+	github.com/dlclark/regexp2/v2 v2.5.2
 	github.com/docker/cli v29.4.0+incompatible
 	github.com/fatih/color v1.19.0
 	github.com/gin-gonic/gin v1.10.1
