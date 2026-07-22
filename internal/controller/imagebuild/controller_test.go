@@ -14,8 +14,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	knativev1 "knative.dev/pkg/apis/duck/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1006,5 +1008,136 @@ func TestGetOCIRepoImages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func newTestReconciler(objs ...client.Object) *ImageBuildReconciler {
+	scheme := newTestSchemeWithTekton()
+	builder := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		WithStatusSubresource(objs...)
+	return &ImageBuildReconciler{
+		Client:   builder.Build(),
+		Scheme:   scheme,
+		Recorder: record.NewFakeRecorder(100),
+	}
+}
+
+func TestUpdateStatusSetsConditionsOnCompleted(t *testing.T) {
+	ib := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: "test-ns"},
+		Status:     automotivev1alpha1.ImageBuildStatus{Phase: phaseBuilding},
+	}
+	r := newTestReconciler(ib)
+
+	if err := r.updateStatus(context.Background(), ib, phaseCompleted, "Build done"); err != nil {
+		t.Fatalf("updateStatus() error: %v", err)
+	}
+
+	fresh := &automotivev1alpha1.ImageBuild{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-build", Namespace: "test-ns"}, fresh); err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+
+	ready := meta.FindStatusCondition(fresh.Status.Conditions, automotivev1alpha1.ImageBuildConditionReady)
+	if ready == nil {
+		t.Fatal("Ready condition not set")
+	}
+	if ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %v, want True", ready.Status)
+	}
+
+	progressing := meta.FindStatusCondition(fresh.Status.Conditions, automotivev1alpha1.ImageBuildConditionProgressing)
+	if progressing == nil {
+		t.Fatal("Progressing condition not set")
+	}
+	if progressing.Status != metav1.ConditionFalse {
+		t.Errorf("Progressing = %v, want False", progressing.Status)
+	}
+}
+
+func TestUpdateStatusGuardsCancelledPhase(t *testing.T) {
+	ib := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: "test-ns"},
+		Status:     automotivev1alpha1.ImageBuildStatus{Phase: phaseCancelled, Message: "Cancelled by user"},
+	}
+	r := newTestReconciler(ib)
+
+	if err := r.updateStatus(context.Background(), ib, phaseCompleted, "Build done"); err != nil {
+		t.Fatalf("updateStatus() error: %v", err)
+	}
+
+	fresh := &automotivev1alpha1.ImageBuild{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-build", Namespace: "test-ns"}, fresh); err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+
+	if fresh.Status.Phase != phaseCancelled {
+		t.Errorf("Phase = %q, want %q (guard should prevent overwrite)", fresh.Status.Phase, phaseCancelled)
+	}
+	if fresh.Status.Message != "Cancelled by user" {
+		t.Errorf("Message = %q, want %q", fresh.Status.Message, "Cancelled by user")
+	}
+}
+
+func TestUpdateStatusAppliesMutations(t *testing.T) {
+	ib := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: "test-ns"},
+		Status:     automotivev1alpha1.ImageBuildStatus{Phase: phaseBuilding},
+	}
+	r := newTestReconciler(ib)
+
+	err := r.updateStatus(context.Background(), ib, phaseCompleted, "Build done", func(ib *automotivev1alpha1.ImageBuild) {
+		ib.Status.AIBImageUsed = "quay.io/aib:v1"
+		ib.Status.BuilderImageUsed = "quay.io/builder:v2"
+		ib.Status.LeaseID = "lease-123"
+	})
+	if err != nil {
+		t.Fatalf("updateStatus() error: %v", err)
+	}
+
+	fresh := &automotivev1alpha1.ImageBuild{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-build", Namespace: "test-ns"}, fresh); err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+
+	if fresh.Status.AIBImageUsed != "quay.io/aib:v1" {
+		t.Errorf("AIBImageUsed = %q, want %q", fresh.Status.AIBImageUsed, "quay.io/aib:v1")
+	}
+	if fresh.Status.BuilderImageUsed != "quay.io/builder:v2" {
+		t.Errorf("BuilderImageUsed = %q, want %q", fresh.Status.BuilderImageUsed, "quay.io/builder:v2")
+	}
+	if fresh.Status.LeaseID != "lease-123" {
+		t.Errorf("LeaseID = %q, want %q", fresh.Status.LeaseID, "lease-123")
+	}
+	if fresh.Status.Phase != phaseCompleted {
+		t.Errorf("Phase = %q, want %q", fresh.Status.Phase, phaseCompleted)
+	}
+
+	ready := meta.FindStatusCondition(fresh.Status.Conditions, automotivev1alpha1.ImageBuildConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Error("Ready condition should be True after Completed with mutations")
+	}
+}
+
+func TestUpdateStatusSetsCompletionTime(t *testing.T) {
+	ib := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: "test-ns"},
+		Status:     automotivev1alpha1.ImageBuildStatus{Phase: phaseBuilding},
+	}
+	r := newTestReconciler(ib)
+
+	if err := r.updateStatus(context.Background(), ib, phaseCompleted, "Build done"); err != nil {
+		t.Fatalf("updateStatus() error: %v", err)
+	}
+
+	fresh := &automotivev1alpha1.ImageBuild{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-build", Namespace: "test-ns"}, fresh); err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+
+	if fresh.Status.CompletionTime == nil {
+		t.Error("CompletionTime should be set on terminal phase")
 	}
 }
