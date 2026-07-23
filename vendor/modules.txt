@@ -624,8 +624,8 @@ github.com/klauspost/pgzip
 ## explicit; go 1.18
 github.com/leodido/go-urn
 github.com/leodido/go-urn/scim/schema
-# github.com/letsencrypt/boulder v0.20260309.0
-## explicit; go 1.25.0
+# github.com/letsencrypt/boulder v0.20260720.0
+## explicit; go 1.26.0
 github.com/letsencrypt/boulder/core
 github.com/letsencrypt/boulder/core/proto
 github.com/letsencrypt/boulder/goodkey

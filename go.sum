@@ -419,8 +419,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/leodido/go-urn v1.4.0 h1:WT9HwE9SGECu3lg4d/dIA+jxlljEa1/ffXKmRjqdmIQ=
 github.com/leodido/go-urn v1.4.0/go.mod h1:bvxc+MVxLKB4z00jd1z+Dvzr47oO32F/QSNjSBOlFxI=
-github.com/letsencrypt/boulder v0.20260309.0 h1:kZynrxK3QfqLGx6hhoz+Rfs3hgltJs1p9Mp+4+VwnY0=
-github.com/letsencrypt/boulder v0.20260309.0/go.mod h1:yG8lj8pNPZ8taq3oNdTpfBS+eC74IaEuiewqzVpXiWE=
+github.com/letsencrypt/boulder v0.20260720.0 h1:qfEk/Wc6CQfmIGCc7PCqrn0iRfUO+eKIp94i9zQsvaU=
+github.com/letsencrypt/boulder v0.20260720.0/go.mod h1:mNAmDl6+4CQnDk4+Mso2UJau2phT0L5UkBIS48FjmG0=
 github.com/maruel/natural v1.1.1 h1:Hja7XhhmvEFhcByqDoHz9QZbkWey+COd9xWfCfn1ioo=
 github.com/maruel/natural v1.1.1/go.mod h1:v+Rfd79xlw1AgVBjbO0BEQmptqb5HvL/k9GRHB7ZKEg=
 github.com/mattn/go-colorable v0.1.14 h1:9A9LHSqF/7dyVVX6g0U9cwm9pG3kP9gSzcuIPHPsaIE=
