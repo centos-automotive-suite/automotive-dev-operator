@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -79,7 +80,10 @@ const (
 	eventReasonDiskBuildDone    = "DiskBuildCompleted"
 )
 
-var isTerminalPhase = automotivev1alpha1.IsTerminalBuildPhase
+var (
+	isTerminalPhase   = automotivev1alpha1.IsTerminalBuildPhase
+	errTerminalConfig = stderrors.New("terminal configuration error")
+)
 
 // safeDerivedName generates a Kubernetes-safe derived resource name by truncating
 // the base name and appending a hash to preserve uniqueness. The final name will
@@ -824,10 +828,8 @@ func (r *ImageBuildReconciler) startNewBuild(
 	// PVC is now created via VolumeClaimTemplate in createBuildTaskRun
 	// to ensure proper zone affinity with WaitForFirstConsumer
 	if err := r.createBuildTaskRun(ctx, imageBuild); err != nil {
-		// secureBuild validation errors are terminal — set Failed status
-		// instead of returning a reconcile error that causes infinite requeue
-		if strings.Contains(err.Error(), "secureBuild") {
-			msg := fmt.Sprintf("Build configuration error: %v", err)
+		if stderrors.Is(err, errTerminalConfig) {
+			msg := strings.TrimSuffix(err.Error(), ": "+errTerminalConfig.Error())
 			if statusErr := r.updateStatus(ctx, imageBuild, phaseFailed, msg); statusErr != nil {
 				return ctrl.Result{}, statusErr
 			}
@@ -858,7 +860,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 
 	// Fail closed: secureBuild must not silently fall back to the cluster pipeline
 	if imageBuild.Spec.SecureBuild && (err != nil || operatorConfig.Spec.OSBuilds == nil) {
-		return fmt.Errorf("secureBuild requested but OperatorConfig or spec.osBuilds is not available")
+		return fmt.Errorf("secureBuild requested but OperatorConfig or spec.osBuilds is not available: %w", errTerminalConfig)
 	}
 
 	var buildConfig *tasks.BuildConfig
@@ -885,19 +887,19 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			// not the current OperatorConfig value (which may have changed).
 			ref := strings.TrimSpace(imageBuild.Spec.TaskBundleRef)
 			if ref == "" {
-				return fmt.Errorf("secureBuild requested but taskBundleRef is not set on the ImageBuild")
+				return fmt.Errorf("secureBuild requested but taskBundleRef is not set on the ImageBuild: %w", errTerminalConfig)
 			}
 			if !digestPinnedRef.MatchString(ref) {
-				return fmt.Errorf("secureBuild requires a digest-pinned taskBundleRef (must match image@sha256:<64 hex>), got %q", ref)
+				return fmt.Errorf("secureBuild requires a digest-pinned taskBundleRef (must match image@sha256:<64 hex>), got %q: %w", ref, errTerminalConfig)
 			}
 
 			if operatorConfig.Spec.OSBuilds.TaskBundleVerify {
 				pubKeyPEM, err := bundleverify.FetchCosignPublicKey(ctx, r.Client, operatorConfig.Spec.OSBuilds.TaskBundleCosignKeyRef, controllerutils.OperatorNamespace())
 				if err != nil {
-					return fmt.Errorf("secureBuild: cosign key is unavailable: %w", err)
+					return fmt.Errorf("secureBuild: cosign key is unavailable: %w: %w", err, errTerminalConfig)
 				}
 				if err := bundleverify.VerifyBundle(ctx, ref, pubKeyPEM); err != nil {
-					return fmt.Errorf("task bundle signature verification failed: %w", err)
+					return fmt.Errorf("task bundle signature verification failed: %w: %w", err, errTerminalConfig)
 				}
 			}
 
@@ -907,12 +909,12 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			// Bundle tasks are exported with nil BuildConfig (defaults only).
 			// Reject settings that would silently diverge from the bundle.
 			if buildConfig.TrustedCABundleName != "" && buildConfig.TrustedCABundleName != tasks.DefaultTrustedCABundleConfigMap {
-				return fmt.Errorf("secureBuild: OperatorConfig specifies custom CA bundle %q but bundle tasks use default %q; build a custom bundle or remove the CA override",
-					buildConfig.TrustedCABundleName, tasks.DefaultTrustedCABundleConfigMap)
+				return fmt.Errorf("secureBuild: OperatorConfig specifies custom CA bundle %q but bundle tasks use default %q; build a custom bundle or remove the CA override: %w",
+					buildConfig.TrustedCABundleName, tasks.DefaultTrustedCABundleConfigMap, errTerminalConfig)
 			}
 			if buildConfig.TrustedCABundleKind != "" && !strings.EqualFold(buildConfig.TrustedCABundleKind, "ConfigMap") {
-				return fmt.Errorf("secureBuild: OperatorConfig specifies CA bundle kind %q but bundle tasks use ConfigMap; build a custom bundle or remove the CA override",
-					buildConfig.TrustedCABundleKind)
+				return fmt.Errorf("secureBuild: OperatorConfig specifies CA bundle kind %q but bundle tasks use ConfigMap; build a custom bundle or remove the CA override: %w",
+					buildConfig.TrustedCABundleKind, errTerminalConfig)
 			}
 			if buildConfig.UseMemoryVolumes {
 				r.emitEventf(imageBuild, corev1.EventTypeWarning, "SecureBuildConfigDrift",
@@ -1098,7 +1100,11 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 	} else {
 		route := &routev1.Route{}
 		routeNS := types.NamespacedName{Name: "default-route", Namespace: "openshift-image-registry"}
-		if err := routeReader.Get(ctx, routeNS, route); err == nil {
+		if err := routeReader.Get(ctx, routeNS, route); err != nil {
+			if !errors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+				return fmt.Errorf("failed to look up cluster registry route %s: %w", routeNS, err)
+			}
+		} else {
 			clusterRegistryRoute = route.Spec.Host
 			log.Info("Auto-detected cluster registry route", "route", clusterRegistryRoute)
 		}
@@ -1144,7 +1150,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		if flashExporterSelector == "" {
 			return fmt.Errorf("flash enabled but no Jumpstarter target mapping found for target %q; "+
 				"configure OperatorConfig.spec.jumpstarter.targetMappings[%q] with selector and flashCmd, "+
-				"or set flash.exporterSelector directly", target, target)
+				"or set flash.exporterSelector directly: %w", target, target, errTerminalConfig)
 		}
 		// User-specified flash command overrides OperatorConfig
 		if userCmd := imageBuild.Spec.GetFlashCmd(); userCmd != "" {
@@ -1154,8 +1160,9 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		// Require an external route and fail fast if unavailable.
 		if imageBuild.Spec.GetUseServiceAccountAuth() && clusterRegistryRoute == "" {
 			return fmt.Errorf(
-				"flash with internal registry requires an external registry route; " +
-					"set OperatorConfig.spec.osBuilds.clusterRegistryRoute or expose openshift-image-registry/default-route",
+				"flash with internal registry requires an external registry route; "+
+					"set OperatorConfig.spec.osBuilds.clusterRegistryRoute or expose openshift-image-registry/default-route: %w",
+				errTerminalConfig,
 			)
 		}
 
