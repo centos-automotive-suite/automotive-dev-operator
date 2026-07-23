@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -41,8 +42,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/yaml"
 )
 
@@ -179,11 +183,12 @@ func (r *ImageBuildReconciler) buildLogger(imageBuild *automotivev1alpha1.ImageB
 //nolint:revive // Name follows Kubebuilder convention for reconcilers
 type ImageBuildReconciler struct {
 	client.Client
-	APIReader  client.Reader
-	Scheme     *runtime.Scheme
-	Log        logr.Logger
-	Recorder   record.EventRecorder
-	RestConfig *rest.Config
+	APIReader       client.Reader
+	Scheme          *runtime.Scheme
+	Log             logr.Logger
+	Recorder        record.EventRecorder
+	RestConfig      *rest.Config
+	verifiedBundles sync.Map
 }
 
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=workspaces,verbs=get;update
@@ -894,12 +899,17 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			}
 
 			if operatorConfig.Spec.OSBuilds.TaskBundleVerify {
-				pubKeyPEM, err := bundleverify.FetchCosignPublicKey(ctx, r.Client, operatorConfig.Spec.OSBuilds.TaskBundleCosignKeyRef, controllerutils.OperatorNamespace())
-				if err != nil {
-					return fmt.Errorf("secureBuild: cosign key is unavailable: %w: %w", err, errTerminalConfig)
-				}
-				if err := bundleverify.VerifyBundle(ctx, ref, pubKeyPEM); err != nil {
-					return fmt.Errorf("task bundle signature verification failed: %w: %w", err, errTerminalConfig)
+				if _, ok := r.verifiedBundles.Load(ref); !ok {
+					verifyCtx, verifyCancel := context.WithTimeout(ctx, 30*time.Second)
+					defer verifyCancel()
+					pubKeyPEM, err := bundleverify.FetchCosignPublicKey(verifyCtx, r.Client, operatorConfig.Spec.OSBuilds.TaskBundleCosignKeyRef, controllerutils.OperatorNamespace())
+					if err != nil {
+						return fmt.Errorf("secureBuild: cosign key is unavailable: %w: %w", err, errTerminalConfig)
+					}
+					if err := bundleverify.VerifyBundle(verifyCtx, ref, pubKeyPEM); err != nil {
+						return fmt.Errorf("task bundle signature verification failed: %w: %w", err, errTerminalConfig)
+					}
+					r.verifiedBundles.Store(ref, struct{}{})
 				}
 			}
 
@@ -2155,17 +2165,17 @@ func (r *ImageBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed to register metrics seeder: %w", err)
 	}
 
-	builder := ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
 		For(&automotivev1alpha1.ImageBuild{}).
 		Owns(&tektonv1.PipelineRun{}).
 		Owns(&tektonv1.TaskRun{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&corev1.Service{}).
-		Owns(&corev1.ConfigMap{}).
-		Owns(&corev1.Secret{})
+		Owns(&corev1.Secret{}, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
 
-	return builder.Complete(r)
+	return b.Complete(r)
 }
 
 func isTaskRunCompleted(taskRun *tektonv1.TaskRun) bool {
