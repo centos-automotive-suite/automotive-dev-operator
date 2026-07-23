@@ -230,7 +230,7 @@ github.com/containers/storage/pkg/reexec
 github.com/containers/storage/pkg/regexp
 github.com/containers/storage/pkg/system
 github.com/containers/storage/pkg/unshare
-# github.com/coreos/go-oidc v2.3.0+incompatible
+# github.com/coreos/go-oidc v2.5.0+incompatible
 ## explicit
 github.com/coreos/go-oidc
 # github.com/coreos/go-oidc/v3 v3.20.0
