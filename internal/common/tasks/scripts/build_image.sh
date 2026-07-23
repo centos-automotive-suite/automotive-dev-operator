@@ -785,21 +785,34 @@ elif [ -d "$WORKSPACE_PATH/${exportFile}" ]; then
       fi
     done
   )
-  echo "Creating compressed archive ${final_compressed_name} in shared workspace..."
-  tar_dir "${exportFile}" "$WORKSPACE_PATH/${final_compressed_name}" || echo "Failed to create ${final_compressed_name}"
-  echo "Compressed archive size:" && ls -lah "$WORKSPACE_PATH/${final_compressed_name}" || true
-  if [ -f "$WORKSPACE_PATH/${final_compressed_name}" ]; then
+  # push_artifact.sh consumes the parts directory when it is populated; the
+  # monolithic archive is only needed as its single-file fallback. Skip the
+  # second full compression pass unless parts compression produced nothing.
+  parts_count=$(find "$parts_dir" -maxdepth 1 -type f ! -name '*.size' 2>/dev/null | wc -l)
+  if [ "$parts_count" -gt 0 ]; then
+    echo "Parts directory populated (${parts_count} files); skipping monolithic archive"
     echo "Removing uncompressed directory ${exportFile} (keeping parts directory)"
     rm -rf "${WORKSPACE_PATH:?}/${exportFile:?}"
-    pushd "$WORKSPACE_PATH" || exit
-    ln -sf "${final_compressed_name}" disk.img
     final_name="${final_compressed_name}"
-    popd || exit
-    echo "Available artifacts:"
-    ls -la "$WORKSPACE_PATH/" || true
-    if [ -d "$WORKSPACE_PATH/${final_compressed_name}-parts" ]; then
-      echo "Individual compressed parts in ${final_compressed_name}-parts/:"
-      ls -la "$WORKSPACE_PATH/${final_compressed_name}-parts/" || true
+    echo "Individual compressed parts in ${final_compressed_name}-parts/:"
+    ls -la "$parts_dir/" || true
+  else
+    echo "Parts compression produced no files; falling back to monolithic archive"
+    # Remove the useless parts dir (may hold only .size sidecars) so
+    # push_artifact.sh takes its single-file fallback instead of multi-layer.
+    rm -rf "$parts_dir"
+    echo "Creating compressed archive ${final_compressed_name} in shared workspace..."
+    tar_dir "${exportFile}" "$WORKSPACE_PATH/${final_compressed_name}" || echo "Failed to create ${final_compressed_name}"
+    echo "Compressed archive size:" && ls -lah "$WORKSPACE_PATH/${final_compressed_name}" || true
+    if [ -f "$WORKSPACE_PATH/${final_compressed_name}" ]; then
+      echo "Removing uncompressed directory ${exportFile}"
+      rm -rf "${WORKSPACE_PATH:?}/${exportFile:?}"
+      pushd "$WORKSPACE_PATH" || exit
+      ln -sf "${final_compressed_name}" disk.img
+      final_name="${final_compressed_name}"
+      popd || exit
+      echo "Available artifacts:"
+      ls -la "$WORKSPACE_PATH/" || true
     fi
   fi
 elif [ -f "${DISK_IMAGE_SOURCE}/${exportFile}" ]; then
