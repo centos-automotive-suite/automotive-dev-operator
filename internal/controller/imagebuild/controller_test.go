@@ -1141,3 +1141,70 @@ func TestUpdateStatusSetsCompletionTime(t *testing.T) {
 		t.Error("CompletionTime should be set on terminal phase")
 	}
 }
+
+func TestVerifiedBundlesCacheHitSkipsLookup(t *testing.T) {
+	const ref = "registry.example.com/bundle@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+
+	scheme := newTestSchemeWithTekton()
+	getCalled := false
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.ConfigMap); ok && key.Name == "cosign-pub-key" {
+					getCalled = true
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+
+	r := &ImageBuildReconciler{
+		Client: fakeClient,
+		Scheme: scheme,
+	}
+	r.verifiedBundles.Store(ref, struct{}{})
+
+	if _, ok := r.verifiedBundles.Load(ref); !ok {
+		t.Fatal("expected cache hit for pre-stored digest ref")
+	}
+	if getCalled {
+		t.Error("cache hit should not trigger cosign key lookup")
+	}
+}
+
+func TestVerifiedBundlesCacheMissAndFailureNotCached(t *testing.T) {
+	const ref = "registry.example.com/bundle@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+
+	r := &ImageBuildReconciler{}
+
+	if _, ok := r.verifiedBundles.Load(ref); ok {
+		t.Fatal("expected cache miss for unknown digest ref")
+	}
+
+	r.verifiedBundles.Store(ref, struct{}{})
+	if _, ok := r.verifiedBundles.Load(ref); !ok {
+		t.Fatal("expected cache hit after Store")
+	}
+
+	const failedRef = "registry.example.com/bundle@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	if _, ok := r.verifiedBundles.Load(failedRef); ok {
+		t.Fatal("never-stored ref should not be in cache (simulates failed verification not being cached)")
+	}
+}
+
+func TestVerifiedBundlesCacheKeyIsolation(t *testing.T) {
+	r := &ImageBuildReconciler{}
+
+	refA := "registry.example.com/bundle@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	refB := "registry.example.com/bundle@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	r.verifiedBundles.Store(refA, struct{}{})
+
+	if _, ok := r.verifiedBundles.Load(refA); !ok {
+		t.Error("refA should be cached")
+	}
+	if _, ok := r.verifiedBundles.Load(refB); ok {
+		t.Error("refB should not be cached — different digest means different bundle")
+	}
+}
