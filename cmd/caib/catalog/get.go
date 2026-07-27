@@ -59,12 +59,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 		token = os.Getenv("CAIB_TOKEN")
 	}
 
-	ns := namespace
-	if ns == "" {
-		ns = defaultNamespace
-	}
-
-	reqURL := fmt.Sprintf("%s/v1/catalog/images/%s?namespace=%s", server, name, ns)
+	reqURL := fmt.Sprintf("%s/v1/catalog/images/%s", server, name)
 
 	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -87,7 +82,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	}()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("catalog image %q not found in namespace %q", name, ns)
+		return fmt.Errorf("catalog image %q not found", name)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -148,7 +143,6 @@ func printImageDetails(img CatalogImageResponse) {
 
 	rows := [][2]string{
 		{"Name", img.Name},
-		{"Namespace", img.Namespace},
 		{"Registry URL", img.RegistryURL},
 		{"Phase", img.Phase},
 		{"Architecture", img.Architecture},

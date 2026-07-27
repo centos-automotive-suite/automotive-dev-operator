@@ -53,10 +53,9 @@ func newPublishCmd() *cobra.Command {
 }
 
 type publishRequest struct {
-	ImageBuildName      string   `json:"imageBuildName"`
-	ImageBuildNamespace string   `json:"imageBuildNamespace"`
-	CatalogImageName    string   `json:"catalogImageName,omitempty"`
-	Tags                []string `json:"tags,omitempty"`
+	ImageBuildName   string   `json:"imageBuildName"`
+	CatalogImageName string   `json:"catalogImageName,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
 }
 
 func runPublish(cmd *cobra.Command, args []string) error {
@@ -75,18 +74,12 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		token = os.Getenv("CAIB_TOKEN")
 	}
 
-	ns := namespace
-	if ns == "" {
-		ns = defaultNamespace
-	}
-
 	clilog.Infof("Publishing ImageBuild %q to catalog...\n", imageBuildName)
 
 	reqBody := publishRequest{
-		ImageBuildName:      imageBuildName,
-		ImageBuildNamespace: ns,
-		CatalogImageName:    publishCatalogName,
-		Tags:                publishTags,
+		ImageBuildName:   imageBuildName,
+		CatalogImageName: publishCatalogName,
+		Tags:             publishTags,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -119,7 +112,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("ImageBuild %q not found in namespace %q", imageBuildName, ns)
+		return fmt.Errorf("ImageBuild %q not found", imageBuildName)
 	}
 
 	if resp.StatusCode != http.StatusCreated {

@@ -34,15 +34,14 @@ import (
 )
 
 var (
-	listArchitecture  string
-	listDistro        string
-	listTarget        string
-	listPhase         string
-	listTags          string
-	listSort          string
-	listLatest        bool
-	listLimit         int
-	listAllNamespaces bool
+	listArchitecture string
+	listDistro       string
+	listTarget       string
+	listPhase        string
+	listTags         string
+	listSort         string
+	listLatest       bool
+	listLimit        int
 )
 
 func newListCmd() *cobra.Command {
@@ -64,7 +63,6 @@ target, and phase. Use --latest to show only the newest image per schedule
 	cmd.Flags().StringVar(&listSort, "sort", "created", "Sort order: created (newest first), name")
 	cmd.Flags().BoolVar(&listLatest, "latest", false, "Show only the latest image per schedule or distro/arch/target group")
 	cmd.Flags().IntVar(&listLimit, "limit", 20, "Maximum results to show")
-	cmd.Flags().BoolVar(&listAllNamespaces, "all-namespaces", false, "List images across all namespaces")
 
 	return cmd
 }
@@ -83,7 +81,6 @@ type CatalogImageListResponse struct {
 //nolint:revive // Name intentionally includes package name for clarity in CLI context
 type CatalogImageResponse struct {
 	Name             string            `json:"name"`
-	Namespace        string            `json:"namespace"`
 	RegistryURL      string            `json:"registryUrl"`
 	Phase            string            `json:"phase"`
 	Architecture     string            `json:"architecture,omitempty"`
@@ -126,9 +123,6 @@ func runList(cmd *cobra.Command, _ []string) error {
 
 	// Build query parameters
 	params := url.Values{}
-	if namespace != "" && !listAllNamespaces {
-		params.Set("namespace", namespace)
-	}
 	if listArchitecture != "" {
 		params.Set("architecture", listArchitecture)
 	}

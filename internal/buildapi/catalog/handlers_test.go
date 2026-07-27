@@ -58,7 +58,7 @@ func TestHandleGetCatalogImage_DoesNotWrite(t *testing.T) {
 	router := gin.New()
 	router.GET("/catalog/images/:name", h.HandleGetCatalogImage)
 
-	req := httptest.NewRequest(http.MethodGet, "/catalog/images/test-image?namespace=default", nil)
+	req := httptest.NewRequest(http.MethodGet, "/catalog/images/test-image", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -109,7 +109,7 @@ func TestHandleListCatalogImages_SortByCreated(t *testing.T) {
 	router := gin.New()
 	router.GET("/catalog/images", h.HandleListCatalogImages)
 
-	req := httptest.NewRequest(http.MethodGet, "/catalog/images?namespace=default&sort=created", nil)
+	req := httptest.NewRequest(http.MethodGet, "/catalog/images?sort=created", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -274,7 +274,7 @@ func TestScheduleNameInResponse(t *testing.T) {
 	router := gin.New()
 	router.GET("/catalog/images/:name", h.HandleGetCatalogImage)
 
-	req := httptest.NewRequest(http.MethodGet, "/catalog/images/nightly-qemu-abc123?namespace=default", nil)
+	req := httptest.NewRequest(http.MethodGet, "/catalog/images/nightly-qemu-abc123", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -302,7 +302,7 @@ func TestHandleGetCatalogImage_NotFound(t *testing.T) {
 	router := gin.New()
 	router.GET("/catalog/images/:name", h.HandleGetCatalogImage)
 
-	req := httptest.NewRequest(http.MethodGet, "/catalog/images/nonexistent?namespace=default", nil)
+	req := httptest.NewRequest(http.MethodGet, "/catalog/images/nonexistent", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

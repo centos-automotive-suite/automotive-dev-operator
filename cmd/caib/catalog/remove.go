@@ -64,11 +64,6 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		token = os.Getenv("CAIB_TOKEN")
 	}
 
-	ns := namespace
-	if ns == "" {
-		ns = defaultNamespace
-	}
-
 	// Confirm deletion
 	if !removeForce {
 		clilog.Infof("Removing catalog image %q...\n", name)
@@ -82,7 +77,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	reqURL := fmt.Sprintf("%s/v1/catalog/images/%s?namespace=%s", server, name, ns)
+	reqURL := fmt.Sprintf("%s/v1/catalog/images/%s", server, name)
 	req, err := http.NewRequest(http.MethodDelete, reqURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -104,7 +99,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("catalog image %q not found in namespace %q", name, ns)
+		return fmt.Errorf("catalog image %q not found", name)
 	}
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {

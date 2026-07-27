@@ -28,7 +28,6 @@ import (
 //nolint:revive // Name intentionally includes package name for clarity in external API
 type CatalogImageResponse struct {
 	Name             string                `json:"name"`
-	Namespace        string                `json:"namespace"`
 	RegistryURL      string                `json:"registryUrl"`
 	Digest           string                `json:"digest,omitempty"`
 	Tags             []string              `json:"tags,omitempty"`
@@ -108,10 +107,9 @@ type CreateCatalogImageRequest struct {
 
 // PublishImageBuildRequest represents a request to publish an ImageBuild to the catalog
 type PublishImageBuildRequest struct {
-	ImageBuildName      string   `json:"imageBuildName" binding:"required"`
-	ImageBuildNamespace string   `json:"imageBuildNamespace" binding:"required"`
-	CatalogImageName    string   `json:"catalogImageName,omitempty"`
-	Tags                []string `json:"tags,omitempty"`
+	ImageBuildName   string   `json:"imageBuildName" binding:"required"`
+	CatalogImageName string   `json:"catalogImageName,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
 }
 
 // VerifyImageResponse represents the response from verifying an image
@@ -122,7 +120,6 @@ type VerifyImageResponse struct {
 
 // ListQueryParams represents query parameters for listing catalog images
 type ListQueryParams struct {
-	Namespace    string `form:"namespace"`
 	Architecture string `form:"architecture"`
 	Distro       string `form:"distro"`
 	Target       string `form:"target"`
@@ -138,7 +135,6 @@ type ListQueryParams struct {
 func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) CatalogImageResponse {
 	response := CatalogImageResponse{
 		Name:        catalogImage.Name,
-		Namespace:   catalogImage.Namespace,
 		RegistryURL: catalogImage.Spec.RegistryURL,
 		Digest:      catalogImage.Spec.Digest,
 		Tags:        catalogImage.Spec.Tags,

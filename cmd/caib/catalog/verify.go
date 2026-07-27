@@ -68,14 +68,9 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		token = os.Getenv("CAIB_TOKEN")
 	}
 
-	ns := namespace
-	if ns == "" {
-		ns = defaultNamespace
-	}
-
 	clilog.Infof("Verifying catalog image %q...\n", name)
 
-	reqURL := fmt.Sprintf("%s/v1/catalog/images/%s/verify?namespace=%s", server, name, ns)
+	reqURL := fmt.Sprintf("%s/v1/catalog/images/%s/verify", server, name)
 	req, err := http.NewRequest(http.MethodPost, reqURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -97,7 +92,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("catalog image %q not found in namespace %q", name, ns)
+		return fmt.Errorf("catalog image %q not found", name)
 	}
 
 	body, _ := io.ReadAll(resp.Body)
@@ -119,7 +114,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 
 	// Optionally get updated status
 	if verifyWait {
-		getURL := fmt.Sprintf("%s/v1/catalog/images/%s?namespace=%s", server, name, ns)
+		getURL := fmt.Sprintf("%s/v1/catalog/images/%s", server, name)
 		getReq, _ := http.NewRequest(http.MethodGet, getURL, nil)
 		if token != "" {
 			getReq.Header.Set("Authorization", "Bearer "+token)

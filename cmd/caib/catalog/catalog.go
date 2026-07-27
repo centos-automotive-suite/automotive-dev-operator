@@ -27,14 +27,12 @@ import (
 )
 
 const (
-	defaultNamespace  = "default"
 	outputFormatTable = "table"
 )
 
 var (
 	serverURL string
 	authToken string
-	namespace string
 )
 
 // NewCatalogCmd creates the catalog command with subcommands
@@ -60,7 +58,6 @@ func NewCatalogCmd() *cobra.Command {
 func addCommonFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&serverURL, "server", "", "REST API server base URL (env: CAIB_SERVER)")
 	cmd.Flags().StringVar(&authToken, "token", "", "Bearer token for authentication (env: CAIB_TOKEN)")
-	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Kubernetes namespace")
 }
 
 // getOutputFormat returns the output format from the root command's --output-format flag.

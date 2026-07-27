@@ -108,11 +108,6 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		token = os.Getenv("CAIB_TOKEN")
 	}
 
-	ns := namespace
-	if ns == "" {
-		ns = defaultNamespace
-	}
-
 	clilog.Infof("Adding image to catalog...\n")
 	clilog.Infof("✓ Validating registry URL\n")
 
@@ -137,7 +132,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	reqURL := fmt.Sprintf("%s/v1/catalog/images?namespace=%s", server, ns)
+	reqURL := fmt.Sprintf("%s/v1/catalog/images", server)
 	req, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)

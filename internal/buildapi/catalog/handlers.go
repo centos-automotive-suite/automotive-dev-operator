@@ -69,12 +69,7 @@ func (h *Handler) HandleListCatalogImages(c *gin.Context) {
 	// Build list options
 	listOpts := []client.ListOption{}
 
-	// Namespace filtering — always scope to a namespace
-	ns := params.Namespace
-	if ns == "" {
-		ns = h.defaultNamespace
-	}
-	listOpts = append(listOpts, client.InNamespace(ns))
+	listOpts = append(listOpts, client.InNamespace(h.defaultNamespace))
 
 	// Build label selector for filtering
 	labelRequirements := []string{}
@@ -141,19 +136,14 @@ func (h *Handler) HandleListCatalogImages(c *gin.Context) {
 func (h *Handler) HandleGetCatalogImage(c *gin.Context) {
 	ctx := context.Background()
 	name := c.Param("name")
-	namespace := c.Query("namespace")
-
-	if namespace == "" {
-		namespace = h.defaultNamespace
-	}
 
 	catalogImage := &automotivev1alpha1.CatalogImage{}
-	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, catalogImage); err != nil {
+	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.defaultNamespace}, catalogImage); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "catalog image not found"})
 			return
 		}
-		h.log.Error(err, "failed to get catalog image", "name", name, "namespace", namespace)
+		h.log.Error(err, "failed to get catalog image", "name", name)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get catalog image"})
 		return
 	}
@@ -165,10 +155,7 @@ func (h *Handler) HandleGetCatalogImage(c *gin.Context) {
 // HandleCreateCatalogImage creates a new catalog image
 func (h *Handler) HandleCreateCatalogImage(c *gin.Context) {
 	ctx := context.Background()
-	namespace := c.Query("namespace")
-	if namespace == "" {
-		namespace = h.defaultNamespace
-	}
+	namespace := h.defaultNamespace
 
 	var req CreateCatalogImageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -236,19 +223,14 @@ func (h *Handler) HandleCreateCatalogImage(c *gin.Context) {
 func (h *Handler) HandleDeleteCatalogImage(c *gin.Context) {
 	ctx := context.Background()
 	name := c.Param("name")
-	namespace := c.Query("namespace")
-
-	if namespace == "" {
-		namespace = h.defaultNamespace
-	}
 
 	catalogImage := &automotivev1alpha1.CatalogImage{}
-	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, catalogImage); err != nil {
+	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.defaultNamespace}, catalogImage); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "catalog image not found"})
 			return
 		}
-		h.log.Error(err, "failed to get catalog image", "name", name, "namespace", namespace)
+		h.log.Error(err, "failed to get catalog image", "name", name)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get catalog image"})
 		return
 	}
@@ -259,7 +241,7 @@ func (h *Handler) HandleDeleteCatalogImage(c *gin.Context) {
 		return
 	}
 
-	h.log.Info("deleted catalog image", "name", name, "namespace", namespace)
+	h.log.Info("deleted catalog image", "name", name)
 	c.Status(http.StatusNoContent)
 }
 
@@ -267,19 +249,14 @@ func (h *Handler) HandleDeleteCatalogImage(c *gin.Context) {
 func (h *Handler) HandleVerifyCatalogImage(c *gin.Context) {
 	ctx := context.Background()
 	name := c.Param("name")
-	namespace := c.Query("namespace")
-
-	if namespace == "" {
-		namespace = h.defaultNamespace
-	}
 
 	catalogImage := &automotivev1alpha1.CatalogImage{}
-	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, catalogImage); err != nil {
+	if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.defaultNamespace}, catalogImage); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "catalog image not found"})
 			return
 		}
-		h.log.Error(err, "failed to get catalog image", "name", name, "namespace", namespace)
+		h.log.Error(err, "failed to get catalog image", "name", name)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get catalog image"})
 		return
 	}
@@ -292,7 +269,7 @@ func (h *Handler) HandleVerifyCatalogImage(c *gin.Context) {
 		return
 	}
 
-	h.log.Info("triggered verification for catalog image", "name", name, "namespace", namespace)
+	h.log.Info("triggered verification for catalog image", "name", name)
 	c.JSON(http.StatusOK, VerifyImageResponse{
 		Message:   "Verification triggered successfully",
 		Triggered: true,
@@ -312,7 +289,7 @@ func (h *Handler) HandlePublishImageBuild(c *gin.Context) {
 	// Get the ImageBuild
 	imageBuild := &automotivev1alpha1.ImageBuild{}
 	if err := h.client.Get(
-		ctx, client.ObjectKey{Name: req.ImageBuildName, Namespace: req.ImageBuildNamespace}, imageBuild,
+		ctx, client.ObjectKey{Name: req.ImageBuildName, Namespace: h.defaultNamespace}, imageBuild,
 	); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "ImageBuild not found"})
@@ -349,7 +326,7 @@ func (h *Handler) HandlePublishImageBuild(c *gin.Context) {
 	// Create CatalogImage
 	catalogImage := &automotivev1alpha1.CatalogImage{}
 	catalogImage.Name = catalogImageName
-	catalogImage.Namespace = req.ImageBuildNamespace
+	catalogImage.Namespace = h.defaultNamespace
 	catalogImage.Spec = automotivev1alpha1.CatalogImageSpec{
 		RegistryURL: registryURL,
 		Tags:        req.Tags,
