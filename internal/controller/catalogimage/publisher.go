@@ -28,6 +28,8 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 )
 
+const labelValueTrue = "true"
+
 // PublishSource indicates where the catalog image was published from
 type PublishSource string
 
@@ -101,18 +103,12 @@ type PublishResult struct {
 	Metadata *automotivev1alpha1.RegistryMetadata
 }
 
-// Publish creates a new CatalogImage and optionally verifies registry accessibility
+// Publish creates or updates a CatalogImage and optionally verifies registry accessibility.
+// When a CatalogImage with the same registry URL already exists (common for scheduled builds
+// that push to a fixed tag), the existing entry is updated with the new build's metadata.
 func (p *Publisher) Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 	log := p.log.WithValues("name", opts.Name, "namespace", opts.Namespace, "registryURL", opts.RegistryURL)
 	log.Info("Publishing image to catalog")
-
-	// Check for duplicate registry URLs
-	if err := p.checkDuplicates(ctx, opts.Namespace, opts.RegistryURL); err != nil {
-		return nil, err
-	}
-
-	// Create the CatalogImage resource
-	catalogImage := p.buildCatalogImage(opts)
 
 	// Verify accessibility if requested
 	var registryMetadata *automotivev1alpha1.RegistryMetadata
@@ -122,31 +118,48 @@ func (p *Publisher) Publish(ctx context.Context, opts PublishOptions) (*PublishR
 		verified, registryMetadata, err = p.verifyAndExtractMetadata(ctx, opts)
 		if err != nil {
 			log.Error(err, "Failed to verify registry accessibility")
-			// Continue with creation, controller will handle verification
 		}
 	}
 
-	// Create the CatalogImage
-	if err := p.client.Create(ctx, catalogImage); err != nil {
-		return nil, fmt.Errorf("failed to create CatalogImage: %w", err)
+	catalogImage, err := p.findExistingByRegistryURL(ctx, opts.Namespace, opts.RegistryURL)
+	if err != nil {
+		return nil, err
 	}
 
-	log.Info("Successfully created CatalogImage", "verified", verified)
+	if catalogImage != nil {
+		p.updateCatalogImage(catalogImage, opts)
 
-	// Record audit event
+		if err := p.client.Update(ctx, catalogImage); err != nil {
+			return nil, fmt.Errorf("failed to update CatalogImage: %w", err)
+		}
+		log.Info("Updated existing CatalogImage", "existingName", catalogImage.Name, "verified", verified)
+	} else {
+		catalogImage = p.buildCatalogImage(opts)
+
+		if err := p.client.Create(ctx, catalogImage); err != nil {
+			return nil, fmt.Errorf("failed to create CatalogImage: %w", err)
+		}
+		log.Info("Successfully created CatalogImage", "verified", verified)
+	}
+
 	if p.auditRecorder != nil {
 		p.auditRecorder.RecordPublished(ctx, catalogImage, string(opts.Source))
 	}
 
-	// If we verified and have metadata, update the status
+	statusChanged := false
+	if opts.SourceImageBuildName != "" {
+		catalogImage.Status.SourceImageBuild = opts.SourceImageBuildName
+		statusChanged = true
+	}
 	if verified && registryMetadata != nil {
 		catalogImage.Status.RegistryMetadata = registryMetadata
 		catalogImage.Status.LastVerificationTime = GetCurrentTime()
 		catalogImage.Status.Phase = automotivev1alpha1.CatalogImagePhaseAvailable
-
+		statusChanged = true
+	}
+	if statusChanged {
 		if err := p.client.Status().Update(ctx, catalogImage); err != nil {
-			log.Error(err, "Failed to update status with verification results")
-			// Non-fatal: controller will pick up verification on next reconcile
+			log.Error(err, "Failed to update status")
 		}
 	}
 
@@ -228,17 +241,50 @@ func (p *Publisher) PublishFromImageBuild(
 	})
 }
 
-// checkDuplicates checks if a CatalogImage with the same registry URL already exists
-func (p *Publisher) checkDuplicates(ctx context.Context, namespace, registryURL string) error {
+// findExistingByRegistryURL returns an existing CatalogImage with the same registry URL, or nil.
+func (p *Publisher) findExistingByRegistryURL(ctx context.Context, namespace, registryURL string) (*automotivev1alpha1.CatalogImage, error) {
 	lister := NewCatalogImageLister(p.client)
-	exists, err := lister.ExistsByRegistryURL(ctx, namespace, registryURL)
+	list, err := lister.ListByRegistryURL(ctx, namespace, registryURL)
 	if err != nil {
-		return fmt.Errorf("failed to check for duplicates: %w", err)
+		return nil, fmt.Errorf("failed to check for existing catalog image: %w", err)
 	}
-	if exists {
-		return fmt.Errorf("catalog image with registry URL %q already exists in namespace %s", registryURL, namespace)
+	if len(list.Items) == 0 {
+		return nil, nil
 	}
-	return nil
+	return &list.Items[0], nil
+}
+
+// updateCatalogImage applies new PublishOptions to an existing CatalogImage.
+func (p *Publisher) updateCatalogImage(catalogImage *automotivev1alpha1.CatalogImage, opts PublishOptions) {
+	catalogImage.Spec.Digest = opts.Digest
+	catalogImage.Spec.Tags = opts.Tags
+	catalogImage.Spec.AuthSecretRef = opts.AuthSecretRef
+	catalogImage.Spec.Metadata = opts.Metadata
+
+	if catalogImage.Labels == nil {
+		catalogImage.Labels = make(map[string]string)
+	}
+	delete(catalogImage.Labels, automotivev1alpha1.LabelTarget)
+	delete(catalogImage.Labels, automotivev1alpha1.LabelBootc)
+	delete(catalogImage.Labels, automotivev1alpha1.LabelScheduledImageBuildName)
+	if opts.Metadata != nil {
+		if opts.Metadata.Architecture != "" {
+			catalogImage.Labels[automotivev1alpha1.LabelArchitecture] = NormalizeArchitecture(opts.Metadata.Architecture)
+		}
+		if opts.Metadata.Distro != "" {
+			catalogImage.Labels[automotivev1alpha1.LabelDistro] = opts.Metadata.Distro
+		}
+		if len(opts.Metadata.Targets) > 0 {
+			catalogImage.Labels[automotivev1alpha1.LabelTarget] = opts.Metadata.Targets[0].Name
+		}
+		if opts.Metadata.Bootc {
+			catalogImage.Labels[automotivev1alpha1.LabelBootc] = labelValueTrue
+		}
+	}
+	catalogImage.Labels[automotivev1alpha1.LabelSourceType] = string(opts.Source)
+	if opts.ScheduleName != "" {
+		catalogImage.Labels[automotivev1alpha1.LabelScheduledImageBuildName] = opts.ScheduleName
+	}
 }
 
 // buildCatalogImage creates a CatalogImage resource from PublishOptions
@@ -279,7 +325,7 @@ func (p *Publisher) buildCatalogImage(opts PublishOptions) *automotivev1alpha1.C
 			catalogImage.Labels[automotivev1alpha1.LabelTarget] = opts.Metadata.Targets[0].Name
 		}
 		if opts.Metadata.Bootc {
-			catalogImage.Labels[automotivev1alpha1.LabelBootc] = "true"
+			catalogImage.Labels[automotivev1alpha1.LabelBootc] = labelValueTrue
 		}
 	}
 

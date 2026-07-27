@@ -388,7 +388,7 @@ func (r *CatalogImageReconciler) ensureLabels(catalogImage *automotivev1alpha1.C
 			catalogImage.Labels[automotivev1alpha1.LabelTarget] = catalogImage.Spec.Metadata.Targets[0].Name
 		}
 		if catalogImage.Spec.Metadata.Bootc {
-			catalogImage.Labels[automotivev1alpha1.LabelBootc] = "true"
+			catalogImage.Labels[automotivev1alpha1.LabelBootc] = labelValueTrue
 		}
 	}
 }
