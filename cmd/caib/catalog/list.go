@@ -20,11 +20,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
@@ -37,6 +39,8 @@ var (
 	listTarget        string
 	listPhase         string
 	listTags          string
+	listSort          string
+	listLatest        bool
 	listLimit         int
 	listAllNamespaces bool
 )
@@ -45,8 +49,10 @@ func newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List images in the catalog",
-		Long:  `List images in the catalog with optional filtering by architecture, distribution, target, and phase.`,
-		RunE:  runList,
+		Long: `List images in the catalog with optional filtering by architecture, distribution,
+target, and phase. Use --latest to show only the newest image per schedule
+(or per distro/arch/target group for non-scheduled images).`,
+		RunE: runList,
 	}
 
 	addCommonFlags(cmd)
@@ -55,6 +61,8 @@ func newListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&listTarget, "target", "", "Filter by hardware target (qemu, raspberry-pi)")
 	cmd.Flags().StringVar(&listPhase, "phase", "", "Filter by phase (Available, Unavailable, etc)")
 	cmd.Flags().StringVar(&listTags, "tags", "", "Filter by tags (comma-separated)")
+	cmd.Flags().StringVar(&listSort, "sort", "created", "Sort order: created (newest first), name")
+	cmd.Flags().BoolVar(&listLatest, "latest", false, "Show only the latest image per schedule or distro/arch/target group")
 	cmd.Flags().IntVar(&listLimit, "limit", 20, "Maximum results to show")
 	cmd.Flags().BoolVar(&listAllNamespaces, "all-namespaces", false, "List images across all namespaces")
 
@@ -84,10 +92,12 @@ type CatalogImageResponse struct {
 	Tags             []string          `json:"tags,omitempty"`
 	SourceType       string            `json:"sourceType,omitempty"`
 	SourceImageBuild string            `json:"sourceImageBuild,omitempty"`
+	ScheduleName     string            `json:"scheduleName,omitempty"`
 	BuildMode        string            `json:"buildMode,omitempty"`
 	ExportFormat     string            `json:"exportFormat,omitempty"`
 	Labels           map[string]string `json:"labels,omitempty"`
 	SizeBytes        int64             `json:"sizeBytes,omitempty"`
+	DownloadURL      string            `json:"downloadUrl,omitempty"`
 	CreatedAt        string            `json:"createdAt"`
 	StatusReason     string            `json:"statusReason,omitempty"`
 	StatusMessage    string            `json:"statusMessage,omitempty"`
@@ -133,6 +143,15 @@ func runList(cmd *cobra.Command, _ []string) error {
 	}
 	if listTags != "" {
 		params.Set("tags", listTags)
+	}
+	if listSort != "" {
+		if listSort != "created" && listSort != "name" {
+			return fmt.Errorf("invalid --sort value %q (supported: created, name)", listSort)
+		}
+		params.Set("sort", listSort)
+	}
+	if listLatest {
+		params.Set("latest", "true")
 	}
 	if listLimit > 0 {
 		params.Set("limit", fmt.Sprintf("%d", listLimit))
@@ -189,7 +208,7 @@ func runList(cmd *cobra.Command, _ []string) error {
 		output, _ := yaml.Marshal(result)
 		fmt.Println(string(output))
 	case outputFormatTable:
-		printTable(result.Items)
+		printTable(result.Items, listTags != "")
 	default:
 		return fmt.Errorf("invalid output format %q (supported: table, json, yaml)", format)
 	}
@@ -197,7 +216,7 @@ func runList(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func printTable(items []CatalogImageResponse) {
+func printTable(items []CatalogImageResponse, tagsFiltered bool) {
 	if len(items) == 0 {
 		fmt.Println("No catalog images found")
 		return
@@ -210,7 +229,12 @@ func printTable(items []CatalogImageResponse) {
 		}
 	}()
 
-	if _, err := fmt.Fprintln(w, "NAME\tSOURCE\tARCH\tDISTRO\tTARGET\tFORMAT\tTAGS\tPHASE\tIMAGE\tCREATED"); err != nil {
+	header := "NAME\tSCHEDULE\tARCH\tDISTRO\tTARGET\tFORMAT\tPHASE\tAGE\tIMAGE"
+	if !tagsFiltered {
+		header = "NAME\tSCHEDULE\tARCH\tDISTRO\tTARGET\tFORMAT\tTAGS\tPHASE\tAGE\tIMAGE"
+	}
+
+	if _, err := fmt.Fprintln(w, header); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to write header: %v\n", err)
 		return
 	}
@@ -221,21 +245,71 @@ func printTable(items []CatalogImageResponse) {
 			target = img.Targets[0].Name
 		}
 
-		tags := strings.Join(img.Tags, ",")
+		age := formatAge(img.CreatedAt)
 
-		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			img.Name,
-			img.SourceType,
-			img.Architecture,
-			img.Distro,
-			target,
-			img.ExportFormat,
-			tags,
-			img.Phase,
-			img.RegistryURL,
-			img.CreatedAt,
-		); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to write row: %v\n", err)
+		if tagsFiltered {
+			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				img.Name,
+				img.ScheduleName,
+				img.Architecture,
+				img.Distro,
+				target,
+				img.ExportFormat,
+				img.Phase,
+				age,
+				img.RegistryURL,
+			); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to write row: %v\n", err)
+			}
+		} else {
+			tags := strings.Join(img.Tags, ",")
+			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				img.Name,
+				img.ScheduleName,
+				img.Architecture,
+				img.Distro,
+				target,
+				img.ExportFormat,
+				tags,
+				img.Phase,
+				age,
+				img.RegistryURL,
+			); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to write row: %v\n", err)
+			}
 		}
+	}
+
+	_, _ = fmt.Fprintf(w, "\n")
+	_, _ = fmt.Fprintf(os.Stderr, "%d image(s)\n", len(items))
+}
+
+// formatAge converts an RFC3339 timestamp to a human-readable relative duration.
+func formatAge(timestamp string) string {
+	t, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return timestamp
+	}
+
+	d := time.Since(t)
+	if d < 0 {
+		return "future"
+	}
+
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd", int(math.Floor(d.Hours()/24)))
+	default:
+		months := int(math.Floor(d.Hours() / (24 * 30)))
+		if months < 12 {
+			return fmt.Sprintf("%dmo", months)
+		}
+		return fmt.Sprintf("%dy", int(math.Floor(d.Hours()/(24*365))))
 	}
 }

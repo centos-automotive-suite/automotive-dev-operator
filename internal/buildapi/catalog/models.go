@@ -45,6 +45,7 @@ type CatalogImageResponse struct {
 	CreatedAt        time.Time             `json:"createdAt"`
 	SourceImageBuild string                `json:"sourceImageBuild,omitempty"`
 	SourceType       string                `json:"sourceType,omitempty"`
+	ScheduleName     string                `json:"scheduleName,omitempty"`
 	BuildMode        string                `json:"buildMode,omitempty"`
 	ExportFormat     string                `json:"exportFormat,omitempty"`
 	Labels           map[string]string     `json:"labels,omitempty"`
@@ -127,6 +128,8 @@ type ListQueryParams struct {
 	Target       string `form:"target"`
 	Phase        string `form:"phase"`
 	Tags         string `form:"tags"`
+	Sort         string `form:"sort"`
+	Latest       bool   `form:"latest"`
 	Limit        int    `form:"limit,default=20"`
 	Continue     string `form:"continue"`
 }
@@ -165,6 +168,9 @@ func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) Catal
 	// Extract source type from label
 	if sourceType, ok := catalogImage.Labels[automotivev1alpha1.LabelSourceType]; ok {
 		response.SourceType = sourceType
+	}
+	if scheduleName, ok := catalogImage.Labels[automotivev1alpha1.LabelScheduledImageBuildName]; ok {
+		response.ScheduleName = scheduleName
 	}
 
 	// Extract registry metadata

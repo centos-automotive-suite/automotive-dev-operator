@@ -20,6 +20,7 @@ package catalog
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+)
+
+const (
+	sortByCreated = "created"
+	sortByName    = "name"
 )
 
 // Handler handles catalog API requests
@@ -93,16 +99,19 @@ func (h *Handler) HandleListCatalogImages(c *gin.Context) {
 		listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
 	}
 
-	// Apply limit
-	if params.Limit > 0 && params.Limit <= 100 {
-		listOpts = append(listOpts, client.Limit(int64(params.Limit)))
-	} else {
-		listOpts = append(listOpts, client.Limit(20))
+	// Validate sort param
+	if params.Sort != "" && params.Sort != sortByCreated && params.Sort != sortByName {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid sort value", "details": "supported values: created, name"})
+		return
 	}
 
-	// Apply continue token
-	if params.Continue != "" {
-		listOpts = append(listOpts, client.Continue(params.Continue))
+	needsPostProcessing := params.Sort != "" || params.Latest
+
+	if !needsPostProcessing {
+		listOpts = append(listOpts, client.Limit(int64(effectiveLimit(params.Limit))))
+		if params.Continue != "" {
+			listOpts = append(listOpts, client.Continue(params.Continue))
+		}
 	}
 
 	// List catalog images
@@ -113,31 +122,18 @@ func (h *Handler) HandleListCatalogImages(c *gin.Context) {
 		return
 	}
 
-	// Filter by phase if specified (post-filter since phase is in status)
-	if params.Phase != "" {
-		filtered := []automotivev1alpha1.CatalogImage{}
-		for _, img := range catalogImages.Items {
-			if string(img.Status.Phase) == params.Phase {
-				filtered = append(filtered, img)
-			}
+	catalogImages.Items = postFilterAndSort(catalogImages.Items, params)
+
+	continueToken := catalogImages.Continue
+	if needsPostProcessing {
+		continueToken = ""
+		limit := effectiveLimit(params.Limit)
+		if len(catalogImages.Items) > limit {
+			catalogImages.Items = catalogImages.Items[:limit]
 		}
-		catalogImages.Items = filtered
 	}
 
-	// Filter by tags if specified
-	if params.Tags != "" {
-		requestedTags := strings.Split(params.Tags, ",")
-		filtered := []automotivev1alpha1.CatalogImage{}
-		for _, img := range catalogImages.Items {
-			if hasAllTags(img.Spec.Tags, requestedTags) {
-				filtered = append(filtered, img)
-			}
-		}
-		catalogImages.Items = filtered
-	}
-
-	// Convert to response
-	response := ToCatalogImageListResponse(catalogImages, catalogImages.Continue)
+	response := ToCatalogImageListResponse(catalogImages, continueToken)
 	c.JSON(http.StatusOK, response)
 }
 
@@ -383,6 +379,84 @@ func (h *Handler) HandlePublishImageBuild(c *gin.Context) {
 	h.log.Info("published ImageBuild to catalog", "imageBuild", req.ImageBuildName, "catalogImage", catalogImageName)
 	response := ToCatalogImageResponse(catalogImage)
 	c.JSON(http.StatusCreated, response)
+}
+
+func effectiveLimit(limit int) int {
+	if limit > 0 && limit <= 100 {
+		return limit
+	}
+	return 20
+}
+
+func postFilterAndSort(items []automotivev1alpha1.CatalogImage, params ListQueryParams) []automotivev1alpha1.CatalogImage {
+	if params.Phase != "" {
+		filtered := []automotivev1alpha1.CatalogImage{}
+		for _, img := range items {
+			if string(img.Status.Phase) == params.Phase {
+				filtered = append(filtered, img)
+			}
+		}
+		items = filtered
+	}
+
+	if params.Tags != "" {
+		requestedTags := strings.Split(params.Tags, ",")
+		filtered := []automotivev1alpha1.CatalogImage{}
+		for _, img := range items {
+			if hasAllTags(img.Spec.Tags, requestedTags) {
+				filtered = append(filtered, img)
+			}
+		}
+		items = filtered
+	}
+
+	if params.Latest {
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].CreationTimestamp.After(items[j].CreationTimestamp.Time)
+		})
+		seen := map[string]bool{}
+		filtered := []automotivev1alpha1.CatalogImage{}
+		for i := range items {
+			key := latestGroupKey(&items[i])
+			if !seen[key] {
+				seen[key] = true
+				filtered = append(filtered, items[i])
+			}
+		}
+		items = filtered
+	}
+
+	sortBy := params.Sort
+	if sortBy == "" {
+		sortBy = sortByCreated
+	}
+	switch sortBy {
+	case sortByCreated:
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].CreationTimestamp.After(items[j].CreationTimestamp.Time)
+		})
+	case sortByName:
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].Name < items[j].Name
+		})
+	}
+
+	return items
+}
+
+// latestGroupKey returns a grouping key for --latest deduplication.
+// Scheduled images group by schedule name; others by distro+arch+target.
+func latestGroupKey(img *automotivev1alpha1.CatalogImage) string {
+	if name, ok := img.Labels[automotivev1alpha1.LabelScheduledImageBuildName]; ok && name != "" {
+		return "schedule:" + name
+	}
+	arch := img.Labels[automotivev1alpha1.LabelArchitecture]
+	distro := img.Labels[automotivev1alpha1.LabelDistro]
+	target := img.Labels[automotivev1alpha1.LabelTarget]
+	if arch == "" && distro == "" && target == "" {
+		return "name:" + img.Name
+	}
+	return distro + "/" + arch + "/" + target
 }
 
 // hasAllTags checks if the image has all the requested tags

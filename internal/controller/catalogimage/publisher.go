@@ -62,6 +62,8 @@ type PublishOptions struct {
 	Source PublishSource
 	// SourceImageBuildName is the name of the source ImageBuild (if applicable)
 	SourceImageBuildName string
+	// ScheduleName is the name of the ScheduledImageBuild that triggered this publish
+	ScheduleName string
 	// VerifyAccessibility determines if registry accessibility should be verified
 	VerifyAccessibility bool
 }
@@ -210,6 +212,8 @@ func (p *Publisher) PublishFromImageBuild(
 
 	log.Info("Publishing ImageBuild to catalog", "catalogName", catalogName, "registryURL", registryURL, "source", publishSource)
 
+	scheduleName := imageBuild.Labels[automotivev1alpha1.LabelScheduledImageBuildName]
+
 	return p.Publish(ctx, PublishOptions{
 		Name:                 catalogName,
 		Namespace:            imageBuild.Namespace,
@@ -219,6 +223,7 @@ func (p *Publisher) PublishFromImageBuild(
 		AuthSecretRef:        authSecretRef,
 		Source:               publishSource,
 		SourceImageBuildName: imageBuild.Name,
+		ScheduleName:         scheduleName,
 		VerifyAccessibility:  true,
 	})
 }
@@ -280,6 +285,10 @@ func (p *Publisher) buildCatalogImage(opts PublishOptions) *automotivev1alpha1.C
 
 	// Set source type label
 	catalogImage.Labels[automotivev1alpha1.LabelSourceType] = string(opts.Source)
+
+	if opts.ScheduleName != "" {
+		catalogImage.Labels[automotivev1alpha1.LabelScheduledImageBuildName] = opts.ScheduleName
+	}
 
 	return catalogImage
 }

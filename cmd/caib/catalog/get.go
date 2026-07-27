@@ -143,7 +143,7 @@ func printImageDetails(img CatalogImageResponse) {
 		for i, t := range img.Targets {
 			names[i] = t.Name
 		}
-		target = fmt.Sprintf("%v", names)
+		target = strings.Join(names, ", ")
 	}
 
 	rows := [][2]string{
@@ -154,7 +154,27 @@ func printImageDetails(img CatalogImageResponse) {
 		{"Architecture", img.Architecture},
 		{"Distro", img.Distro},
 		{"Targets", target},
+		{"Build Mode", img.BuildMode},
+		{"Export Format", img.ExportFormat},
 		{"Created At", img.CreatedAt},
+	}
+	if img.ScheduleName != "" {
+		rows = append(rows, [2]string{"Schedule", img.ScheduleName})
+	}
+	if img.SourceType != "" {
+		rows = append(rows, [2]string{"Source Type", img.SourceType})
+	}
+	if img.SourceImageBuild != "" {
+		rows = append(rows, [2]string{"Source Build", img.SourceImageBuild})
+	}
+	if len(img.Tags) > 0 {
+		rows = append(rows, [2]string{"Tags", strings.Join(img.Tags, ", ")})
+	}
+	if img.SizeBytes > 0 {
+		rows = append(rows, [2]string{"Size", formatBytes(img.SizeBytes)})
+	}
+	if img.DownloadURL != "" {
+		rows = append(rows, [2]string{"Download URL", img.DownloadURL})
 	}
 	if img.StatusReason != "" {
 		reason := img.StatusReason
@@ -163,14 +183,32 @@ func printImageDetails(img CatalogImageResponse) {
 		}
 		rows = append(rows, [2]string{"Status Reason", reason})
 	}
-	if img.SizeBytes > 0 {
-		rows = append(rows, [2]string{"Size", fmt.Sprintf("%d bytes", img.SizeBytes)})
-	}
 
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(w, "%s\t%s\n", row[0], row[1]); err != nil {
+		if row[1] == "" {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "%s:\t%s\n", row[0], row[1]); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to write output row: %v\n", err)
 			return
 		}
+	}
+}
+
+func formatBytes(b int64) string {
+	const (
+		kb = 1024
+		mb = 1024 * kb
+		gb = 1024 * mb
+	)
+	switch {
+	case b >= gb:
+		return fmt.Sprintf("%.1f GiB", float64(b)/float64(gb))
+	case b >= mb:
+		return fmt.Sprintf("%.1f MiB", float64(b)/float64(mb))
+	case b >= kb:
+		return fmt.Sprintf("%.1f KiB", float64(b)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", b)
 	}
 }
