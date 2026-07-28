@@ -89,6 +89,15 @@ type Options struct {
 	RestoreSourcesRef *string
 	TTL               *string
 
+	S3Bucket            *string
+	S3Prefix            *string
+	S3Region            *string
+	S3Endpoint          *string
+	S3AccessKeyID       *string
+	S3SecretAccessKey   *string
+	S3CredentialsSecret *string
+	S3Insecure          *bool
+
 	InsecureSkipTLS *bool
 	OutputFormat    *string
 
@@ -536,6 +545,63 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 	return nil
 }
 
+func (h *Handler) applyS3Options(req *buildapitypes.BuildRequest) error {
+	if h.opts.S3Bucket == nil || *h.opts.S3Bucket == "" {
+		return nil
+	}
+
+	req.S3Bucket = *h.opts.S3Bucket
+	if h.opts.S3Prefix != nil {
+		req.S3Prefix = *h.opts.S3Prefix
+	}
+	if h.opts.S3Endpoint != nil {
+		req.S3Endpoint = *h.opts.S3Endpoint
+	}
+	if h.opts.S3Region != nil {
+		req.S3Region = *h.opts.S3Region
+	}
+	if h.opts.S3Insecure != nil {
+		req.S3InsecureSkipTLSVerify = *h.opts.S3Insecure
+	}
+
+	if h.opts.S3CredentialsSecret != nil && *h.opts.S3CredentialsSecret != "" {
+		req.S3CredentialsSecretName = *h.opts.S3CredentialsSecret
+		return nil
+	}
+
+	accessKeyID := ""
+	if h.opts.S3AccessKeyID != nil {
+		accessKeyID = *h.opts.S3AccessKeyID
+	}
+	if accessKeyID == "" {
+		accessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
+	}
+
+	secretAccessKey := ""
+	if h.opts.S3SecretAccessKey != nil {
+		secretAccessKey = *h.opts.S3SecretAccessKey
+	}
+	if secretAccessKey == "" {
+		secretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	}
+
+	if accessKeyID != "" && secretAccessKey != "" {
+		req.S3Credentials = &buildapitypes.S3Credentials{
+			AccessKeyID:     accessKeyID,
+			SecretAccessKey: secretAccessKey,
+		}
+		return nil
+	}
+	if accessKeyID != "" {
+		return fmt.Errorf("AWS_ACCESS_KEY_ID / --s3-access-key-id is set but AWS_SECRET_ACCESS_KEY / --s3-secret-access-key is missing")
+	}
+	if secretAccessKey != "" {
+		return fmt.Errorf("AWS_SECRET_ACCESS_KEY / --s3-secret-access-key is set but AWS_ACCESS_KEY_ID / --s3-access-key-id is missing")
+	}
+
+	return nil
+}
+
 func (h *Handler) displayBuildLogsCommand(buildName string) {
 	if clilog.IsQuiet() || h.isStructuredOutput() {
 		return
@@ -773,6 +839,11 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	if err := h.applyS3Options(&req); err != nil {
+		h.handleError(err)
+		return
+	}
+
 	localRefs, refsErr := common.FindLocalFileReferences(string(manifestBytes), filepath.Dir(manifestPath))
 	if refsErr != nil {
 		h.handleError(fmt.Errorf("manifest file reference error: %w", refsErr))
@@ -891,6 +962,11 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	if err := h.applyS3Options(&req); err != nil {
+		h.handleError(err)
+		return
+	}
+
 	resp, err := api.CreateBuild(ctx, req)
 	if err != nil {
 		h.handleError(err)
@@ -906,6 +982,19 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 	}
 
 	h.displayBuildResults(ctx, api, resp.Name)
+}
+
+func (h *Handler) validateDevExportFlags(manifestPath string) error {
+	if *h.opts.UseInternalRegistry {
+		if *h.opts.ExportOCI != "" {
+			return common.NewActionableError(
+				fmt.Errorf("--internal-registry cannot be used with --push"),
+				fmt.Sprintf("caib image build-dev --push %s %s", *h.opts.ExportOCI, manifestPath),
+			)
+		}
+		return nil
+	}
+	return common.ValidateOutputRequiresPush(*h.opts.OutputDir, *h.opts.ExportOCI, "--push")
 }
 
 // RunBuildDev handles `caib image build-dev` (traditional ostree/package builds).
@@ -928,6 +1017,11 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 
 	if err := h.validateRegistryFlags("--push",
 		fmt.Sprintf("caib image build-dev --push %s %s", *h.opts.ExportOCI, manifestPath)); err != nil {
+		h.handleError(err)
+		return
+	}
+
+	if err := h.validateDevExportFlags(manifestPath); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -1037,6 +1131,11 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	ApplyTargetDefaults(cmd, operatorConfig, &req)
 
 	if err := h.applyFlashOptions(&req, "--push"); err != nil {
+		h.handleError(err)
+		return
+	}
+
+	if err := h.applyS3Options(&req); err != nil {
 		h.handleError(err)
 		return
 	}

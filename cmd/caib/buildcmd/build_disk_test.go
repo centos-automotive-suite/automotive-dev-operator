@@ -53,6 +53,14 @@ func newTestDiskOpts() Options {
 		restoreSourcesRef    string
 		buildTTL             string
 		insecureSkipTLS      bool
+		s3Bucket             string
+		s3Prefix             string
+		s3Region             = "us-east-1"
+		s3Endpoint           string
+		s3AccessKeyID        string
+		s3SecretAccessKey    string
+		s3CredentialsSecret  string
+		s3Insecure           bool
 	)
 	var defineFiles []string
 	return Options{
@@ -98,6 +106,14 @@ func newTestDiskOpts() Options {
 		RestoreSourcesRef:         &restoreSourcesRef,
 		TTL:                       &buildTTL,
 		InsecureSkipTLS:           &insecureSkipTLS,
+		S3Bucket:                  &s3Bucket,
+		S3Prefix:                  &s3Prefix,
+		S3Region:                  &s3Region,
+		S3Endpoint:                &s3Endpoint,
+		S3AccessKeyID:             &s3AccessKeyID,
+		S3SecretAccessKey:         &s3SecretAccessKey,
+		S3CredentialsSecret:       &s3CredentialsSecret,
+		S3Insecure:                &s3Insecure,
 	}
 }
 
