@@ -65,6 +65,15 @@ type runtimeState struct {
 	RestoreSourcesRef *string
 	TTL               *string
 
+	S3Bucket            *string
+	S3Prefix            *string
+	S3Region            *string
+	S3Endpoint          *string
+	S3AccessKeyID       *string
+	S3SecretAccessKey   *string
+	S3CredentialsSecret *string
+	S3Insecure          *bool
+
 	InsecureSkipTLS *bool
 
 	SealedBuilderImage      *string
@@ -132,6 +141,15 @@ func newRuntimeState() runtimeState {
 		TaskBundleRef:     &taskBundleRef,
 		RestoreSourcesRef: &restoreSourcesRef,
 		TTL:               &buildTTL,
+
+		S3Bucket:            &s3Bucket,
+		S3Prefix:            &s3Prefix,
+		S3Region:            &s3Region,
+		S3Endpoint:          &s3Endpoint,
+		S3AccessKeyID:       &s3AccessKeyID,
+		S3SecretAccessKey:   &s3SecretAccessKey,
+		S3CredentialsSecret: &s3CredentialsSecret,
+		S3Insecure:          &s3Insecure,
 
 		InsecureSkipTLS: &insecureSkipTLS,
 
@@ -206,6 +224,14 @@ func (s runtimeState) newHandlers() handlerSet {
 			TaskBundleRef:             s.TaskBundleRef,
 			RestoreSourcesRef:         s.RestoreSourcesRef,
 			TTL:                       s.TTL,
+			S3Bucket:                  s.S3Bucket,
+			S3Prefix:                  s.S3Prefix,
+			S3Region:                  s.S3Region,
+			S3Endpoint:                s.S3Endpoint,
+			S3AccessKeyID:             s.S3AccessKeyID,
+			S3SecretAccessKey:         s.S3SecretAccessKey,
+			S3CredentialsSecret:       s.S3CredentialsSecret,
+			S3Insecure:                s.S3Insecure,
 			InsecureSkipTLS:           s.InsecureSkipTLS,
 			OutputFormat:              s.OutputFormat,
 			HandleError:               handleError,
@@ -345,6 +371,15 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		TaskBundleRef:     s.TaskBundleRef,
 		RestoreSourcesRef: s.RestoreSourcesRef,
 		TTL:               s.TTL,
+
+		S3Bucket:            s.S3Bucket,
+		S3Prefix:            s.S3Prefix,
+		S3Region:            s.S3Region,
+		S3Endpoint:          s.S3Endpoint,
+		S3AccessKeyID:       s.S3AccessKeyID,
+		S3SecretAccessKey:   s.S3SecretAccessKey,
+		S3CredentialsSecret: s.S3CredentialsSecret,
+		S3Insecure:          s.S3Insecure,
 
 		SealedBuilderImage:      s.SealedBuilderImage,
 		SealedArchitecture:      s.SealedArchitecture,

@@ -79,6 +79,15 @@ type Options struct {
 	RestoreSourcesRef *string
 	TTL               *string
 
+	S3Bucket            *string
+	S3Prefix            *string
+	S3Region            *string
+	S3Endpoint          *string
+	S3AccessKeyID       *string
+	S3SecretAccessKey   *string
+	S3CredentialsSecret *string
+	S3Insecure          *bool
+
 	SealedBuilderImage      *string
 	SealedArchitecture      *string
 	SealedKeySecret         *string
@@ -180,6 +189,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
 	buildCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: bootc)")
+	addS3Flags(buildCmd, opts)
 
 	listCmd.Flags().StringVar(
 		opts.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
@@ -239,6 +249,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	diskCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	diskCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
 	diskCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: disk)")
+	addS3Flags(diskCmd, opts)
 
 	// build-dev command flags (traditional ostree/package builds)
 	buildDevCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
@@ -291,6 +302,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
 	buildDevCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
 	buildDevCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: disk)")
+	addS3Flags(buildDevCmd, opts)
 
 	// logs command flags
 	logsCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
@@ -673,6 +685,17 @@ Input, signed artifact, and output can be given as positionals or via --input, -
 		Args: cobra.RangeArgs(0, 3),
 		Run:  opts.RunInjectSigned,
 	}
+}
+
+func addS3Flags(cmd *cobra.Command, opts Options) {
+	cmd.Flags().StringVar(opts.S3Bucket, "s3-bucket", "", "S3 bucket name for artifact upload")
+	cmd.Flags().StringVar(opts.S3Prefix, "s3-prefix", "", "S3 key prefix (path within bucket)")
+	cmd.Flags().StringVar(opts.S3Region, "s3-region", "us-east-1", "S3 region")
+	cmd.Flags().StringVar(opts.S3Endpoint, "s3-endpoint", "", "Custom S3 endpoint URL (for MinIO/Ceph)")
+	cmd.Flags().StringVar(opts.S3AccessKeyID, "s3-access-key-id", "", "S3 access key ID (env: AWS_ACCESS_KEY_ID)")
+	cmd.Flags().StringVar(opts.S3SecretAccessKey, "s3-secret-access-key", "", "S3 secret access key (env: AWS_SECRET_ACCESS_KEY)")
+	cmd.Flags().StringVar(opts.S3CredentialsSecret, "s3-credentials-secret", "", "Existing K8s secret with S3 credentials")
+	cmd.Flags().BoolVar(opts.S3Insecure, "s3-insecure", false, "Skip TLS verification for S3 endpoint")
 }
 
 func addSealedFlags(cmd *cobra.Command, opts Options, defaultServer string) {
