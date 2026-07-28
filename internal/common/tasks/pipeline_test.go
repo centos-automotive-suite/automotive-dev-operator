@@ -331,6 +331,18 @@ func hasParam(params []tektonv1.ParamSpec, name string) bool {
 	return false
 }
 
+func paramDefault(params []tektonv1.ParamSpec, name string) (string, bool) {
+	for _, p := range params {
+		if p.Name == name {
+			if p.Default == nil {
+				return "", true
+			}
+			return p.Default.StringVal, true
+		}
+	}
+	return "", false
+}
+
 func findPipelineTask(tasks []tektonv1.PipelineTask, name string) *tektonv1.PipelineTask {
 	for i := range tasks {
 		if tasks[i].Name == name {
@@ -629,14 +641,22 @@ func TestPipeline_S3Task_WhenGate(t *testing.T) {
 			if w.Operator != "notin" {
 				t.Errorf("s3-bucket when operator = %q, want notin", w.Operator)
 			}
-			hasEmpty := false
+			sawEmpty, sawNull := false, false
 			for _, v := range w.Values {
-				if v == "" || v == "null" {
-					hasEmpty = true
+				switch v {
+				case "":
+					sawEmpty = true
+				case "null":
+					sawNull = true
+				default:
+					t.Errorf("unexpected exclusion value %q in s3-bucket when gate", v)
 				}
 			}
-			if !hasEmpty {
-				t.Error("s3-bucket when gate should exclude empty/null values")
+			if !sawEmpty {
+				t.Error("s3-bucket when gate must exclude empty string")
+			}
+			if !sawNull {
+				t.Error("s3-bucket when gate must exclude \"null\"")
 			}
 			break
 		}
@@ -721,13 +741,21 @@ func TestPipeline_S3Task_S3AuthWorkspaceBinding(t *testing.T) {
 func TestPipeline_S3Params_Declared(t *testing.T) {
 	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
 
-	s3Params := []string{
-		"s3-bucket", "s3-prefix", "s3-endpoint", "s3-region",
-		"s3-insecure-skip-tls-verify",
+	wantDefaults := map[string]string{
+		"s3-bucket":                   "",
+		"s3-prefix":                   "",
+		"s3-endpoint":                 "",
+		"s3-region":                   "us-east-1",
+		"s3-insecure-skip-tls-verify": "false",
 	}
-	for _, name := range s3Params {
-		if !hasParam(pipeline.Spec.Params, name) {
+	for name, wantVal := range wantDefaults {
+		got, ok := paramDefault(pipeline.Spec.Params, name)
+		if !ok {
 			t.Errorf("pipeline missing S3 param %q", name)
+			continue
+		}
+		if got != wantVal {
+			t.Errorf("pipeline param %q default = %q, want %q", name, got, wantVal)
 		}
 	}
 }
