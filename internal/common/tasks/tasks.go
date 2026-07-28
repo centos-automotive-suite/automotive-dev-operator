@@ -1519,6 +1519,11 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact.results.IMAGE_DIGEST)"},
 				},
 				{
+					Name:        "s3-artifact-url",
+					Description: "S3 URL where the disk artifact was uploaded",
+					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(tasks.push-disk-artifact-s3.results.S3_URL)"},
+				},
+				{
 					Name:        "IMAGES",
 					Description: "Newline-separated image@digest list for Tekton Chains attestation",
 					Value:       tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "$(finally.collect-images-result.results.IMAGES)"},
