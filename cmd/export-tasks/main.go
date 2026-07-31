@@ -41,6 +41,7 @@ func main() {
 	taskList := []*tektonv1.Task{
 		tasks.GenerateBuildAutomotiveImageTask("", nil, ""),
 		tasks.GeneratePushArtifactRegistryTask("", nil),
+		tasks.GeneratePushArtifactS3Task("", nil),
 		tasks.GeneratePrepareBuilderTask("", nil),
 		tasks.GenerateFlashTask("", nil),
 	}
