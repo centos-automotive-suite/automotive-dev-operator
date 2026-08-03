@@ -2164,6 +2164,9 @@ func (r *ImageBuildReconciler) cleanupTransientSecrets(
 		collect(r.deleteSecret(ctx, imageBuild.Namespace, flashSecretRef, "flash client config", log, uid))
 	}
 	collect(r.deleteSecret(ctx, imageBuild.Namespace, imageBuild.Name+"-flash-oci-auth", "flash OCI auth", log, uid))
+	if s3SecretRef := imageBuild.Spec.GetS3CredentialsSecret(); s3SecretRef != "" {
+		collect(r.deleteSecret(ctx, imageBuild.Namespace, s3SecretRef, "S3 credentials", log, uid))
+	}
 	return firstErr
 }
 

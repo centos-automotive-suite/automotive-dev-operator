@@ -152,6 +152,94 @@ func TestApplyS3Options_PartialCredentialsError(t *testing.T) {
 	}
 }
 
+func TestValidateDevExportFlags_OutputWithS3Bucket(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.OutputDir = "/tmp/output"
+	*opts.S3Bucket = "my-bucket"
+	h := newS3TestHandler(opts)
+
+	if err := h.validateDevExportFlags("manifest.aib.yml"); err != nil {
+		t.Errorf("expected --output + --s3-bucket (no --push) to be accepted, got: %v", err)
+	}
+}
+
+func TestValidateDevExportFlags_OutputWithoutPushOrS3(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.OutputDir = "/tmp/output"
+	h := newS3TestHandler(opts)
+
+	if err := h.validateDevExportFlags("manifest.aib.yml"); err == nil {
+		t.Error("expected error for --output without --push or --s3-bucket")
+	}
+}
+
+func TestValidateDevExportFlags_InternalRegistryConflictsWithPush(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.UseInternalRegistry = true
+	*opts.ExportOCI = "quay.io/org/image:v1"
+	h := newS3TestHandler(opts)
+
+	if err := h.validateDevExportFlags("manifest.aib.yml"); err == nil {
+		t.Error("expected error for --internal-registry with --push")
+	}
+}
+
+func TestApplyS3Options_ExplicitAccessKeyOnlyError(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.S3Bucket = testS3Bucket
+	*opts.S3AccessKeyID = "EXPLICIT_AKID"
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+	h := newS3TestHandler(opts)
+
+	var req buildapitypes.BuildRequest
+	err := h.applyS3Options(&req)
+	if err == nil {
+		t.Fatal("expected error when only --s3-access-key-id is set (should not combine with env)")
+	}
+}
+
+func TestApplyS3Options_ExplicitSecretKeyOnlyError(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.S3Bucket = testS3Bucket
+	*opts.S3SecretAccessKey = "EXPLICIT_SECRET"
+	t.Setenv("AWS_ACCESS_KEY_ID", "ENV_AKID")
+	h := newS3TestHandler(opts)
+
+	var req buildapitypes.BuildRequest
+	err := h.applyS3Options(&req)
+	if err == nil {
+		t.Fatal("expected error when only --s3-secret-access-key is set (should not combine with env)")
+	}
+}
+
+func TestApplyS3Options_AmbientAccessKeyOnlyError(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.S3Bucket = testS3Bucket
+	t.Setenv("AWS_ACCESS_KEY_ID", "ENV_AKID")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	h := newS3TestHandler(opts)
+
+	var req buildapitypes.BuildRequest
+	err := h.applyS3Options(&req)
+	if err == nil {
+		t.Fatal("expected error when only AWS_ACCESS_KEY_ID is set in env")
+	}
+}
+
+func TestApplyS3Options_AmbientSecretKeyOnlyError(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.S3Bucket = testS3Bucket
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+	h := newS3TestHandler(opts)
+
+	var req buildapitypes.BuildRequest
+	err := h.applyS3Options(&req)
+	if err == nil {
+		t.Fatal("expected error when only AWS_SECRET_ACCESS_KEY is set in env")
+	}
+}
+
 func TestApplyS3Options_NoCredentialsAllowed(t *testing.T) {
 	opts := newTestDiskOpts()
 	*opts.S3Bucket = testS3Bucket
