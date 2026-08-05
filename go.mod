@@ -1,6 +1,6 @@
 module github.com/centos-automotive-suite/automotive-dev-operator
 
-go 1.25.8
+go 1.26.0
 
 require (
 	github.com/containers/image/v5 v5.36.2
@@ -106,7 +106,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
-	github.com/letsencrypt/boulder v0.20260309.0 // indirect
+	github.com/letsencrypt/boulder v0.20260729.0 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.27 // indirect
