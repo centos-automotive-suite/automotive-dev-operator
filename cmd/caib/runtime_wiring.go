@@ -266,6 +266,7 @@ func (s runtimeState) newHandlers() handlerSet {
 			ServerURL:       s.ServerURL,
 			AuthToken:       s.AuthToken,
 			InsecureSkipTLS: s.InsecureSkipTLS,
+			OutputFormat:    s.OutputFormat,
 			HandleError:     handleError,
 		}),
 		inspect: inspectcmd.NewHandler(inspectcmd.Options{
