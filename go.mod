@@ -23,10 +23,10 @@ require (
 	github.com/sigstore/sigstore v1.10.8
 	github.com/sigstore/sigstore-go v1.1.4
 	golang.org/x/term v0.45.0
-	k8s.io/apimachinery v0.35.6
-	k8s.io/apiserver v0.35.6
-	k8s.io/client-go v0.35.6
-	knative.dev/pkg v0.0.0-20260622140654-39ebae2ee2dc
+	k8s.io/apimachinery v0.35.7
+	k8s.io/apiserver v0.35.7
+	k8s.io/client-go v0.35.7
+	knative.dev/pkg v0.0.0-20260727151759-521cb33b33dd
 	oras.land/oras-go/v2 v2.6.2
 	sigs.k8s.io/controller-runtime v0.22.5
 )
@@ -196,7 +196,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/openshift/api v0.0.0-20250725072657-92b1455121e1
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
@@ -227,13 +227,13 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260715232425-e75dac1f907d // indirect
 	google.golang.org/grpc v1.83.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.35.6
-	k8s.io/apiextensions-apiserver v0.35.6
-	k8s.io/component-base v0.35.6 // indirect
+	k8s.io/api v0.35.7
+	k8s.io/apiextensions-apiserver v0.35.7
+	k8s.io/component-base v0.35.7 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
