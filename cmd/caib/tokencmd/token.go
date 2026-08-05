@@ -57,6 +57,12 @@ func (h *Handler) RunToken(_ *cobra.Command, args []string) {
 	serverURL := strings.TrimSpace(*h.opts.ServerURL)
 	insecureSkipTLS := *h.opts.InsecureSkipTLS
 
+	format, fmtErr := common.ResolveOutputFormat(h.opts.OutputFormat)
+	if fmtErr != nil {
+		h.handleError(fmtErr)
+		return
+	}
+
 	var tok *buildapitypes.TokenResponse
 	err := common.ExecuteWithReauth(serverURL, h.opts.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
 		var tokenErr error
@@ -65,12 +71,6 @@ func (h *Handler) RunToken(_ *cobra.Command, args []string) {
 	})
 	if err != nil {
 		h.handleError(fmt.Errorf("error requesting token for build %s: %w", buildName, err))
-		return
-	}
-
-	format, fmtErr := common.ResolveOutputFormat(h.opts.OutputFormat)
-	if fmtErr != nil {
-		h.handleError(fmtErr)
 		return
 	}
 
