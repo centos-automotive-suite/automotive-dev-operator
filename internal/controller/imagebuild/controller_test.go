@@ -8,6 +8,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
+	"github.com/go-logr/logr"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -1206,5 +1207,178 @@ func TestVerifiedBundlesCacheKeyIsolation(t *testing.T) {
 	}
 	if _, ok := r.verifiedBundles.Load(refB); ok {
 		t.Error("refB should not be cached — different digest means different bundle")
+	}
+}
+
+func TestCleanupTransientSecretsDeletesOwnedS3Secret(t *testing.T) {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(automotivev1alpha1.AddToScheme(scheme))
+
+	buildUID := types.UID("build-uid-123")
+	s3SecretName := "my-s3-creds"
+
+	imageBuild := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-build",
+			Namespace: "default",
+			UID:       buildUID,
+		},
+		Spec: automotivev1alpha1.ImageBuildSpec{
+			Export: &automotivev1alpha1.ExportSpec{
+				Disk: &automotivev1alpha1.DiskExport{
+					S3: &automotivev1alpha1.S3Export{
+						Bucket:            "bucket",
+						CredentialsSecret: s3SecretName,
+					},
+				},
+			},
+		},
+	}
+
+	s3Secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s3SecretName,
+			Namespace: "default",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: automotivev1alpha1.GroupVersion.String(),
+					Kind:       "ImageBuild",
+					Name:       "test-build",
+					UID:        buildUID,
+					Controller: func() *bool { b := true; return &b }(),
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(s3Secret).
+		Build()
+
+	r := &ImageBuildReconciler{Client: fakeClient, Scheme: scheme}
+	log := logr.Discard()
+
+	err := r.cleanupTransientSecrets(context.Background(), imageBuild, log)
+	if err != nil {
+		t.Fatalf("cleanupTransientSecrets returned error: %v", err)
+	}
+
+	got := &corev1.Secret{}
+	getErr := fakeClient.Get(context.Background(), types.NamespacedName{Name: s3SecretName, Namespace: "default"}, got)
+	if getErr == nil {
+		t.Error("expected S3 credentials secret to be deleted, but it still exists")
+	}
+}
+
+func TestCleanupTransientSecretsPreservesUnownedS3Secret(t *testing.T) {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(automotivev1alpha1.AddToScheme(scheme))
+
+	buildUID := types.UID("build-uid-123")
+	s3SecretName := "user-s3-creds"
+
+	imageBuild := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-build",
+			Namespace: "default",
+			UID:       buildUID,
+		},
+		Spec: automotivev1alpha1.ImageBuildSpec{
+			Export: &automotivev1alpha1.ExportSpec{
+				Disk: &automotivev1alpha1.DiskExport{
+					S3: &automotivev1alpha1.S3Export{
+						Bucket:            "bucket",
+						CredentialsSecret: s3SecretName,
+					},
+				},
+			},
+		},
+	}
+
+	userSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s3SecretName,
+			Namespace: "default",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(userSecret).
+		Build()
+
+	r := &ImageBuildReconciler{Client: fakeClient, Scheme: scheme}
+	log := logr.Discard()
+
+	err := r.cleanupTransientSecrets(context.Background(), imageBuild, log)
+	if err != nil {
+		t.Fatalf("cleanupTransientSecrets returned error: %v", err)
+	}
+
+	got := &corev1.Secret{}
+	getErr := fakeClient.Get(context.Background(), types.NamespacedName{Name: s3SecretName, Namespace: "default"}, got)
+	if getErr != nil {
+		t.Errorf("expected user-provided S3 secret to be preserved, but got error: %v", getErr)
+	}
+}
+
+func TestS3Prefix(t *testing.T) {
+	tests := []struct {
+		name  string
+		build *automotivev1alpha1.ImageBuild
+		want  string
+	}{
+		{
+			name: "uses explicit prefix",
+			build: &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-build"},
+				Spec: automotivev1alpha1.ImageBuildSpec{
+					Export: &automotivev1alpha1.ExportSpec{
+						Disk: &automotivev1alpha1.DiskExport{
+							S3: &automotivev1alpha1.S3Export{
+								Bucket: "bucket",
+								Prefix: "custom/path",
+							},
+						},
+					},
+				},
+			},
+			want: "custom/path",
+		},
+		{
+			name: "defaults to builds/<name> when prefix empty",
+			build: &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-build"},
+				Spec: automotivev1alpha1.ImageBuildSpec{
+					Export: &automotivev1alpha1.ExportSpec{
+						Disk: &automotivev1alpha1.DiskExport{
+							S3: &automotivev1alpha1.S3Export{
+								Bucket: "bucket",
+							},
+						},
+					},
+				},
+			},
+			want: "builds/my-build",
+		},
+		{
+			name: "defaults to builds/<name> when no S3 export",
+			build: &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-build"},
+				Spec:       automotivev1alpha1.ImageBuildSpec{},
+			},
+			want: "builds/my-build",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s3Prefix(tt.build)
+			if got != tt.want {
+				t.Errorf("s3Prefix() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

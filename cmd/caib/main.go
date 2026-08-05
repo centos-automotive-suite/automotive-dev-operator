@@ -79,6 +79,16 @@ var (
 	// Output options
 	quiet bool
 
+	// S3 upload options
+	s3Bucket            string
+	s3Prefix            string
+	s3Region            string
+	s3Endpoint          string
+	s3AccessKeyID       string
+	s3SecretAccessKey   string
+	s3CredentialsSecret string
+	s3Insecure          bool
+
 	// TLS options
 	insecureSkipTLS bool
 
