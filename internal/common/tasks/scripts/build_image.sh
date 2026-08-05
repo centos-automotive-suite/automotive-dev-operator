@@ -862,14 +862,17 @@ if [ -n "$final_name" ] && [ "$final_name" != "container:$CONTAINER_PUSH" ]; the
   # For ride4/ridesx4 targets, duplicate boot_a as boot_b BEFORE computing the
   # integrity digest so the digest covers the complete artifact that will be pushed.
   if [ -d "$parts_dir" ]; then
+    # ride4/ridesx4 use A/B partition slots. AIB only populates the _a slot;
+    # duplicate as _b so the full partition set is present in the artifact.
+    # abl_a is only produced on SIG distros (qcom-abl package); glob skips when absent.
     case "$(params.target)" in
       ride4*|ridesx4*)
-        for boot_a_file in "${parts_dir}"/boot_a.*; do
-          [ -f "$boot_a_file" ] || continue
-          boot_b_file=$(echo "$boot_a_file" | sed 's/boot_a/boot_b/')
-          if [ ! -f "$boot_b_file" ]; then
-            echo "Duplicating $(basename "$boot_a_file") as $(basename "$boot_b_file") for target $(params.target)"
-            cp "$boot_a_file" "$boot_b_file"
+        for a_file in "${parts_dir}"/boot_a.* "${parts_dir}"/abl_a.*; do
+          [ -f "$a_file" ] || continue
+          b_file=$(echo "$a_file" | sed 's/_a\./_b./')
+          if [ ! -f "$b_file" ]; then
+            echo "Duplicating $(basename "$a_file") as $(basename "$b_file") for target $(params.target)"
+            cp "$a_file" "$b_file"
           fi
         done
         ;;

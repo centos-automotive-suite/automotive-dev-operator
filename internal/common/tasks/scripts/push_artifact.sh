@@ -167,16 +167,17 @@ if [ -d "${parts_dir}" ] && [ -n "$(ls -A "${parts_dir}" 2>/dev/null)" ]; then
   echo "Found parts directory: ${parts_dir}"
   echo "Using multi-layer push for individual partition files"
 
-  # For ride4/ridesx4 targets, ensure boot_b exists (normally created by build task;
-  # kept here as idempotent fallback for backwards compatibility with older bundles)
+  # For ride4/ridesx4 targets, ensure _b slots exist (normally created by build task;
+  # kept here as idempotent fallback for backwards compatibility with older bundles).
+  # abl_a is only produced on SIG distros (qcom-abl package); glob skips when absent.
   case "$target" in
     ride4*|ridesx4*)
-      for boot_a_file in "${parts_dir}"/boot_a.*; do
-        [ -f "$boot_a_file" ] || continue
-        boot_b_file=$(echo "$boot_a_file" | sed 's/boot_a/boot_b/')
-        if [ ! -f "$boot_b_file" ]; then
-          echo "Duplicating $(basename "$boot_a_file") as $(basename "$boot_b_file") for target $target"
-          cp "$boot_a_file" "$boot_b_file"
+      for a_file in "${parts_dir}"/boot_a.* "${parts_dir}"/abl_a.*; do
+        [ -f "$a_file" ] || continue
+        b_file=$(echo "$a_file" | sed 's/_a\./_b./')
+        if [ ! -f "$b_file" ]; then
+          echo "Duplicating $(basename "$a_file") as $(basename "$b_file") for target $target"
+          cp "$a_file" "$b_file"
         fi
       done
       ;;
