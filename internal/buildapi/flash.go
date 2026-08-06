@@ -82,6 +82,14 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		operatorConfig = &automotivev1alpha1.OperatorConfig{}
 	}
 
+	// Auto-detect target from OCI image annotations when not specified
+	if req.Target == "" && req.ExporterSelector == "" {
+		if detected := resolveTargetFromImage(ctx, req.ImageRef, req.RegistryCredentials); detected != "" {
+			req.Target = detected
+			a.log.Info("auto-detected target from image annotations", "target", detected, "image", req.ImageRef)
+		}
+	}
+
 	// Resolve exporter selector and flash command from OperatorConfig
 	exporterSelector, flashCmd := resolveFlashTargetConfig(req, operatorConfig)
 	if exporterSelector == "" {

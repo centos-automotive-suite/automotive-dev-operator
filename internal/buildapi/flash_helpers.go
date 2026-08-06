@@ -8,8 +8,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/containers/image/v5/docker"
+	"github.com/containers/image/v5/types"
+
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,6 +54,68 @@ func resolveFlashTargetConfig(req FlashRequest, operatorConfig *automotivev1alph
 		}
 	}
 	return exporterSelector, flashCmd
+}
+
+// readImageAnnotationsFn reads OCI manifest annotations for a given image reference.
+// Overridable for testing.
+var readImageAnnotationsFn = readImageAnnotations
+
+func readImageAnnotations(ctx context.Context, imageRef string, sysCtx *types.SystemContext) (map[string]string, error) {
+	ref, err := docker.ParseReference("//" + imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("parse reference: %w", err)
+	}
+
+	if sysCtx == nil {
+		sysCtx = &types.SystemContext{}
+	}
+
+	src, err := ref.NewImageSource(ctx, sysCtx)
+	if err != nil {
+		return nil, fmt.Errorf("open image source: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+
+	rawManifest, _, err := src.GetManifest(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get manifest: %w", err)
+	}
+
+	var parsed struct {
+		Annotations map[string]string `json:"annotations"`
+	}
+	if err := json.Unmarshal(rawManifest, &parsed); err != nil {
+		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	return parsed.Annotations, nil
+}
+
+// systemContextFromCredentials builds a types.SystemContext with Docker auth
+// from FlashRequest registry credentials. Returns nil if no credentials.
+func systemContextFromCredentials(creds *RegistryCredentials) *types.SystemContext {
+	if creds == nil || !creds.Enabled {
+		return nil
+	}
+	username, password, err := extractOCICredentials(creds)
+	if err != nil || username == "" {
+		return nil
+	}
+	return &types.SystemContext{
+		DockerAuthConfig: &types.DockerAuthConfig{
+			Username: username,
+			Password: password,
+		},
+	}
+}
+
+// resolveTargetFromImage inspects OCI image annotations and returns the target name if present.
+func resolveTargetFromImage(ctx context.Context, imageRef string, creds *RegistryCredentials) string {
+	sysCtx := systemContextFromCredentials(creds)
+	annotations, err := readImageAnnotationsFn(ctx, imageRef, sysCtx)
+	if err != nil {
+		return ""
+	}
+	return annotations[oci.Get().AnnotationKey("target")]
 }
 
 // createFlashClientConfigSecret creates the Jumpstarter client config secret for a standalone flash job.
