@@ -6,7 +6,7 @@ require (
 	github.com/containers/image/v5 v5.36.2
 	github.com/containers/storage v1.59.1
 	github.com/dlclark/regexp2 v1.12.0
-	github.com/docker/cli v29.7.1+incompatible
+	github.com/docker/cli v29.7.2+incompatible
 	github.com/fatih/color v1.19.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
