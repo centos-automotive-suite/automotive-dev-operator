@@ -140,7 +140,7 @@ require (
 	github.com/smallstep/pkcs7 v0.2.3 // indirect
 	github.com/stefanberger/go-pkcs11uri v0.0.0-20230803200340-78284954bff6 // indirect
 	github.com/syndtr/goleveldb v1.0.1-0.20220721030215-126854af5e6d // indirect
-	github.com/theupdateframework/go-tuf v0.7.0 // indirect
+	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
