@@ -23,8 +23,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"path"
 	"time"
 
+	ssldsse "github.com/secure-systems-lab/go-securesystemslib/dsse"
 	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
 	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
 	protorekor "github.com/sigstore/protobuf-specs/gen/pb-go/rekor/v1"
@@ -57,6 +59,7 @@ const (
 
 type RekorClient interface {
 	CreateLogEntry(params *entries.CreateLogEntryParams, opts ...entries.ClientOption) (*entries.CreateLogEntryCreated, error)
+	GetLogEntryByUUID(params *entries.GetLogEntryByUUIDParams, opts ...entries.ClientOption) (*entries.GetLogEntryByUUIDOK, error)
 }
 
 type RekorV2Client interface {
@@ -149,10 +152,10 @@ func (r *Rekor) getRekorV2TLE(ctx context.Context, keyOrCertPEM []byte, b *proto
 		return nil, fmt.Errorf("unknown key type: %s", block.Type)
 	}
 	var opts []signature.LoadOption
-	// When signing with ed25519, only the prehash variant is supported for hashedrekord
-	if messageSignature != nil {
-		opts = append(opts, options.WithED25519ph())
-	}
+	// hashedrekord (used for both message_signature and DSSE envelopes on
+	// Rekor v2) requires a prehashing signature algorithm; ed25519 must use
+	// the prehash variant. This is a no-op for ECDSA/RSA.
+	opts = append(opts, options.WithED25519ph())
 	algoDetails, err := signature.GetDefaultAlgorithmDetails(pubKey, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("getting algorithm details: %w", err)
@@ -176,9 +179,25 @@ func (r *Rekor) getRekorV2TLE(ctx context.Context, keyOrCertPEM []byte, b *proto
 	var req any
 	switch {
 	case dsseEnvelope != nil:
-		req = &rekortilespb.DSSERequestV002{
-			Envelope:  dsseEnvelope,
-			Verifiers: []*rekortilespb.Verifier{verifier},
+		// Rekor v2 only supports hashedrekord entries, so DSSE envelopes are
+		// always uploaded as a hashedrekord whose digest covers the envelope's
+		// PAE. The hash function matches the signing algorithm (e.g.
+		// ECDSA P-256 → SHA-256, P-384 → SHA-384).
+		if len(dsseEnvelope.Signatures) == 0 {
+			return nil, fmt.Errorf("dsse envelope has no signatures")
+		}
+		hf := algoDetails.GetHashType()
+		if hf == crypto.Hash(0) {
+			return nil, fmt.Errorf("hashedrekord entries require a prehashing signature algorithm; for ed25519 keys use ed25519ph")
+		}
+		hasher := hf.New()
+		hasher.Write(ssldsse.PAE(dsseEnvelope.PayloadType, dsseEnvelope.Payload))
+		req = &rekortilespb.HashedRekordRequestV002{
+			Signature: &rekortilespb.Signature{
+				Content:  dsseEnvelope.Signatures[0].Sig,
+				Verifier: verifier,
+			},
+			Digest: hasher.Sum(nil),
 		}
 	case messageSignature != nil:
 		req = &rekortilespb.HashedRekordRequestV002{
@@ -200,6 +219,19 @@ func (r *Rekor) getRekorV2TLE(ctx context.Context, keyOrCertPEM []byte, b *proto
 	}
 	tle, err := r.options.ClientV2.Add(ctx, req)
 	if err != nil {
+		// Note: A 409 Conflict from Rekor v2 is currently not handled. The simplest
+		// solution is to sign again to generate a different signature.
+		// If someone wants to gracefully handle a 409 Conflict (e.g. from CI retries),
+		// they would need to:
+		// 1. Extract the log index from the error string (e.g. "an equivalent entry already exists... with index <idx>")
+		//    or from the x-log-index response header.
+		// 2. Fetch the checkpoint from the log's base URL and parse its size and root hash.
+		// 3. Use the tessera HTTP fetcher and ProofBuilder to fetch the inclusion proof for that index.
+		// 4. Fetch the entry bundle for the index, decode it, and extract the matching entry.
+		// 5. Construct the TransparencyLogEntry manually.
+		// However, doing so requires the log's public key (to compute the LogId field), which is
+		// only available from the trusted root, making it impossible to correctly populate the bundle here
+		// without access to the Verifier or TrustedRoot. Thus, we return the error.
 		return nil, fmt.Errorf("adding rekor v2 entry: %w", err)
 	}
 	return tle, nil
@@ -267,11 +299,28 @@ func (r *Rekor) getRekorV1TLE(ctx context.Context, keyOrCertPEM []byte, b *proto
 	}
 
 	resp, err := r.options.Client.CreateLogEntry(params)
+	var entry models.LogEntryAnon
 	if err != nil {
-		return nil, err
+		var conflictErr *entries.CreateLogEntryConflict
+		if errors.As(err, &conflictErr) {
+			uuid := path.Base(conflictErr.Location.String())
+			getParams := entries.NewGetLogEntryByUUIDParamsWithContext(ctx)
+			getParams.SetEntryUUID(uuid)
+			getResp, getErr := r.options.Client.GetLogEntryByUUID(getParams)
+			if getErr != nil {
+				return nil, fmt.Errorf("failed to fetch conflicting entry: %w", getErr)
+			}
+			for _, v := range getResp.Payload {
+				entry = v
+				break
+			}
+		} else {
+			return nil, err
+		}
+	} else {
+		entry = resp.Payload[resp.ETag]
 	}
 
-	entry := resp.Payload[resp.ETag]
 	tlogEntry, err := tle.GenerateTransparencyLogEntry(entry)
 	if err != nil {
 		return nil, err

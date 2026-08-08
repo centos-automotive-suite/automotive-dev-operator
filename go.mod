@@ -21,7 +21,7 @@ require (
 	github.com/shipwright-io/build v0.18.3
 	github.com/sigstore/cosign/v3 v3.0.6
 	github.com/sigstore/sigstore v1.10.9
-	github.com/sigstore/sigstore-go v1.1.4
+	github.com/sigstore/sigstore-go v1.3.0
 	golang.org/x/term v0.45.0
 	k8s.io/apimachinery v0.35.7
 	k8s.io/apiserver v0.35.7
