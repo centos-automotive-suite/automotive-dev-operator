@@ -161,7 +161,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.25"
+                  go-version: "1.26"
 
             - name: Install tkn CLI
               run: |
@@ -264,7 +264,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.25"
+                  go-version: "1.26"
 
             - name: Install operator-sdk
               run: |
@@ -319,7 +319,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.25"
+                  go-version: "1.26"
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v4
@@ -357,7 +357,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.25"
+                  go-version: "1.26"
 
             - name: Build CLI for ARM64
               run: |
@@ -383,7 +383,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.25"
+                  go-version: "1.26"
 
             - name: Build CLI for AMD64
               run: |
@@ -409,7 +409,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.25"
+                  go-version: "1.26"
 
             - name: Build CLI for darwin/arm64
               run: |
@@ -439,7 +439,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.25"
+                  go-version: "1.26"
 
             - name: Download all CLI artifacts
               uses: actions/download-artifact@v8
