@@ -37,7 +37,7 @@ type Progress struct {
 	interceptIO  chan func(io.Writer)
 	renderReq    chan time.Time
 	done         chan struct{}
-	renderOff    bool
+	noRender     bool
 }
 
 // pState holds bars in its priorityQueue, it gets passed to (*Progress).serve monitor goroutine.
@@ -120,7 +120,7 @@ func NewWithContext(ctx context.Context, options ...ContainerOption) *Progress {
 		p.renderReq = make(chan time.Time)
 		refreshStrategy = (*Progress).autoRefreshListener
 	default:
-		p.renderOff = true
+		p.noRender = true
 		refreshStrategy = (*Progress).nopRefreshListener
 	}
 
@@ -175,7 +175,7 @@ func (p *Progress) Add(total int64, filler BarFiller, options ...BarOption) (*Ba
 		bar := p.makeBar(bs)
 		if bs.isQueue() {
 			s.queueBars[bs.waitFor] = bar
-		} else {
+		} else if !p.noRender {
 			s.hm.push(bar, true, nil)
 		}
 		p.bwg.Go(func() {
@@ -325,7 +325,7 @@ func (p *Progress) serve(s *pState) {
 				}
 			}
 		case <-p.done:
-			if !p.renderOff && s.hasUnrendered {
+			if !p.noRender && s.hasUnrendered {
 				err := s.render()
 				if err != nil {
 					_, _ = fmt.Fprintln(s.debugOut, err.Error())
