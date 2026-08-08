@@ -1,6 +1,6 @@
 module github.com/centos-automotive-suite/automotive-dev-operator
 
-go 1.25.8
+go 1.26.0
 
 require (
 	github.com/containers/image/v5 v5.36.2
@@ -23,12 +23,12 @@ require (
 	github.com/sigstore/sigstore v1.10.9
 	github.com/sigstore/sigstore-go v1.1.4
 	golang.org/x/term v0.45.0
-	k8s.io/apimachinery v0.35.7
-	k8s.io/apiserver v0.35.7
-	k8s.io/client-go v0.35.7
+	k8s.io/apimachinery v0.36.0
+	k8s.io/apiserver v0.36.0
+	k8s.io/client-go v0.36.0
 	knative.dev/pkg v0.0.0-20260727151759-521cb33b33dd
 	oras.land/oras-go/v2 v2.6.2
-	sigs.k8s.io/controller-runtime v0.22.5
+	sigs.k8s.io/controller-runtime v0.24.1
 )
 
 require (
@@ -93,7 +93,6 @@ require (
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/btree v1.1.3 // indirect
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/certificate-transparency-go v1.3.3 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
@@ -116,7 +115,6 @@ require (
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
 	github.com/moby/sys/user v0.4.1 // indirect
 	github.com/moby/term v0.5.2 // indirect
-	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
 	github.com/nozzle/throttler v0.0.0-20180817012639-2ea982251481 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/opencontainers/runtime-spec v1.3.0 // indirect
@@ -164,6 +162,7 @@ require (
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	gopkg.in/go-jose/go-jose.v2 v2.6.3 // indirect
+	k8s.io/streaming v0.36.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
@@ -233,13 +232,13 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.35.7
-	k8s.io/apiextensions-apiserver v0.35.7
-	k8s.io/component-base v0.35.7 // indirect
+	k8s.io/api v0.36.0
+	k8s.io/apiextensions-apiserver v0.36.0
+	k8s.io/component-base v0.36.0 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
-	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 // indirect
+	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
-	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.32.0 // indirect
+	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.34.0 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/yaml v1.6.0
 )
