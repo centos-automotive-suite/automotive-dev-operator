@@ -15,23 +15,17 @@ env:
     REPOSITORY: ${{ vars.REPOSITORY }}
     OPERATOR_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator
     TOOLCHAIN_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/autosd-toolchain
-    AIB_BASE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/aib-base-dev
+    BUNDLE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-bundle
+    CATALOG_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-catalog
     TEKTON_BUNDLE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-tekton-tasks
     VERSION: ${{ github.sha }}
     AIB_CLI_BINARY: "caib"
 
 jobs:
-    build-operator-arm64:
+    build-toolchain-arm64:
         runs-on: ubuntu-24.04-arm
         steps:
             - uses: actions/checkout@v7
-
-            - name: Read operator version
-              run: |
-                  set -euo pipefail
-                  v=$(cat VERSION)
-                  [ -n "$v" ] || { echo "::error::VERSION file is empty"; exit 1; }
-                  echo "OPERATOR_VERSION=$v" >> "$GITHUB_ENV"
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v4
@@ -42,21 +36,6 @@ jobs:
                   registry: ${{ env.REGISTRY }}
                   username: ${{ secrets.REGISTRY_USER }}
                   password: ${{ secrets.REGISTRY_PASSWORD }}
-
-            - name: Build and push operator (ARM64)
-              uses: docker/build-push-action@v7
-              with:
-                  context: .
-                  file: Dockerfile
-                  platforms: linux/arm64
-                  push: true
-                  tags: |
-                      ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-arm64
-                      ${{ env.OPERATOR_IMAGE }}:latest-arm64
-                  build-args: |
-                      VERSION=${{ env.OPERATOR_VERSION }}
-                  cache-from: type=gha
-                  cache-to: type=gha,mode=max
 
             - name: Build and push toolchain (ARM64)
               uses: docker/build-push-action@v7
@@ -71,17 +50,10 @@ jobs:
                   cache-from: type=gha,scope=toolchain-arm64
                   cache-to: type=gha,mode=max,scope=toolchain-arm64
 
-    build-operator-amd64:
+    build-toolchain-amd64:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v7
-
-            - name: Read operator version
-              run: |
-                  set -euo pipefail
-                  v=$(cat VERSION)
-                  [ -n "$v" ] || { echo "::error::VERSION file is empty"; exit 1; }
-                  echo "OPERATOR_VERSION=$v" >> "$GITHUB_ENV"
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v4
@@ -92,21 +64,6 @@ jobs:
                   registry: ${{ env.REGISTRY }}
                   username: ${{ secrets.REGISTRY_USER }}
                   password: ${{ secrets.REGISTRY_PASSWORD }}
-
-            - name: Build and push operator (AMD64)
-              uses: docker/build-push-action@v7
-              with:
-                  context: .
-                  file: Dockerfile
-                  platforms: linux/amd64
-                  push: true
-                  tags: |
-                      ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-amd64
-                      ${{ env.OPERATOR_IMAGE }}:latest-amd64
-                  build-args: |
-                      VERSION=${{ env.OPERATOR_VERSION }}
-                  cache-from: type=gha
-                  cache-to: type=gha,mode=max
 
             - name: Build and push toolchain (AMD64)
               uses: docker/build-push-action@v7
@@ -121,8 +78,8 @@ jobs:
                   cache-from: type=gha,scope=toolchain-amd64
                   cache-to: type=gha,mode=max,scope=toolchain-amd64
 
-    create-multiarch-manifest:
-        needs: [build-operator-arm64, build-operator-amd64]
+    create-toolchain-manifest:
+        needs: [build-toolchain-arm64, build-toolchain-amd64]
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v7
@@ -139,13 +96,6 @@ jobs:
 
             - name: Create and push multi-arch manifest
               run: |
-                  docker buildx imagetools create -t ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }} \
-                  ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-amd64 \
-                  ${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}-arm64
-                  docker buildx imagetools create -t ${{ env.OPERATOR_IMAGE }}:latest \
-                  ${{ env.OPERATOR_IMAGE }}:latest-amd64 \
-                  ${{ env.OPERATOR_IMAGE }}:latest-arm64
-
                   docker buildx imagetools create -t ${{ env.TOOLCHAIN_IMAGE }}:${{ env.VERSION }} \
                   ${{ env.TOOLCHAIN_IMAGE }}:${{ env.VERSION }}-amd64 \
                   ${{ env.TOOLCHAIN_IMAGE }}:${{ env.VERSION }}-arm64
@@ -190,7 +140,7 @@ jobs:
                   tkn bundle push "${{ env.TEKTON_BUNDLE_IMAGE }}:latest" "${bundle_args[@]}"
 
     retag-on-release:
-        needs: [create-multiarch-manifest, build-tekton-bundle]
+        needs: [create-toolchain-manifest, build-tekton-bundle]
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/tags/')
         outputs:
@@ -223,7 +173,6 @@ jobs:
               env:
                   TAG_NAME: ${{ github.ref_name }}
               run: |
-                  # Alias the existing multi-arch manifests built on main (by sha) to the git tag
                   docker buildx imagetools create -t "${{ env.OPERATOR_IMAGE }}:${TAG_NAME}" "${{ env.OPERATOR_IMAGE }}:${{ env.VERSION }}"
 
             - name: Create tag alias for toolchain
@@ -231,6 +180,18 @@ jobs:
                   TAG_NAME: ${{ github.ref_name }}
               run: |
                   docker buildx imagetools create -t "${{ env.TOOLCHAIN_IMAGE }}:${TAG_NAME}" "${{ env.TOOLCHAIN_IMAGE }}:${{ env.VERSION }}"
+
+            - name: Create tag alias for bundle
+              env:
+                  TAG_NAME: ${{ github.ref_name }}
+              run: |
+                  docker buildx imagetools create -t "${{ env.BUNDLE_IMAGE }}:${TAG_NAME}" "${{ env.BUNDLE_IMAGE }}:${{ env.VERSION }}"
+
+            - name: Create tag alias for catalog
+              env:
+                  TAG_NAME: ${{ github.ref_name }}
+              run: |
+                  docker buildx imagetools create -t "${{ env.CATALOG_IMAGE }}:${TAG_NAME}" "${{ env.CATALOG_IMAGE }}:${{ env.VERSION }}"
 
             - name: Retag and sign Tekton Bundle
               id: retag-bundle
@@ -251,102 +212,6 @@ jobs:
                   BUNDLE_DIGEST: ${{ steps.retag-bundle.outputs.digest }}
               run: |
                   cosign verify --key hack/cosign.pub "${TEKTON_BUNDLE_REF}@${BUNDLE_DIGEST}"
-
-    build-bundle:
-        runs-on: ubuntu-latest
-        if: startsWith(github.ref, 'refs/tags/')
-        needs: [retag-on-release]
-        env:
-            BUNDLE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-bundle
-        steps:
-            - uses: actions/checkout@v7
-
-            - name: Set up Go
-              uses: actions/setup-go@v7
-              with:
-                  go-version: "1.25"
-
-            - name: Install operator-sdk
-              run: |
-                  ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
-                  OS=$(uname | awk '{print tolower($0)}')
-                  OPERATOR_SDK_DL_URL=https://github.com/operator-framework/operator-sdk/releases/download/v1.42.0
-                  export ARCH OS OPERATOR_SDK_DL_URL
-                  curl -LO "${OPERATOR_SDK_DL_URL}/operator-sdk_${OS}_${ARCH}"
-                  chmod +x "operator-sdk_${OS}_${ARCH}"
-                  sudo mv "operator-sdk_${OS}_${ARCH}" /usr/local/bin/operator-sdk
-
-            - name: Generate bundle
-              env:
-                  TAG_NAME: ${{ github.ref_name }}
-              run: |
-                  # Strip 'v' prefix for VERSION
-                  VERSION="${TAG_NAME#v}"
-                  IMG="${{ env.OPERATOR_IMAGE }}:${TAG_NAME}"
-                  make bundle VERSION="$VERSION" IMG="$IMG"
-
-            - name: Login to Quay.io
-              uses: docker/login-action@v4
-              with:
-                  registry: ${{ env.REGISTRY }}
-                  username: ${{ secrets.REGISTRY_USER }}
-                  password: ${{ secrets.REGISTRY_PASSWORD }}
-
-            - name: Build and push bundle image
-              env:
-                  TAG_NAME: ${{ github.ref_name }}
-              run: |
-                  docker build -f bundle.Dockerfile -t "${{ env.BUNDLE_IMAGE }}:${TAG_NAME}" .
-                  docker push "${{ env.BUNDLE_IMAGE }}:${TAG_NAME}"
-
-            - name: Validate bundle
-              run: |
-                  operator-sdk bundle validate ./bundle
-                  operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2
-                  operator-sdk bundle validate ./bundle --select-optional name=capabilities
-                  operator-sdk bundle validate ./bundle --select-optional name=categories
-
-    build-catalog:
-        runs-on: ubuntu-latest
-        if: startsWith(github.ref, 'refs/tags/')
-        needs: [build-bundle]
-        env:
-            BUNDLE_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-bundle
-            CATALOG_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-catalog
-        steps:
-            - uses: actions/checkout@v7
-
-            - name: Set up Go
-              uses: actions/setup-go@v7
-              with:
-                  go-version: "1.25"
-
-            - name: Set up Docker Buildx
-              uses: docker/setup-buildx-action@v4
-
-            - name: Login to Quay.io
-              uses: docker/login-action@v4
-              with:
-                  registry: ${{ env.REGISTRY }}
-                  username: ${{ secrets.REGISTRY_USER }}
-                  password: ${{ secrets.REGISTRY_PASSWORD }}
-
-            - name: Update catalog configuration
-              env:
-                  TAG_NAME: ${{ github.ref_name }}
-              run: |
-                  VERSION="${TAG_NAME#v}"
-                  make catalog-update VERSION="$VERSION" \
-                    BUNDLE_IMG="${{ env.BUNDLE_IMAGE }}:${TAG_NAME}"
-
-            - name: Build and push multi-arch catalog image
-              uses: docker/build-push-action@v7
-              with:
-                  context: .
-                  file: catalog.Dockerfile
-                  platforms: linux/amd64,linux/arm64
-                  push: true
-                  tags: ${{ env.CATALOG_IMAGE }}:${{ github.ref_name }}
 
     build-caib-arm64:
         runs-on: ubuntu-24.04-arm
@@ -430,7 +295,7 @@ jobs:
     create-release:
         permissions:
             contents: write
-        needs: [build-caib-arm64, build-caib-amd64, build-caib-darwin-arm64, build-bundle, build-catalog, retag-on-release]
+        needs: [build-caib-arm64, build-caib-amd64, build-caib-darwin-arm64, retag-on-release]
         runs-on: ubuntu-latest
         if: startsWith(github.ref, 'refs/tags/')
         steps:
@@ -483,8 +348,8 @@ jobs:
 
                       ### Container Images
                       - Operator: `${{ env.OPERATOR_IMAGE }}:${{ github.ref_name }}`
-                      - Bundle: `${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-bundle:${{ github.ref_name }}`
-                      - Catalog: `${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator-catalog:${{ github.ref_name }}`
+                      - Bundle: `${{ env.BUNDLE_IMAGE }}:${{ github.ref_name }}`
+                      - Catalog: `${{ env.CATALOG_IMAGE }}:${{ github.ref_name }}`
                       - Tekton Tasks Bundle: `${{ env.TEKTON_BUNDLE_IMAGE }}:${{ github.ref_name }}` (cosign signed)
                         - Secure build ref: `${{ env.TEKTON_BUNDLE_IMAGE }}:${{ github.ref_name }}@${{ needs.retag-on-release.outputs.tekton-bundle-digest }}`
                       - Toolchain: `${{ env.TOOLCHAIN_IMAGE }}:${{ github.ref_name }}`
