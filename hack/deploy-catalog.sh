@@ -374,11 +374,33 @@ rm -f catalog/automotive-dev-operator.yaml.bak
 
 echo ""
 echo "Building catalog image..."
-${CONTAINER_TOOL} build -f catalog.Dockerfile -t ${CATALOG_IMG} .
+if [ ${#ARCHS_ARRAY[@]} -gt 1 ]; then
+    for arch in ${CLUSTER_ARCHS}; do
+        echo "Building catalog for linux/${arch}..."
+        ${CONTAINER_TOOL} buildx build -f catalog.Dockerfile --platform linux/${arch} --load -t ${CATALOG_IMG}-${arch} .
+    done
+    echo "Creating multi-arch catalog manifest..."
+    ${CONTAINER_TOOL} manifest rm ${CATALOG_IMG} 2>/dev/null || true
+    ${CONTAINER_TOOL} rmi ${CATALOG_IMG} 2>/dev/null || true
+    CATALOG_MANIFEST_ARGS=""
+    for arch in ${CLUSTER_ARCHS}; do
+        CATALOG_MANIFEST_ARGS="${CATALOG_MANIFEST_ARGS} ${CATALOG_IMG}-${arch}"
+    done
+    ${CONTAINER_TOOL} manifest create ${CATALOG_IMG} ${CATALOG_MANIFEST_ARGS}
+else
+    ${CONTAINER_TOOL} buildx build -f catalog.Dockerfile --platform linux/${ARCHS_ARRAY[0]} --load -t ${CATALOG_IMG} .
+fi
 
 echo ""
 echo "Pushing catalog image to OpenShift registry..."
-${CONTAINER_TOOL} push ${CATALOG_IMG} --tls-verify=false
+if [ ${#ARCHS_ARRAY[@]} -gt 1 ]; then
+    for arch in ${CLUSTER_ARCHS}; do
+        ${CONTAINER_TOOL} push ${CATALOG_IMG}-${arch} --tls-verify=false
+    done
+    ${CONTAINER_TOOL} manifest push ${CATALOG_IMG} --tls-verify=false
+else
+    ${CONTAINER_TOOL} push ${CATALOG_IMG} --tls-verify=false
+fi
 
 echo ""
 echo "Updating CatalogSource manifest..."
