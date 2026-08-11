@@ -91,8 +91,8 @@ func createRegistrySecret(
 
 		// Also create dockerconfigjson format for tools that need it (oras, skopeo, etc.)
 		auth := base64.StdEncoding.EncodeToString([]byte(creds.Username + ":" + creds.Password))
-		dockerConfig, err := json.Marshal(map[string]interface{}{
-			"auths": map[string]interface{}{
+		dockerConfig, err := json.Marshal(map[string]any{
+			"auths": map[string]any{
 				creds.RegistryURL: map[string]string{
 					"auth": auth,
 				},
@@ -160,8 +160,8 @@ func createPushSecret(
 			return "", fmt.Errorf("registry URL, username, and password are required for push")
 		}
 		auth := base64.StdEncoding.EncodeToString([]byte(creds.Username + ":" + creds.Password))
-		dockerConfigJSON, err = json.Marshal(map[string]interface{}{
-			"auths": map[string]interface{}{
+		dockerConfigJSON, err = json.Marshal(map[string]any{
+			"auths": map[string]any{
 				creds.RegistryURL: map[string]string{
 					"auth": auth,
 				},
@@ -175,8 +175,8 @@ func createPushSecret(
 			return "", fmt.Errorf("registry URL and token are required for push with token auth")
 		}
 		auth := base64.StdEncoding.EncodeToString([]byte(":" + creds.Token))
-		dockerConfigJSON, err = json.Marshal(map[string]interface{}{
-			"auths": map[string]interface{}{
+		dockerConfigJSON, err = json.Marshal(map[string]any{
+			"auths": map[string]any{
 				creds.RegistryURL: map[string]string{
 					"auth": auth,
 				},

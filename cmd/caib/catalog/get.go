@@ -98,14 +98,14 @@ func runGet(cmd *cobra.Command, args []string) error {
 	format := strings.ToLower(strings.TrimSpace(getOutputFormat(cmd)))
 	switch format {
 	case "json":
-		var result map[string]interface{}
+		var result map[string]any
 		if err := json.Unmarshal(body, &result); err != nil {
 			return fmt.Errorf("failed to parse JSON response: %w", err)
 		}
 		output, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Println(string(output))
 	case "yaml", "yml":
-		var result map[string]interface{}
+		var result map[string]any
 		if err := json.Unmarshal(body, &result); err != nil {
 			return fmt.Errorf("failed to parse JSON response: %w", err)
 		}

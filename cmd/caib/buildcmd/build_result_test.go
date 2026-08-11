@@ -15,7 +15,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func strPtr(s string) *string { return &s }
+//go:fix inline
+func strPtr(s string) *string { return new(s) }
 
 func TestBuildResultJSONMarshal(t *testing.T) {
 	result := BuildResult{
@@ -97,9 +98,9 @@ func TestIsStructuredOutput(t *testing.T) {
 		want   bool
 	}{
 		{"nil", nil, false},
-		{"table", strPtr("table"), false},
-		{"json", strPtr("json"), true},
-		{"yaml", strPtr("yaml"), true},
+		{"table", new("table"), false},
+		{"json", new("json"), true},
+		{"yaml", new("yaml"), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

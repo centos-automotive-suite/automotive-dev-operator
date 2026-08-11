@@ -2,8 +2,6 @@ package v1alpha1
 
 import (
 	"testing"
-
-	"k8s.io/utils/ptr"
 )
 
 func TestGetUsePVCScratchVolumes_NilDefaultsToTrue(t *testing.T) {
@@ -14,14 +12,14 @@ func TestGetUsePVCScratchVolumes_NilDefaultsToTrue(t *testing.T) {
 }
 
 func TestGetUsePVCScratchVolumes_ExplicitTrue(t *testing.T) {
-	cfg := &OSBuildsConfig{UsePVCScratchVolumes: ptr.To(true)}
+	cfg := &OSBuildsConfig{UsePVCScratchVolumes: new(true)}
 	if !cfg.GetUsePVCScratchVolumes() {
 		t.Fatal("explicit true should return true")
 	}
 }
 
 func TestGetUsePVCScratchVolumes_ExplicitFalse(t *testing.T) {
-	cfg := &OSBuildsConfig{UsePVCScratchVolumes: ptr.To(false)}
+	cfg := &OSBuildsConfig{UsePVCScratchVolumes: new(false)}
 	if cfg.GetUsePVCScratchVolumes() {
 		t.Fatal("explicit false should return false")
 	}

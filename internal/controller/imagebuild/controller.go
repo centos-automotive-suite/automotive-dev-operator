@@ -1494,7 +1494,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 					Kind:       imageBuild.Kind,
 					Name:       imageBuild.Name,
 					UID:        imageBuild.UID,
-					Controller: ptr.To(true),
+					Controller: new(true),
 				},
 			},
 		},
@@ -1757,7 +1757,7 @@ func (r *ImageBuildReconciler) createPushTaskRun(ctx context.Context, imageBuild
 					Kind:       imageBuild.Kind,
 					Name:       imageBuild.Name,
 					UID:        imageBuild.UID,
-					Controller: ptr.To(true),
+					Controller: new(true),
 				},
 			},
 		},
@@ -2047,7 +2047,7 @@ func (r *ImageBuildReconciler) createFlashTaskRun(
 					Kind:       imageBuild.Kind,
 					Name:       imageBuild.Name,
 					UID:        imageBuild.UID,
-					Controller: ptr.To(true),
+					Controller: new(true),
 				},
 			},
 		},
@@ -2449,8 +2449,8 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 					Kind:               imageBuild.Kind,
 					Name:               imageBuild.Name,
 					UID:                imageBuild.UID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
+					Controller:         new(true),
+					BlockOwnerDeletion: new(true),
 				},
 			},
 		},
@@ -2459,7 +2459,7 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 				RunAsUser:    ptr.To[int64](1000),
 				RunAsGroup:   ptr.To[int64](1000),
 				FSGroup:      ptr.To[int64](1000),
-				RunAsNonRoot: ptr.To(true),
+				RunAsNonRoot: new(true),
 			},
 			Containers: []corev1.Container{
 				{
@@ -2858,7 +2858,7 @@ func setImageBuildConditions(imageBuild *automotivev1alpha1.ImageBuild, phase, m
 func (r *ImageBuildReconciler) emitEventf(
 	imageBuild *automotivev1alpha1.ImageBuild,
 	eventType, reason, messageFmt string,
-	args ...interface{},
+	args ...any,
 ) {
 	if r.Recorder == nil || imageBuild == nil {
 		return
@@ -2915,8 +2915,8 @@ func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(
 					Kind:               imageBuild.Kind,
 					Name:               imageBuild.Name,
 					UID:                imageBuild.UID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
+					Controller:         new(true),
+					BlockOwnerDeletion: new(true),
 				},
 			},
 		},

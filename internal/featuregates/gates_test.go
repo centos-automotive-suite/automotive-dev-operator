@@ -1,6 +1,7 @@
 package featuregates
 
 import (
+	"maps"
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -15,9 +16,7 @@ const (
 func setupTestFeatures(t *testing.T) {
 	t.Helper()
 	saved := make(map[FeatureName]FeatureSpec, len(defaultFeatures))
-	for k, v := range defaultFeatures {
-		saved[k] = v
-	}
+	maps.Copy(saved, defaultFeatures)
 	t.Cleanup(func() {
 		defaultFeatures = saved
 	})

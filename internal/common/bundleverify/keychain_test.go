@@ -46,8 +46,8 @@ func TestKeychainFromPullSecrets_SkipsNonDockerSecret(t *testing.T) {
 }
 
 func TestKeychainFromPullSecrets_ResolvesDockerConfigJSON(t *testing.T) {
-	dockerCfg := map[string]interface{}{
-		"auths": map[string]interface{}{
+	dockerCfg := map[string]any{
+		"auths": map[string]any{
 			"registry.example.com": map[string]string{
 				"username": "testuser",
 				"password": "testpass",
@@ -85,8 +85,8 @@ func TestKeychainFromPullSecrets_ResolvesDockerConfigJSON(t *testing.T) {
 }
 
 func TestKeychainFromPullSecrets_UnknownRegistryFallsThrough(t *testing.T) {
-	dockerCfg := map[string]interface{}{
-		"auths": map[string]interface{}{
+	dockerCfg := map[string]any{
+		"auths": map[string]any{
 			"registry.example.com": map[string]string{
 				"username": "testuser",
 				"password": "testpass",

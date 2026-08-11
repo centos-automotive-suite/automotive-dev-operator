@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
@@ -171,9 +172,7 @@ func PatchTektonTaskStep(namespace, taskName string, stepIndex int, scriptReplac
 		script = strings.ReplaceAll(script, old, repl)
 	}
 	step["script"] = script
-	for k, v := range stepFields {
-		step[k] = v
-	}
+	maps.Copy(step, stepFields)
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return fmt.Errorf("task %s: marshal patched task: %w", taskName, err)
@@ -376,8 +375,8 @@ func splitImageName(image string) (string, string) {
 // according to line breakers, and ignores the empty elements in it.
 func GetNonEmptyLines(output string) []string {
 	var res []string
-	elements := strings.Split(output, "\n")
-	for _, element := range elements {
+	elements := strings.SplitSeq(output, "\n")
+	for element := range elements {
 		if element != "" {
 			res = append(res, element)
 		}

@@ -535,7 +535,7 @@ func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
 
 	// Parse remote checksums into map: relativePath -> hash
 	remote := make(map[string]string, len(req.Files))
-	for _, line := range strings.Split(checksumBuf.String(), "\n") {
+	for line := range strings.SplitSeq(checksumBuf.String(), "\n") {
 		// sha256sum output: "hash  path/to/file"
 		parts := strings.SplitN(strings.TrimSpace(line), "  ", 2)
 		if len(parts) != 2 {

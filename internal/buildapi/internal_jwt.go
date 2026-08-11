@@ -3,6 +3,7 @@ package buildapi
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -74,10 +75,5 @@ func validateInternalJWT(tokenString string, cfg *internalJWTConfig) (string, bo
 }
 
 func audienceContains(audiences jwt.ClaimStrings, audience string) bool {
-	for _, entry := range audiences {
-		if entry == audience {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(audiences, audience)
 }

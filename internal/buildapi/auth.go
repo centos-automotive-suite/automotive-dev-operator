@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -437,13 +438,7 @@ func (a *APIServer) authenticateRequest(c *gin.Context) (string, string, *authEr
 }
 
 func (a *APIServer) buildAuthFailureError(authAttempts []string, oidcError error, tokenReviewError string) *authError {
-	oidcAttempted := false
-	for _, method := range authAttempts {
-		if method == "oidc" {
-			oidcAttempted = true
-			break
-		}
-	}
+	oidcAttempted := slices.Contains(authAttempts, "oidc")
 
 	// Log full error details server-side for debugging
 	if tokenReviewError != "" {
@@ -527,11 +522,8 @@ func (a *APIServer) handleGetAuthConfig(c *gin.Context) {
 	if clientID != "" && authConfig != nil {
 		clientIDInAudience := false
 		for _, jwtConfig := range authConfig.JWT {
-			for _, audience := range jwtConfig.Issuer.Audiences {
-				if audience == clientID {
-					clientIDInAudience = true
-					break
-				}
+			if slices.Contains(jwtConfig.Issuer.Audiences, clientID) {
+				clientIDInAudience = true
 			}
 		}
 		if !clientIDInAudience && len(authConfig.JWT) > 0 {

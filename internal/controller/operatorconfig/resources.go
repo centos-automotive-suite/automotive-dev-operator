@@ -140,7 +140,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isO
 			},
 			// No volume mounts needed - Build API reads directly from OperatorConfig CRD
 			SecurityContext: &corev1.SecurityContext{
-				AllowPrivilegeEscalation: ptr.To(false),
+				AllowPrivilegeEscalation: new(false),
 			},
 		},
 	}
@@ -191,7 +191,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIContainers(namespace string, isO
 			},
 			Resources: resourcesCfg.GetOAuthProxyResources(),
 			SecurityContext: &corev1.SecurityContext{
-				AllowPrivilegeEscalation: ptr.To(false),
+				AllowPrivilegeEscalation: new(false),
 			},
 		})
 	}
@@ -243,7 +243,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, isO
 								},
 							},
 							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: ptr.To(false),
+								AllowPrivilegeEscalation: new(false),
 							},
 						},
 					},
@@ -503,7 +503,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 				Spec: corev1.PodSpec{
 					ServiceAccountName: buildControllerName,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: ptr.To(true),
+						RunAsNonRoot: new(true),
 					},
 					Containers: []corev1.Container{
 						{
@@ -566,7 +566,7 @@ func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace stri
 								return resourcesCfg.GetBuildControllerResources()
 							}(),
 							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: ptr.To(false),
+								AllowPrivilegeEscalation: new(false),
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
 								},
@@ -992,7 +992,7 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCC() *securityv1.SecurityConte
 		AllowHostNetwork:         false,
 		AllowHostPID:             false,
 		AllowHostPorts:           false,
-		AllowPrivilegeEscalation: ptr.To(true),
+		AllowPrivilegeEscalation: new(true),
 		AllowPrivilegedContainer: false,
 		AllowedCapabilities:      []corev1.Capability{"SETUID", "SETGID", "SYS_ADMIN", "DAC_OVERRIDE", "CHOWN", "FOWNER"},
 		FSGroup: securityv1.FSGroupStrategyOptions{
@@ -1044,7 +1044,7 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCCPrivileged() *securityv1.Sec
 		AllowHostNetwork:         false,
 		AllowHostPID:             false,
 		AllowHostPorts:           false,
-		AllowPrivilegeEscalation: ptr.To(true),
+		AllowPrivilegeEscalation: new(true),
 		AllowPrivilegedContainer: true,
 		AllowedCapabilities:      []corev1.Capability{"*"},
 		FSGroup: securityv1.FSGroupStrategyOptions{
@@ -1158,23 +1158,23 @@ func (r *OperatorConfigReconciler) buildServiceMonitor(namespace string, config 
 		"app.kubernetes.io/component":  "monitoring",
 	})
 
-	sm.Object["spec"] = map[string]interface{}{
-		"selector": map[string]interface{}{
-			"matchLabels": map[string]interface{}{
+	sm.Object["spec"] = map[string]any{
+		"selector": map[string]any{
+			"matchLabels": map[string]any{
 				"control-plane": "operator",
 			},
 		},
-		"endpoints": []interface{}{
-			map[string]interface{}{
+		"endpoints": []any{
+			map[string]any{
 				"path":     "/metrics",
 				"port":     "https",
 				"scheme":   "https",
 				"interval": interval,
-				"bearerTokenSecret": map[string]interface{}{
+				"bearerTokenSecret": map[string]any{
 					"name": serviceMonitorTokenSecret,
 					"key":  "token",
 				},
-				"tlsConfig": map[string]interface{}{
+				"tlsConfig": map[string]any{
 					"insecureSkipVerify": true,
 				},
 			},

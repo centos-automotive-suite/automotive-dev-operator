@@ -386,7 +386,7 @@ func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotive
 				"automotive.sdv.cloud.redhat.com/imagereseal": sealed.Name,
 			},
 			OwnerReferences: []metav1.OwnerReference{
-				{APIVersion: automotivev1alpha1.GroupVersion.String(), Kind: "ImageReseal", Name: sealed.Name, UID: sealed.UID, Controller: ptr(true)},
+				{APIVersion: automotivev1alpha1.GroupVersion.String(), Kind: "ImageReseal", Name: sealed.Name, UID: sealed.UID, Controller: new(true)},
 			},
 		},
 		Spec: trSpec,
@@ -513,7 +513,7 @@ func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automo
 				"automotive.sdv.cloud.redhat.com/imagereseal": sealed.Name,
 			},
 			OwnerReferences: []metav1.OwnerReference{
-				{APIVersion: automotivev1alpha1.GroupVersion.String(), Kind: "ImageReseal", Name: sealed.Name, UID: sealed.UID, Controller: ptr(true)},
+				{APIVersion: automotivev1alpha1.GroupVersion.String(), Kind: "ImageReseal", Name: sealed.Name, UID: sealed.UID, Controller: new(true)},
 			},
 		},
 		Spec: prSpec,
@@ -693,7 +693,7 @@ func eventTypeForResealPhase(phase string) string {
 func (r *Reconciler) emitEventf(
 	sealed *automotivev1alpha1.ImageReseal,
 	eventType, reason, messageFmt string,
-	args ...interface{},
+	args ...any,
 ) {
 	if r.Recorder == nil || sealed == nil {
 		return
@@ -779,8 +779,9 @@ func (r *Reconciler) deleteSecret(ctx context.Context, namespace, secretName, se
 	return err
 }
 
+//go:fix inline
 func ptr(b bool) *bool {
-	return &b
+	return new(b)
 }
 
 // detectImageArch inspects a container image and returns its architecture (e.g. "amd64", "arm64").

@@ -60,7 +60,7 @@ func main() {
 
 	type namedResource struct {
 		name string
-		obj  interface{}
+		obj  any
 	}
 
 	stripMetadata := func(obj metav1.Object) {

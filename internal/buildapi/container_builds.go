@@ -423,10 +423,10 @@ func (a *APIServer) getContainerBuild(c *gin.Context, name string) {
 }
 
 func parseWaiterLockFileArg(tokens []string) (string, bool) {
-	for i := 0; i < len(tokens); i++ {
+	for i := range tokens {
 		token := tokens[i]
-		if strings.HasPrefix(token, "--lock-file=") {
-			lockFile := strings.TrimSpace(strings.TrimPrefix(token, "--lock-file="))
+		if after, ok := strings.CutPrefix(token, "--lock-file="); ok {
+			lockFile := strings.TrimSpace(after)
 			if lockFile != "" {
 				return lockFile, true
 			}

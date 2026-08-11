@@ -18,7 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -325,7 +324,7 @@ func testOwnerRef(buildName string) []metav1.OwnerReference {
 		APIVersion: "automotive.sdv.cloud.redhat.com/v1alpha1",
 		Kind:       "ImageBuild",
 		Name:       buildName,
-		Controller: ptr.To(true),
+		Controller: new(true),
 	}}
 }
 

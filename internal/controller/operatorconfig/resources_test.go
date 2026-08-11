@@ -126,7 +126,7 @@ var _ = Describe("OperatorConfig Resources", func() {
 
 	Describe("targetDefaultsYAML", func() {
 		It("should be valid YAML", func() {
-			var parsed map[string]interface{}
+			var parsed map[string]any
 			err := yaml.Unmarshal([]byte(targetDefaultsYAML), &parsed)
 			Expect(err).NotTo(HaveOccurred(), "targetDefaultsYAML should be valid YAML")
 		})

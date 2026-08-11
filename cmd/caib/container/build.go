@@ -409,10 +409,7 @@ func getContainerBuildStatus(ctx context.Context, name string) (*buildapitypes.C
 // waitForContainerBuildCompletion polls until the build reaches a terminal state.
 func waitForContainerBuildCompletion(ctx context.Context, name string, pb *ui.ProgressBar) *buildapitypes.ContainerBuildResponse {
 	// Add extra headroom for queueing and status propagation beyond task timeout.
-	waitTimeout := time.Duration(containerBuildTimeout+10) * time.Minute
-	if waitTimeout < 15*time.Minute {
-		waitTimeout = 15 * time.Minute
-	}
+	waitTimeout := max(time.Duration(containerBuildTimeout+10)*time.Minute, 15*time.Minute)
 
 	timeout := time.After(waitTimeout)
 	ticker := time.NewTicker(2 * time.Second)

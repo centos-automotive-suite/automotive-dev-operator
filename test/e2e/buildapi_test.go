@@ -90,7 +90,7 @@ var _ = Describe("Build API", Label("operator"), Ordered, func() {
 			Expect(result).To(HaveKey("requestedBy"))
 			Expect(result["requestedBy"]).NotTo(BeEmpty())
 
-			if params, ok := result["parameters"].(map[string]interface{}); ok {
+			if params, ok := result["parameters"].(map[string]any); ok {
 				Expect(params["architecture"]).To(Equal(arch))
 			}
 		})

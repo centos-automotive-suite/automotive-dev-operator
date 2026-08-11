@@ -382,7 +382,7 @@ func (a *APIServer) streamSealedLogs(c *gin.Context, name string) {
 
 	// Retry getting the log stream if the container is still initializing
 	var stream io.ReadCloser
-	for retries := 0; retries < 30; retries++ {
+	for range 30 {
 		req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 			Container: containerName,
 			Follow:    true,

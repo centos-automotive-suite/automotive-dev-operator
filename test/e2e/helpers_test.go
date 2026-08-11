@@ -848,7 +848,7 @@ func getImageBuildCRName(prefix string) string {
 		"-o", "jsonpath={.items[*].metadata.name}")
 	out, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
-	for _, name := range strings.Fields(string(out)) {
+	for name := range strings.FieldsSeq(string(out)) {
 		if strings.HasPrefix(name, prefix+"-") {
 			return name
 		}
@@ -1045,7 +1045,7 @@ func parseCaibBuildName(output string) string {
 }
 
 // showBuildViaCaib runs `caib image show` and returns the parsed JSON output.
-func showBuildViaCaib(name string) map[string]interface{} {
+func showBuildViaCaib(name string) map[string]any {
 	ctx, cancel := context.WithTimeout(context.Background(), caibImageShowTimeout)
 	defer cancel()
 
@@ -1055,7 +1055,7 @@ func showBuildViaCaib(name string) map[string]interface{} {
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
 		fmt.Sprintf("caib image show %s failed:\n%s", name, string(output)))
 
-	var result map[string]interface{}
+	var result map[string]any
 	ExpectWithOffset(1, json.Unmarshal(output, &result)).To(Succeed(),
 		fmt.Sprintf("failed to parse caib show output: %s", string(output)))
 	return result

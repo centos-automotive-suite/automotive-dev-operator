@@ -285,7 +285,7 @@ spec:
 			)
 			Expect(err).NotTo(HaveOccurred(), "caib catalog get failed: %s", string(output))
 
-			var result map[string]interface{}
+			var result map[string]any
 			Expect(json.Unmarshal(output, &result)).To(Succeed())
 			Expect(result["scheduleName"]).To(Equal("nightly-detail"))
 			Expect(result["sourceType"]).To(Equal("Scheduled"))

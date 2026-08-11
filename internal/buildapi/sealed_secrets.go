@@ -117,8 +117,8 @@ func buildSealedRegistrySecretData(creds *RegistryCredentials) (map[string][]byt
 		secretData["REGISTRY_PASSWORD"] = []byte(creds.Password)
 
 		auth := base64.StdEncoding.EncodeToString([]byte(creds.Username + ":" + creds.Password))
-		dockerConfig, err := json.Marshal(map[string]interface{}{
-			"auths": map[string]interface{}{
+		dockerConfig, err := json.Marshal(map[string]any{
+			"auths": map[string]any{
 				creds.RegistryURL: map[string]string{
 					"auth": auth,
 				},

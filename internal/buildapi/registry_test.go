@@ -144,8 +144,8 @@ var _ = Describe("Registry", func() {
 			scheme := newRegistryTestScheme()
 			is := newUnstructuredImageStream("ns", "tagged-stream")
 			// Set status.tags via unstructured
-			Expect(unstructured.SetNestedSlice(is.Object, []interface{}{
-				map[string]interface{}{"tag": "v1"},
+			Expect(unstructured.SetNestedSlice(is.Object, []any{
+				map[string]any{"tag": "v1"},
 			}, "status", "tags")).To(Succeed())
 			k8sClient := newRegistryTestClient(scheme, is)
 

@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -35,7 +36,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	clockutil "k8s.io/utils/clock"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -253,10 +253,7 @@ func (r *Reconciler) deleteExcess(ctx context.Context, builds []automotivev1alph
 	if len(builds) <= limit {
 		return nil
 	}
-	maxUnpublished := limit * 2
-	if maxUnpublished < 5 {
-		maxUnpublished = 5
-	}
+	maxUnpublished := max(limit*2, 5)
 	unpublishedCount := 0
 	excess := builds[:len(builds)-limit]
 	for i := range excess {
@@ -561,9 +558,7 @@ func (r *Reconciler) createSingleImageBuild(ctx context.Context, sib *automotive
 	name := safeDerivedName(sib.Name, combo.suffix()+tsSuffix)
 
 	labels := make(map[string]string)
-	for k, v := range sib.Spec.ImageBuildTemplate.Metadata.Labels {
-		labels[k] = v
-	}
+	maps.Copy(labels, sib.Spec.ImageBuildTemplate.Metadata.Labels)
 	labels[automotivev1alpha1.LabelScheduledImageBuildName] = sib.Name
 
 	if combo.Architecture != "" {
@@ -577,9 +572,7 @@ func (r *Reconciler) createSingleImageBuild(ctx context.Context, sib *automotive
 	}
 
 	annotations := make(map[string]string)
-	for k, v := range sib.Spec.ImageBuildTemplate.Metadata.Annotations {
-		annotations[k] = v
-	}
+	maps.Copy(annotations, sib.Spec.ImageBuildTemplate.Metadata.Annotations)
 
 	spec := sib.Spec.ImageBuildTemplate.Spec.DeepCopy()
 	if combo.Architecture != "" {
@@ -613,8 +606,8 @@ func (r *Reconciler) createSingleImageBuild(ctx context.Context, sib *automotive
 					Kind:               "ScheduledImageBuild",
 					Name:               sib.Name,
 					UID:                sib.UID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
+					Controller:         new(true),
+					BlockOwnerDeletion: new(true),
 				},
 			},
 		},

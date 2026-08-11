@@ -24,10 +24,10 @@ type CRDSchema struct {
 				OpenAPIV3Schema struct {
 					Properties struct {
 						Status struct {
-							Properties map[string]interface{} `yaml:"properties"`
+							Properties map[string]any `yaml:"properties"`
 						} `yaml:"status"`
 						Spec struct {
-							Properties map[string]interface{} `yaml:"properties"`
+							Properties map[string]any `yaml:"properties"`
 						} `yaml:"spec"`
 					} `yaml:"properties"`
 				} `yaml:"openAPIV3Schema"`
@@ -39,8 +39,8 @@ type CRDSchema struct {
 // getJSONFieldNames extracts JSON field names from a struct type using reflection
 func getJSONFieldNames(t reflect.Type) []string {
 	var fields []string
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
+	for field := range t.Fields() {
+		field := field
 		jsonTag := field.Tag.Get("json")
 		if jsonTag == "" || jsonTag == "-" {
 			continue
@@ -77,20 +77,20 @@ func TestCRDSchemaMatchesGoTypes(t *testing.T) {
 		{
 			name:       "ImageBuild",
 			crdFile:    "automotive.sdv.cloud.redhat.com_imagebuilds.yaml",
-			statusType: reflect.TypeOf(ImageBuildStatus{}),
-			specType:   reflect.TypeOf(ImageBuildSpec{}),
+			statusType: reflect.TypeFor[ImageBuildStatus](),
+			specType:   reflect.TypeFor[ImageBuildSpec](),
 		},
 		{
 			name:       "Image",
 			crdFile:    "automotive.sdv.cloud.redhat.com_images.yaml",
-			statusType: reflect.TypeOf(ImageStatus{}),
-			specType:   reflect.TypeOf(ImageSpec{}),
+			statusType: reflect.TypeFor[ImageStatus](),
+			specType:   reflect.TypeFor[ImageSpec](),
 		},
 		{
 			name:       "OperatorConfig",
 			crdFile:    "automotive.sdv.cloud.redhat.com_operatorconfigs.yaml",
-			statusType: reflect.TypeOf(OperatorConfigStatus{}),
-			specType:   reflect.TypeOf(OperatorConfigSpec{}),
+			statusType: reflect.TypeFor[OperatorConfigStatus](),
+			specType:   reflect.TypeFor[OperatorConfigSpec](),
 		},
 	}
 

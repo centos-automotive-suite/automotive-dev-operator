@@ -418,7 +418,7 @@ func eventTypeForContainerPhase(phase string) string {
 func (r *ContainerBuildReconciler) emitEventf(
 	cb *automotivev1alpha1.ContainerBuild,
 	eventType, reason, messageFmt string,
-	args ...interface{},
+	args ...any,
 ) {
 	if r.Recorder == nil || cb == nil {
 		return
@@ -523,11 +523,11 @@ func (r *ContainerBuildReconciler) buildShipwrightBuildRun(
 
 func extractRegistryHost(imageRef string) string {
 	ref := strings.TrimPrefix(imageRef, "docker://")
-	slashIdx := strings.IndexByte(ref, '/')
-	if slashIdx < 0 {
+	before, _, ok := strings.Cut(ref, "/")
+	if !ok {
 		return ""
 	}
-	host := ref[:slashIdx]
+	host := before
 	if strings.ContainsAny(host, ".:") {
 		return host
 	}

@@ -147,7 +147,7 @@ func SaveOIDCConfig(config *OIDCConfig) error {
 		return err
 	}
 
-	configData := map[string]interface{}{
+	configData := map[string]any{
 		"issuer_url": config.IssuerURL,
 		"client_id":  config.ClientID,
 		"scopes":     config.Scopes,

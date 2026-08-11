@@ -135,8 +135,8 @@ func (h *Handler) RunInspect(_ *cobra.Command, args []string) {
 func (h *Handler) printStructured(format, ociRef, digest string, annotations map[string]string, referrers []referrerInfo, referrerTypes map[string]bool) {
 	stripped := make(map[string]string)
 	for k, v := range annotations {
-		if strings.HasPrefix(k, ociSpec.AnnotationPrefix) {
-			stripped[strings.TrimPrefix(k, ociSpec.AnnotationPrefix)] = v
+		if after, ok := strings.CutPrefix(k, ociSpec.AnnotationPrefix); ok {
+			stripped[after] = v
 		}
 	}
 
@@ -343,7 +343,7 @@ func buildRebuildCommand(ociRef, digest string, annotations map[string]string, r
 		parts = append(parts, fmt.Sprintf("  --format %s", v))
 	}
 	if v := get("custom-defines"); v != "" {
-		for _, def := range strings.Split(v, "\n") {
+		for def := range strings.SplitSeq(v, "\n") {
 			def = strings.TrimSpace(def)
 			if def != "" {
 				parts = append(parts, fmt.Sprintf("  --define %s", def))
@@ -351,7 +351,7 @@ func buildRebuildCommand(ociRef, digest string, annotations map[string]string, r
 		}
 	}
 	if v := get("aib-extra-args"); v != "" {
-		for _, arg := range strings.Split(v, "\n") {
+		for arg := range strings.SplitSeq(v, "\n") {
 			arg = strings.TrimSpace(arg)
 			if arg != "" {
 				parts = append(parts, fmt.Sprintf("  --extra-args %s", arg))

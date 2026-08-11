@@ -23,16 +23,16 @@ var _ = Describe("GetOIDCConfigFromAPI", func() {
 	It("should return config when API returns valid OIDC configuration", func() {
 		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			Expect(r.URL.Path).To(Equal("/v1/auth/config"))
-			response := map[string]interface{}{
+			response := map[string]any{
 				"clientId": "test-client",
-				"jwt": []map[string]interface{}{
+				"jwt": []map[string]any{
 					{
-						"issuer": map[string]interface{}{
+						"issuer": map[string]any{
 							"url":       "https://issuer.example.com",
 							"audiences": []string{"audience1"},
 						},
-						"claimMappings": map[string]interface{}{
-							"username": map[string]interface{}{
+						"claimMappings": map[string]any{
+							"username": map[string]any{
 								"claim": "preferred_username",
 							},
 						},
@@ -74,9 +74,9 @@ var _ = Describe("GetOIDCConfigFromAPI", func() {
 
 	It("should return error when API returns empty JWT array", func() {
 		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			response := map[string]interface{}{
+			response := map[string]any{
 				"clientId": "test-client",
-				"jwt":      []interface{}{},
+				"jwt":      []any{},
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(response)
@@ -89,11 +89,11 @@ var _ = Describe("GetOIDCConfigFromAPI", func() {
 
 	It("should return error when client ID is missing", func() {
 		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			response := map[string]interface{}{
+			response := map[string]any{
 				"clientId": "",
-				"jwt": []map[string]interface{}{
+				"jwt": []map[string]any{
 					{
-						"issuer": map[string]interface{}{
+						"issuer": map[string]any{
 							"url": "https://issuer.example.com",
 						},
 					},
@@ -161,7 +161,7 @@ var _ = Describe("GetOIDCConfigFromLocalConfig", func() {
 		configDir := filepath.Join(tempDir, ".config", "caib")
 		Expect(os.MkdirAll(configDir, 0700)).To(Succeed())
 
-		configData := map[string]interface{}{
+		configData := map[string]any{
 			"issuer_url": "https://issuer.example.com",
 			"client_id":  "test-client",
 			"scopes":     []string{"openid", "profile"},
@@ -202,7 +202,7 @@ var _ = Describe("GetOIDCConfigFromLocalConfig", func() {
 		configDir := filepath.Join(tempDir, ".config", "caib")
 		Expect(os.MkdirAll(configDir, 0700)).To(Succeed())
 
-		configData := map[string]interface{}{
+		configData := map[string]any{
 			"client_id": "test-client",
 		}
 		data, err := json.Marshal(configData)
@@ -260,7 +260,7 @@ var _ = Describe("SaveOIDCConfig", func() {
 		data, err := os.ReadFile(configPath)
 		Expect(err).NotTo(HaveOccurred())
 
-		var savedConfig map[string]interface{}
+		var savedConfig map[string]any
 		Expect(json.Unmarshal(data, &savedConfig)).To(Succeed())
 		Expect(savedConfig["issuer_url"]).To(Equal("https://issuer.example.com"))
 		Expect(savedConfig["client_id"]).To(Equal("test-client"))

@@ -304,7 +304,7 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 	var secCtx *corev1.SecurityContext
 	if userNamespaces {
 		secCtx = &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(true),
+			AllowPrivilegeEscalation: new(true),
 			ProcMount:                ptr.To(corev1.UnmaskedProcMount),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
@@ -313,12 +313,12 @@ func (r *Reconciler) buildPod(ws *automotivev1alpha1.Workspace, operatorConfig *
 		}
 	} else if image == configuredImage {
 		secCtx = &corev1.SecurityContext{
-			Privileged:               ptr.To(true),
-			AllowPrivilegeEscalation: ptr.To(true),
+			Privileged:               new(true),
+			AllowPrivilegeEscalation: new(true),
 		}
 	} else {
 		secCtx = &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(true),
+			AllowPrivilegeEscalation: new(true),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 				Add:  []corev1.Capability{"SETUID", "SETGID", "DAC_OVERRIDE", "CHOWN", "FOWNER"},
@@ -430,7 +430,7 @@ chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.cache /workspace/
 				Command:      []string{"/bin/sh", "-c", initScript},
 				VolumeMounts: initMounts,
 				SecurityContext: &corev1.SecurityContext{
-					AllowPrivilegeEscalation: ptr.To(false),
+					AllowPrivilegeEscalation: new(false),
 					Capabilities: &corev1.Capabilities{
 						Drop: []corev1.Capability{"ALL"},
 						Add:  []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER"},
@@ -475,7 +475,7 @@ chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.cache /workspace/
 		RestartPolicy:                 corev1.RestartPolicyNever,
 	}
 	if userNamespaces {
-		podSpec.HostUsers = ptr.To(false)
+		podSpec.HostUsers = new(false)
 	}
 
 	pod := &corev1.Pod{

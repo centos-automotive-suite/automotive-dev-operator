@@ -14,7 +14,6 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	clocktesting "k8s.io/utils/clock/testing"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -105,7 +104,7 @@ func childBuild(sibName, buildName string, phase string, creationTime time.Time)
 					Kind:       "ScheduledImageBuild",
 					Name:       sibName,
 					UID:        types.UID("test-uid-" + sibName),
-					Controller: ptr.To(true),
+					Controller: new(true),
 				},
 			},
 		},
@@ -170,7 +169,7 @@ func TestReconcile_CreatesImageBuild(t *testing.T) {
 func TestReconcile_Suspended(t *testing.T) {
 	now := time.Date(2025, 1, 1, 2, 30, 0, 0, time.UTC)
 	sib := baseSIB("test-suspend")
-	sib.Spec.Suspend = ptr.To(true)
+	sib.Spec.Suspend = new(true)
 
 	r := newReconciler([]runtime.Object{sib}, now)
 
@@ -309,7 +308,7 @@ func TestReconcile_ReplaceConcurrency(t *testing.T) {
 func TestReconcile_HistoryCleanup(t *testing.T) {
 	now := time.Date(2025, 1, 2, 2, 30, 0, 0, time.UTC)
 	sib := baseSIB("test-history")
-	sib.Spec.SuccessfulBuildsHistoryLimit = ptr.To(int32(1))
+	sib.Spec.SuccessfulBuildsHistoryLimit = new(int32(1))
 	sib.Status.LastScheduleTime = &metav1.Time{Time: now.Add(-time.Hour)}
 
 	old1 := childBuild("test-history", "old-1", automotivev1alpha1.ImageBuildPhaseCompleted, now.Add(-3*time.Hour))
@@ -375,7 +374,7 @@ func TestReconcile_StartingDeadline(t *testing.T) {
 	// The 2am run is 4 hours ago, beyond 1 hour deadline — should skip.
 	now := time.Date(2025, 1, 1, 6, 0, 0, 0, time.UTC)
 	sib := baseSIB("test-deadline")
-	sib.Spec.StartingDeadlineSeconds = ptr.To(int64(3600)) // 1 hour
+	sib.Spec.StartingDeadlineSeconds = new(int64(3600)) // 1 hour
 
 	r := newReconciler([]runtime.Object{sib}, now)
 

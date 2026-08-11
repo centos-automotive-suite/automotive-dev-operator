@@ -11,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 // BuildConfig defines configuration options for build operations
@@ -226,7 +225,7 @@ func trustedCABundleVolumeSource(buildConfig *BuildConfig) corev1.VolumeSource {
 		return corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
 				SecretName: name,
-				Optional:   ptr.To(optional),
+				Optional:   new(optional),
 			},
 		}
 	}
@@ -236,7 +235,7 @@ func trustedCABundleVolumeSource(buildConfig *BuildConfig) corev1.VolumeSource {
 			LocalObjectReference: corev1.LocalObjectReference{
 				Name: name,
 			},
-			Optional: ptr.To(optional),
+			Optional: new(optional),
 		},
 	}
 }
@@ -468,7 +467,7 @@ func GeneratePushArtifactRegistryTask(namespace string, buildConfig *BuildConfig
 							LocalObjectReference: corev1.LocalObjectReference{
 								Name: "aib-target-defaults",
 							},
-							Optional: ptr.To(true),
+							Optional: new(true),
 						},
 					},
 				},
@@ -731,7 +730,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					Name:  PipelineTaskBuildImage,
 					Image: "$(params.automotive-image-builder)",
 					SecurityContext: &corev1.SecurityContext{
-						Privileged: ptr.To(true),
+						Privileged: new(true),
 						SELinuxOptions: &corev1.SELinuxOptions{
 							Type: "unconfined_t",
 						},
@@ -1740,7 +1739,7 @@ func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tek
 			},
 			StepTemplate: &tektonv1.StepTemplate{
 				SecurityContext: &corev1.SecurityContext{
-					Privileged: ptr.To(true),
+					Privileged: new(true),
 					SELinuxOptions: &corev1.SELinuxOptions{
 						Type: "unconfined_t",
 					},
@@ -2090,7 +2089,7 @@ func sealedTaskSpec(operation string, buildConfig *BuildConfig) tektonv1.TaskSpe
 		},
 		StepTemplate: &tektonv1.StepTemplate{
 			SecurityContext: &corev1.SecurityContext{
-				Privileged: ptr.To(true),
+				Privileged: new(true),
 				SELinuxOptions: &corev1.SELinuxOptions{
 					Type: "unconfined_t",
 				},
@@ -2240,7 +2239,7 @@ func GenerateBuildBuilderJob(namespace, distro, targetRegistry, aibImage string)
 					Name:  "build-helper",
 					Image: aibImage,
 					SecurityContext: &corev1.SecurityContext{
-						Privileged: ptr.To(true),
+						Privileged: new(true),
 						SELinuxOptions: &corev1.SELinuxOptions{
 							Type: "unconfined_t",
 						},

@@ -16,7 +16,7 @@ import (
 )
 
 // makeTestJWT creates an unsigned JWT with the given claims for testing.
-func makeTestJWT(claims map[string]interface{}) string {
+func makeTestJWT(claims map[string]any) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
 	payload, _ := json.Marshal(claims)
 	body := base64.RawURLEncoding.EncodeToString(payload)
@@ -24,7 +24,7 @@ func makeTestJWT(claims map[string]interface{}) string {
 }
 
 func makeValidTestJWT(iss string, expiresIn time.Duration) string {
-	return makeTestJWT(map[string]interface{}{
+	return makeTestJWT(map[string]any{
 		"sub": "test-user",
 		"iss": iss,
 		"exp": float64(time.Now().Add(expiresIn).Unix()),
@@ -33,7 +33,7 @@ func makeValidTestJWT(iss string, expiresIn time.Duration) string {
 }
 
 func makeExpiredTestJWT(iss string) string {
-	return makeTestJWT(map[string]interface{}{
+	return makeTestJWT(map[string]any{
 		"sub": "test-user",
 		"iss": iss,
 		"exp": float64(time.Now().Add(-1 * time.Hour).Unix()),
@@ -67,7 +67,7 @@ var _ = Describe("IsTokenValid", func() {
 	})
 
 	It("should return true for a token without exp claim", func() {
-		token := makeTestJWT(map[string]interface{}{
+		token := makeTestJWT(map[string]any{
 			"sub": "user1",
 			"iss": "https://issuer.example.com",
 		})
@@ -190,7 +190,7 @@ var _ = Describe("Token cache save/load", func() {
 		data, err := os.ReadFile(oidcAuth.cachePath)
 		Expect(err).NotTo(HaveOccurred())
 
-		var raw map[string]interface{}
+		var raw map[string]any
 		Expect(json.Unmarshal(data, &raw)).To(Succeed())
 		Expect(raw["refresh_token"]).To(Equal("my-refresh"))
 	})
@@ -334,7 +334,7 @@ var _ = Describe("refreshAccessToken", func() {
 			Expect(r.FormValue("client_id")).To(Equal("test-client"))
 
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  newAccessToken,
 				"refresh_token": "new-refresh-token",
 				"expires_in":    3600,
@@ -359,7 +359,7 @@ var _ = Describe("refreshAccessToken", func() {
 		idToken := makeValidTestJWT("https://issuer.example.com", 1*time.Hour)
 		tokenServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id_token":   idToken,
 				"expires_in": 3600,
 			})
@@ -378,7 +378,7 @@ var _ = Describe("refreshAccessToken", func() {
 	It("should return error when server returns neither access_token nor id_token", func() {
 		tokenServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"expires_in": 3600,
 			})
 		}))
@@ -457,7 +457,7 @@ var _ = Describe("tryRefreshToken", func() {
 				})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  newAccessToken,
 				"refresh_token": "rotated-refresh",
 				"expires_in":    3600,
@@ -503,7 +503,7 @@ var _ = Describe("tryRefreshToken", func() {
 				})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token": newAccessToken,
 				"expires_in":   3600,
 			})
@@ -602,7 +602,7 @@ var _ = Describe("GetTokenWithStatus", func() {
 				})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  newToken,
 				"refresh_token": "new-rt",
 				"expires_in":    3600,
@@ -652,7 +652,7 @@ var _ = Describe("GetTokenWithStatus", func() {
 				})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  newToken,
 				"refresh_token": "new-rt",
 				"expires_in":    3600,
@@ -708,7 +708,7 @@ var _ = Describe("exchangeCodeForToken", func() {
 			Expect(r.FormValue("code_verifier")).To(Equal("pkce-verifier"))
 
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  accessToken,
 				"refresh_token": "the-refresh-token",
 				"id_token":      "some-id-token",
@@ -732,7 +732,7 @@ var _ = Describe("exchangeCodeForToken", func() {
 		accessToken := makeValidTestJWT("https://issuer.example.com", 1*time.Hour)
 		tokenServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token": accessToken,
 				"expires_in":   3600,
 			})

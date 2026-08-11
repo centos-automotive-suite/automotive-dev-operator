@@ -53,9 +53,9 @@ func TestNoHardcodedOCIStringsInScripts(t *testing.T) {
 }
 
 func stripGeneratedBlock(script, block string) string {
-	idx := strings.Index(script, block)
-	if idx < 0 {
+	before, after, ok := strings.Cut(script, block)
+	if !ok {
 		return script
 	}
-	return script[:idx] + script[idx+len(block):]
+	return before + after
 }

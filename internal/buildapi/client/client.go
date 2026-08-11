@@ -963,7 +963,7 @@ func (c *Client) SyncWorkspace(ctx context.Context, name string, body io.Reader)
 }
 
 // workspaceStreamRequest performs a POST with a JSON body and returns the streaming response body.
-func (c *Client) workspaceStreamRequest(ctx context.Context, name, action string, reqBody interface{}) (io.ReadCloser, error) {
+func (c *Client) workspaceStreamRequest(ctx context.Context, name, action string, reqBody any) (io.ReadCloser, error) {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err

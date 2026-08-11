@@ -5,7 +5,8 @@ import (
 	"testing"
 )
 
-func ptr(s string) *string { return &s }
+//go:fix inline
+func ptr(s string) *string { return new(s) }
 
 func TestResolveOutputFormat(t *testing.T) {
 	tests := []struct {
@@ -15,14 +16,14 @@ func TestResolveOutputFormat(t *testing.T) {
 		wantErr bool
 	}{
 		{"nil defaults to table", nil, OutputFormatTable, false},
-		{"empty defaults to table", ptr(""), OutputFormatTable, false},
-		{"table", ptr("table"), OutputFormatTable, false},
-		{"json", ptr("json"), "json", false},
-		{"JSON uppercase", ptr("JSON"), "json", false},
-		{"yaml", ptr("yaml"), "yaml", false},
-		{"yml", ptr("yml"), "yml", false},
-		{"invalid format", ptr("csv"), "", true},
-		{"whitespace trimmed", ptr("  json  "), "json", false},
+		{"empty defaults to table", new(""), OutputFormatTable, false},
+		{"table", new("table"), OutputFormatTable, false},
+		{"json", new("json"), "json", false},
+		{"JSON uppercase", new("JSON"), "json", false},
+		{"yaml", new("yaml"), "yaml", false},
+		{"yml", new("yml"), "yml", false},
+		{"invalid format", new("csv"), "", true},
+		{"whitespace trimmed", new("  json  "), "json", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -44,11 +45,11 @@ func TestIsStructuredFormat(t *testing.T) {
 		want  bool
 	}{
 		{"nil is not structured", nil, false},
-		{"table is not structured", ptr("table"), false},
-		{"json is structured", ptr("json"), true},
-		{"yaml is structured", ptr("yaml"), true},
-		{"yml is structured", ptr("yml"), true},
-		{"invalid falls back to false", ptr("csv"), false},
+		{"table is not structured", new("table"), false},
+		{"json is structured", new("json"), true},
+		{"yaml is structured", new("yaml"), true},
+		{"yml is structured", new("yml"), true},
+		{"invalid falls back to false", new("csv"), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

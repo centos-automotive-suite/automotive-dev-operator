@@ -641,8 +641,8 @@ func parseDevMode(mode string) (buildapitypes.Mode, error) {
 // all other entries are workspace repos passed through unchanged.
 func splitExtraRepos(repos []string) (workspaceRepos []string, ociImages []string, err error) {
 	for _, repo := range repos {
-		if strings.HasPrefix(repo, "oci:") {
-			ref := strings.TrimPrefix(repo, "oci:")
+		if after, ok := strings.CutPrefix(repo, "oci:"); ok {
+			ref := after
 			if ref == "" {
 				return nil, nil, fmt.Errorf("--extra-repo oci: requires an image reference (e.g. oci:quay.io/org/rpms:latest)")
 			}
@@ -1126,10 +1126,7 @@ func (h *Handler) handleFileUploads(
 				"caib image logs "+buildName,
 			)
 		}
-		attemptTimeout := perAttemptTimeout
-		if remaining < attemptTimeout {
-			attemptTimeout = remaining
-		}
+		attemptTimeout := min(remaining, perAttemptTimeout)
 
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, attemptTimeout)
 		err := api.UploadFiles(attemptCtx, buildName, uploads)

@@ -88,10 +88,7 @@ const maxPageLimit = 500
 func parsePagination(c *gin.Context) (limit, offset int) {
 	if l := c.Query("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
-			limit = n
-			if limit > maxPageLimit {
-				limit = maxPageLimit
-			}
+			limit = min(n, maxPageLimit)
 		}
 	}
 	if o := c.Query("offset"); o != "" {
@@ -111,10 +108,7 @@ func applyPagination[T any](items []T, limit, offset int) []T {
 	if limit <= 0 {
 		return items[offset:]
 	}
-	end := offset + limit
-	if end > len(items) {
-		end = len(items)
-	}
+	end := min(offset+limit, len(items))
 	return items[offset:end]
 }
 

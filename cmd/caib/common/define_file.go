@@ -3,6 +3,7 @@ package caibcommon
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 
@@ -29,9 +30,7 @@ func LoadDefineFiles(paths []string) ([]string, error) {
 			continue
 		}
 
-		for k, v := range fileDefines {
-			merged[k] = v
-		}
+		maps.Copy(merged, fileDefines)
 	}
 
 	keys := make([]string, 0, len(merged))

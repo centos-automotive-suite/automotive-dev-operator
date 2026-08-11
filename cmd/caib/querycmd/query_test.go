@@ -131,7 +131,7 @@ func TestFormatOutputYAML_List(t *testing.T) {
 		t.Fatalf("unexpected error: %v", lastErr)
 	}
 
-	var parsed []map[string]interface{}
+	var parsed []map[string]any
 	if err := yaml.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("output is not valid YAML: %v\noutput: %s", err, out)
 	}
@@ -258,7 +258,7 @@ func TestFormatOutputYAML_Show(t *testing.T) {
 		t.Fatalf("unexpected error: %v", lastErr)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("output is not valid YAML: %v\noutput: %s", err, out)
 	}
