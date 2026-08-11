@@ -11,6 +11,7 @@ on:
             - "v*"
 
 env:
+    GO_VERSION: "1.26"
     REGISTRY: quay.io
     REPOSITORY: ${{ vars.REPOSITORY }}
     OPERATOR_IMAGE: ${{ vars.REGISTRY }}/${{ vars.REPOSITORY }}/automotive-dev-operator
@@ -161,7 +162,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.26"
+                  go-version: ${{ env.GO_VERSION }}
 
             - name: Install tkn CLI
               run: |
@@ -264,7 +265,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.26"
+                  go-version: ${{ env.GO_VERSION }}
 
             - name: Install operator-sdk
               run: |
@@ -319,7 +320,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.26"
+                  go-version: ${{ env.GO_VERSION }}
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v4
@@ -357,7 +358,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.26"
+                  go-version: ${{ env.GO_VERSION }}
 
             - name: Build CLI for ARM64
               run: |
@@ -383,7 +384,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.26"
+                  go-version: ${{ env.GO_VERSION }}
 
             - name: Build CLI for AMD64
               run: |
@@ -409,7 +410,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.26"
+                  go-version: ${{ env.GO_VERSION }}
 
             - name: Build CLI for darwin/arm64
               run: |
@@ -439,7 +440,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v7
               with:
-                  go-version: "1.26"
+                  go-version: ${{ env.GO_VERSION }}
 
             - name: Download all CLI artifacts
               uses: actions/download-artifact@v8

@@ -445,6 +445,33 @@ community-operators-bundle: bundle ## Prepare bundle for community-operators-pro
 	fi
 	@echo "Bundle prepared at: community-operators-prod/operators/automotive-dev-operator/$(VERSION)"
 
+.PHONY: bump-go
+bump-go: ## Update Go version everywhere (usage: make bump-go GO_PATCH_VERSION=1.26.3)
+	@if [ -z "$(GO_PATCH_VERSION)" ]; then \
+		echo "Usage: make bump-go GO_PATCH_VERSION=1.26.3"; exit 1; \
+	fi
+	@if ! echo "$(GO_PATCH_VERSION)" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+		echo "Error: GO_PATCH_VERSION must be in X.Y.Z format (got '$(GO_PATCH_VERSION)')"; exit 1; \
+	fi
+	$(eval GO_MINOR_VERSION := $(shell echo $(GO_PATCH_VERSION) | cut -d. -f1,2))
+	@echo "Bumping Go: minor=$(GO_MINOR_VERSION) patch=$(GO_PATCH_VERSION)"
+	@perl -pi -e "s/(GO_VERSION: ['\"]?)[0-9]+\.[0-9]+(['\"]?)/\$${1}$(GO_MINOR_VERSION)\$${2}/" \
+		.github/workflows/build.yml \
+		.github/workflows/e2e-lanes.yml \
+		.github/workflows/e2e.yml \
+		.github/workflows/lint.yml \
+		.github/workflows/test-images.yml
+	@perl -pi -e 's/go-toolset:[0-9]+\.[0-9]+\.[0-9]+/go-toolset:$(GO_PATCH_VERSION)/' \
+		.tekton/bundle-pull-request.yaml \
+		.tekton/bundle-push.yaml \
+		.tekton/catalog-pull-request.yaml \
+		.tekton/catalog-push.yaml \
+		Dockerfile
+	@perl -pi -e 's/^go [0-9]+\.[0-9]+\.[0-9]+/go $(GO_PATCH_VERSION)/' go.mod
+	@echo "Running go mod tidy and make generate manifests..."
+	go mod tidy
+	$(MAKE) generate manifests
+
 .PHONY: release-images
 release-images: docker-buildx bundle-build bundle-push catalog-build catalog-push ## Build and push all release images (operator, bundle, catalog)
 
