@@ -286,26 +286,26 @@ if [ ${#ARCHS_ARRAY[@]} -gt 1 ]; then
     echo "Multi-arch cluster detected. Building for all architectures..."
 
     # Build and push each architecture
-    for arch in ${CLUSTER_ARCHS}; do
+    for arch in "${ARCHS_ARRAY[@]}"; do
         echo ""
         echo "Building for linux/${arch}..."
-        ${CONTAINER_TOOL} buildx build -f Dockerfile --platform linux/${arch} --load -t ${OPERATOR_IMG}-${arch} .
+        ${CONTAINER_TOOL} buildx build -f Dockerfile --platform "linux/${arch}" --load -t "${OPERATOR_IMG}-${arch}" .
         echo "Pushing ${OPERATOR_IMG}-${arch}..."
-        ${CONTAINER_TOOL} push ${OPERATOR_IMG}-${arch} --tls-verify=false
+        ${CONTAINER_TOOL} push "${OPERATOR_IMG}-${arch}" --tls-verify=false
     done
 
     echo ""
     echo "Creating multi-arch manifest..."
     # Remove any existing manifest or image with this name
-    ${CONTAINER_TOOL} manifest rm ${OPERATOR_IMG} 2>/dev/null || true
-    ${CONTAINER_TOOL} rmi ${OPERATOR_IMG} 2>/dev/null || true
+    ${CONTAINER_TOOL} manifest rm "${OPERATOR_IMG}" 2>/dev/null || true
+    ${CONTAINER_TOOL} rmi "${OPERATOR_IMG}" 2>/dev/null || true
 
-    MANIFEST_ARGS=""
-    for arch in ${CLUSTER_ARCHS}; do
-        MANIFEST_ARGS="${MANIFEST_ARGS} ${OPERATOR_IMG}-${arch}"
+    MANIFEST_ARGS=()
+    for arch in "${ARCHS_ARRAY[@]}"; do
+        MANIFEST_ARGS+=("${OPERATOR_IMG}-${arch}")
     done
-    ${CONTAINER_TOOL} manifest create ${OPERATOR_IMG} ${MANIFEST_ARGS}
-    ${CONTAINER_TOOL} manifest push ${OPERATOR_IMG} --tls-verify=false
+    ${CONTAINER_TOOL} manifest create "${OPERATOR_IMG}" "${MANIFEST_ARGS[@]}"
+    ${CONTAINER_TOOL} manifest push "${OPERATOR_IMG}" --tls-verify=false
 else
     BUILD_PLATFORM="linux/${ARCHS_ARRAY[0]}"
     echo "Single architecture cluster. Building for: ${BUILD_PLATFORM}"
@@ -375,18 +375,18 @@ rm -f catalog/automotive-dev-operator.yaml.bak
 echo ""
 echo "Building catalog image..."
 if [ ${#ARCHS_ARRAY[@]} -gt 1 ]; then
-    for arch in ${CLUSTER_ARCHS}; do
+    for arch in "${ARCHS_ARRAY[@]}"; do
         echo "Building catalog for linux/${arch}..."
-        ${CONTAINER_TOOL} buildx build -f catalog.Dockerfile --platform linux/${arch} --load -t ${CATALOG_IMG}-${arch} .
+        ${CONTAINER_TOOL} buildx build -f catalog.Dockerfile --platform "linux/${arch}" --load -t "${CATALOG_IMG}-${arch}" .
     done
     echo "Creating multi-arch catalog manifest..."
-    ${CONTAINER_TOOL} manifest rm ${CATALOG_IMG} 2>/dev/null || true
-    ${CONTAINER_TOOL} rmi ${CATALOG_IMG} 2>/dev/null || true
-    CATALOG_MANIFEST_ARGS=""
-    for arch in ${CLUSTER_ARCHS}; do
-        CATALOG_MANIFEST_ARGS="${CATALOG_MANIFEST_ARGS} ${CATALOG_IMG}-${arch}"
+    ${CONTAINER_TOOL} manifest rm "${CATALOG_IMG}" 2>/dev/null || true
+    ${CONTAINER_TOOL} rmi "${CATALOG_IMG}" 2>/dev/null || true
+    CATALOG_MANIFEST_ARGS=()
+    for arch in "${ARCHS_ARRAY[@]}"; do
+        CATALOG_MANIFEST_ARGS+=("${CATALOG_IMG}-${arch}")
     done
-    ${CONTAINER_TOOL} manifest create ${CATALOG_IMG} ${CATALOG_MANIFEST_ARGS}
+    ${CONTAINER_TOOL} manifest create "${CATALOG_IMG}" "${CATALOG_MANIFEST_ARGS[@]}"
 else
     ${CONTAINER_TOOL} buildx build -f catalog.Dockerfile --platform linux/${ARCHS_ARRAY[0]} --load -t ${CATALOG_IMG} .
 fi
@@ -394,10 +394,10 @@ fi
 echo ""
 echo "Pushing catalog image to OpenShift registry..."
 if [ ${#ARCHS_ARRAY[@]} -gt 1 ]; then
-    for arch in ${CLUSTER_ARCHS}; do
-        ${CONTAINER_TOOL} push ${CATALOG_IMG}-${arch} --tls-verify=false
+    for arch in "${ARCHS_ARRAY[@]}"; do
+        ${CONTAINER_TOOL} push "${CATALOG_IMG}-${arch}" --tls-verify=false
     done
-    ${CONTAINER_TOOL} manifest push ${CATALOG_IMG} --tls-verify=false
+    ${CONTAINER_TOOL} manifest push "${CATALOG_IMG}" --tls-verify=false
 else
     ${CONTAINER_TOOL} push ${CATALOG_IMG} --tls-verify=false
 fi
