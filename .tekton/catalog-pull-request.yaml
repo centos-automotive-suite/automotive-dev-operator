@@ -224,7 +224,7 @@ spec:
           - use
           - $(params.SOURCE_ARTIFACT)=/var/workdir/source
         - name: generate-catalog
-          image: registry.access.redhat.com/ubi10/go-toolset:1.25.9
+          image: registry.access.redhat.com/ubi10/go-toolset:1.26.5
           env:
           - name: HOME
             value: /tekton/home

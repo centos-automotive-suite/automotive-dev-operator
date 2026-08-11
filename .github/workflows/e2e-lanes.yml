@@ -11,7 +11,7 @@ permissions:
   statuses: write
 
 env:
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.26'
   CLUSTER_NAME: automotive-dev-e2e
   REGISTRY_NAME: kind-registry
   REGISTRY_PORT: '5001'

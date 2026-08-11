@@ -1,6 +1,6 @@
 module github.com/centos-automotive-suite/automotive-dev-operator
 
-go 1.25.8
+go 1.26.5
 
 require (
 	github.com/containers/image/v5 v5.36.2
