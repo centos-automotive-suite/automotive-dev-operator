@@ -15,9 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:fix inline
-func strPtr(s string) *string { return new(s) }
-
 func TestBuildResultJSONMarshal(t *testing.T) {
 	result := BuildResult{
 		Name:                    "my-build-abc12",

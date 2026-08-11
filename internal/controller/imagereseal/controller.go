@@ -779,11 +779,6 @@ func (r *Reconciler) deleteSecret(ctx context.Context, namespace, secretName, se
 	return err
 }
 
-//go:fix inline
-func ptr(b bool) *bool {
-	return new(b)
-}
-
 // detectImageArch inspects a container image and returns its architecture (e.g. "amd64", "arm64").
 // Uses registry credentials from SecretRef when available.
 func (r *Reconciler) detectImageArch(ctx context.Context, imageRef, namespace, secretRef string) (string, error) {

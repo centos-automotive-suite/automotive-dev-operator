@@ -40,7 +40,6 @@ type CRDSchema struct {
 func getJSONFieldNames(t reflect.Type) []string {
 	var fields []string
 	for field := range t.Fields() {
-		field := field
 		jsonTag := field.Tag.Get("json")
 		if jsonTag == "" || jsonTag == "-" {
 			continue

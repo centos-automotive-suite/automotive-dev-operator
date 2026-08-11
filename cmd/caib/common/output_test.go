@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-//go:fix inline
-func ptr(s string) *string { return new(s) }
-
 func TestResolveOutputFormat(t *testing.T) {
 	tests := []struct {
 		name    string
