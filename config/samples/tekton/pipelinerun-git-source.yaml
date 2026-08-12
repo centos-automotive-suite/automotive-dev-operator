@@ -1,0 +1,50 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: automotive-build-git-
+  labels:
+    app.kubernetes.io/part-of: automotive-dev
+spec:
+  pipelineRef:
+    name: automotive-build-from-git
+  params:
+    - name: git-url
+      value: "https://github.com/centos-automotive-suite/sample-repo.git"
+    - name: git-revision
+      value: "main"
+    - name: manifest-path
+      value: "."
+    - name: task-bundle-ref
+      value: "quay.io/rh-sdv-cloud/automotive-dev-operator-tekton-tasks@sha256:48d81436921d0c1ec011cf4b5f363e9d1d30ec13712e2803a7a446855f88e5e7"
+    - name: distro
+      value: "autosd"
+    - name: target
+      value: "qemu"
+    - name: arch
+      value: "x86_64"
+    - name: mode
+      value: "image"
+    - name: export-format
+      value: "qcow2"
+    - name: export-oci
+      value: "quay.io/bzlotnik/pipeline-disk:latest"
+    - name: secret-ref
+      value: "push-creds"
+  taskRunTemplate:
+    podTemplate:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3-csi
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 30Gi
+    # Uncomment if build-image needs registry credentials (e.g. for container-push):
+    # - name: registry-auth
+    #   secret:
+    #     secretName: my-registry-auth
