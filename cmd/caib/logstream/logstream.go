@@ -40,8 +40,17 @@ func (s *State) Reset() {
 	s.WarningShown = false
 }
 
-// StreamLogsToStdout streams response body line-by-line to stdout.
-func StreamLogsToStdout(body io.Reader, state *State, captureLeaseID bool) error {
+// LogWriter returns the appropriate writer for log output: os.Stderr when
+// quiet mode is active (structured output requested), os.Stdout otherwise.
+func LogWriter() io.Writer {
+	if clilog.IsQuiet() {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+// StreamLogs streams response body line-by-line to the provided writer.
+func StreamLogs(w io.Writer, body io.Reader, state *State, captureLeaseID bool) error {
 	if state == nil {
 		return fmt.Errorf("stream state is required")
 	}
@@ -58,7 +67,10 @@ func StreamLogsToStdout(body io.Reader, state *State, captureLeaseID bool) error
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Println(line)
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			state.Active = false
+			return fmt.Errorf("writing log line: %w", err)
+		}
 		state.StartTime = time.Now()
 
 		if !captureLeaseID {

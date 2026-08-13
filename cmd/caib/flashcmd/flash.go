@@ -350,7 +350,7 @@ func (h *Handler) tryFlashLogStreaming(ctx context.Context, logClient *http.Clie
 				fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", closeErr)
 			}
 		}()
-		return logstream.StreamLogsToStdout(resp.Body, state, false)
+		return logstream.StreamLogs(logstream.LogWriter(), resp.Body, state, false)
 	}
 	return logstream.HandleLogStreamError(resp, state, maxLogRetries)
 }

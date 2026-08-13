@@ -2,7 +2,6 @@
 package sealedcmd
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/logstream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
@@ -315,16 +315,8 @@ func (h *Handler) sealedStreamLogs(ctx context.Context, op buildapitypes.SealedO
 		return fmt.Errorf("log stream error: HTTP %d", resp.StatusCode)
 	}
 
-	clilog.Infoln("Streaming logs...")
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		fmt.Println(scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("log stream interrupted: %w", err)
-	}
-	return nil
+	state := &logstream.State{}
+	return logstream.StreamLogs(logstream.LogWriter(), resp.Body, state, false)
 }
 
 // resolveSealedTwoRefs returns input and output refs from --input/--output flags or positionals (any order).

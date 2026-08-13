@@ -34,15 +34,8 @@ import (
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/logstream"
 )
-
-// logStreamState encapsulates state for log streaming with automatic reconnection
-type logStreamState struct {
-	retryCount   int
-	warningShown bool
-	startTime    time.Time
-	completed    bool // Set when stream ends normally, prevents reconnection
-}
 
 const maxLogRetries = 24 // ~2 minutes at 5s intervals
 
@@ -101,7 +94,7 @@ func runContainerLogs(_ *cobra.Command, args []string) {
 		// Build is finished — fetch logs once without follow mode (pods may have been GC'd)
 		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		streamState := &logStreamState{}
+		streamState := &logstream.State{}
 		if err := tryContainerLogStreaming(fetchCtx, logClient, name, streamState, false); err != nil {
 			clilog.Infof("Could not retrieve logs (pods may have been cleaned up): %v\n", err)
 		}
@@ -128,10 +121,10 @@ func runContainerLogs(_ *cobra.Command, args []string) {
 	}
 
 	// Stream logs
-	streamState := &logStreamState{}
+	streamState := &logstream.State{}
 	for {
 		err := tryContainerLogStreaming(ctx, logClient, name, streamState, true)
-		if streamState.completed {
+		if streamState.Completed {
 			break
 		}
 		if ctx.Err() != nil {
@@ -141,8 +134,8 @@ func runContainerLogs(_ *cobra.Command, args []string) {
 			handleError(err)
 		}
 		// Stream ended (nil error with incomplete stream, or transient error) — retry
-		streamState.retryCount++
-		if streamState.retryCount > maxLogRetries {
+		streamState.RetryCount++
+		if streamState.RetryCount > maxLogRetries {
 			handleError(fmt.Errorf("log stream unavailable after %d retries", maxLogRetries))
 		}
 		time.Sleep(5 * time.Second)
@@ -159,8 +152,8 @@ func isNonRetryableLogError(err error) bool {
 
 // tryContainerLogStreaming attempts to stream logs and returns error if it fails.
 // When follow is true, the server keeps the connection open for live streaming.
-func tryContainerLogStreaming(ctx context.Context, logClient *http.Client, name string, state *logStreamState, follow bool) error {
-	logURL := buildContainerBuildLogURL(name, state.startTime, follow)
+func tryContainerLogStreaming(ctx context.Context, logClient *http.Client, name string, state *logstream.State, follow bool) error {
+	logURL := buildContainerBuildLogURL(name, state.StartTime, follow)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, logURL, nil)
 	if err != nil {
@@ -181,10 +174,10 @@ func tryContainerLogStreaming(ctx context.Context, logClient *http.Client, name 
 	}()
 
 	if resp.StatusCode == http.StatusOK {
-		return streamLogsToStdout(resp.Body, state)
+		return containerStreamLogs(resp.Body, state)
 	}
 
-	return handleLogStreamError(resp, state)
+	return handleContainerLogStreamError(resp, state)
 }
 
 // buildContainerBuildLogURL builds the log streaming URL for container builds
@@ -203,24 +196,24 @@ func buildContainerBuildLogURL(buildName string, startTime time.Time, follow boo
 	return logURL
 }
 
-// streamLogsToStdout streams logs from the response body to stdout
-func streamLogsToStdout(body io.Reader, state *logStreamState) error {
-	if state.startTime.IsZero() {
-		state.startTime = time.Now()
+func containerStreamLogs(body io.Reader, state *logstream.State) error {
+	if state.StartTime.IsZero() {
+		state.StartTime = time.Now()
 	}
 
+	w := logstream.LogWriter()
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Println(line)
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return fmt.Errorf("writing log line: %w", err)
+		}
 
-		// Advance the cursor so reconnections resume from here
-		state.startTime = time.Now()
+		state.StartTime = time.Now()
 
-		// Check for completion markers
 		if strings.Contains(line, "Build completed") || strings.Contains(line, "Build failed") {
-			state.completed = true
+			state.Completed = true
 		}
 	}
 
@@ -233,16 +226,15 @@ func streamLogsToStdout(body io.Reader, state *logStreamState) error {
 
 const maxLogErrorBodyBytes = 64 * 1024 // 64KB limit for error response bodies
 
-// handleLogStreamError handles HTTP errors from log streaming
-func handleLogStreamError(resp *http.Response, state *logStreamState) error {
+func handleContainerLogStreamError(resp *http.Response, state *logstream.State) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxLogErrorBodyBytes))
 	msg := strings.TrimSpace(string(body))
 
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
-		if !state.warningShown {
+		if !state.WarningShown {
 			clilog.Infof("log stream not ready (HTTP %d). Retrying... (attempt %d/%d)\n",
-				resp.StatusCode, state.retryCount+1, maxLogRetries)
-			state.warningShown = true
+				resp.StatusCode, state.RetryCount+1, maxLogRetries)
+			state.WarningShown = true
 		}
 		return fmt.Errorf("log endpoint not ready (HTTP %d)", resp.StatusCode)
 	}
