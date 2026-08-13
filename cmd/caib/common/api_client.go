@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/auth"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -35,8 +36,8 @@ func CreateBuildAPIClient(serverURL string, authToken *string, insecureSkipTLS b
 	if !explicitToken {
 		token, didAuth, err := auth.GetTokenWithReauth(ctx, serverURL, "", insecureSkipTLS)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: OIDC authentication failed: %v\n", err)
-			fmt.Fprintln(os.Stderr, "Attempting kubeconfig fallback (this may use a different identity)")
+			clilog.Statusf("Error: OIDC authentication failed: %v\n", err)
+			clilog.Statusln("Attempting kubeconfig fallback (this may use a different identity)")
 			if tok, loadErr := LoadTokenFromKubeconfig(); loadErr == nil && strings.TrimSpace(tok) != "" {
 				setToken(tok)
 			} else {
@@ -45,7 +46,7 @@ func CreateBuildAPIClient(serverURL string, authToken *string, insecureSkipTLS b
 		} else if token != "" {
 			setToken(token)
 			if didAuth {
-				fmt.Fprintln(os.Stderr, "OIDC authentication successful")
+				clilog.Statusln("OIDC authentication successful")
 			}
 		} else if tok, loadErr := LoadTokenFromKubeconfig(); loadErr == nil && strings.TrimSpace(tok) != "" {
 			setToken(tok)
@@ -113,14 +114,14 @@ func ExecuteWithReauth(
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "Authentication failed (401), re-authenticating...")
+	clilog.Statusln("Authentication failed (401), re-authenticating...")
 	newToken, _, err := auth.GetTokenWithReauth(ctx, serverURL, currentToken, insecureSkipTLS)
 	if err != nil {
 		return fmt.Errorf("re-authentication failed: %w", err)
 	}
 	setToken(newToken)
 
-	fmt.Fprintln(os.Stderr, "Retrying request...")
+	clilog.Statusln("Retrying request...")
 	err = runWithFreshClient()
 	if err == nil {
 		return nil
@@ -131,7 +132,7 @@ func ExecuteWithReauth(
 
 	if tok, loadErr := LoadTokenFromKubeconfig(); loadErr == nil && strings.TrimSpace(tok) != "" {
 		setToken(tok)
-		fmt.Fprintln(os.Stderr, "Attempting kubeconfig fallback...")
+		clilog.Statusln("Attempting kubeconfig fallback...")
 		return runWithFreshClient()
 	}
 

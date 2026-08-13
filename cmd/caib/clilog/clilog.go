@@ -30,6 +30,20 @@ func Infoln(a ...any) {
 	}
 }
 
+// Statusf prints a formatted status message to stderr unless quiet mode is enabled.
+func Statusf(format string, a ...any) {
+	if !quiet {
+		fmt.Fprintf(os.Stderr, format, a...)
+	}
+}
+
+// Statusln prints a status message line to stderr unless quiet mode is enabled.
+func Statusln(a ...any) {
+	if !quiet {
+		fmt.Fprintln(os.Stderr, a...)
+	}
+}
+
 // Warnf prints a formatted warning to stderr. Warnings are never suppressed by quiet mode.
 func Warnf(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "Warning: "+format, a...)
