@@ -99,7 +99,7 @@ func runLogin(_ *cobra.Command, args []string) {
 	ctx := context.Background()
 	token, didAuth, err := auth.GetTokenWithReauth(ctx, server, "", insecureSkipTLS)
 	if err != nil {
-		fmt.Printf("Warning: authentication failed (you may need --token or kubeconfig for API calls): %v\n", err)
+		clilog.Warnf("authentication failed (you may need --token or kubeconfig for API calls): %v\n", err)
 		return
 	}
 	if token != "" && didAuth {

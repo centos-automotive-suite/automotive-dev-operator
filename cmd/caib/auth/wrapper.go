@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
 )
 
@@ -104,7 +105,7 @@ func CreateClientWithReauth(ctx context.Context, serverURL string, authToken *st
 		token, _, err := GetTokenWithReauth(ctx, serverURL, "", insecureSkipTLS)
 		if err != nil {
 			// OIDC fetch failed - log but continue (auth is optional, kubeconfig may work)
-			fmt.Printf("Warning: OIDC authentication failed: %v\n", err)
+			clilog.Warnf("OIDC authentication failed: %v\n", err)
 		} else if token != "" {
 			tokenValue = token
 			if authToken != nil {

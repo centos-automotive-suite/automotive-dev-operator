@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	caibconfig "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -135,7 +136,7 @@ func (a *OIDCAuth) tryRefreshToken(ctx context.Context) (string, error) {
 	}
 
 	if err := a.saveTokenCache(token, refreshToken, tokenResp.ExpiresIn); err != nil {
-		fmt.Printf("Warning: Failed to save token cache: %v\n", err)
+		clilog.Warnf("Failed to save token cache: %v\n", err)
 	}
 
 	return token, nil
@@ -269,10 +270,10 @@ func (a *OIDCAuth) authenticate(ctx context.Context) (string, error) {
 		case err := <-errChan:
 			return a.shutdownAndReturn(server, err)
 		case <-time.After(3 * time.Second):
-			fmt.Printf("\nPlease complete login in your browser or open the URL manually:\n%s\n\n", authURL.String())
+			fmt.Fprintf(os.Stderr, "\nPlease complete login in your browser or open the URL manually:\n%s\n\n", authURL.String())
 		}
 	} else {
-		fmt.Printf("\nCould not open browser automatically. Please open this URL:\n%s\n\n", authURL.String())
+		fmt.Fprintf(os.Stderr, "\nCould not open browser automatically. Please open this URL:\n%s\n\n", authURL.String())
 	}
 
 	select {
@@ -303,7 +304,7 @@ func (a *OIDCAuth) handleAuthCode(ctx context.Context, server *http.Server, toke
 	}
 
 	if err := a.saveTokenCache(token, tokenResp.RefreshToken, tokenResp.ExpiresIn); err != nil {
-		fmt.Printf("Warning: Failed to save token cache: %v\n", err)
+		clilog.Warnf("Failed to save token cache: %v\n", err)
 	}
 
 	return token, nil

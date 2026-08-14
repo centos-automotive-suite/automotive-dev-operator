@@ -1,9 +1,12 @@
 package authcmd
 
 import (
+	"bytes"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 )
@@ -44,6 +47,49 @@ var _ = Describe("formatDuration", func() {
 
 	It("should handle large durations", func() {
 		Expect(formatDuration(48*time.Hour + 59*time.Minute)).To(Equal("48h 59m"))
+	})
+})
+
+func captureStdout(fn func()) string {
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	fn()
+	_ = w.Close()
+	os.Stdout = old
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	return buf.String()
+}
+
+var _ = Describe("printTokenStatus quiet mode", func() {
+	AfterEach(func() {
+		clilog.SetQuiet(false)
+	})
+
+	It("should suppress output in quiet mode", func() {
+		clilog.SetQuiet(true)
+		out := captureStdout(func() {
+			printTokenStatus(2*time.Hour, "2h 0m")
+		})
+		Expect(out).To(BeEmpty())
+	})
+
+	It("should show output when not quiet", func() {
+		clilog.SetQuiet(false)
+		out := captureStdout(func() {
+			printTokenStatus(2*time.Hour, "2h 0m")
+		})
+		Expect(out).NotTo(BeEmpty())
+		Expect(out).To(ContainSubstring("Valid"))
+	})
+
+	It("should suppress expired status in quiet mode", func() {
+		clilog.SetQuiet(true)
+		out := captureStdout(func() {
+			printTokenStatus(-1*time.Hour, "1h 0m")
+		})
+		Expect(out).To(BeEmpty())
 	})
 })
 

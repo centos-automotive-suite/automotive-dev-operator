@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/auth"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/fatih/color"
 	"github.com/golang-jwt/jwt/v5"
@@ -71,13 +72,13 @@ func getInsecureSkipTLS(cmd *cobra.Command) bool {
 func runStatus(_ *cobra.Command, _ []string) {
 	cache, err := auth.LoadTokenCache()
 	if err != nil {
-		fmt.Printf(color.RedString("Failed to read token cache: %v\n"), err)
+		fmt.Fprintf(os.Stderr, color.RedString("Failed to read token cache: %v\n"), err)
 		return
 	}
 
 	if cache == nil || cache.Token == "" {
-		fmt.Println(color.RedString("No cached token found."))
-		fmt.Println("Run 'caib login <server-url>' to authenticate.")
+		fmt.Fprintln(os.Stderr, color.RedString("No cached token found."))
+		fmt.Fprintln(os.Stderr, "Run 'caib login <server-url>' to authenticate.")
 		return
 	}
 
@@ -85,42 +86,42 @@ func runStatus(_ *cobra.Command, _ []string) {
 	claims := jwt.MapClaims{}
 	_, _, err = parser.ParseUnverified(cache.Token, claims)
 	if err != nil {
-		fmt.Printf(color.RedString("Failed to parse cached token: %v\n"), err)
+		fmt.Fprintf(os.Stderr, color.RedString("Failed to parse cached token: %v\n"), err)
 		return
 	}
 
 	exp, hasExp := claims["exp"].(float64)
 	if !hasExp {
-		fmt.Println(color.YellowString("Token has no expiration claim."))
+		clilog.Infoln(color.YellowString("Token has no expiration claim."))
 	} else {
 		expTime := time.Unix(int64(exp), 0)
 		remaining := time.Until(expTime)
 		duration := formatDuration(remaining)
 
-		fmt.Printf("Token expiry: %s\n", expTime.UTC().Format("2006-01-02 15:04:05 UTC"))
+		clilog.Infof("Token expiry: %s\n", expTime.UTC().Format("2006-01-02 15:04:05 UTC"))
 		printTokenStatus(remaining, duration)
 	}
 
 	if sub, ok := claims["sub"].(string); ok && sub != "" {
-		fmt.Printf("Subject: %s\n", sub)
+		clilog.Infof("Subject: %s\n", sub)
 	}
 	if iss, ok := claims["iss"].(string); ok && iss != "" {
-		fmt.Printf("Issuer: %s\n", iss)
+		clilog.Infof("Issuer: %s\n", iss)
 	}
 
 	if verbose {
 		if iat, ok := claims["iat"].(float64); ok {
 			t := time.Unix(int64(iat), 0)
-			fmt.Printf("Issued at: %s\n", t.UTC().Format("2006-01-02 15:04:05 UTC"))
+			clilog.Infof("Issued at: %s\n", t.UTC().Format("2006-01-02 15:04:05 UTC"))
 		}
 		if authTime, ok := claims["auth_time"].(float64); ok {
 			t := time.Unix(int64(authTime), 0)
-			fmt.Printf("Auth time: %s\n", t.UTC().Format("2006-01-02 15:04:05 UTC"))
+			clilog.Infof("Auth time: %s\n", t.UTC().Format("2006-01-02 15:04:05 UTC"))
 		}
 		if cache.RefreshToken != "" {
-			fmt.Println("Refresh token stored: yes")
+			clilog.Infoln("Refresh token stored: yes")
 		} else {
-			fmt.Println("Refresh token stored: no")
+			clilog.Infoln("Refresh token stored: no")
 		}
 	}
 }
@@ -128,8 +129,8 @@ func runStatus(_ *cobra.Command, _ []string) {
 func runRefresh(cmd *cobra.Command, _ []string) {
 	serverURL := config.DefaultServerWithDerive()
 	if serverURL == "" {
-		fmt.Println(color.RedString("No server configured."))
-		fmt.Println("Run 'caib login <server-url>' or 'jmp login <endpoint>' first.")
+		fmt.Fprintln(os.Stderr, color.RedString("No server configured."))
+		fmt.Fprintln(os.Stderr, "Run 'caib login <server-url>' or 'jmp login <endpoint>' first.")
 		return
 	}
 
@@ -138,17 +139,17 @@ func runRefresh(cmd *cobra.Command, _ []string) {
 
 	token, err := auth.RefreshCachedToken(ctx, serverURL, insecure)
 	if err != nil {
-		fmt.Printf(color.RedString("Refresh failed: %v\n"), err)
-		fmt.Println("Run 'caib login <server-url>' to re-authenticate.")
+		fmt.Fprintf(os.Stderr, color.RedString("Refresh failed: %v\n"), err)
+		fmt.Fprintln(os.Stderr, "Run 'caib login <server-url>' to re-authenticate.")
 		return
 	}
 
 	if token == "" {
-		fmt.Println(color.RedString("Refresh returned an empty token."))
-		fmt.Println("Run 'caib login <server-url>' to re-authenticate.")
+		fmt.Fprintln(os.Stderr, color.RedString("Refresh returned an empty token."))
+		fmt.Fprintln(os.Stderr, "Run 'caib login <server-url>' to re-authenticate.")
 		return
 	}
-	fmt.Println("Access token refreshed successfully.")
+	clilog.Infoln("Access token refreshed successfully.")
 }
 
 const tokenExpiryWarningSeconds = 300
@@ -158,15 +159,15 @@ func printTokenStatus(remaining time.Duration, duration string) {
 
 	switch {
 	case remaining < 0:
-		fmt.Println(color.RedString("Status: EXPIRED (%s ago)", duration))
-		fmt.Println(color.YellowString(hint))
+		clilog.Infoln(color.RedString("Status: EXPIRED (%s ago)", duration))
+		clilog.Infoln(color.YellowString(hint))
 	case remaining.Seconds() < tokenExpiryWarningSeconds:
-		fmt.Println(color.RedString("Status: EXPIRING SOON (%s remaining)", duration))
-		fmt.Println(color.YellowString(hint))
+		clilog.Infoln(color.RedString("Status: EXPIRING SOON (%s remaining)", duration))
+		clilog.Infoln(color.YellowString(hint))
 	case remaining < time.Hour:
-		fmt.Println(color.YellowString("Status: Valid (%s remaining)", duration))
+		clilog.Infoln(color.YellowString("Status: Valid (%s remaining)", duration))
 	default:
-		fmt.Println(color.GreenString("Status: Valid (%s remaining)", duration))
+		clilog.Infoln(color.GreenString("Status: Valid (%s remaining)", duration))
 	}
 }
 
