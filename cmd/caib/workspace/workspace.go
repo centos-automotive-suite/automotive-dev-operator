@@ -36,6 +36,9 @@ var (
 	authToken       string
 	insecureSkipTLS bool
 
+	// output format pointer — set by NewWorkspaceCmd from the root command's flag
+	outputFormatPtr *string
+
 	// create flags
 	fromBuild        string
 	leaseID          string
@@ -59,7 +62,9 @@ var (
 )
 
 // NewWorkspaceCmd creates the workspace command with subcommands.
-func NewWorkspaceCmd() *cobra.Command {
+// outputFormat is a pointer to the root command's --output-format flag value.
+func NewWorkspaceCmd(outputFormat *string) *cobra.Command {
+	outputFormatPtr = outputFormat
 	cmd := &cobra.Command{
 		Use:   "workspace",
 		Short: "Manage developer workspaces for application building",
@@ -332,8 +337,13 @@ func runCreate(_ *cobra.Command, args []string) {
 func runList(_ *cobra.Command, _ []string) {
 	requireServer()
 
+	format, err := caibcommon.ResolveOutputFormat(outputFormatPtr)
+	if err != nil {
+		handleError(err)
+	}
+
 	var workspaces []buildapitypes.WorkspaceResponse
-	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		ws, cerr := client.ListWorkspaces(context.Background())
 		if cerr != nil {
 			return cerr
@@ -345,13 +355,24 @@ func runList(_ *cobra.Command, _ []string) {
 		handleError(fmt.Errorf("failed to list workspaces: %w", err))
 	}
 
-	if len(workspaces) == 0 {
-		fmt.Println("No workspaces found")
-		return
+	if workspaces == nil {
+		workspaces = []buildapitypes.WorkspaceResponse{}
 	}
 
+	caibcommon.RenderFormatted(format, workspaces, func() error {
+		if len(workspaces) == 0 {
+			fmt.Println("No workspaces found")
+			return nil
+		}
+		return printWorkspaceList(workspaces)
+	}, handleError)
+}
+
+func printWorkspaceList(workspaces []buildapitypes.WorkspaceResponse) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "NAME\tARCH\tPHASE\tLEASE\tAGE")
+	if _, err := fmt.Fprintln(w, "NAME\tARCH\tPHASE\tLEASE\tAGE"); err != nil {
+		return err
+	}
 	for _, ws := range workspaces {
 		lease := ws.Lease
 		if lease == "" {
@@ -361,17 +382,24 @@ func runList(_ *cobra.Command, _ []string) {
 		if age == "" {
 			age = "-"
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", ws.Name, ws.Arch, ws.Phase, lease, age)
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", ws.Name, ws.Arch, ws.Phase, lease, age); err != nil {
+			return err
+		}
 	}
-	_ = w.Flush()
+	return w.Flush()
 }
 
 func runShow(_ *cobra.Command, args []string) {
 	requireServer()
 	name := args[0]
 
+	format, err := caibcommon.ResolveOutputFormat(outputFormatPtr)
+	if err != nil {
+		handleError(err)
+	}
+
 	var ws *buildapitypes.WorkspaceResponse
-	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		r, cerr := client.GetWorkspace(context.Background(), name)
 		if cerr != nil {
 			return cerr
@@ -383,6 +411,12 @@ func runShow(_ *cobra.Command, args []string) {
 		handleError(fmt.Errorf("failed to get workspace: %w", err))
 	}
 
+	caibcommon.RenderFormatted(format, ws, func() error {
+		return printWorkspaceDetails(ws)
+	}, handleError)
+}
+
+func printWorkspaceDetails(ws *buildapitypes.WorkspaceResponse) error {
 	fmt.Printf("Name:         %s\n", ws.Name)
 	fmt.Printf("Architecture: %s\n", ws.Arch)
 	fmt.Printf("Phase:        %s\n", ws.Phase)
@@ -397,6 +431,7 @@ func runShow(_ *cobra.Command, args []string) {
 	if ws.LastActivity != "" {
 		fmt.Printf("Last active:  %s\n", ws.LastActivity)
 	}
+	return nil
 }
 
 func runDelete(_ *cobra.Command, args []string) {
@@ -876,7 +911,7 @@ func newProgressReader(r io.Reader, total int64) *progressReader {
 	return &progressReader{
 		r:     r,
 		total: total,
-		isTTY: term.IsTerminal(int(os.Stdout.Fd())),
+		isTTY: term.IsTerminal(int(os.Stderr.Fd())),
 		last:  -1,
 	}
 }
@@ -895,20 +930,23 @@ func (p *progressReader) Read(b []byte) (int, error) {
 }
 
 func (p *progressReader) render(pct int) {
+	if clilog.IsQuiet() {
+		return
+	}
 	barWidth := 30
 	filled := barWidth * pct / 100
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 	sizeInfo := fmt.Sprintf("%s / %s", humanSize(p.read), humanSize(p.total))
 	if p.isTTY {
-		_, _ = fmt.Fprintf(os.Stdout, "\r  Upload   │%s│ %3d%% %s", bar, pct, sizeInfo)
+		_, _ = fmt.Fprintf(os.Stderr, "\r  Upload   │%s│ %3d%% %s", bar, pct, sizeInfo)
 	} else if pct%25 == 0 || pct == 100 {
-		_, _ = fmt.Fprintf(os.Stdout, "  Upload: %d%% %s\n", pct, sizeInfo)
+		_, _ = fmt.Fprintf(os.Stderr, "  Upload: %d%% %s\n", pct, sizeInfo)
 	}
 }
 
 func (p *progressReader) finish() {
-	if p.total > 0 && p.isTTY {
-		_, _ = fmt.Fprintln(os.Stdout)
+	if p.total > 0 && p.isTTY && !clilog.IsQuiet() {
+		_, _ = fmt.Fprintln(os.Stderr)
 	}
 }
 

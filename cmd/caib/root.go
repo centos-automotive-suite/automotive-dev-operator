@@ -88,7 +88,7 @@ func newRootCmd() *cobra.Command {
 		container.NewContainerCmd(),
 		catalog.NewCatalogCmd(),
 		authcmd.NewAuthCmd(),
-		workspace.NewWorkspaceCmd(),
+		workspace.NewWorkspaceCmd(&outputFormat),
 	)
 
 	return rootCmd
