@@ -77,7 +77,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			fmt.Printf("Warning: failed to close response body: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
 		}
 	}()
 
@@ -97,14 +97,14 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	format := strings.ToLower(strings.TrimSpace(getOutputFormat(cmd)))
 	switch format {
-	case "json":
+	case outputFormatJSON:
 		var result map[string]any
 		if err := json.Unmarshal(body, &result); err != nil {
 			return fmt.Errorf("failed to parse JSON response: %w", err)
 		}
 		output, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Println(string(output))
-	case "yaml", "yml":
+	case outputFormatYAML, outputFormatYML:
 		var result map[string]any
 		if err := json.Unmarshal(body, &result); err != nil {
 			return fmt.Errorf("failed to parse JSON response: %w", err)

@@ -28,6 +28,9 @@ import (
 
 const (
 	outputFormatTable = "table"
+	outputFormatJSON  = "json"
+	outputFormatYAML  = "yaml"
+	outputFormatYML   = "yml"
 )
 
 var (

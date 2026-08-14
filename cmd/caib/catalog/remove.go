@@ -66,8 +66,13 @@ func runRemove(cmd *cobra.Command, args []string) error {
 
 	// Confirm deletion
 	if !removeForce {
+		format := strings.ToLower(strings.TrimSpace(getOutputFormat(cmd)))
+		if clilog.IsQuiet() || format == outputFormatJSON || format == outputFormatYAML || format == outputFormatYML {
+			clilog.Infoln("Cancelled (use --force to skip confirmation)")
+			return nil
+		}
 		clilog.Infof("Removing catalog image %q...\n", name)
-		fmt.Print("Are you sure you want to remove this image from the catalog? (y/N): ")
+		fmt.Fprint(os.Stderr, "Are you sure you want to remove this image from the catalog? (y/N): ")
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')
 		response = strings.TrimSpace(strings.ToLower(response))

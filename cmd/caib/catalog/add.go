@@ -150,7 +150,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			fmt.Printf("Warning: failed to close response body: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
 		}
 	}()
 
