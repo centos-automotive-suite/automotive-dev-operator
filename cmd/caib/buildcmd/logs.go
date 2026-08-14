@@ -219,13 +219,13 @@ func (h *Handler) tryLogStreaming(ctx context.Context, logClient *http.Client, n
 	if err != nil {
 		return fmt.Errorf("log request failed: %w", err)
 	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", closeErr)
+		}
+	}()
 
 	if resp.StatusCode == http.StatusOK {
-		defer func() {
-			if closeErr := resp.Body.Close(); closeErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", closeErr)
-			}
-		}()
 		return logstream.StreamLogs(logstream.LogWriter(), resp.Body, state, true)
 	}
 

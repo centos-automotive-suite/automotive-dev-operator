@@ -2,6 +2,7 @@ package logstream
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -51,11 +52,8 @@ func TestLogWriter_ReturnsStderrWhenQuiet(t *testing.T) {
 	defer clilog.SetQuiet(false)
 
 	w := LogWriter()
-	// LogWriter should not return os.Stdout when quiet
-	// We can't easily compare io.Writer identity, but we can verify the function
-	// returns a non-nil writer that is stderr
-	if w == nil {
-		t.Fatal("LogWriter returned nil")
+	if w != os.Stderr {
+		t.Errorf("expected os.Stderr in quiet mode, got %v", w)
 	}
 }
 
@@ -63,25 +61,25 @@ func TestLogWriter_ReturnsStdoutWhenNotQuiet(t *testing.T) {
 	clilog.SetQuiet(false)
 
 	w := LogWriter()
-	if w == nil {
-		t.Fatal("LogWriter returned nil")
+	if w != os.Stdout {
+		t.Errorf("expected os.Stdout in normal mode, got %v", w)
 	}
 }
 
-func TestStreamLogs_QuietModeDoesNotWriteToStdout(t *testing.T) {
-	clilog.SetQuiet(true)
-	defer clilog.SetQuiet(false)
-
+func TestStreamLogs_LineHandler(t *testing.T) {
 	var buf bytes.Buffer
 	state := &State{}
-	body := strings.NewReader("log line 1\nlog line 2\n")
+	var seen []string
+	state.LineHandler = func(line string) {
+		seen = append(seen, line)
+	}
+	body := strings.NewReader("alpha\nbeta\n")
 
 	if err := StreamLogs(&buf, body, state, false); err != nil {
 		t.Fatalf("StreamLogs returned error: %v", err)
 	}
 
-	got := buf.String()
-	if !strings.Contains(got, "log line 1") || !strings.Contains(got, "log line 2") {
-		t.Errorf("expected log lines in provided writer, got: %q", got)
+	if len(seen) != 2 || seen[0] != "alpha" || seen[1] != "beta" {
+		t.Errorf("LineHandler got %v, want [alpha beta]", seen)
 	}
 }
