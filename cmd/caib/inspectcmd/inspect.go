@@ -249,6 +249,9 @@ func splitReference(ref string) string {
 }
 
 func (h *Handler) printProvenance(ociRef, digest string, annotations map[string]string, _ []referrerInfo, referrerTypes map[string]bool) {
+	if clilog.IsQuiet() {
+		return
+	}
 	bold := func(a ...any) string { return fmt.Sprint(a...) }
 	green := func(a ...any) string { return fmt.Sprint(a...) }
 	yellow := func(a ...any) string { return fmt.Sprint(a...) }

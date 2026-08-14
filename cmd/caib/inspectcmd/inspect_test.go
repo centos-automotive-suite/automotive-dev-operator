@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -338,5 +339,24 @@ func TestPrintProvenance_NoAnnotations(t *testing.T) {
 
 	if !strings.Contains(out, "No automotive build annotations found") {
 		t.Error("should show no-annotations message")
+	}
+}
+
+func TestPrintProvenance_QuietMode(t *testing.T) {
+	clilog.SetQuiet(true)
+	defer clilog.SetQuiet(false)
+
+	h := NewHandler(Options{})
+	annotations := fullAnnotations()
+	referrerTypes := map[string]bool{
+		"application/vnd.automotive.manifest.v1+yaml": true,
+	}
+
+	out := captureStdout(t, func() {
+		h.printProvenance("quay.io/org/repo:v1", "sha256:abc", annotations, nil, referrerTypes)
+	})
+
+	if out != "" {
+		t.Errorf("expected no output in quiet mode, got: %s", out)
 	}
 }
