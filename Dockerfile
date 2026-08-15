@@ -1,5 +1,5 @@
 ARG BUILDPLATFORM
-FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi10/go-toolset:1.26.5 AS builder
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi10/go-toolset:1.26.5-1786496329 AS builder
 ARG TARGETOS=linux
 ARG TARGETARCH
 
