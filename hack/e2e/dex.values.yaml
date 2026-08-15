@@ -32,10 +32,9 @@ volumeMounts:
   - name: tls
     mountPath: /etc/dex/tls
 service:
-  type: NodePort
+  type: ClusterIP
   ports:
     http:
       port: 5554
     https:
       port: 5556
-      nodePort: 32000
