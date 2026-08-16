@@ -23,12 +23,18 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
+)
+
+const (
+	listSortCreated = "created"
+	listSortName    = "name"
 )
 
 var (
@@ -39,6 +45,7 @@ var (
 	listTags         string
 	listSort         string
 	listLatest       bool
+	listAll          bool
 	listLimit        int
 )
 
@@ -47,8 +54,9 @@ func newListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List images in the catalog",
 		Long: `List images in the catalog with optional filtering by architecture, distribution,
-target, and phase. Use --latest to show only the newest image per schedule
-(or per distro/arch/target group for non-scheduled images).`,
+target, and phase. By default the API returns Available heads (newest per schedule,
+or per distro/arch/target for unscheduled images). Use --all to list every catalog
+image regardless of phase.`,
 		RunE: runList,
 	}
 
@@ -56,10 +64,11 @@ target, and phase. Use --latest to show only the newest image per schedule
 	cmd.Flags().StringVar(&listArchitecture, "architecture", "", "Filter by architecture (amd64, arm64)")
 	cmd.Flags().StringVar(&listDistro, "distro", "", "Filter by distribution (cs9, autosd10-sig)")
 	cmd.Flags().StringVar(&listTarget, "target", "", "Filter by hardware target (qemu, raspberry-pi)")
-	cmd.Flags().StringVar(&listPhase, "phase", "", "Filter by phase (Available, Unavailable, etc)")
+	cmd.Flags().StringVar(&listPhase, "phase", "", "Filter by phase (Available, Unavailable, Failed, all)")
 	cmd.Flags().StringVar(&listTags, "tags", "", "Filter by tags (comma-separated)")
-	cmd.Flags().StringVar(&listSort, "sort", "created", "Sort order: created (newest first), name")
-	cmd.Flags().BoolVar(&listLatest, "latest", false, "Show only the latest image per schedule or distro/arch/target group")
+	cmd.Flags().StringVar(&listSort, "sort", listSortCreated, "Sort order: created (newest first), name")
+	cmd.Flags().BoolVar(&listLatest, "latest", false, "Show only the latest image per schedule or distro/arch/target group (API default)")
+	cmd.Flags().BoolVar(&listAll, "all", false, "List all catalog images (all phases, not only latest heads)")
 	cmd.Flags().IntVar(&listLimit, "limit", 20, "Maximum results to show")
 
 	return cmd
@@ -84,6 +93,7 @@ type CatalogImageResponse struct {
 	Architecture     string            `json:"architecture,omitempty"`
 	Distro           string            `json:"distro,omitempty"`
 	Targets          []Target          `json:"targets,omitempty"`
+	Digest           string            `json:"digest,omitempty"`
 	Tags             []string          `json:"tags,omitempty"`
 	SourceType       string            `json:"sourceType,omitempty"`
 	SourceImageBuild string            `json:"sourceImageBuild,omitempty"`
@@ -94,6 +104,7 @@ type CatalogImageResponse struct {
 	SizeBytes        int64             `json:"sizeBytes,omitempty"`
 	DownloadURL      string            `json:"downloadUrl,omitempty"`
 	CreatedAt        string            `json:"createdAt"`
+	PublishedAt      string            `json:"publishedAt,omitempty"`
 	StatusReason     string            `json:"statusReason,omitempty"`
 	StatusMessage    string            `json:"statusMessage,omitempty"`
 }
@@ -119,34 +130,9 @@ func runList(cmd *cobra.Command, _ []string) error {
 		token = os.Getenv("CAIB_TOKEN")
 	}
 
-	// Build query parameters
-	params := url.Values{}
-	if listArchitecture != "" {
-		params.Set("architecture", listArchitecture)
-	}
-	if listDistro != "" {
-		params.Set("distro", listDistro)
-	}
-	if listTarget != "" {
-		params.Set("target", listTarget)
-	}
-	if listPhase != "" {
-		params.Set("phase", listPhase)
-	}
-	if listTags != "" {
-		params.Set("tags", listTags)
-	}
-	if listSort != "" {
-		if listSort != "created" && listSort != "name" {
-			return fmt.Errorf("invalid --sort value %q (supported: created, name)", listSort)
-		}
-		params.Set("sort", listSort)
-	}
-	if listLatest {
-		params.Set("latest", "true")
-	}
-	if listLimit > 0 {
-		params.Set("limit", fmt.Sprintf("%d", listLimit))
+	params, err := listQueryParams(cmd)
+	if err != nil {
+		return err
 	}
 
 	// Make request
@@ -204,6 +190,49 @@ func runList(cmd *cobra.Command, _ []string) error {
 	return renderErr
 }
 
+// listQueryParams builds GET /v1/catalog/images query values from parsed flags.
+// The API treats a missing `latest` as true; only send the param when --latest
+// was set explicitly (or --all, which always disables latest-head filtering).
+func listQueryParams(cmd *cobra.Command) (url.Values, error) {
+	params := url.Values{}
+	if listArchitecture != "" {
+		params.Set("architecture", listArchitecture)
+	}
+	if listDistro != "" {
+		params.Set("distro", listDistro)
+	}
+	if listTarget != "" {
+		params.Set("target", listTarget)
+	}
+	if listAll {
+		if listPhase != "" {
+			return nil, fmt.Errorf("--all and --phase are mutually exclusive")
+		}
+		params.Set("phase", "all")
+		params.Set("latest", "false")
+	} else {
+		if listPhase != "" {
+			params.Set("phase", listPhase)
+		}
+		if cmd.Flags().Changed("latest") {
+			params.Set("latest", strconv.FormatBool(listLatest))
+		}
+	}
+	if listTags != "" {
+		params.Set("tags", listTags)
+	}
+	if listSort != "" {
+		if listSort != listSortCreated && listSort != listSortName {
+			return nil, fmt.Errorf("invalid --sort value %q (supported: created, name)", listSort)
+		}
+		params.Set("sort", listSort)
+	}
+	if listLimit > 0 {
+		params.Set("limit", fmt.Sprintf("%d", listLimit))
+	}
+	return params, nil
+}
+
 func printTable(items []CatalogImageResponse, tagsFiltered bool) {
 	if len(items) == 0 {
 		fmt.Println("No catalog images found")
@@ -233,7 +262,7 @@ func printTable(items []CatalogImageResponse, tagsFiltered bool) {
 			target = img.Targets[0].Name
 		}
 
-		age := caibcommon.FormatAge(img.CreatedAt)
+		age := caibcommon.FormatAge(catalogAgeTimestamp(img.CreatedAt, img.PublishedAt))
 
 		if tagsFiltered {
 			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -270,4 +299,11 @@ func printTable(items []CatalogImageResponse, tagsFiltered bool) {
 
 	_, _ = fmt.Fprintf(w, "\n")
 	_, _ = fmt.Fprintf(os.Stderr, "%d image(s)\n", len(items))
+}
+
+func catalogAgeTimestamp(createdAt, publishedAt string) string {
+	if publishedAt != "" {
+		return publishedAt
+	}
+	return createdAt
 }

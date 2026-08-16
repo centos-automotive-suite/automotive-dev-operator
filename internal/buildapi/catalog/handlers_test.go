@@ -94,6 +94,9 @@ func TestHandleListCatalogImages_SortByCreated(t *testing.T) {
 			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-2 * 24 * time.Hour)},
 		},
 		Spec: automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/older:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{
+			Phase: automotivev1alpha1.CatalogImagePhaseAvailable,
+		},
 	}
 	newer := &automotivev1alpha1.CatalogImage{
 		ObjectMeta: metav1.ObjectMeta{
@@ -102,6 +105,9 @@ func TestHandleListCatalogImages_SortByCreated(t *testing.T) {
 			CreationTimestamp: metav1.Time{Time: metav1.Now().Time},
 		},
 		Spec: automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/newer:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{
+			Phase: automotivev1alpha1.CatalogImagePhaseAvailable,
+		},
 	}
 
 	h, _ := newTestHandler(older, newer)
@@ -170,6 +176,9 @@ func TestHandleListCatalogImages_Latest(t *testing.T) {
 					},
 				},
 				Spec: automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/older:v1"},
+				Status: automotivev1alpha1.CatalogImageStatus{
+					Phase: automotivev1alpha1.CatalogImagePhaseAvailable,
+				},
 			}
 			newer := &automotivev1alpha1.CatalogImage{
 				ObjectMeta: metav1.ObjectMeta{
@@ -181,6 +190,9 @@ func TestHandleListCatalogImages_Latest(t *testing.T) {
 					},
 				},
 				Spec: automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/newer:v1"},
+				Status: automotivev1alpha1.CatalogImageStatus{
+					Phase: automotivev1alpha1.CatalogImagePhaseAvailable,
+				},
 			}
 
 			h, _ := newTestHandler(older, newer)
@@ -208,6 +220,149 @@ func TestHandleListCatalogImages_Latest(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleListCatalogImages_DefaultAvailableLatest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	pending := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pending-head",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Time},
+			Labels: map[string]string{
+				automotivev1alpha1.LabelScheduledImageBuildName: "nightly-qemu",
+			},
+		},
+		Spec:   automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/pending:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{Phase: automotivev1alpha1.CatalogImagePhasePending},
+	}
+	olderAvailable := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "older-available",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-48 * time.Hour)},
+			Labels: map[string]string{
+				automotivev1alpha1.LabelScheduledImageBuildName: "nightly-qemu",
+			},
+		},
+		Spec:   automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/older:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{Phase: automotivev1alpha1.CatalogImagePhaseAvailable},
+	}
+	newerAvailable := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "newer-available",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-24 * time.Hour)},
+			Labels: map[string]string{
+				automotivev1alpha1.LabelScheduledImageBuildName: "nightly-qemu",
+			},
+		},
+		Spec:   automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/newer:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{Phase: automotivev1alpha1.CatalogImagePhaseAvailable},
+	}
+	otherSchedule := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "other-schedule",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-12 * time.Hour)},
+			Labels: map[string]string{
+				automotivev1alpha1.LabelScheduledImageBuildName: "nightly-ebbr",
+			},
+		},
+		Spec:   automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/ebbr:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{Phase: automotivev1alpha1.CatalogImagePhaseAvailable},
+	}
+
+	h, _ := newTestHandler(pending, olderAvailable, newerAvailable, otherSchedule)
+	router := gin.New()
+	router.GET("/catalog/images", h.HandleListCatalogImages)
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog/images", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp CatalogImageListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 Available heads, got %d: %+v", len(resp.Items), namesOf(resp.Items))
+	}
+	got := map[string]bool{}
+	for _, item := range resp.Items {
+		got[item.Name] = true
+		if item.Phase != string(automotivev1alpha1.CatalogImagePhaseAvailable) {
+			t.Errorf("expected Available, got %s for %s", item.Phase, item.Name)
+		}
+	}
+	if !got["newer-available"] || !got["other-schedule"] {
+		t.Errorf("expected newer-available and other-schedule, got %v", namesOf(resp.Items))
+	}
+	if got["pending-head"] || got["older-available"] {
+		t.Errorf("default list should omit pending and superseded heads, got %v", namesOf(resp.Items))
+	}
+}
+
+func TestHandleListCatalogImages_PhaseAllLatestFalse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	pending := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pending-head",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Time},
+			Labels: map[string]string{
+				automotivev1alpha1.LabelScheduledImageBuildName: "nightly-qemu",
+			},
+		},
+		Spec:   automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/pending:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{Phase: automotivev1alpha1.CatalogImagePhasePending},
+	}
+	available := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "available-head",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-24 * time.Hour)},
+			Labels: map[string]string{
+				automotivev1alpha1.LabelScheduledImageBuildName: "nightly-qemu",
+			},
+		},
+		Spec:   automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/available:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{Phase: automotivev1alpha1.CatalogImagePhaseAvailable},
+	}
+
+	h, _ := newTestHandler(pending, available)
+	router := gin.New()
+	router.GET("/catalog/images", h.HandleListCatalogImages)
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog/images?phase=all&latest=false", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp CatalogImageListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 items with phase=all&latest=false, got %d: %v", len(resp.Items), namesOf(resp.Items))
+	}
+}
+
+func namesOf(items []CatalogImageResponse) []string {
+	names := make([]string, len(items))
+	for i, item := range items {
+		names[i] = item.Name
+	}
+	return names
 }
 
 func TestLatestGroupKey(t *testing.T) {

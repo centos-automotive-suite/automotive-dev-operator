@@ -126,7 +126,7 @@ type ListQueryParams struct {
 	Phase        string `form:"phase"`
 	Tags         string `form:"tags"`
 	Sort         string `form:"sort"`
-	Latest       bool   `form:"latest"`
+	Latest       *bool  `form:"latest"`
 	Limit        int    `form:"limit,default=20"`
 	Continue     string `form:"continue"`
 }

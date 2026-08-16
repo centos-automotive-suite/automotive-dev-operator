@@ -454,8 +454,11 @@ func TestReconcile_AutoPublish(t *testing.T) {
 
 	published := false
 	publisher := &mockPublisher{
-		publishFn: func(_ context.Context, _ *automotivev1alpha1.ImageBuild, _ string, tags []string, _ *automotivev1alpha1.AuthSecretReference) (*catalogimage.PublishResult, error) {
+		publishFn: func(_ context.Context, _ *automotivev1alpha1.ImageBuild, name string, tags []string, _ *automotivev1alpha1.AuthSecretReference) (*catalogimage.PublishResult, error) {
 			published = true
+			if name != "test-publish" {
+				t.Errorf("Expected catalog name %q, got %q", "test-publish", name)
+			}
 			if len(tags) != 1 || tags[0] != "nightly" {
 				t.Errorf("Expected tags [nightly], got %v", tags)
 			}
@@ -552,6 +555,9 @@ func TestReconcile_TemplateLabelsAndAnnotations(t *testing.T) {
 	}
 	if build.Annotations["note"] != "nightly" {
 		t.Errorf("Expected annotation note=nightly, got %v", build.Annotations)
+	}
+	if build.Annotations[AnnotationCatalogImageName] != "test-meta" {
+		t.Errorf("Expected catalog-image-name %q, got %q", "test-meta", build.Annotations[AnnotationCatalogImageName])
 	}
 }
 
@@ -819,6 +825,11 @@ func TestReconcile_MatrixCreatesMultipleBuilds(t *testing.T) {
 		if b.Labels[automotivev1alpha1.LabelArchitecture] == "" {
 			t.Errorf("Missing architecture label on build %s", b.Name)
 		}
+		wantCatalog := catalogImageName(sib, matrixCombo{Architecture: b.Spec.Architecture})
+		if b.Annotations[AnnotationCatalogImageName] != wantCatalog {
+			t.Errorf("build %s: expected catalog-image-name %q, got %q",
+				b.Name, wantCatalog, b.Annotations[AnnotationCatalogImageName])
+		}
 	}
 	if !archSeen[archX86] || !archSeen[archARM] {
 		t.Errorf("Expected both architectures, got %v", archSeen)
@@ -898,6 +909,9 @@ func TestReconcile_NoMatrixBackwardCompatible(t *testing.T) {
 	}
 	if buildList.Items[0].Spec.Architecture != archX86 {
 		t.Errorf("Expected template architecture x86_64, got %s", buildList.Items[0].Spec.Architecture)
+	}
+	if got := buildList.Items[0].Annotations[AnnotationCatalogImageName]; got != "test-no-matrix" {
+		t.Errorf("Expected catalog-image-name %q, got %q", "test-no-matrix", got)
 	}
 }
 

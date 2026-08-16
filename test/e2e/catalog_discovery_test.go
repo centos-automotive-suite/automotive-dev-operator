@@ -137,12 +137,13 @@ spec:
 			waitForCatalogPhase(newerName, "Available")
 		})
 
-		It("should sort by created date (newest first) by default", func() {
+		It("should sort by created date (newest first) with --all", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
 			output, err := runCaibCommand(ctx,
 				"catalog", "list",
+				"--all",
 				"--tags", "nightly",
 				"--output-format", "json",
 			)
@@ -335,6 +336,7 @@ spec:
 
 			output, err := runCaibCommand(ctx,
 				"catalog", "list",
+				"--all",
 				"--distro", "autosd",
 				"--sort", "name",
 				"--output-format", "json",
