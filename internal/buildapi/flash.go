@@ -33,10 +33,6 @@ func (a *APIServer) createFlash(c *gin.Context) {
 	}
 
 	// Validate required fields
-	if req.ImageRef == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "imageRef is required"})
-		return
-	}
 	if req.ClientConfig == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "clientConfig is required"})
 		return
@@ -64,13 +60,20 @@ func (a *APIServer) createFlash(c *gin.Context) {
 	if err != nil {
 		return
 	}
+
+	ctx := c.Request.Context()
+	namespace := resolveNamespace()
+
+	if httpErr := a.applyFlashImageSource(ctx, k8sClient, namespace, &req); httpErr != nil {
+		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
+		return
+	}
+
 	clientset, err := getClientsetOrFail(c)
 	if err != nil {
 		return
 	}
 
-	ctx := c.Request.Context()
-	namespace := resolveNamespace()
 	requestedBy := a.resolveRequester(c)
 
 	// Load OperatorConfig for target mappings, image overrides, and lease duration defaults
@@ -232,6 +235,21 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		RequestedBy: requestedBy,
 		TaskRunName: taskRun.Name,
 	})
+}
+
+func (a *APIServer) applyFlashImageSource(ctx context.Context, k8sClient client.Client, namespace string, req *FlashRequest) *httpError {
+	if req.CatalogImage != "" {
+		ref, httpErr := resolveFlashImageFromCatalog(ctx, k8sClient, namespace, req.CatalogImage)
+		if httpErr != nil {
+			return httpErr
+		}
+		req.ImageRef = ref
+		a.log.Info("resolved catalog image for flash", "catalogImage", req.CatalogImage, "imageRef", req.ImageRef)
+	}
+	if req.ImageRef == "" {
+		return &httpError{code: http.StatusBadRequest, message: "imageRef or catalogImage is required"}
+	}
+	return nil
 }
 
 func (a *APIServer) listFlash(c *gin.Context) {
