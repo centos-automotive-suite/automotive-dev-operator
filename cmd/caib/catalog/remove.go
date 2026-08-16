@@ -67,8 +67,14 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	// Confirm deletion
 	if !removeForce {
 		format := strings.ToLower(strings.TrimSpace(getOutputFormat(cmd)))
-		if clilog.IsQuiet() || format == outputFormatJSON || format == outputFormatYAML || format == outputFormatYML {
-			clilog.Infoln("Cancelled (use --force to skip confirmation)")
+		structured := format == outputFormatJSON || format == outputFormatYAML || format == outputFormatYML
+		if clilog.IsQuiet() || structured {
+			// Structured output modes must keep stdout parseable, and quiet mode
+			// suppresses informational output, so send this notice to stderr
+			// instead of using clilog.Infoln (which writes to stdout).
+			if !clilog.IsQuiet() {
+				fmt.Fprintln(os.Stderr, "Cancelled (use --force to skip confirmation)")
+			}
 			return nil
 		}
 		clilog.Infof("Removing catalog image %q...\n", name)

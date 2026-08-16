@@ -144,6 +144,9 @@ func TestRemovePromptAutoDeclineInJSONMode(t *testing.T) {
 	if strings.Contains(stdout, "Are you sure") {
 		t.Error("prompt should not appear on stdout in json mode")
 	}
+	if strings.Contains(stdout, "Cancelled") {
+		t.Error("cancellation notice should not appear on stdout in json mode, it would corrupt structured output")
+	}
 }
 
 func TestRemovePromptWritesToStderr(t *testing.T) {
