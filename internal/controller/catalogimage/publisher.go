@@ -121,6 +121,9 @@ func (p *Publisher) Publish(ctx context.Context, opts PublishOptions) (*PublishR
 			log.Error(err, "Failed to verify registry accessibility")
 		}
 	}
+	if registryMetadata != nil && registryMetadata.ResolvedDigest != "" {
+		opts.Digest = registryMetadata.ResolvedDigest
+	}
 
 	catalogImage, stale, err := p.resolveExisting(ctx, opts)
 	if err != nil {
@@ -164,21 +167,17 @@ func (p *Publisher) Publish(ctx context.Context, opts PublishOptions) (*PublishR
 		p.auditRecorder.RecordPublished(ctx, catalogImage, string(opts.Source))
 	}
 
-	statusChanged := false
+	catalogImage.Status.PublishedAt = GetCurrentTime()
 	if opts.SourceImageBuildName != "" {
 		catalogImage.Status.SourceImageBuild = opts.SourceImageBuildName
-		statusChanged = true
 	}
 	if verified && registryMetadata != nil {
 		catalogImage.Status.RegistryMetadata = registryMetadata
 		catalogImage.Status.LastVerificationTime = GetCurrentTime()
 		catalogImage.Status.Phase = automotivev1alpha1.CatalogImagePhaseAvailable
-		statusChanged = true
 	}
-	if statusChanged {
-		if err := p.client.Status().Update(ctx, catalogImage); err != nil {
-			return nil, fmt.Errorf("failed to update CatalogImage status: %w", err)
-		}
+	if err := p.client.Status().Update(ctx, catalogImage); err != nil {
+		return nil, fmt.Errorf("failed to update CatalogImage status: %w", err)
 	}
 
 	return &PublishResult{

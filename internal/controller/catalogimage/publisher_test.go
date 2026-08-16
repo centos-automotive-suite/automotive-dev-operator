@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/containers/image/v5/types"
 	"github.com/go-logr/logr"
@@ -68,6 +69,8 @@ func TestBuildCatalogImage_ScheduleNameLabel(t *testing.T) {
 	})
 }
 
+const stubResolvedDigest = "sha256:abc123"
+
 type stubRegistryClient struct{}
 
 func (s *stubRegistryClient) VerifyImageAccessible(_ context.Context, _ string, _ *types.DockerAuthConfig) (bool, error) {
@@ -75,11 +78,11 @@ func (s *stubRegistryClient) VerifyImageAccessible(_ context.Context, _ string, 
 }
 
 func (s *stubRegistryClient) GetImageMetadata(_ context.Context, _ string, _ *types.DockerAuthConfig) (*automotivev1alpha1.RegistryMetadata, error) {
-	return &automotivev1alpha1.RegistryMetadata{SizeBytes: 1024}, nil
+	return &automotivev1alpha1.RegistryMetadata{SizeBytes: 1024, ResolvedDigest: stubResolvedDigest}, nil
 }
 
 func (s *stubRegistryClient) VerifyDigest(_ context.Context, _ string, _ string, _ *types.DockerAuthConfig) (bool, string, error) {
-	return true, "sha256:abc123", nil
+	return true, stubResolvedDigest, nil
 }
 
 func newFakePublisherWithRegistry(objs ...client.Object) *Publisher {
@@ -121,6 +124,30 @@ func TestPublishFromImageBuild_PropagatesScheduleName(t *testing.T) {
 	}
 	if got := res.CatalogImage.Labels[automotivev1alpha1.LabelScheduledImageBuildName]; got != "nightly-autosd-qemu" {
 		t.Errorf("expected schedule label propagated, got %q", got)
+	}
+	if res.CatalogImage.Spec.Digest != stubResolvedDigest {
+		t.Errorf("expected digest persisted from registry, got %q", res.CatalogImage.Spec.Digest)
+	}
+	if res.CatalogImage.Status.PublishedAt == nil {
+		t.Error("expected PublishedAt to be set")
+	}
+}
+
+func TestPublish_ResolvedDigestWinsOverCallerDigest(t *testing.T) {
+	pub := newFakePublisherWithRegistry()
+	res, err := pub.Publish(context.Background(), PublishOptions{
+		Name:                "img",
+		Namespace:           "default",
+		RegistryURL:         "quay.io/test/img:latest",
+		Digest:              "sha256:stale-caller",
+		VerifyAccessibility: true,
+		Source:              PublishSourceManual,
+	})
+	if err != nil {
+		t.Fatalf("Publish() error: %v", err)
+	}
+	if res.CatalogImage.Spec.Digest != stubResolvedDigest {
+		t.Errorf("expected verified digest to replace caller digest, got %q", res.CatalogImage.Spec.Digest)
 	}
 }
 
@@ -292,6 +319,49 @@ func TestPublish_CreatesNewWhenNoExisting(t *testing.T) {
 
 	if result.CatalogImage.Name != "fresh-build" {
 		t.Errorf("expected name %q, got %q", "fresh-build", result.CatalogImage.Name)
+	}
+}
+
+func TestPublish_RefreshesPublishedAtOnOverwrite(t *testing.T) {
+	old := metav1.NewTime(time.Now().Add(-30 * 24 * time.Hour))
+	existing := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nightly-qemu",
+			Namespace:         "default",
+			CreationTimestamp: old,
+		},
+		Spec: automotivev1alpha1.CatalogImageSpec{
+			RegistryURL: "quay.io/test/img:nightly",
+		},
+		Status: automotivev1alpha1.CatalogImageStatus{
+			PublishedAt: &old,
+			Phase:       automotivev1alpha1.CatalogImagePhaseAvailable,
+		},
+	}
+
+	pub := newFakePublisher(existing)
+	_, err := pub.Publish(context.Background(), PublishOptions{
+		Name:        "nightly-qemu",
+		Namespace:   "default",
+		RegistryURL: "quay.io/test/img:nightly",
+		Source:      PublishSourceScheduled,
+	})
+	if err != nil {
+		t.Fatalf("Publish() error: %v", err)
+	}
+
+	got := &automotivev1alpha1.CatalogImage{}
+	if err := pub.client.Get(context.Background(), client.ObjectKey{Name: "nightly-qemu", Namespace: "default"}, got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status.PublishedAt == nil {
+		t.Fatal("expected PublishedAt to be set")
+	}
+	if !got.Status.PublishedAt.After(old.Time) {
+		t.Errorf("PublishedAt %v was not refreshed past %v", got.Status.PublishedAt.Time, old.Time)
+	}
+	if time.Since(got.CreationTimestamp.Time) < 24*time.Hour {
+		t.Errorf("creationTimestamp should remain the original create time, got %v", got.CreationTimestamp.Time)
 	}
 }
 

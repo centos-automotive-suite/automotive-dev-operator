@@ -97,6 +97,15 @@ func TestListQueryParams_LatestFlag(t *testing.T) {
 	}
 }
 
+func TestCatalogAgeTimestamp(t *testing.T) {
+	if got := catalogAgeTimestamp("created", "published"); got != "published" {
+		t.Errorf("catalogAgeTimestamp() = %q, want published", got)
+	}
+	if got := catalogAgeTimestamp("created", ""); got != "created" {
+		t.Errorf("catalogAgeTimestamp() = %q, want created", got)
+	}
+}
+
 func TestFormatBytes(t *testing.T) {
 	tests := []struct {
 		input int64

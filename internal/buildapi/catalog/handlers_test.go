@@ -135,6 +135,142 @@ func TestHandleListCatalogImages_SortByCreated(t *testing.T) {
 	}
 }
 
+func TestHandleListCatalogImages_SortByPublishedAt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldCreate := metav1.NewTime(metav1.Now().Add(-48 * time.Hour))
+	newerPublish := metav1.NewTime(metav1.Now().Add(-time.Hour))
+	olderPublish := metav1.NewTime(metav1.Now().Add(-24 * time.Hour))
+
+	staleCreate := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "published-recently",
+			Namespace:         "default",
+			CreationTimestamp: oldCreate,
+		},
+		Spec: automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/old-create:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{
+			Phase:       automotivev1alpha1.CatalogImagePhaseAvailable,
+			PublishedAt: &newerPublish,
+		},
+	}
+	freshCreate := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "created-later",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-2 * time.Hour)},
+		},
+		Spec: automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/new-create:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{
+			Phase:       automotivev1alpha1.CatalogImagePhaseAvailable,
+			PublishedAt: &olderPublish,
+		},
+	}
+
+	h, _ := newTestHandler(staleCreate, freshCreate)
+	router := gin.New()
+	router.GET("/catalog/images", h.HandleListCatalogImages)
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog/images?sort=created&latest=false", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp CatalogImageListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(resp.Items))
+	}
+	if resp.Items[0].Name != "published-recently" {
+		t.Errorf("expected published-recently first (newer publishedAt), got %s", resp.Items[0].Name)
+	}
+}
+
+func TestHandleListCatalogImages_LatestUsesPublishedAt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldCreate := metav1.NewTime(metav1.Now().Add(-48 * time.Hour))
+	newerPublish := metav1.NewTime(metav1.Now().Add(-time.Hour))
+
+	olderHead := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "overwritten-head",
+			Namespace:         "default",
+			CreationTimestamp: oldCreate,
+			Labels: map[string]string{
+				automotivev1alpha1.LabelScheduledImageBuildName: "nightly-qemu",
+			},
+		},
+		Spec: automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/head:v2"},
+		Status: automotivev1alpha1.CatalogImageStatus{
+			Phase:       automotivev1alpha1.CatalogImagePhaseAvailable,
+			PublishedAt: &newerPublish,
+		},
+	}
+	newerCreate := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "legacy-timestamped",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-2 * time.Hour)},
+			Labels: map[string]string{
+				automotivev1alpha1.LabelScheduledImageBuildName: "nightly-qemu",
+			},
+		},
+		Spec: automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/legacy:v1"},
+		Status: automotivev1alpha1.CatalogImageStatus{
+			Phase: automotivev1alpha1.CatalogImagePhaseAvailable,
+		},
+	}
+
+	h, _ := newTestHandler(olderHead, newerCreate)
+	router := gin.New()
+	router.GET("/catalog/images", h.HandleListCatalogImages)
+
+	req := httptest.NewRequest(http.MethodGet, "/catalog/images", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp CatalogImageListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 latest head, got %d: %v", len(resp.Items), namesOf(resp.Items))
+	}
+	if resp.Items[0].Name != "overwritten-head" {
+		t.Errorf("expected overwritten-head (newer publishedAt), got %s", resp.Items[0].Name)
+	}
+}
+
+func TestToCatalogImageResponse_DigestFallsBackToResolved(t *testing.T) {
+	img := &automotivev1alpha1.CatalogImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "default"},
+		Spec:       automotivev1alpha1.CatalogImageSpec{RegistryURL: "quay.io/test/img:latest"},
+		Status: automotivev1alpha1.CatalogImageStatus{
+			RegistryMetadata: &automotivev1alpha1.RegistryMetadata{ResolvedDigest: "sha256:from-status"},
+		},
+	}
+	resp := ToCatalogImageResponse(img)
+	if resp.Digest != "sha256:from-status" {
+		t.Errorf("digest = %q, want resolved digest from status", resp.Digest)
+	}
+
+	img.Spec.Digest = "sha256:from-spec"
+	resp = ToCatalogImageResponse(img)
+	if resp.Digest != "sha256:from-spec" {
+		t.Errorf("digest = %q, want spec digest to win", resp.Digest)
+	}
+}
+
 func TestHandleListCatalogImages_Latest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
