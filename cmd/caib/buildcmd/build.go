@@ -391,21 +391,22 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 	}
 
 	if h.isStructuredOutput() {
+		credsFile := h.handleBuildArtifacts(st)
 		format, _ := common.ResolveOutputFormat(h.opts.OutputFormat)
 		result := BuildResult{
-			Name:           st.Name,
-			Phase:          st.Phase,
-			Message:        st.Message,
-			ContainerImage: st.ContainerImage,
-			DiskImage:      st.DiskImage,
-			LeaseID:        h.lastLeaseID,
+			Name:                    st.Name,
+			Phase:                   st.Phase,
+			Message:                 st.Message,
+			ContainerImage:          st.ContainerImage,
+			DiskImage:               st.DiskImage,
+			LeaseID:                 h.lastLeaseID,
+			RegistryCredentialsFile: credsFile,
 		}
 		if st.RegistryToken != "" && *h.opts.UseInternalRegistry {
 			result.RegistryUsername = "serviceaccount"
 			result.RegistryToken = st.RegistryToken
 		}
 		common.RenderFormatted(format, result, nil, h.handleError)
-		h.handleBuildArtifacts(st)
 		return
 	}
 
