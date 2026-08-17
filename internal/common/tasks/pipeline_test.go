@@ -615,7 +615,6 @@ func TestGeneratePushArtifactS3Task_Params(t *testing.T) {
 		"s3-bucket", "s3-prefix", "s3-endpoint", "s3-region",
 		"s3-insecure-skip-tls-verify", "artifact-filename",
 		"yq-helper-image", "trace-id",
-		"distro", "target", "arch",
 	}
 	for _, name := range required {
 		if !hasParam(task.Spec.Params, name) {
@@ -702,9 +701,6 @@ func TestPipeline_S3Task_ParamForwarding(t *testing.T) {
 		"s3-insecure-skip-tls-verify": "$(params.s3-insecure-skip-tls-verify)",
 		"artifact-filename":           "$(tasks.build-image.results.artifact-filename)",
 		"yq-helper-image":             "$(params.yq-helper-image)",
-		"distro":                      "$(params.distro)",
-		"target":                      "$(params.target)",
-		"arch":                        "$(params.arch)",
 	}
 	for param, wantVal := range expectedBindings {
 		got, ok := taskParamBinding(s3Task, param)

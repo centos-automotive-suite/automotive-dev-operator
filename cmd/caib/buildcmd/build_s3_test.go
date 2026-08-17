@@ -100,7 +100,7 @@ func TestApplyS3Options_EnvVarFallback(t *testing.T) {
 	}
 }
 
-func TestApplyS3Options_FlagOverridesEnvVar(t *testing.T) {
+func TestApplyS3Options_ConflictingCredentialSourcesError(t *testing.T) {
 	opts := newTestDiskOpts()
 	*opts.S3Bucket = testS3Bucket
 	*opts.S3AccessKeyID = "FLAG_AKID"
@@ -110,14 +110,9 @@ func TestApplyS3Options_FlagOverridesEnvVar(t *testing.T) {
 	h := newS3TestHandler(opts)
 
 	var req buildapitypes.BuildRequest
-	if err := h.applyS3Options(&req); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if req.S3Credentials.AccessKeyID != "FLAG_AKID" {
-		t.Errorf("AccessKeyID = %q, want flag value %q", req.S3Credentials.AccessKeyID, "FLAG_AKID")
-	}
-	if req.S3Credentials.SecretAccessKey != "FLAG_SECRET" {
-		t.Errorf("SecretAccessKey = %q, want flag value %q", req.S3Credentials.SecretAccessKey, "FLAG_SECRET")
+	err := h.applyS3Options(&req)
+	if err == nil {
+		t.Fatal("expected error when both flags and env vars provide credentials")
 	}
 }
 

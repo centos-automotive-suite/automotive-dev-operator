@@ -1348,6 +1348,14 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 
 	if status, err := resolveS3Credentials(ctx, k8sClient, &req, namespace); err != nil {
+		if flashSecretName != "" {
+			orphan := &corev1.Secret{}
+			orphan.Name = flashSecretName
+			orphan.Namespace = namespace
+			if delErr := k8sClient.Delete(ctx, orphan); delErr != nil {
+				a.log.Error(delErr, "failed to clean up flash client secret", "secret", flashSecretName)
+			}
+		}
 		spanError(span, err)
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
@@ -1394,15 +1402,6 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 
 	setBuildSecretOwnerRefs(ctx, k8sClient, namespace, imageBuild, envSecretRef, pushSecretName, flashSecretName, &req)
-
-	// Set owner reference only on secrets we created (not pre-existing ones)
-	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
-		if err := setSecretOwnerRef(ctx, k8sClient, namespace, req.S3CredentialsSecretName, imageBuild); err != nil {
-			a.log.Error(err, "failed to set owner reference on S3 secret, cleanup may require manual intervention",
-				"secret", req.S3CredentialsSecretName,
-			)
-		}
-	}
 
 	writeJSON(c, http.StatusAccepted, BuildResponse{
 		Name:        req.Name,

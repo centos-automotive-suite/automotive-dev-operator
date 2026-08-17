@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 // BuildConfig defines configuration options for build operations
@@ -560,21 +561,6 @@ func GeneratePushArtifactS3Task(namespace string, buildConfig *BuildConfig) *tek
 					Name:        "artifact-filename",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Filename of the artifact to push",
-				},
-				{
-					Name:        "distro",
-					Type:        tektonv1.ParamTypeString,
-					Description: "Distribution name (for logging)",
-				},
-				{
-					Name:        "target",
-					Type:        tektonv1.ParamTypeString,
-					Description: "Build target (for logging)",
-				},
-				{
-					Name:        "arch",
-					Type:        tektonv1.ParamTypeString,
-					Description: "Target architecture (for logging)",
 				},
 			},
 			Results: []tektonv1.TaskResult{
@@ -1766,27 +1752,6 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 							Value: tektonv1.ParamValue{
 								Type:      tektonv1.ParamTypeString,
 								StringVal: "$(tasks.build-image.results.artifact-filename)",
-							},
-						},
-						{
-							Name: "distro",
-							Value: tektonv1.ParamValue{
-								Type:      tektonv1.ParamTypeString,
-								StringVal: "$(params.distro)",
-							},
-						},
-						{
-							Name: "target",
-							Value: tektonv1.ParamValue{
-								Type:      tektonv1.ParamTypeString,
-								StringVal: "$(params.target)",
-							},
-						},
-						{
-							Name: "arch",
-							Value: tektonv1.ParamValue{
-								Type:      tektonv1.ParamTypeString,
-								StringVal: "$(params.arch)",
 							},
 						},
 					},

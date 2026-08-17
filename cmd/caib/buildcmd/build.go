@@ -564,15 +564,31 @@ func (h *Handler) applyS3Options(req *buildapitypes.BuildRequest) error {
 		req.S3InsecureSkipTLSVerify = *h.opts.S3Insecure
 	}
 
-	if h.opts.S3CredentialsSecret != nil && *h.opts.S3CredentialsSecret != "" {
-		req.S3CredentialsSecretName = *h.opts.S3CredentialsSecret
-		return nil
-	}
-
+	secretProvided := h.opts.S3CredentialsSecret != nil && *h.opts.S3CredentialsSecret != ""
 	explicitAccess := h.opts.S3AccessKeyID != nil && *h.opts.S3AccessKeyID != ""
 	explicitSecret := h.opts.S3SecretAccessKey != nil && *h.opts.S3SecretAccessKey != ""
+	inlineCredsProvided := explicitAccess || explicitSecret
+	envAccess := os.Getenv("AWS_ACCESS_KEY_ID")
+	envSecret := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	envCredsProvided := envAccess != "" || envSecret != ""
 
-	if explicitAccess || explicitSecret {
+	sourcesCount := 0
+	if secretProvided {
+		sourcesCount++
+	}
+	if inlineCredsProvided {
+		sourcesCount++
+	}
+	if envCredsProvided {
+		sourcesCount++
+	}
+	if sourcesCount > 1 {
+		return fmt.Errorf("multiple S3 credential sources provided; use only one of: --s3-credentials-secret, --s3-access-key-id/--s3-secret-access-key, or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars")
+	}
+
+	if secretProvided {
+		req.S3CredentialsSecretName = *h.opts.S3CredentialsSecret
+	} else if inlineCredsProvided {
 		if !explicitAccess {
 			return fmt.Errorf("--s3-secret-access-key is set but --s3-access-key-id is missing")
 		}
@@ -583,13 +599,7 @@ func (h *Handler) applyS3Options(req *buildapitypes.BuildRequest) error {
 			AccessKeyID:     *h.opts.S3AccessKeyID,
 			SecretAccessKey: *h.opts.S3SecretAccessKey,
 		}
-		return nil
-	}
-
-	envAccess := os.Getenv("AWS_ACCESS_KEY_ID")
-	envSecret := os.Getenv("AWS_SECRET_ACCESS_KEY")
-
-	if envAccess != "" || envSecret != "" {
+	} else if envCredsProvided {
 		if envAccess == "" {
 			return fmt.Errorf("AWS_SECRET_ACCESS_KEY is set but AWS_ACCESS_KEY_ID is missing")
 		}
@@ -600,7 +610,6 @@ func (h *Handler) applyS3Options(req *buildapitypes.BuildRequest) error {
 			AccessKeyID:     envAccess,
 			SecretAccessKey: envSecret,
 		}
-		return nil
 	}
 
 	return nil

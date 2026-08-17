@@ -177,26 +177,6 @@ if [ -d "$PARTS_DIR" ] && [ -n "$(ls -A "$PARTS_DIR" 2>/dev/null)" ]; then
 
   echo "Uploaded ${UPLOADED_FILES} partition files"
 
-  # Also upload the full tarball if it exists
-  cd /workspace/shared || exit
-  if [ -f "$ARTIFACT_FILE" ]; then
-    S3_KEY="$(s3_key "$ARTIFACT_FILE")"
-    FILE_SIZE=$(stat -f %z "$ARTIFACT_FILE" 2>/dev/null || stat -c %s "$ARTIFACT_FILE" 2>/dev/null || echo "unknown")
-
-    echo "Uploading full archive (${FILE_SIZE} bytes) to s3://${S3_BUCKET}/${S3_KEY}"
-
-    if aws s3 cp "${AWS_ARGS[@]}" \
-      --region "$S3_REGION" \
-      --storage-class STANDARD \
-      "$ARTIFACT_FILE" \
-      "s3://${S3_BUCKET}/${S3_KEY}"; then
-      echo "  ✓ Full archive uploaded successfully"
-    else
-      echo "  ✗ Full archive upload failed" >&2
-      exit 1
-    fi
-  fi
-
 else
   # Single file push
   # Use absolute path to ensure we find the file
@@ -225,7 +205,11 @@ fi
 emit_progress "Pushing to S3" 1 1
 
 # Write Tekton results
-S3_URL="s3://${S3_BUCKET}/$(s3_key "$ARTIFACT_FILE")"
+if [ -d "$PARTS_DIR" ] && [ -n "$(ls -A "$PARTS_DIR" 2>/dev/null)" ]; then
+  S3_URL="s3://${S3_BUCKET}/$(s3_key "")"
+else
+  S3_URL="s3://${S3_BUCKET}/$(s3_key "$ARTIFACT_FILE")"
+fi
 echo -n "$S3_URL" > /tekton/results/S3_URL
 
 echo ""
