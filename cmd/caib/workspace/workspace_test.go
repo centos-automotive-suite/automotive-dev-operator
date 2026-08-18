@@ -13,6 +13,55 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestNewWorkspaceCmdDerivesServerURL(t *testing.T) {
+	origServer := os.Getenv("CAIB_SERVER")
+	defer func() {
+		if origServer != "" {
+			_ = os.Setenv("CAIB_SERVER", origServer)
+		} else {
+			_ = os.Unsetenv("CAIB_SERVER")
+		}
+	}()
+
+	t.Run("PersistentPreRunE populates serverURL from CAIB_SERVER env", func(t *testing.T) {
+		_ = os.Setenv("CAIB_SERVER", "https://env-server.example.com")
+		serverURL = ""
+
+		outputFmt := "table"
+		cmd := NewWorkspaceCmd(&outputFmt)
+
+		if cmd.PersistentPreRunE == nil {
+			t.Fatal("workspace command must have PersistentPreRunE set for server URL derivation")
+		}
+
+		if err := cmd.PersistentPreRunE(cmd, nil); err != nil {
+			t.Fatalf("PersistentPreRunE returned error: %v", err)
+		}
+
+		if serverURL != "https://env-server.example.com" {
+			t.Errorf("expected serverURL to be derived from CAIB_SERVER, got %q", serverURL)
+		}
+	})
+
+	t.Run("PersistentPreRunE preserves explicit --server flag value", func(t *testing.T) {
+		_ = os.Unsetenv("CAIB_SERVER")
+
+		outputFmt := "table"
+		cmd := NewWorkspaceCmd(&outputFmt)
+
+		// Simulate --server flag being set after flag parsing
+		serverURL = "https://explicit.example.com"
+
+		if err := cmd.PersistentPreRunE(cmd, nil); err != nil {
+			t.Fatalf("PersistentPreRunE returned error: %v", err)
+		}
+
+		if serverURL != "https://explicit.example.com" {
+			t.Errorf("expected explicit server URL to be preserved, got %q", serverURL)
+		}
+	})
+}
+
 func TestRenderFormattedWorkspaceList(t *testing.T) {
 	workspaces := []buildapitypes.WorkspaceResponse{
 		{Name: "ws-1", Arch: "amd64", Phase: "Running", Lease: "lease-abc", Age: "5m"},
