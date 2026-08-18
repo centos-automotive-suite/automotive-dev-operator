@@ -27,9 +27,10 @@ if [ -d "$SHARED_WS" ] && [ "$(ls -A "$SHARED_WS" 2>/dev/null)" ]; then
   echo "Copying uploaded files from $SHARED_WS to /manifest-work/"
   for item in "$SHARED_WS"/*; do
     base="$(basename "$item")"
-    # Skip build-cache (osbuild store) and known build artifacts from previous runs
+    # Skip build-cache, PVC-backed scratch subPaths (names match pvcScratchRedirects in tasks.go),
+    # and known build artifacts from previous runs
     case "$base" in
-      build-cache|aib-manifest.yml|image.json|disk.img|*-parts) continue ;;
+      build-cache|scratch-build|scratch-output|scratch-run|aib-manifest.yml|image.json|disk.img|*-parts) continue ;;
     esac
     cp -rv "$item" /manifest-work/ 2>/dev/null || true
   done

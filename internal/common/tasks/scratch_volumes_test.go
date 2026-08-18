@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -263,6 +264,30 @@ func TestPVCScratchVolumes_BuildStepRewritten(t *testing.T) {
 
 // Tests for GetUsePVCScratchVolumes are in the api package
 // but we verify the BuildConfig bool integration here
+func TestPVCScratchSubPaths_PresentInBuildImageCleanupSkipList(t *testing.T) {
+	task := GenerateBuildAutomotiveImageTask("test-ns", &BuildConfig{
+		UsePVCScratchVolumes: true,
+	}, "")
+
+	subPaths := map[string]bool{}
+	for _, step := range task.Spec.Steps {
+		for _, vm := range step.VolumeMounts {
+			if vm.Name == workspaceVolumeRef && vm.SubPath != "" {
+				subPaths[vm.SubPath] = true
+			}
+		}
+	}
+
+	for sp := range subPaths {
+		if !strings.Contains(BuildImageScript, sp) {
+			t.Fatalf("scratch subPath %q used in task volume mounts but not referenced in BuildImageScript; the persistent-cache cleanup will destroy it", sp)
+		}
+		if !strings.Contains(FindManifestScript, sp) {
+			t.Fatalf("scratch subPath %q used in task volume mounts but not referenced in FindManifestScript; it will be unnecessarily copied", sp)
+		}
+	}
+}
+
 func TestBuildConfig_PVCScratchDefaultFalse(t *testing.T) {
 	cfg := &BuildConfig{}
 	if cfg.UsePVCScratchVolumes {

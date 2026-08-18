@@ -70,7 +70,11 @@ if [ "$(params.use-persistent-cache)" = "true" ]; then
 
   echo "Cleaning up stale artifacts from persistent workspace..."
   for item in "$WORKSPACE_PATH"/*; do
-    [ "$(basename "$item")" = "build-cache" ] && continue
+    # Keep build-cache (osbuild store) and PVC-backed scratch subPath directories.
+    # Scratch names must match pvcScratchRedirects in tasks.go.
+    case "$(basename "$item")" in
+      build-cache|scratch-build|scratch-output|scratch-run) continue ;;
+    esac
     rm -rf "$item"
   done
 
