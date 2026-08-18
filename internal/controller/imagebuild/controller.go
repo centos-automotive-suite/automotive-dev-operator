@@ -1681,15 +1681,6 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		})
 	}
 
-	if imageBuild.Spec.WorkspacePVC != "" {
-		pipelineWorkspaces = append(pipelineWorkspaces, tektonv1.WorkspaceBinding{
-			Name: tasks.WorkspaceNameSrc,
-			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-				ClaimName: imageBuild.Spec.WorkspacePVC,
-			},
-		})
-	}
-
 	if imageBuild.Spec.GetS3CredentialsSecret() != "" {
 		pipelineWorkspaces = append(pipelineWorkspaces, tektonv1.WorkspaceBinding{
 			Name: "s3-auth",
@@ -1751,6 +1742,7 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 	}
 	podTemplate.Volumes = append(podTemplate.Volumes, tasks.OCIVolumes(buildConfig)...)
 	podTemplate.Volumes = append(podTemplate.Volumes, ociRepoVolumes(imageBuild.Spec.GetOCIRepoImages())...)
+	podTemplate.Volumes = append(podTemplate.Volumes, workspaceSrcVolume(imageBuild.Spec.WorkspacePVC))
 	pipelineRunSpec := tektonv1.PipelineRunSpec{
 		Params:     params,
 		Workspaces: pipelineWorkspaces,
@@ -3367,6 +3359,25 @@ func ociRepoVolumes(ociRepoImages []string) []corev1.Volume {
 		}
 	}
 	return []corev1.Volume{vol}
+}
+
+// workspaceSrcVolume returns the workspace-src volume for the PipelineRun PodTemplate.
+// If a PVC name is provided, uses PersistentVolumeClaimVolumeSource; otherwise EmptyDir
+// so the Task's VolumeMount always resolves.
+func workspaceSrcVolume(pvcName string) corev1.Volume {
+	vol := corev1.Volume{Name: tasks.WorkspaceNameSrc}
+	if pvcName != "" {
+		vol.VolumeSource = corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: pvcName,
+			},
+		}
+	} else {
+		vol.VolumeSource = corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		}
+	}
+	return vol
 }
 
 func decodeAuthEntry(auth string, log logr.Logger) ([]byte, []byte) {
