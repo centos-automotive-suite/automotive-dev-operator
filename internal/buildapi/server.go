@@ -989,9 +989,10 @@ func resolveOCIRepoImages(req *BuildRequest) error {
 }
 
 type workspaceBuildResolution struct {
-	CachePVC string
-	FileURL  string
-	Running  bool
+	CachePVC     string
+	WorkspacePVC string // workspace PVC, mounted in the build pod for file:// access
+	FileURL      string
+	Running      bool
 }
 
 // resolveWorkspaceForBuild resolves a workspace reference for a build:
@@ -1035,6 +1036,8 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 			return workspaceBuildResolution{}, fmt.Errorf("workspace %q not found", wsName)
 		}
 	}
+
+	res.WorkspacePVC = ws.Status.PVCName
 
 	// Forward workspace lease if flash is enabled and no explicit lease was provided
 	if req.FlashEnabled && req.FlashLeaseName == "" && ws.Spec.LeaseID != "" {
@@ -1139,27 +1142,27 @@ func (a *APIServer) bindWorkspaceToBuild(
 	k8sClient client.Client,
 	namespace, requester string,
 	req *BuildRequest,
-) (string, []WorkspaceHydrateRef, bool) {
+) (string, string, []WorkspaceHydrateRef, bool) {
 	restCfg, restErr := getRESTConfigFromRequest(c)
 	if restErr != nil {
 		spanError(span, restErr)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"}) //nolint:goconst // matches existing handlers
-		return "", nil, true
+		return "", "", nil, true
 	}
 	wsRes, wsErr := a.resolveWorkspaceForBuild(ctx, k8sClient, restCfg, namespace, req.Workspace, requester, req)
 	if wsErr != nil {
 		spanError(span, wsErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": wsErr.Error()})
-		return "", nil, true
+		return "", "", nil, true
 	}
 	rewritten, refs, applyErr := applyWorkspaceManifest(req.Manifest, wsRes.FileURL, wsRes.Running)
 	if applyErr != nil {
 		spanError(span, applyErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": applyErr.Error()})
-		return "", nil, true
+		return "", "", nil, true
 	}
 	req.Manifest = rewritten
-	return wsRes.CachePVC, refs, false
+	return wsRes.CachePVC, wsRes.WorkspacePVC, refs, false
 }
 
 func (a *APIServer) applyWorkspaceOnCreate(
@@ -1170,18 +1173,18 @@ func (a *APIServer) applyWorkspaceOnCreate(
 	namespace, requestedBy string,
 	req *BuildRequest,
 	needsUpload bool,
-) (string, []WorkspaceHydrateRef, bool, bool) {
+) (string, string, []WorkspaceHydrateRef, bool, bool) {
 	if req.Workspace == "" {
-		return "", nil, needsUpload, false
+		return "", "", nil, needsUpload, false
 	}
-	pvcName, refs, failed := a.bindWorkspaceToBuild(ctx, c, span, k8sClient, namespace, requestedBy, req)
+	pvcName, wsPVCName, refs, failed := a.bindWorkspaceToBuild(ctx, c, span, k8sClient, namespace, requestedBy, req)
 	if failed {
-		return "", nil, needsUpload, true
+		return "", "", nil, needsUpload, true
 	}
 	if len(refs) > 0 {
 		needsUpload = true
 	}
-	return pvcName, refs, needsUpload || manifestNeedsUpload(req.Manifest), false
+	return pvcName, wsPVCName, refs, needsUpload || manifestNeedsUpload(req.Manifest), false
 }
 
 func setWorkspaceUploadAnnotations(annotations map[string]string, hydrateRefs []WorkspaceHydrateRef, req *BuildRequest) error {
@@ -1410,7 +1413,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
-	buildCachePVCName, hydrateRefs, needsUpload, wsFailed := a.applyWorkspaceOnCreate(
+	buildCachePVCName, workspacePVCName, hydrateRefs, needsUpload, wsFailed := a.applyWorkspaceOnCreate(
 		ctx, c, span, k8sClient, namespace, requestedBy, &req, needsUpload)
 	if wsFailed {
 		return
@@ -1529,6 +1532,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			Export:            buildExportSpec(&req),
 			Flash:             flashSpec,
 			BuildCachePVC:     buildCachePVCName,
+			WorkspacePVC:      workspacePVCName,
 			Workspace:         req.Workspace,
 			SecureBuild:       req.SecureBuild,
 			Reproducible:      req.Reproducible,

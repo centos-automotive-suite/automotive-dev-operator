@@ -1681,6 +1681,15 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 		})
 	}
 
+	if imageBuild.Spec.WorkspacePVC != "" {
+		pipelineWorkspaces = append(pipelineWorkspaces, tektonv1.WorkspaceBinding{
+			Name: tasks.WorkspaceNameSrc,
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: imageBuild.Spec.WorkspacePVC,
+			},
+		})
+	}
+
 	if imageBuild.Spec.GetS3CredentialsSecret() != "" {
 		pipelineWorkspaces = append(pipelineWorkspaces, tektonv1.WorkspaceBinding{
 			Name: "s3-auth",
