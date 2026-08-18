@@ -93,7 +93,7 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 	}
 
 	clilog.Infof("Downloading OCI artifact...")
-	var reportWriter io.Writer = os.Stderr
+	var reportWriter io.Writer = os.Stdout
 	if clilog.IsQuiet() {
 		reportWriter = io.Discard
 	}
