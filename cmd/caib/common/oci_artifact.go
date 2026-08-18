@@ -83,7 +83,7 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 	}
 	defer func() {
 		if err := os.RemoveAll(tempDir); err != nil {
-			clilog.Warnf("Warning: failed to remove temp directory: %v\n", err)
+			clilog.Warnf("failed to remove temp directory: %v\n", err)
 		}
 	}()
 
@@ -250,21 +250,21 @@ func sanitizeFilename(filename string, layerIndex int) string {
 		return fallback
 	}
 	if strings.ContainsRune(filename, 0) {
-		clilog.Warnf("Warning: layer %d filename contains null bytes, using fallback\n", layerIndex)
+		clilog.Warnf("layer %d filename contains null bytes, using fallback\n", layerIndex)
 		return fallback
 	}
 	if filepath.IsAbs(filename) {
-		clilog.Warnf("Warning: layer %d filename is absolute path, using fallback\n", layerIndex)
+		clilog.Warnf("layer %d filename is absolute path, using fallback\n", layerIndex)
 		return fallback
 	}
 	if strings.Contains(filename, "..") {
-		clilog.Warnf("Warning: layer %d filename contains '..', using fallback\n", layerIndex)
+		clilog.Warnf("layer %d filename contains '..', using fallback\n", layerIndex)
 		return fallback
 	}
 
 	base := filepath.Base(filename)
 	if base != filename {
-		clilog.Warnf("Warning: layer %d filename contains path separators, using basename: %s\n", layerIndex, base)
+		clilog.Warnf("layer %d filename contains path separators, using basename: %s\n", layerIndex, base)
 		filename = base
 	}
 	if filename == "" || filename == "." || filename == ".." {
@@ -280,7 +280,7 @@ func copyFile(srcPath, dstPath string) error {
 	}
 	defer func() {
 		if err := src.Close(); err != nil {
-			clilog.Warnf("Warning: failed to close source file: %v\n", err)
+			clilog.Warnf("failed to close source file: %v\n", err)
 		}
 	}()
 
@@ -290,7 +290,7 @@ func copyFile(srcPath, dstPath string) error {
 	}
 	defer func() {
 		if err := dst.Close(); err != nil {
-			clilog.Warnf("Warning: failed to close destination file: %v\n", err)
+			clilog.Warnf("failed to close destination file: %v\n", err)
 		}
 	}()
 
