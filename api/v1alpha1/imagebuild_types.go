@@ -93,6 +93,12 @@ type ImageBuildSpec struct {
 	// +optional
 	Workspace string `json:"workspace,omitempty"`
 
+	// WorkspacePVC is the name of the workspace PVC to mount at /workspace/src
+	// in the build pod, giving AIB direct filesystem access to files synced
+	// via `caib workspace sync`.
+	// +optional
+	WorkspacePVC string `json:"workspacePVC,omitempty"`
+
 	// SecureBuild enables supply chain security for this build.
 	// When true, pipeline tasks are resolved from the signed Tekton Bundle
 	// specified in TaskBundleRef instead of cluster-installed tasks.

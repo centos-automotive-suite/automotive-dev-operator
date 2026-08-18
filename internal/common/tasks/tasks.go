@@ -181,6 +181,9 @@ const volumeNameContainerStorage = "container-storage"
 // workspaceNameShared is the Tekton workspace name for the shared PVC workspace.
 const workspaceNameShared = "shared-workspace"
 
+// WorkspaceNameSrc is the Tekton workspace name for the workspace source PVC.
+const WorkspaceNameSrc = "workspace-src"
+
 // workspaceVolumeRef is the Tekton variable reference for the shared workspace volume name.
 // Tekton resolves this at runtime to the actual volume name in the pod spec.
 const workspaceVolumeRef = "$(workspaces." + workspaceNameShared + ".volume)"
@@ -849,6 +852,12 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					MountPath:   "/workspace/registry-auth",
 					Optional:    true,
 				},
+				{
+					Name:        WorkspaceNameSrc,
+					Description: "Optional: Workspace PVC for file:// access to synced content",
+					MountPath:   "/workspace/src",
+					Optional:    true,
+				},
 			},
 			Steps: []tektonv1.Step{
 				{
@@ -1462,6 +1471,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 				{Name: "s3-auth", Optional: true},
 				{Name: "flash-oci-auth", Optional: true},
 				{Name: "jumpstarter-client", Optional: true},
+				{Name: WorkspaceNameSrc, Optional: true},
 			},
 			Results: []tektonv1.PipelineResult{
 				{
@@ -1541,6 +1551,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 						{Name: workspaceNameShared, Workspace: workspaceNameShared},
 						{Name: "manifest-config-workspace", Workspace: "manifest-config-workspace"},
 						{Name: "registry-auth", Workspace: "registry-auth"},
+						{Name: WorkspaceNameSrc, Workspace: WorkspaceNameSrc},
 					},
 					Timeout: &metav1.Duration{Duration: time.Duration(buildConfig.getBuildTimeoutMinutes()) * time.Minute},
 				},

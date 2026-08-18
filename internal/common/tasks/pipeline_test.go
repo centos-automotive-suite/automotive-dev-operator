@@ -770,6 +770,53 @@ func TestPipeline_S3AuthWorkspace_Optional(t *testing.T) {
 	t.Fatal("pipeline should declare s3-auth workspace")
 }
 
+func TestBuildTask_WorkspaceSrc_Optional(t *testing.T) {
+	task := GenerateBuildAutomotiveImageTask("test-ns", nil, "")
+
+	for _, ws := range task.Spec.Workspaces {
+		if ws.Name == WorkspaceNameSrc {
+			if !ws.Optional {
+				t.Error("workspace-src should be optional on the build task")
+			}
+			if ws.MountPath != "/workspace/src" {
+				t.Errorf("workspace-src mount path = %q, want /workspace/src", ws.MountPath)
+			}
+			return
+		}
+	}
+	t.Fatal("build task should declare workspace-src workspace")
+}
+
+func TestPipeline_WorkspaceSrc_Optional(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	for _, ws := range pipeline.Spec.Workspaces {
+		if ws.Name == WorkspaceNameSrc {
+			if !ws.Optional {
+				t.Error("pipeline workspace-src should be optional")
+			}
+			return
+		}
+	}
+	t.Fatal("pipeline should declare workspace-src workspace")
+}
+
+func TestPipeline_BuildImageTask_WorkspaceSrcBinding(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	buildTask := findPipelineTask(pipeline.Spec.Tasks, PipelineTaskBuildImage)
+	if buildTask == nil {
+		t.Fatal("pipeline missing build-image task")
+	}
+
+	for _, ws := range buildTask.Workspaces {
+		if ws.Name == WorkspaceNameSrc && ws.Workspace == WorkspaceNameSrc {
+			return
+		}
+	}
+	t.Error("build-image pipeline task should bind workspace-src workspace")
+}
+
 // TestImagesResultFormat verifies the image@digest format Chains expects
 func TestImagesResultFormat(t *testing.T) {
 	// Simulate what the collect-images script produces
