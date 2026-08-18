@@ -109,12 +109,48 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 	h.applyWaitFollowDefaults(cmd, true, false)
 
 	ctx := context.Background()
-	imageRef := args[0]
+	arg := args[0]
 	server := strings.TrimSpace(*h.opts.ServerURL)
 
 	if server == "" {
 		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
+	}
+
+	api, err := caibcommon.CreateBuildAPIClient(server, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
+	req := buildapitypes.FlashRequest{
+		Name:             *h.opts.FlashName,
+		Target:           *h.opts.Target,
+		ExporterSelector: *h.opts.ExporterSelector,
+		LeaseName:        *h.opts.LeaseName,
+		FlashCmd:         *h.opts.FlashCmd,
+	}
+
+	imageRef := arg
+	if isCatalogName(arg) {
+		req.CatalogImage = arg
+		img, getErr := api.GetCatalogImage(ctx, arg)
+		if getErr != nil {
+			h.handleError(getErr)
+			return
+		}
+		if img.Phase != "Available" {
+			h.handleError(fmt.Errorf("catalog image %q is not Available (phase: %s)", arg, img.Phase))
+			return
+		}
+		if img.RegistryURL == "" {
+			h.handleError(fmt.Errorf("catalog image %q has no registry URL", arg))
+			return
+		}
+		imageRef = buildapitypes.PinFlashDigest(img.RegistryURL, img.Digest)
+		clilog.Infof("Using catalog image %s (%s)\n", arg, imageRef)
+	} else {
+		req.ImageRef = arg
 	}
 
 	// Resolve Jumpstarter client config (explicit path or auto-detect)
@@ -129,6 +165,7 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 	if strings.TrimSpace(*h.opts.Target) == "" && strings.TrimSpace(*h.opts.ExporterSelector) == "" {
 		if detected := h.resolveTargetFromAnnotations(imageRef); detected != "" {
 			*h.opts.Target = detected
+			req.Target = detected
 			clilog.Infof("Auto-detected target from image annotations: %s\n", detected)
 		} else {
 			h.handleError(fmt.Errorf("either --target or --exporter is required (target auto-detection from image annotations failed or annotation not present)"))
@@ -142,12 +179,6 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	api, err := caibcommon.CreateBuildAPIClient(server, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
-	if err != nil {
-		h.handleError(err)
-		return
-	}
-
 	clientConfigB64 := base64.StdEncoding.EncodeToString(clientInfo.Data)
 
 	leaseTags, err := caibcommon.ValidateAndJoinLeaseTags(h.opts.LeaseTags)
@@ -156,16 +187,8 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	req := buildapitypes.FlashRequest{
-		Name:             *h.opts.FlashName,
-		ImageRef:         imageRef,
-		Target:           *h.opts.Target,
-		ExporterSelector: *h.opts.ExporterSelector,
-		ClientConfig:     clientConfigB64,
-		LeaseName:        *h.opts.LeaseName,
-		FlashCmd:         *h.opts.FlashCmd,
-		LeaseTags:        leaseTags,
-	}
+	req.ClientConfig = clientConfigB64
+	req.LeaseTags = leaseTags
 	if req.LeaseName == "" {
 		req.LeaseDuration = *h.opts.LeaseDuration
 	}
@@ -195,6 +218,14 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 	if *h.opts.WaitForBuild || *h.opts.FollowLogs {
 		h.waitForFlashCompletion(ctx, api, resp.Name)
 	}
+}
+
+// isCatalogName reports whether ref is a CatalogImage name rather than an OCI
+// image reference. Kubernetes object names are RFC 1123 labels and cannot
+// contain "/", while registry refs always include at least one "/" (e.g.
+// quay.io/org/image:tag or localhost/image@sha256:...).
+func isCatalogName(ref string) bool {
+	return !strings.Contains(ref, "/")
 }
 
 // parseLeaseDuration converts HH:MM:SS format to time.Duration.

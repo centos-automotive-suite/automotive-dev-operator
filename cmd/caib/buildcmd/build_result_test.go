@@ -280,6 +280,65 @@ func TestBuildResultYAMLKeysMatchJSON(t *testing.T) {
 	}
 }
 
+func TestDisplayBuildResultsTextQuietSuppressesOutput(t *testing.T) {
+	clilog.SetQuiet(true)
+	defer clilog.SetQuiet(false)
+
+	useInternal := false
+	outputDir := ""
+	containerPush := "registry.example.com/img:v1"
+	exportOCI := "registry.example.com/disk:v1"
+	h := &Handler{opts: Options{
+		UseInternalRegistry: &useInternal,
+		OutputDir:           &outputDir,
+		ContainerPush:       &containerPush,
+		ExportOCI:           &exportOCI,
+	}}
+
+	st := &buildapi.BuildResponse{
+		Name:           "test-build",
+		Phase:          "Completed",
+		ContainerImage: "registry.example.com/img:v1",
+		DiskImage:      "registry.example.com/disk:v1",
+	}
+
+	out := captureStdout(t, func() {
+		h.displayBuildResultsText(st, "")
+	})
+
+	if out != "" {
+		t.Errorf("quiet mode should suppress all text output, got: %q", out)
+	}
+}
+
+func TestDisplayBuildResultsTextInternalRegistryQuiet(t *testing.T) {
+	clilog.SetQuiet(true)
+	defer clilog.SetQuiet(false)
+
+	useInternal := true
+	outputDir := ""
+	h := &Handler{opts: Options{
+		UseInternalRegistry: &useInternal,
+		OutputDir:           &outputDir,
+	}}
+
+	st := &buildapi.BuildResponse{
+		Name:           "test-build",
+		Phase:          "Completed",
+		ContainerImage: "image-registry.example.com/img:v1",
+		DiskImage:      "image-registry.example.com/disk:v1",
+		RegistryToken:  "secret-token",
+	}
+
+	out := captureStdout(t, func() {
+		h.displayBuildResultsText(st, "")
+	})
+
+	if out != "" {
+		t.Errorf("quiet mode should suppress all text output, got: %q", out)
+	}
+}
+
 func TestBuildResultRenderFormatted(t *testing.T) {
 	result := BuildResult{
 		Name:  "test-build",

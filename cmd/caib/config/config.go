@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -188,7 +189,7 @@ func DeriveServerFromJumpstarter() string {
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "Using Build API server derived from Jumpstarter config: %s\n", apiURL)
+		clilog.Statusf("Using Build API server derived from Jumpstarter config: %s\n", apiURL)
 		if err := saveDerivedServerURL(apiURL, rawEndpoint); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not save derived server URL to config: %v\n", err)
 		}

@@ -256,7 +256,10 @@ type FlashRequest struct {
 	// Name is the flash job name (auto-generated if omitted)
 	Name string `json:"name"`
 	// ImageRef is the OCI registry reference of the disk image to flash
-	ImageRef string `json:"imageRef"`
+	ImageRef string `json:"imageRef,omitempty"`
+	// CatalogImage is a CatalogImage resource name. When set, the API resolves
+	// it to a digest-pinned registry URL and overwrites ImageRef.
+	CatalogImage string `json:"catalogImage,omitempty"`
 	// Target is the target platform for exporter lookup from OperatorConfig
 	Target string `json:"target,omitempty"`
 	// ExporterSelector is the direct label selector for Jumpstarter exporters (alternative to Target)

@@ -16,12 +16,13 @@ import (
 	"github.com/containers/image/v5/signature"
 	"github.com/containers/image/v5/types"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 )
 
 // PullOCIArtifact pulls and extracts an OCI artifact to local destination.
 func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTLS bool, authFilePaths ...string) error {
-	fmt.Printf("Pulling OCI artifact %s to %s\n", ociRef, destPath)
+	clilog.Infof("Pulling OCI artifact %s to %s\n", ociRef, destPath)
 
 	destDir := filepath.Dir(destPath)
 	if destDir != "" && destDir != "." {
@@ -36,13 +37,13 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 		systemCtx.AuthFilePath = authFilePaths[0]
 	}
 	if username != "" && password != "" {
-		fmt.Printf("Using provided username/password credentials\n")
+		clilog.Infof("Using provided username/password credentials\n")
 		systemCtx.DockerAuthConfig = &types.DockerAuthConfig{
 			Username: username,
 			Password: password,
 		}
 	} else {
-		fmt.Printf("No explicit credentials provided, will use local container auth files if available\n")
+		clilog.Infof("No explicit credentials provided, will use local container auth files if available\n")
 	}
 
 	if insecureSkipTLS {
@@ -82,7 +83,7 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 	}
 	defer func() {
 		if err := os.RemoveAll(tempDir); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp directory: %v\n", err)
+			clilog.Warnf("failed to remove temp directory: %v\n", err)
 		}
 	}()
 
@@ -91,9 +92,13 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 		return fmt.Errorf("parse destination reference: %w", err)
 	}
 
-	fmt.Printf("Downloading OCI artifact...")
+	clilog.Infof("Downloading OCI artifact...")
+	var reportWriter io.Writer = os.Stdout
+	if clilog.IsQuiet() {
+		reportWriter = io.Discard
+	}
 	_, err = copy.Image(ctx, policyCtx, destRef, srcRef, &copy.Options{
-		ReportWriter:   os.Stdout,
+		ReportWriter:   reportWriter,
 		SourceCtx:      systemCtx,
 		DestinationCtx: systemCtx,
 	})
@@ -101,7 +106,7 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 		return fmt.Errorf("copy image: %w", err)
 	}
 
-	fmt.Printf("\nExtracting artifact to %s\n", destPath)
+	clilog.Infof("\nExtracting artifact to %s\n", destPath)
 	if err := extractOCIArtifactBlob(tempDir, destPath); err != nil {
 		return fmt.Errorf("extract artifact: %w", err)
 	}
@@ -112,7 +117,7 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 	}
 
 	if info.IsDir() {
-		fmt.Printf("Downloaded multi-layer artifact to %s/\n", destPath)
+		clilog.Infof("Downloaded multi-layer artifact to %s/\n", destPath)
 		return nil
 	}
 
@@ -122,14 +127,14 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 		ext := compressionExtension(compression)
 		if ext != "" {
 			newPath := destPath + ext
-			fmt.Printf("Adding compression extension: %s -> %s\n", filepath.Base(destPath), filepath.Base(newPath))
+			clilog.Infof("Adding compression extension: %s -> %s\n", filepath.Base(destPath), filepath.Base(newPath))
 			if err := os.Rename(destPath, newPath); err != nil {
 				return fmt.Errorf("rename file with compression extension: %w", err)
 			}
 			finalPath = newPath
 		}
 	}
-	fmt.Printf("Downloaded to %s\n", finalPath)
+	clilog.Infof("Downloaded to %s\n", finalPath)
 	return nil
 }
 
@@ -189,9 +194,9 @@ func extractOCIArtifactBlob(ociLayoutPath, destPath string) error {
 	isMultiLayer := annotationMultiLayer || len(manifest.Layers) > 1
 	if isMultiLayer {
 		if !annotationMultiLayer && len(manifest.Layers) > 1 {
-			fmt.Printf("Warning: manifest has %d layers without multi-layer annotation; extracting all layers\n", len(manifest.Layers))
+			clilog.Warnf("manifest has %d layers without multi-layer annotation; extracting all layers\n", len(manifest.Layers))
 		}
-		fmt.Printf("Multi-layer artifact detected (%d layers)\n", len(manifest.Layers))
+		clilog.Infof("Multi-layer artifact detected (%d layers)\n", len(manifest.Layers))
 		if err := os.MkdirAll(destPath, 0755); err != nil {
 			return fmt.Errorf("create destination directory: %w", err)
 		}
@@ -224,13 +229,13 @@ func extractOCIArtifactBlob(ociLayoutPath, destPath string) error {
 			}
 
 			destFile := filepath.Join(destPath, filename)
-			fmt.Printf("  Extracting layer %d: %s\n", i+1, filename)
+			clilog.Infof("  Extracting layer %d: %s\n", i+1, filename)
 			if err := copyFile(layerPath, destFile); err != nil {
 				return fmt.Errorf("extract layer %s: %w", filename, err)
 			}
 		}
 
-		fmt.Printf("Extracted %d files to %s\n", len(manifest.Layers), destPath)
+		clilog.Infof("Extracted %d files to %s\n", len(manifest.Layers), destPath)
 		return nil
 	}
 
@@ -245,21 +250,21 @@ func sanitizeFilename(filename string, layerIndex int) string {
 		return fallback
 	}
 	if strings.ContainsRune(filename, 0) {
-		fmt.Fprintf(os.Stderr, "Warning: layer %d filename contains null bytes, using fallback\n", layerIndex)
+		clilog.Warnf("layer %d filename contains null bytes, using fallback\n", layerIndex)
 		return fallback
 	}
 	if filepath.IsAbs(filename) {
-		fmt.Fprintf(os.Stderr, "Warning: layer %d filename is absolute path, using fallback\n", layerIndex)
+		clilog.Warnf("layer %d filename is absolute path, using fallback\n", layerIndex)
 		return fallback
 	}
 	if strings.Contains(filename, "..") {
-		fmt.Fprintf(os.Stderr, "Warning: layer %d filename contains '..', using fallback\n", layerIndex)
+		clilog.Warnf("layer %d filename contains '..', using fallback\n", layerIndex)
 		return fallback
 	}
 
 	base := filepath.Base(filename)
 	if base != filename {
-		fmt.Fprintf(os.Stderr, "Warning: layer %d filename contains path separators, using basename: %s\n", layerIndex, base)
+		clilog.Warnf("layer %d filename contains path separators, using basename: %s\n", layerIndex, base)
 		filename = base
 	}
 	if filename == "" || filename == "." || filename == ".." {
@@ -275,7 +280,7 @@ func copyFile(srcPath, dstPath string) error {
 	}
 	defer func() {
 		if err := src.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to close source file: %v\n", err)
+			clilog.Warnf("failed to close source file: %v\n", err)
 		}
 	}()
 
@@ -285,7 +290,7 @@ func copyFile(srcPath, dstPath string) error {
 	}
 	defer func() {
 		if err := dst.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to close destination file: %v\n", err)
+			clilog.Warnf("failed to close destination file: %v\n", err)
 		}
 	}()
 

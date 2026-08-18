@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/catalog"
 	"github.com/gorilla/websocket"
 )
 
@@ -377,6 +378,39 @@ func (c *Client) GetFlash(ctx context.Context, name string) (*buildapi.FlashResp
 		return nil, fmt.Errorf("get flash failed: %s: %s", resp.Status, string(b))
 	}
 	var out buildapi.FlashResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetCatalogImage retrieves a catalog image by name.
+func (c *Client) GetCatalogImage(ctx context.Context, name string) (*catalog.CatalogImageResponse, error) {
+	endpoint := c.resolve(path.Join("/v1/catalog/images", url.PathEscape(name)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("catalog image %q not found", name)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("get catalog image failed: %s: %s", resp.Status, string(b))
+	}
+	var out catalog.CatalogImageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
 	}

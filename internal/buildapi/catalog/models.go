@@ -126,7 +126,7 @@ type ListQueryParams struct {
 	Phase        string `form:"phase"`
 	Tags         string `form:"tags"`
 	Sort         string `form:"sort"`
-	Latest       bool   `form:"latest"`
+	Latest       *bool  `form:"latest"`
 	Limit        int    `form:"limit,default=20"`
 	Continue     string `form:"continue"`
 }
@@ -136,7 +136,7 @@ func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) Catal
 	response := CatalogImageResponse{
 		Name:        catalogImage.Name,
 		RegistryURL: catalogImage.Spec.RegistryURL,
-		Digest:      catalogImage.Spec.Digest,
+		Digest:      catalogDigest(catalogImage),
 		Tags:        catalogImage.Spec.Tags,
 		Phase:       string(catalogImage.Status.Phase),
 		Labels:      catalogImage.Labels,
@@ -247,6 +247,16 @@ func resolveDownloadURL(catalogImage *automotivev1alpha1.CatalogImage) string {
 
 	// Default to registry URL
 	return catalogImage.Spec.RegistryURL
+}
+
+func catalogDigest(catalogImage *automotivev1alpha1.CatalogImage) string {
+	if catalogImage.Spec.Digest != "" {
+		return catalogImage.Spec.Digest
+	}
+	if catalogImage.Status.RegistryMetadata != nil {
+		return catalogImage.Status.RegistryMetadata.ResolvedDigest
+	}
+	return ""
 }
 
 // ToCatalogImageListResponse converts a list of CatalogImage CRs to an API response

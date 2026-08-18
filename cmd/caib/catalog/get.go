@@ -144,6 +144,7 @@ func printImageDetails(img CatalogImageResponse) {
 	rows := [][2]string{
 		{"Name", img.Name},
 		{"Registry URL", img.RegistryURL},
+		{"Digest", img.Digest},
 		{"Phase", img.Phase},
 		{"Architecture", img.Architecture},
 		{"Distro", img.Distro},
@@ -151,6 +152,7 @@ func printImageDetails(img CatalogImageResponse) {
 		{"Build Mode", img.BuildMode},
 		{"Export Format", img.ExportFormat},
 		{"Created At", img.CreatedAt},
+		{"Published At", img.PublishedAt},
 	}
 	if img.ScheduleName != "" {
 		rows = append(rows, [2]string{"Schedule", img.ScheduleName})

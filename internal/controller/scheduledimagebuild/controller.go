@@ -49,6 +49,7 @@ const (
 
 	AnnotationCatalogPublished      = "automotive.sdv.cloud.redhat.com/catalog-published"
 	AnnotationCatalogPublishedValue = "true"
+	AnnotationCatalogImageName      = "automotive.sdv.cloud.redhat.com/catalog-image-name"
 
 	ConditionScheduled            = "Scheduled"
 	ConditionLastBuildSucceeded   = "LastBuildSucceeded"
@@ -84,7 +85,7 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=scheduledimagebuilds/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=scheduledimagebuilds/finalizers,verbs=update
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagebuilds,verbs=get;list;watch;create;delete;update;patch
-// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=catalogimages,verbs=get;list;create
+// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=catalogimages,verbs=get;list;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
 
 // Reconcile handles a single ScheduledImageBuild reconciliation loop.
@@ -351,7 +352,7 @@ func (r *Reconciler) publishToCatalog(ctx context.Context, sib *automotivev1alph
 		authSecretRef = sib.Spec.PublishToCatalog.AuthSecretRef
 	}
 
-	result, err := r.Publisher.PublishFromImageBuild(ctx, build, "", tags, authSecretRef)
+	result, err := r.Publisher.PublishFromImageBuild(ctx, build, catalogNameForPublish(sib, build), tags, authSecretRef)
 	if err != nil {
 		log.Error(err, "Failed to publish to catalog")
 		r.Recorder.Eventf(sib, corev1.EventTypeWarning, "PublishFailed",
@@ -573,6 +574,7 @@ func (r *Reconciler) createSingleImageBuild(ctx context.Context, sib *automotive
 
 	annotations := make(map[string]string)
 	maps.Copy(annotations, sib.Spec.ImageBuildTemplate.Metadata.Annotations)
+	annotations[AnnotationCatalogImageName] = catalogImageName(sib, combo)
 
 	spec := sib.Spec.ImageBuildTemplate.Spec.DeepCopy()
 	if combo.Architecture != "" {
@@ -696,6 +698,19 @@ func appendOCITagSuffix(ref, suffix string) string {
 		return ref[:i] + ":" + ref[i+1:] + suffix
 	}
 	return ref + ":latest" + suffix
+}
+
+func catalogImageName(sib *automotivev1alpha1.ScheduledImageBuild, combo matrixCombo) string {
+	return safeDerivedName(sib.Name, combo.suffix())
+}
+
+func catalogNameForPublish(sib *automotivev1alpha1.ScheduledImageBuild, build *automotivev1alpha1.ImageBuild) string {
+	if build.Annotations != nil {
+		if name := build.Annotations[AnnotationCatalogImageName]; name != "" {
+			return name
+		}
+	}
+	return sib.Name
 }
 
 func safeDerivedName(baseName, suffix string) string {

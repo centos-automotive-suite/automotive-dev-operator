@@ -69,3 +69,20 @@ func TestResolveTargetFromAnnotations_PassesImageRef(t *testing.T) {
 		t.Errorf("expected imageRef passed through, got %q", receivedRef)
 	}
 }
+
+func TestIsCatalogName(t *testing.T) {
+	tests := []struct {
+		ref  string
+		want bool
+	}{
+		{"qa-ebbr", true},
+		{"bootc-matrix-test-qemu", true},
+		{"quay.io/bzlotnik/qa:disk-ebbr", false},
+		{"localhost:5000/foo:tag", false},
+	}
+	for _, tt := range tests {
+		if got := isCatalogName(tt.ref); got != tt.want {
+			t.Errorf("isCatalogName(%q) = %v, want %v", tt.ref, got, tt.want)
+		}
+	}
+}

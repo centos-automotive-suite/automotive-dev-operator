@@ -19,9 +19,12 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
@@ -32,8 +35,10 @@ import (
 )
 
 const (
-	sortByCreated = "created"
-	sortByName    = "name"
+	sortByCreated    = "created"
+	sortByName       = "name"
+	phaseAll         = "all"
+	defaultListPhase = string(automotivev1alpha1.CatalogImagePhaseAvailable)
 )
 
 // Handler handles catalog API requests
@@ -65,11 +70,10 @@ func (h *Handler) HandleListCatalogImages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid query parameters", "details": err.Error()})
 		return
 	}
+	normalizeListParams(&params)
 
 	// Build list options
-	listOpts := []client.ListOption{}
-
-	listOpts = append(listOpts, client.InNamespace(h.defaultNamespace))
+	listOpts := []client.ListOption{client.InNamespace(h.defaultNamespace)}
 
 	// Build label selector for filtering
 	labelRequirements := []string{}
@@ -100,16 +104,10 @@ func (h *Handler) HandleListCatalogImages(c *gin.Context) {
 		return
 	}
 
-	needsPostProcessing := params.Sort != "" || params.Latest
-
-	if !needsPostProcessing {
-		listOpts = append(listOpts, client.Limit(int64(effectiveLimit(params.Limit))))
-		if params.Continue != "" {
-			listOpts = append(listOpts, client.Continue(params.Continue))
-		}
-	}
-
-	// List catalog images
+	// Always list the full namespace set, then filter/sort, then page.
+	// Kubernetes Limit cannot run first: phase/latest/tags filter in-process,
+	// and the default created sort must order the full set before limit/continue
+	// or pages omit newer images (and continue cannot recover global order).
 	catalogImages := &automotivev1alpha1.CatalogImageList{}
 	if err := h.client.List(ctx, catalogImages, listOpts...); err != nil {
 		h.log.Error(err, "failed to list catalog images")
@@ -119,16 +117,15 @@ func (h *Handler) HandleListCatalogImages(c *gin.Context) {
 
 	catalogImages.Items = postFilterAndSort(catalogImages.Items, params)
 
-	continueToken := catalogImages.Continue
-	if needsPostProcessing {
-		continueToken = ""
-		limit := effectiveLimit(params.Limit)
-		if len(catalogImages.Items) > limit {
-			catalogImages.Items = catalogImages.Items[:limit]
-		}
+	page, next, total, err := paginateFiltered(catalogImages.Items, effectiveLimit(params.Limit), params.Continue)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid continue token", "details": err.Error()})
+		return
 	}
+	catalogImages.Items = page
 
-	response := ToCatalogImageListResponse(catalogImages, continueToken)
+	response := ToCatalogImageListResponse(catalogImages, next)
+	response.Total = total
 	c.JSON(http.StatusOK, response)
 }
 
@@ -365,6 +362,51 @@ func effectiveLimit(limit int) int {
 	return 20
 }
 
+func latestEnabled(params ListQueryParams) bool {
+	if params.Latest == nil {
+		return true
+	}
+	return *params.Latest
+}
+
+func normalizeListParams(params *ListQueryParams) {
+	if params.Phase == "" {
+		params.Phase = defaultListPhase
+	}
+	if strings.EqualFold(params.Phase, phaseAll) {
+		params.Phase = ""
+	}
+	if params.Latest == nil {
+		params.Latest = new(true)
+	}
+}
+
+// paginateFiltered returns a limit-sized window of an already-filtered list.
+// continueToken is a decimal offset into that filtered list (not a kube continue).
+func paginateFiltered(items []automotivev1alpha1.CatalogImage, limit int, continueToken string) ([]automotivev1alpha1.CatalogImage, string, int, error) {
+	offset := 0
+	if continueToken != "" {
+		n, err := strconv.Atoi(continueToken)
+		if err != nil || n < 0 {
+			return nil, "", 0, fmt.Errorf("must be a non-negative integer offset")
+		}
+		offset = n
+	}
+	total := len(items)
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	next := ""
+	if end < total {
+		next = strconv.Itoa(end)
+	}
+	return items[offset:end], next, total, nil
+}
+
 func postFilterAndSort(items []automotivev1alpha1.CatalogImage, params ListQueryParams) []automotivev1alpha1.CatalogImage {
 	if params.Phase != "" {
 		filtered := []automotivev1alpha1.CatalogImage{}
@@ -387,9 +429,9 @@ func postFilterAndSort(items []automotivev1alpha1.CatalogImage, params ListQuery
 		items = filtered
 	}
 
-	if params.Latest {
+	if latestEnabled(params) {
 		sort.Slice(items, func(i, j int) bool {
-			return items[i].CreationTimestamp.After(items[j].CreationTimestamp.Time)
+			return catalogTime(items[i]).After(catalogTime(items[j]))
 		})
 		seen := map[string]bool{}
 		filtered := []automotivev1alpha1.CatalogImage{}
@@ -410,7 +452,7 @@ func postFilterAndSort(items []automotivev1alpha1.CatalogImage, params ListQuery
 	switch sortBy {
 	case sortByCreated:
 		sort.Slice(items, func(i, j int) bool {
-			return items[i].CreationTimestamp.After(items[j].CreationTimestamp.Time)
+			return catalogTime(items[i]).After(catalogTime(items[j]))
 		})
 	case sortByName:
 		sort.Slice(items, func(i, j int) bool {
@@ -434,6 +476,15 @@ func latestGroupKey(img *automotivev1alpha1.CatalogImage) string {
 		return "name:" + img.Name
 	}
 	return distro + "/" + arch + "/" + target
+}
+
+// catalogTime is when the catalog row last became the published head.
+// Overwrite-in-place does not bump creationTimestamp.
+func catalogTime(img automotivev1alpha1.CatalogImage) time.Time {
+	if img.Status.PublishedAt != nil && !img.Status.PublishedAt.Time.IsZero() {
+		return img.Status.PublishedAt.Time
+	}
+	return img.CreationTimestamp.Time
 }
 
 // hasAllTags checks if the image has all the requested tags

@@ -444,9 +444,13 @@ Examples:
 
 func newFlashCmd(opts Options) *cobra.Command {
 	return &cobra.Command{
-		Use:   "flash <oci-registry-reference>",
+		Use:   "flash <oci-registry-reference|catalog-image-name>",
 		Short: "Flash a disk image to hardware via Jumpstarter",
-		Long: `Flash a disk image from an OCI registry to a hardware device using Jumpstarter.
+		Long: `Flash a disk image from an OCI registry or catalog name to a hardware device using Jumpstarter.
+
+A name without '/' is treated as a CatalogImage (for example qa-ebbr). The API
+resolves it to a digest-pinned registry URL. A value containing '/' is an OCI
+reference (quay.io/org/disk:v1).
 
 This command connects to a Jumpstarter exporter to flash the specified disk image
 onto physical hardware. The Jumpstarter client config is auto-detected from
@@ -456,6 +460,9 @@ If --target and --exporter are both omitted, the target is auto-detected from th
 OCI image manifest annotations (set by the operator during image push).
 
 Examples:
+  # Flash a catalog head by name
+  caib image flash qa-ebbr --target j784s4evm
+
   # Flash with auto-detected target (from image annotations)
   caib image flash quay.io/org/disk:v1
 
