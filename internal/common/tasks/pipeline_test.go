@@ -790,6 +790,9 @@ func TestBuildTask_WorkspaceSrc_VolumeMount(t *testing.T) {
 				if vm.MountPath != "/workspace/src" {
 					t.Errorf("workspace-src mount path = %q, want /workspace/src", vm.MountPath)
 				}
+				if vm.SubPath != "src" {
+					t.Errorf("workspace-src subPath = %q, want \"src\"", vm.SubPath)
+				}
 				if !vm.ReadOnly {
 					t.Error("workspace-src should be read-only")
 				}

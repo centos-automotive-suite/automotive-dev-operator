@@ -998,9 +998,13 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 				},
 				// workspace-src: provides file:// access to content synced via `caib workspace sync`.
 				// Volume is provided at PipelineRun time via PodTemplate (PVC or emptyDir fallback).
+				// SubPath "src" is required because the workspace PVC root is mounted at /workspace
+				// in the workspace pod, and sync writes into /workspace/src/ — so the files live
+				// under the "src" subdirectory of the PVC.
 				corev1.VolumeMount{
 					Name:      WorkspaceNameSrc,
 					MountPath: "/workspace/src",
+					SubPath:   "src",
 					ReadOnly:  true,
 				},
 			)
