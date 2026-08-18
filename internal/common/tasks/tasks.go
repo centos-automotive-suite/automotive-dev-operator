@@ -852,12 +852,6 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					MountPath:   "/workspace/registry-auth",
 					Optional:    true,
 				},
-				{
-					Name:        WorkspaceNameSrc,
-					Description: "Optional: Workspace PVC for file:// access to synced content",
-					MountPath:   "/workspace/src",
-					Optional:    true,
-				},
 			},
 			Steps: []tektonv1.Step{
 				{
@@ -996,11 +990,20 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 	// The actual Volume definition is provided at PipelineRun time via PodTemplate.
 	for i := range task.Spec.Steps {
 		if task.Spec.Steps[i].Name == PipelineTaskBuildImage {
-			task.Spec.Steps[i].VolumeMounts = append(task.Spec.Steps[i].VolumeMounts, corev1.VolumeMount{
-				Name:      OCIRepoVolumeName,
-				MountPath: OCIRepoMountPath,
-				ReadOnly:  true,
-			})
+			task.Spec.Steps[i].VolumeMounts = append(task.Spec.Steps[i].VolumeMounts,
+				corev1.VolumeMount{
+					Name:      OCIRepoVolumeName,
+					MountPath: OCIRepoMountPath,
+					ReadOnly:  true,
+				},
+				// workspace-src: provides file:// access to content synced via `caib workspace sync`.
+				// Volume is provided at PipelineRun time via PodTemplate (PVC or emptyDir fallback).
+				corev1.VolumeMount{
+					Name:      WorkspaceNameSrc,
+					MountPath: "/workspace/src",
+					ReadOnly:  true,
+				},
+			)
 			break
 		}
 	}
@@ -1471,7 +1474,6 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 				{Name: "s3-auth", Optional: true},
 				{Name: "flash-oci-auth", Optional: true},
 				{Name: "jumpstarter-client", Optional: true},
-				{Name: WorkspaceNameSrc, Optional: true},
 			},
 			Results: []tektonv1.PipelineResult{
 				{
@@ -1551,7 +1553,6 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 						{Name: workspaceNameShared, Workspace: workspaceNameShared},
 						{Name: "manifest-config-workspace", Workspace: "manifest-config-workspace"},
 						{Name: "registry-auth", Workspace: "registry-auth"},
-						{Name: WorkspaceNameSrc, Workspace: WorkspaceNameSrc},
 					},
 					Timeout: &metav1.Duration{Duration: time.Duration(buildConfig.getBuildTimeoutMinutes()) * time.Minute},
 				},

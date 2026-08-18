@@ -963,6 +963,49 @@ func TestOCIRepoVolumes(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSrcVolume(t *testing.T) {
+	tests := []struct {
+		name    string
+		pvcName string
+		wantPVC bool
+	}{
+		{
+			name:    "no PVC — EmptyDir",
+			pvcName: "",
+			wantPVC: false,
+		},
+		{
+			name:    "with PVC — PersistentVolumeClaim",
+			pvcName: "my-workspace",
+			wantPVC: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vol := workspaceSrcVolume(tt.pvcName)
+			if vol.Name != tasks.WorkspaceNameSrc {
+				t.Errorf("volume name = %q, want %q", vol.Name, tasks.WorkspaceNameSrc)
+			}
+			if tt.wantPVC {
+				if vol.PersistentVolumeClaim == nil {
+					t.Fatal("expected PersistentVolumeClaim, got nil")
+				}
+				if vol.PersistentVolumeClaim.ClaimName != tt.pvcName {
+					t.Errorf("ClaimName = %q, want %q", vol.PersistentVolumeClaim.ClaimName, tt.pvcName)
+				}
+			} else {
+				if vol.EmptyDir == nil {
+					t.Fatal("expected EmptyDir, got nil")
+				}
+				if vol.PersistentVolumeClaim != nil {
+					t.Error("should not have PVC when EmptyDir is set")
+				}
+			}
+		})
+	}
+}
+
 func TestGetOCIRepoImages(t *testing.T) {
 	tests := []struct {
 		name string
