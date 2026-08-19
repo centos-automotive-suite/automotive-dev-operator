@@ -56,6 +56,8 @@ func TestApplyS3Options_InlineCredentials(t *testing.T) {
 	*opts.S3AccessKeyID = testS3AccessKey
 	*opts.S3SecretAccessKey = "SECRET"
 	*opts.S3Insecure = true
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	var req buildapitypes.BuildRequest
@@ -133,6 +135,8 @@ func TestApplyS3Options_SecretName(t *testing.T) {
 	opts := newTestDiskOpts()
 	*opts.S3Bucket = testS3Bucket
 	*opts.S3CredentialsSecret = "shared-s3-creds"
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	var req buildapitypes.BuildRequest
@@ -151,6 +155,8 @@ func TestApplyS3Options_PartialCredentialsError(t *testing.T) {
 	opts := newTestDiskOpts()
 	*opts.S3Bucket = testS3Bucket
 	*opts.S3AccessKeyID = "AKID"
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	var req buildapitypes.BuildRequest
@@ -266,6 +272,8 @@ func TestApplyS3Options_NoCredentialsAllowed(t *testing.T) {
 
 func TestApplyS3Options_ConfigFileDefaults(t *testing.T) {
 	opts := newTestDiskOpts()
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	cfg := &config.S3Config{
@@ -311,6 +319,8 @@ func TestApplyS3Options_CLIFlagsOverrideConfig(t *testing.T) {
 	*opts.S3Region = "ap-southeast-1"
 	*opts.S3CredentialsSecret = "flag-secret"
 	*opts.S3Insecure = true
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	cfg := &config.S3Config{
@@ -352,6 +362,8 @@ func TestApplyS3Options_ExplicitInsecureFalseOverridesConfig(t *testing.T) {
 	opts := newTestDiskOpts()
 	*opts.S3Bucket = "test-bucket"
 	*opts.S3Insecure = false
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	cmd := &cobra.Command{}
@@ -377,6 +389,8 @@ func TestApplyS3Options_ExplicitInsecureFalseOverridesConfig(t *testing.T) {
 func TestApplyS3Options_ConfigBucketWithFlagOverrides(t *testing.T) {
 	opts := newTestDiskOpts()
 	*opts.S3Region = "us-west-2"
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	cfg := &config.S3Config{
@@ -572,6 +586,8 @@ func TestApplyS3Options_ExplicitEmptyConnectionParamsOverrideConfig(t *testing.T
 	*opts.S3Prefix = ""
 	*opts.S3Endpoint = ""
 	*opts.S3Region = ""
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	cmd := &cobra.Command{}
