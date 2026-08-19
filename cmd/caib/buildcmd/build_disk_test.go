@@ -55,7 +55,7 @@ func newTestDiskOpts() Options {
 		insecureSkipTLS      bool
 		s3Bucket             string
 		s3Prefix             string
-		s3Region             = "us-east-1"
+		s3Region             string
 		s3Endpoint           string
 		s3AccessKeyID        string
 		s3SecretAccessKey    string

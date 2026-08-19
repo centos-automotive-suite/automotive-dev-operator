@@ -14,6 +14,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
@@ -545,28 +546,68 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 	return nil
 }
 
-func (h *Handler) applyS3Options(req *buildapitypes.BuildRequest) error {
-	if h.opts.S3Bucket == nil || *h.opts.S3Bucket == "" {
+// s3DefaultsFn is the function used to load S3 defaults from the config file.
+// Overridden in tests.
+var s3DefaultsFn = config.S3Defaults
+
+func (h *Handler) applyS3Options(cmd *cobra.Command, req *buildapitypes.BuildRequest) error {
+	s3Cfg, err := s3DefaultsFn()
+	if err != nil {
+		return err
+	}
+
+	bucket := ptrStr(h.opts.S3Bucket)
+	if !flagChanged(cmd, "s3-bucket") && bucket == "" && s3Cfg != nil {
+		bucket = s3Cfg.Bucket
+	}
+	if bucket == "" {
 		return nil
 	}
+	req.S3Bucket = bucket
 
-	req.S3Bucket = *h.opts.S3Bucket
-	if h.opts.S3Prefix != nil {
-		req.S3Prefix = *h.opts.S3Prefix
-	}
-	if h.opts.S3Endpoint != nil {
-		req.S3Endpoint = *h.opts.S3Endpoint
-	}
-	if h.opts.S3Region != nil {
-		req.S3Region = *h.opts.S3Region
-	}
-	if h.opts.S3Insecure != nil {
-		req.S3InsecureSkipTLSVerify = *h.opts.S3Insecure
+	h.applyS3ConnectionParams(cmd, req, s3Cfg)
+
+	return h.applyS3Credentials(req, s3Cfg)
+}
+
+func (h *Handler) applyS3ConnectionParams(cmd *cobra.Command, req *buildapitypes.BuildRequest, s3Cfg *config.S3Config) {
+	if flagChanged(cmd, "s3-prefix") {
+		req.S3Prefix = ptrStr(h.opts.S3Prefix)
+	} else if v := ptrStr(h.opts.S3Prefix); v != "" {
+		req.S3Prefix = v
+	} else if s3Cfg != nil {
+		req.S3Prefix = s3Cfg.Prefix
 	}
 
-	secretProvided := h.opts.S3CredentialsSecret != nil && *h.opts.S3CredentialsSecret != ""
-	explicitAccess := h.opts.S3AccessKeyID != nil && *h.opts.S3AccessKeyID != ""
-	explicitSecret := h.opts.S3SecretAccessKey != nil && *h.opts.S3SecretAccessKey != ""
+	if flagChanged(cmd, "s3-endpoint") {
+		req.S3Endpoint = ptrStr(h.opts.S3Endpoint)
+	} else if v := ptrStr(h.opts.S3Endpoint); v != "" {
+		req.S3Endpoint = v
+	} else if s3Cfg != nil {
+		req.S3Endpoint = s3Cfg.Endpoint
+	}
+
+	if flagChanged(cmd, "s3-region") {
+		req.S3Region = ptrStr(h.opts.S3Region)
+	} else if v := ptrStr(h.opts.S3Region); v != "" {
+		req.S3Region = v
+	} else if s3Cfg != nil {
+		req.S3Region = s3Cfg.Region
+	}
+
+	if flagChanged(cmd, "s3-insecure") {
+		req.S3InsecureSkipTLSVerify = h.opts.S3Insecure != nil && *h.opts.S3Insecure
+	} else if h.opts.S3Insecure != nil && *h.opts.S3Insecure {
+		req.S3InsecureSkipTLSVerify = true
+	} else if s3Cfg != nil {
+		req.S3InsecureSkipTLSVerify = s3Cfg.InsecureSkipTLSVerify
+	}
+}
+
+func (h *Handler) applyS3Credentials(req *buildapitypes.BuildRequest, s3Cfg *config.S3Config) error {
+	secretProvided := ptrStr(h.opts.S3CredentialsSecret) != ""
+	explicitAccess := ptrStr(h.opts.S3AccessKeyID) != ""
+	explicitSecret := ptrStr(h.opts.S3SecretAccessKey) != ""
 	inlineCredsProvided := explicitAccess || explicitSecret
 	envAccess := os.Getenv("AWS_ACCESS_KEY_ID")
 	envSecret := os.Getenv("AWS_SECRET_ACCESS_KEY")
@@ -610,9 +651,38 @@ func (h *Handler) applyS3Options(req *buildapitypes.BuildRequest) error {
 			AccessKeyID:     envAccess,
 			SecretAccessKey: envSecret,
 		}
+	} else if s3Cfg != nil {
+		if s3Cfg.CredentialsSecret != "" && (s3Cfg.AccessKeyID != "" || s3Cfg.SecretAccessKey != "") {
+			return fmt.Errorf("config file has both s3.credentials_secret and s3.access_key_id/s3.secret_access_key; use only one")
+		}
+		if s3Cfg.CredentialsSecret != "" {
+			req.S3CredentialsSecretName = s3Cfg.CredentialsSecret
+		} else if s3Cfg.AccessKeyID != "" || s3Cfg.SecretAccessKey != "" {
+			if s3Cfg.AccessKeyID == "" {
+				return fmt.Errorf("config file has s3.secret_access_key but s3.access_key_id is missing")
+			}
+			if s3Cfg.SecretAccessKey == "" {
+				return fmt.Errorf("config file has s3.access_key_id but s3.secret_access_key is missing")
+			}
+			req.S3Credentials = &buildapitypes.S3Credentials{
+				AccessKeyID:     s3Cfg.AccessKeyID,
+				SecretAccessKey: s3Cfg.SecretAccessKey,
+			}
+		}
 	}
 
 	return nil
+}
+
+func ptrStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func flagChanged(cmd *cobra.Command, name string) bool {
+	return cmd != nil && cmd.Flags().Changed(name)
 }
 
 func (h *Handler) displayBuildLogsCommand(buildName string) {
@@ -852,7 +922,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if err := h.applyS3Options(&req); err != nil {
+	if err := h.applyS3Options(cmd, &req); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -976,7 +1046,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if err := h.applyS3Options(&req); err != nil {
+	if err := h.applyS3Options(cmd, &req); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -1152,7 +1222,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if err := h.applyS3Options(&req); err != nil {
+	if err := h.applyS3Options(cmd, &req); err != nil {
 		h.handleError(err)
 		return
 	}
