@@ -86,10 +86,14 @@ Tests are split into independently-runnable lanes, each deployed into its own na
 |------|-------|-----------|----------------|
 | `smoke` | `smoke` | `e2e-smoke` | CRDs, OperatorConfig, Build API endpoints, CR lifecycle, guard rails |
 | `operator` | `operator` | `e2e-operator` | Operator health, Tekton tasks/pipeline, Build API CRUD, ImageBuild lifecycle, error handling |
-| `bootc` | `bootc` | `e2e-bootc` | Bootc container build via caib CLI |
-| `auth` | `auth` | `e2e-auth` | OIDC authentication (OpenShift only) |
-| `package-mode` | `package-mode` | `e2e-package-mode` | Package mode disk image build (OpenShift only) |
 | `features` | `features` | `e2e-features` | TTL expiry, image propagation in Tekton Tasks, Build API log streaming |
+| `auth` | `auth` | `e2e-auth` | OIDC authentication (OpenShift or Kind+Dex) |
+| `bootc` | `bootc` | `e2e-bootc` | Bootc container build via caib CLI |
+| `internal-registry` | `internal-registry` | `e2e-internal-registry` | Internal-registry build path via `--internal-registry` (OpenShift only) |
+| `package-mode` | `package-mode`, `smoke` | `e2e-package-mode` | Package mode disk image build (OpenShift only) |
+| `container-build` | `container-build` | `e2e-container-build` | Shipwright container builds via `caib container build` (OpenShift only) |
+| `manifest-validation` | `manifest-validation` | `e2e-manifest-validation` | AIB manifest schema/unknown-field validation behavior |
+| `catalog` | `catalog` | `e2e-catalog` | Catalog discovery listing, sorting, latest filtering, and detail output |
 
 ### Running individual lanes
 
@@ -98,6 +102,7 @@ Tests are split into independently-runnable lanes, each deployed into its own na
 make test-e2e-smoke
 make test-e2e-operator
 make test-e2e-bootc
+make test-e2e-container-build
 make test-e2e-auth
 make test-e2e-package-mode
 make test-e2e-features
@@ -107,10 +112,16 @@ make test-e2e              # all lanes
 bash hack/run-e2e-local.sh smoke
 bash hack/run-e2e-local.sh operator
 bash hack/run-e2e-local.sh bootc
+bash hack/run-e2e-local.sh container-build
 bash hack/run-e2e-local.sh auth
 bash hack/run-e2e-local.sh package-mode
 bash hack/run-e2e-local.sh features
 bash hack/run-e2e-local.sh            # all lanes
+
+# Via direct label filter (lanes without dedicated make/local shorthand)
+go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="internal-registry"
+go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="manifest-validation"
+go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="catalog"
 ```
 
 ### Benchmarks
@@ -127,8 +138,15 @@ Times measured on CRC (cluster already running):
 | `package-mode` | ~4 min | ~4 min | 15m |
 | all | ~8 min | ~36 min | 45m |
 
+## E2E Tests Summary
+
+Per-test inventory (file, lane, Ginkgo label(s), prerequisites, steps, and pass checks) is in [e2e-test-summary.md](e2e-test-summary.md).
+
+Run `make e2e-spec-index` (or `test/e2e/scripts/gen-spec-index.sh`) to print an auto-generated, lane-grouped index of every spec's group, test name, labels, and source location straight from `ginkgo --dry-run`. It needs no live cluster and is useful for catching drift in the Lane/Label/Test/File columns above before hand-editing them; it still cannot generate the prerequisites/steps/pass-check columns.
+
 ## Test Structure
 
+- `e2e-test-summary.md`: Per-test inventory of every e2e spec
 - `e2e_suite_test.go`: Suite setup, `BeforeSuite`/`AfterSuite`
 - `helpers_test.go`: Shared helpers — `sync.Once`-based operator deploy, Build API access, caib credentials, and utility functions (`applyImageBuildCR`, `createBuildViaCaib`, `waitForImageBuildPhase`, etc.)
 - `operator_test.go`: Operator health checks (`Label("operator", "smoke")`)
@@ -139,9 +157,11 @@ Times measured on CRC (cluster already running):
 - `error_handling_test.go`: Concurrent builds isolation (`Label("operator")`)
 - `bootc_build_test.go`: Bootc build and internal-registry build via caib (`Label("bootc")`, `Label("internal-registry")`)
 - `auth_test.go`: OIDC authentication (`Label("auth")`)
-- `package_build_test.go`: Package mode disk image build (`Label("package-mode")`)
+- `package_build_test.go`: Package mode disk image build (`Label("package-mode", "smoke")`)
 - `features_e2e_test.go`: TTL expiry, image propagation, Build API log streaming (`Label("features")`)
 - `manifest_validation_test.go`: caib manifest validation (`Label("manifest-validation")`)
+- `container_build_test.go`: Shipwright container builds (`Label("container-build")`)
+- `catalog_discovery_test.go`: Catalog list/get output behavior (`Label("catalog")`)
 - `../utils/`: Utility functions for running commands and managing processes
 
 ## GitHub Actions
@@ -153,6 +173,7 @@ The e2e tests run automatically on:
 
 Individual lanes can be triggered on PRs via comment commands:
 - `/e2e-smoke`, `/e2e-operator`, `/e2e-bootc`, `/e2e-auth`, `/e2e-package-mode`, `/e2e-features`, `/e2e-test-all`
+- `/e2e-container-build`
 
 See `.github/workflows/e2e.yml` and `.github/workflows/e2e-lanes.yml` for the CI configuration.
 
