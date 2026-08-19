@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -29,6 +30,17 @@ func ManifestTarget(manifest []byte) string {
 // manifestDir is the directory containing the manifest, used to resolve
 // relative glob patterns.
 func FindLocalFileReferences(manifestContent string, manifestDir string) ([]map[string]string, error) {
+	return findLocalFileReferences(manifestContent, manifestDir, false)
+}
+
+// FindLocalFileReferencesForWorkspaceBuild is like FindLocalFileReferences but
+// skips source_path/source_glob under /workspace (those live on the cluster
+// workspace PVC, not the local machine).
+func FindLocalFileReferencesForWorkspaceBuild(manifestContent string, manifestDir string) ([]map[string]string, error) {
+	return findLocalFileReferences(manifestContent, manifestDir, true)
+}
+
+func findLocalFileReferences(manifestContent string, manifestDir string, excludeClusterWorkspace bool) ([]map[string]string, error) {
 	var manifestData map[string]any
 	var localFiles []map[string]string
 
@@ -68,49 +80,9 @@ func FindLocalFileReferences(manifestContent string, manifestDir string) ([]map[
 		return nil
 	}
 
-	processAddFiles := func(addFiles []any) error {
-		for _, file := range addFiles {
-			fileMap, ok := file.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			// Handle source_glob entries
-			if sourceGlob, hasGlob := fileMap["source_glob"].(string); hasGlob {
-				matches, err := expandSourceGlob(sourceGlob, manifestDir)
-				if err != nil {
-					return err
-				}
-				for _, m := range matches {
-					if err := isPathSafe(m); err != nil {
-						return err
-					}
-					localFiles = append(localFiles, map[string]string{
-						"source_path": m,
-					})
-				}
-				continue
-			}
-
-			// Handle source_path entries
-			path, hasPath := fileMap["path"].(string)
-			sourcePath, hasSourcePath := fileMap["source_path"].(string)
-			if hasPath && hasSourcePath {
-				if err := isPathSafe(sourcePath); err != nil {
-					return err
-				}
-				localFiles = append(localFiles, map[string]string{
-					"path":        path,
-					"source_path": sourcePath,
-				})
-			}
-		}
-		return nil
-	}
-
 	if content, ok := manifestData["content"].(map[string]any); ok {
 		if addFiles, ok := content["add_files"].([]any); ok {
-			if err := processAddFiles(addFiles); err != nil {
+			if err := collectAddFileRefs(addFiles, manifestDir, excludeClusterWorkspace, isPathSafe, &localFiles); err != nil {
 				return nil, err
 			}
 		}
@@ -118,7 +90,7 @@ func FindLocalFileReferences(manifestContent string, manifestDir string) ([]map[
 	if qm, ok := manifestData["qm"].(map[string]any); ok {
 		if qmContent, ok := qm["content"].(map[string]any); ok {
 			if addFiles, ok := qmContent["add_files"].([]any); ok {
-				if err := processAddFiles(addFiles); err != nil {
+				if err := collectAddFileRefs(addFiles, manifestDir, excludeClusterWorkspace, isPathSafe, &localFiles); err != nil {
 					return nil, err
 				}
 			}
@@ -126,6 +98,65 @@ func FindLocalFileReferences(manifestContent string, manifestDir string) ([]map[
 	}
 
 	return localFiles, nil
+}
+
+func collectAddFileRefs(
+	addFiles []any,
+	manifestDir string,
+	excludeClusterWorkspace bool,
+	isPathSafe func(string) error,
+	localFiles *[]map[string]string,
+) error {
+	for _, file := range addFiles {
+		fileMap, ok := file.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if sourceGlob, hasGlob := fileMap["source_glob"].(string); hasGlob {
+			if excludeClusterWorkspace && isClusterWorkspacePath(sourceGlob) {
+				continue
+			}
+			matches, err := expandSourceGlob(sourceGlob, manifestDir)
+			if err != nil {
+				return err
+			}
+			for _, m := range matches {
+				if err := isPathSafe(m); err != nil {
+					return err
+				}
+				*localFiles = append(*localFiles, map[string]string{
+					"source_path": m,
+				})
+			}
+			continue
+		}
+
+		path, hasPath := fileMap["path"].(string)
+		sourcePath, hasSourcePath := fileMap["source_path"].(string)
+		if hasPath && hasSourcePath {
+			if excludeClusterWorkspace && isClusterWorkspacePath(sourcePath) {
+				continue
+			}
+			if err := isPathSafe(sourcePath); err != nil {
+				return err
+			}
+			*localFiles = append(*localFiles, map[string]string{
+				"path":        path,
+				"source_path": sourcePath,
+			})
+		}
+	}
+	return nil
+}
+
+func isClusterWorkspacePath(p string) bool {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return false
+	}
+	cleaned := path.Clean("/" + strings.TrimLeft(p, "/"))
+	return cleaned == "/workspace" || strings.HasPrefix(cleaned, "/workspace/")
 }
 
 // expandSourceGlob expands a glob pattern relative to manifestDir and returns

@@ -857,7 +857,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	localRefs, refsErr := common.FindLocalFileReferences(string(manifestBytes), filepath.Dir(manifestPath))
+	localRefs, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestBytes, manifestPath)
 	if refsErr != nil {
 		h.handleError(fmt.Errorf("manifest file reference error: %w", refsErr))
 		return
@@ -1156,7 +1156,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	localRefs, refsErr := common.FindLocalFileReferences(string(manifestBytes), filepath.Dir(manifestPath))
+	localRefs, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestBytes, manifestPath)
 	if refsErr != nil {
 		h.handleError(fmt.Errorf("manifest file reference error: %w", refsErr))
 		return
@@ -1185,6 +1185,42 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	}
 
 	h.displayBuildResults(ctx, api, resp.Name)
+}
+
+func (h *Handler) localFileReferences(manifestBytes []byte, manifestPath string) ([]map[string]string, error) {
+	dir := filepath.Dir(manifestPath)
+	content := string(manifestBytes)
+	if h.opts.Workspace != nil && strings.TrimSpace(*h.opts.Workspace) != "" {
+		return common.FindLocalFileReferencesForWorkspaceBuild(content, dir)
+	}
+	return common.FindLocalFileReferences(content, dir)
+}
+
+func (h *Handler) prepareManifestUploads(
+	ctx context.Context,
+	api *buildapiclient.Client,
+	req *buildapitypes.BuildRequest,
+	manifestBytes []byte,
+	manifestPath string,
+) ([]map[string]string, error) {
+	localRefs, err := h.localFileReferences(manifestBytes, manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	if h.opts.Workspace == nil || strings.TrimSpace(*h.opts.Workspace) == "" {
+		return localRefs, nil
+	}
+	// CAIB_CLIENT_WORKSPACE_UPLOAD=0: send /workspace paths unchanged so the
+	// operator hydrate path can be tested (no client-side copy).
+	if os.Getenv("CAIB_CLIENT_WORKSPACE_UPLOAD") == "0" {
+		return localRefs, nil
+	}
+	rewritten, wsRefs, err := h.materializeWorkspaceFiles(ctx, api, strings.TrimSpace(*h.opts.Workspace), req.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	req.Manifest = rewritten
+	return append(localRefs, wsRefs...), nil
 }
 
 func (h *Handler) handleFileUploads(
@@ -1225,9 +1261,13 @@ func (h *Handler) handleFileUploads(
 
 	uploads := make([]buildapiclient.Upload, 0, len(localRefs))
 	for _, ref := range localRefs {
+		dest := ref["dest"]
+		if dest == "" {
+			dest = ref["source_path"]
+		}
 		uploads = append(uploads, buildapiclient.Upload{
 			SourcePath: ref["source_path"],
-			DestPath:   ref["source_path"],
+			DestPath:   dest,
 		})
 	}
 

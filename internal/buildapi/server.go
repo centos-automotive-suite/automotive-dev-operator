@@ -952,13 +952,19 @@ func resolveOCIRepoImages(req *BuildRequest) error {
 	return nil
 }
 
+type workspaceBuildResolution struct {
+	CachePVC string
+	FileURL  string
+	Running  bool
+}
+
 // resolveWorkspaceForBuild resolves a workspace reference for a build:
 // - Finds the workspace or auto-creates it if it doesn't exist
 // - Creates/finds a build-cache PVC for osbuild checkpoint persistence
 // - Forwards the workspace's lease if the build has flash enabled but no explicit lease
 // - Starts an HTTP file server in the workspace pod and injects workspace_url as a custom define
-// Returns the build-cache PVC name.
-func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *BuildRequest) (string, error) {
+func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *BuildRequest) (workspaceBuildResolution, error) {
+	var res workspaceBuildResolution
 	operatorConfig, _ := loadOperatorConfigFn(ctx, k8sClient, namespace)
 	var wsConfig *automotivev1alpha1.WorkspacesConfig
 	if operatorConfig != nil {
@@ -969,7 +975,7 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 	err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: wsName}, ws)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
-			return "", fmt.Errorf("checking workspace %q: %w", wsName, err)
+			return workspaceBuildResolution{}, fmt.Errorf("checking workspace %q: %w", wsName, err)
 		}
 		// Auto-create workspace with defaults from OperatorConfig
 		ws = &automotivev1alpha1.Workspace{
@@ -985,12 +991,12 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 			},
 		}
 		if err := k8sClient.Create(ctx, ws); err != nil {
-			return "", fmt.Errorf("creating workspace %q: %w", wsName, err)
+			return workspaceBuildResolution{}, fmt.Errorf("creating workspace %q: %w", wsName, err)
 		}
 		a.log.Info("Auto-created workspace for build", "workspace", wsName, "requester", requester)
 	} else {
 		if ws.Spec.Owner != requester {
-			return "", fmt.Errorf("workspace %q not found", wsName)
+			return workspaceBuildResolution{}, fmt.Errorf("workspace %q not found", wsName)
 		}
 	}
 
@@ -1001,19 +1007,23 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 
 	// Start file server in workspace pod and inject workspace_url for manifest use
 	// (e.g. add_files: [{path: /usr/bin/foo, url: $workspace_url/my-binary}])
-	if ws.Status.Phase == phaseRunning && ws.Status.PodName != "" && restCfg != nil {
-		pod := &corev1.Pod{}
-		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ws.Status.PodName}, pod); err == nil && pod.Status.PodIP != "" {
-			const wsFileServerPort = 9090
-			// Redirect shell's own FDs first so runc exec doesn't block waiting for SPDY pipes.
-			cmd := []string{"/bin/sh", "-c",
-				fmt.Sprintf("exec 0</dev/null 1>/dev/null 2>/dev/null; python3 -m http.server %d -d /workspace &", wsFileServerPort)}
-			if err := podExec(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
-				a.log.Error(err, "Failed to start workspace file server", "workspace", wsName)
-			} else {
-				wsURL := fmt.Sprintf("http://%s:%d", pod.Status.PodIP, wsFileServerPort)
-				req.CustomDefs = append(req.CustomDefs, fmt.Sprintf("workspace_url=%s", wsURL))
-				a.log.Info("Workspace file server started", "workspace", wsName, "url", wsURL)
+	if ws.Status.Phase == phaseRunning && ws.Status.PodName != "" {
+		res.Running = true
+		if restCfg != nil {
+			pod := &corev1.Pod{}
+			if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ws.Status.PodName}, pod); err == nil && pod.Status.PodIP != "" {
+				const wsFileServerPort = 9090
+				// Redirect shell's own FDs first so runc exec doesn't block waiting for SPDY pipes.
+				cmd := []string{"/bin/sh", "-c",
+					fmt.Sprintf("exec 0</dev/null 1>/dev/null 2>/dev/null; python3 -m http.server %d -d /workspace &", wsFileServerPort)}
+				if err := podExec(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
+					a.log.Error(err, "Failed to start workspace file server", "workspace", wsName)
+				} else {
+					wsURL := fmt.Sprintf("http://%s:%d", pod.Status.PodIP, wsFileServerPort)
+					req.CustomDefs = append(req.CustomDefs, fmt.Sprintf("workspace_url=%s", wsURL))
+					a.log.Info("Workspace file server started", "workspace", wsName, "url", wsURL)
+					res.FileURL = wsURL
+				}
 			}
 		}
 	}
@@ -1028,11 +1038,12 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 		client.InNamespace(namespace),
 		client.MatchingLabels(buildCacheLabels),
 	); err != nil {
-		return "", fmt.Errorf("listing build-cache PVCs: %w", err)
+		return workspaceBuildResolution{}, fmt.Errorf("listing build-cache PVCs: %w", err)
 	}
 	for i := range pvcList.Items {
 		if pvcList.Items[i].DeletionTimestamp == nil {
-			return pvcList.Items[i].Name, nil
+			res.CachePVC = pvcList.Items[i].Name
+			return res, nil
 		}
 	}
 
@@ -1049,7 +1060,7 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 	}
 	cacheSizeQty, err := resource.ParseQuantity(cacheSize)
 	if err != nil {
-		return "", fmt.Errorf("invalid buildCacheSize %q: %w", cacheSize, err)
+		return workspaceBuildResolution{}, fmt.Errorf("invalid buildCacheSize %q: %w", cacheSize, err)
 	}
 
 	pvc := &corev1.PersistentVolumeClaim{
@@ -1077,11 +1088,82 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 		},
 	}
 	if err := k8sClient.Create(ctx, pvc); err != nil {
-		return "", fmt.Errorf("creating build-cache PVC: %w", err)
+		return workspaceBuildResolution{}, fmt.Errorf("creating build-cache PVC: %w", err)
 	}
 
 	a.log.Info("Created build-cache PVC", "workspace", wsName, "pvc", pvc.Name, "size", cacheSize)
-	return pvc.Name, nil
+	res.CachePVC = pvc.Name
+	return res, nil
+}
+
+func (a *APIServer) bindWorkspaceToBuild(
+	ctx context.Context,
+	c *gin.Context,
+	span trace.Span,
+	k8sClient client.Client,
+	namespace, requester string,
+	req *BuildRequest,
+) (string, []WorkspaceHydrateRef, bool) {
+	restCfg, restErr := getRESTConfigFromRequest(c)
+	if restErr != nil {
+		spanError(span, restErr)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"}) //nolint:goconst // matches existing handlers
+		return "", nil, true
+	}
+	wsRes, wsErr := a.resolveWorkspaceForBuild(ctx, k8sClient, restCfg, namespace, req.Workspace, requester, req)
+	if wsErr != nil {
+		spanError(span, wsErr)
+		c.JSON(http.StatusBadRequest, gin.H{"error": wsErr.Error()})
+		return "", nil, true
+	}
+	rewritten, refs, applyErr := applyWorkspaceManifest(req.Manifest, wsRes.FileURL, wsRes.Running)
+	if applyErr != nil {
+		spanError(span, applyErr)
+		c.JSON(http.StatusBadRequest, gin.H{"error": applyErr.Error()})
+		return "", nil, true
+	}
+	req.Manifest = rewritten
+	return wsRes.CachePVC, refs, false
+}
+
+func (a *APIServer) applyWorkspaceOnCreate(
+	ctx context.Context,
+	c *gin.Context,
+	span trace.Span,
+	k8sClient client.Client,
+	namespace, requestedBy string,
+	req *BuildRequest,
+	needsUpload bool,
+) (string, []WorkspaceHydrateRef, bool, bool) {
+	if req.Workspace == "" {
+		return "", nil, needsUpload, false
+	}
+	pvcName, refs, failed := a.bindWorkspaceToBuild(ctx, c, span, k8sClient, namespace, requestedBy, req)
+	if failed {
+		return "", nil, needsUpload, true
+	}
+	if len(refs) > 0 {
+		needsUpload = true
+	}
+	return pvcName, refs, needsUpload || manifestNeedsUpload(req.Manifest), false
+}
+
+func setWorkspaceUploadAnnotations(annotations map[string]string, hydrateRefs []WorkspaceHydrateRef, req *BuildRequest) error {
+	if len(hydrateRefs) > 0 {
+		raw, err := json.Marshal(hydrateRefs)
+		if err != nil {
+			return err
+		}
+		annotations[labels.WorkspaceHydrate] = string(raw)
+	}
+	if req.HasLocalFiles {
+		annotations[labels.AwaitClientUploads] = labels.ValueTrue
+	} else if req.Workspace != "" {
+		// New caib with --workspace does not POST /uploads for /workspace paths.
+		// Tell the controller not to wait for a client that is never coming.
+		annotations[labels.ClientSkipsUploads] = labels.ValueTrue
+	}
+	return nil
 }
 
 // buildAIBSpec creates AIBSpec configuration from build request
@@ -1277,22 +1359,10 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
-	// Resolve --workspace: create/find build-cache PVC, forward lease, start file server
-	var buildCachePVCName string
-	if req.Workspace != "" {
-		restCfg, restErr := getRESTConfigFromRequest(c)
-		if restErr != nil {
-			spanError(span, restErr)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
-			return
-		}
-		pvcName, wsErr := a.resolveWorkspaceForBuild(ctx, k8sClient, restCfg, namespace, req.Workspace, requestedBy, &req)
-		if wsErr != nil {
-			spanError(span, wsErr)
-			c.JSON(http.StatusBadRequest, gin.H{"error": wsErr.Error()})
-			return
-		}
-		buildCachePVCName = pvcName
+	buildCachePVCName, hydrateRefs, needsUpload, wsFailed := a.applyWorkspaceOnCreate(
+		ctx, c, span, k8sClient, namespace, requestedBy, &req, needsUpload)
+	if wsFailed {
+		return
 	}
 
 	existing := &automotivev1alpha1.ImageBuild{}
@@ -1368,6 +1438,11 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 	if req.Reproducible && taskBundleRef != "" {
 		annotations[automotivev1alpha1.AnnotationTaskBundleRef] = taskBundleRef
+	}
+	if err := setWorkspaceUploadAnnotations(annotations, hydrateRefs, &req); err != nil {
+		spanError(span, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode workspace hydrate plan"})
+		return
 	}
 
 	imageBuild := &automotivev1alpha1.ImageBuild{

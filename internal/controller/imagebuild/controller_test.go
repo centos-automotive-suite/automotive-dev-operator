@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 	"github.com/go-logr/logr"
@@ -1022,6 +1023,39 @@ func newTestReconciler(objs ...client.Object) *ImageBuildReconciler {
 		Client:   builder.Build(),
 		Scheme:   scheme,
 		Recorder: record.NewFakeRecorder(100),
+	}
+}
+
+func TestHandleUploadingState_ClientSkipsUploadsWithoutHydrate(t *testing.T) {
+	ib := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "skip-uploads",
+			Namespace:         "test-ns",
+			CreationTimestamp: metav1.Now(),
+			Annotations: map[string]string{
+				labels.ClientSkipsUploads: labels.ValueTrue,
+			},
+		},
+		Status: automotivev1alpha1.ImageBuildStatus{
+			Phase:   "Uploading",
+			Message: "Waiting for file uploads",
+		},
+	}
+	r := newTestReconciler(ib)
+
+	if _, err := r.handleUploadingState(context.Background(), ib); err != nil {
+		t.Fatalf("handleUploadingState() error: %v", err)
+	}
+
+	fresh := &automotivev1alpha1.ImageBuild{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "skip-uploads", Namespace: "test-ns"}, fresh); err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+	if fresh.Annotations[labels.UploadsComplete] != labels.ValueTrue {
+		t.Errorf("uploads-complete = %q, want true", fresh.Annotations[labels.UploadsComplete])
+	}
+	if fresh.Status.Phase != phaseBuilding {
+		t.Errorf("phase = %q, want %q", fresh.Status.Phase, phaseBuilding)
 	}
 }
 

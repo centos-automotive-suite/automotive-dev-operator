@@ -495,3 +495,46 @@ func TestExpandSourceGlob_AbsolutePattern(t *testing.T) {
 		t.Errorf("expected absolute path for absolute pattern, got %q", files[0])
 	}
 }
+
+func TestFindLocalFileReferencesForWorkspaceBuild_SkipsClusterPaths(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "local.bin"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `
+content:
+  add_files:
+    - path: /usr/bin/app
+      source_path: /workspace/src/build/app
+    - path: /usr/bin/local
+      source_path: local.bin
+    - dest: /etc/
+      source_glob: /workspace/src/etc/**/*.conf
+`
+	refs, err := FindLocalFileReferencesForWorkspaceBuild(manifest, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 laptop ref, got %d: %v", len(refs), refs)
+	}
+	if refs[0]["source_path"] != "local.bin" {
+		t.Errorf("source_path = %q, want local.bin", refs[0]["source_path"])
+	}
+}
+
+func TestFindLocalFileReferences_DoesNotSkipWorkspaceWithoutFlag(t *testing.T) {
+	manifest := `
+content:
+  add_files:
+    - path: /usr/bin/app
+      source_path: /workspace/src/build/app
+`
+	refs, err := FindLocalFileReferences(manifest, "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 ref when not excluding workspace paths, got %d", len(refs))
+	}
+}
