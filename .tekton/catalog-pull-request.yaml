@@ -231,7 +231,7 @@ spec:
             mountPath: /var/workdir
         steps:
         - name: use-trusted-artifact
-          image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:47d12667f914ca72e5e6f2db64bc1c1ecda519565ca2eef9e9f7cb3db9ebd3bf
+          image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
           args:
           - use
           - $(params.SOURCE_ARTIFACT)=/var/workdir/source
@@ -270,7 +270,7 @@ spec:
             echo "Generating catalog from ${BUNDLE_IMG} (OLM version ${VERSION})..."
             make catalog-update
         - name: create-trusted-artifact
-          image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:47d12667f914ca72e5e6f2db64bc1c1ecda519565ca2eef9e9f7cb3db9ebd3bf
+          image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
           env:
           - name: IMAGE_EXPIRES_AFTER
             value: $(params.ociArtifactExpiresAfter)
