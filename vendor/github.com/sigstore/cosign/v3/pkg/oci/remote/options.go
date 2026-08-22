@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/sigstore/cosign/v3/pkg/cosign/env"
+	sgbundle "github.com/sigstore/sigstore-go/pkg/bundle"
 )
 
 const (
@@ -45,6 +46,7 @@ type options struct {
 	ROpt              []remote.Option
 	NameOpts          []name.Option
 	OriginalOptions   []Option
+	BundleOpts        []sgbundle.Option
 }
 
 var defaultOptions = []remote.Option{
@@ -129,6 +131,13 @@ func WithTargetRepository(repo name.Repository) Option {
 	}
 }
 
+// TargetRepositoryFromOptions extracts the TargetRepository that a
+// WithTargetRepository option would have set in the provided options.
+// Returns the zero name.Repository if no override was provided.
+func TargetRepositoryFromOptions(opts ...Option) name.Repository {
+	return makeOptions(name.Repository{}, opts...).TargetRepository
+}
+
 // GetEnvTargetRepository returns the Repository specified by
 // `os.Getenv(RepoOverrideEnvKey)`, or the empty value if not set.
 // Returns an error if the value is set but cannot be parsed.
@@ -148,5 +157,13 @@ func GetEnvTargetRepository() (name.Repository, error) {
 func WithNameOptions(opts ...name.Option) Option {
 	return func(o *options) {
 		o.NameOpts = opts
+	}
+}
+
+// WithBundleOptions is a functional option for passing sigstore-go bundle
+// options (e.g. AllowCertificateChain) when parsing bundles.
+func WithBundleOptions(opts ...sgbundle.Option) Option {
+	return func(o *options) {
+		o.BundleOpts = append(o.BundleOpts, opts...)
 	}
 }
