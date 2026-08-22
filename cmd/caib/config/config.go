@@ -27,10 +27,23 @@ const (
 // nil means use the default (insecure TLS, 5s timeout). Overridden in tests.
 var healthHTTPClient *http.Client
 
+// S3Config holds default S3 artifact upload settings.
+type S3Config struct {
+	Bucket                string `json:"bucket,omitempty"`
+	Prefix                string `json:"prefix,omitempty"`
+	Endpoint              string `json:"endpoint,omitempty"`
+	Region                string `json:"region,omitempty"`
+	CredentialsSecret     string `json:"credentials_secret,omitempty"`
+	AccessKeyID           string `json:"access_key_id,omitempty"`
+	SecretAccessKey       string `json:"secret_access_key,omitempty"`
+	InsecureSkipTLSVerify bool   `json:"insecure_skip_tls_verify,omitempty"`
+}
+
 // CLIConfig holds saved CLI settings.
 type CLIConfig struct {
-	ServerURL           string `json:"server_url"`
-	DerivedFromEndpoint string `json:"derived_from_endpoint,omitempty"`
+	ServerURL           string    `json:"server_url"`
+	DerivedFromEndpoint string    `json:"derived_from_endpoint,omitempty"`
+	S3                  *S3Config `json:"s3,omitempty"`
 }
 
 // DefaultServer returns the effective default server URL: CAIB_SERVER env, then saved config.
@@ -220,21 +233,49 @@ func Read() (*CLIConfig, error) {
 	return &cfg, nil
 }
 
+// S3Defaults returns the S3 config from the saved config file.
+// Returns (nil, nil) when no config file exists or the S3 section is absent.
+func S3Defaults() (*S3Config, error) {
+	cfg, err := Read()
+	if err != nil {
+		return nil, fmt.Errorf("reading config for S3 defaults: %w", err)
+	}
+	if cfg == nil {
+		return nil, nil
+	}
+	return cfg.S3, nil
+}
+
 // SaveServerURL writes the given server URL to the local config file.
 // This is the manual-set path (e.g. caib login <url>) — clears DerivedFromEndpoint
-// so the URL is never auto-invalidated.
+// so the URL is never auto-invalidated. Preserves other config fields (e.g. S3).
 func SaveServerURL(serverURL string) error {
-	return saveConfig(&CLIConfig{ServerURL: strings.TrimSpace(serverURL)})
+	cfg, err := Read()
+	if err != nil {
+		return fmt.Errorf("reading existing config: %w", err)
+	}
+	if cfg == nil {
+		cfg = &CLIConfig{}
+	}
+	cfg.ServerURL = strings.TrimSpace(serverURL)
+	cfg.DerivedFromEndpoint = ""
+	return saveConfig(cfg)
 }
 
 // saveDerivedServerURL saves a server URL that was auto-derived from a Jumpstarter endpoint.
 // The source endpoint is recorded so the cached URL can be invalidated when the
-// Jumpstarter config changes.
+// Jumpstarter config changes. Preserves other config fields (e.g. S3).
 func saveDerivedServerURL(serverURL, sourceEndpoint string) error {
-	return saveConfig(&CLIConfig{
-		ServerURL:           strings.TrimSpace(serverURL),
-		DerivedFromEndpoint: strings.TrimSpace(sourceEndpoint),
-	})
+	cfg, err := Read()
+	if err != nil {
+		return fmt.Errorf("reading existing config: %w", err)
+	}
+	if cfg == nil {
+		cfg = &CLIConfig{}
+	}
+	cfg.ServerURL = strings.TrimSpace(serverURL)
+	cfg.DerivedFromEndpoint = strings.TrimSpace(sourceEndpoint)
+	return saveConfig(cfg)
 }
 
 func saveConfig(cfg *CLIConfig) error {
