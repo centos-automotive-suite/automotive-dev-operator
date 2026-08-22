@@ -27,6 +27,7 @@ const (
 	// SpecOutputSecretRefNotFound indicates the referenced secret in output is missing
 	SpecOutputSecretRefNotFound BuildReason = "SpecOutputSecretRefNotFound"
 	// SpecBuilderSecretRefNotFound indicates the referenced secret in builder is missing
+	// #nosec G101 no hard-coded credentials
 	SpecBuilderSecretRefNotFound BuildReason = "SpecBuilderSecretRefNotFound"
 	// MultipleSecretRefNotFound indicates that multiple secrets are missing
 	MultipleSecretRefNotFound BuildReason = "MultipleSecretRefNotFound"
@@ -100,6 +101,8 @@ const (
 
 	// AnnotationBuildRefSecret is an annotation that tells the Build Controller to reconcile on
 	// events of the secret only if is referenced by a Build in the same namespace
+	//
+	// Deprecated: this annotation is no longer required and has no effect.
 	AnnotationBuildRefSecret = BuildDomain + "/referenced.secret"
 
 	// AnnotationBuildVerifyRepository tells the Build Controller to check a remote repository. If the annotation is not set

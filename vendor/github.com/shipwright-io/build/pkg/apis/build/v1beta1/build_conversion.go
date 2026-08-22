@@ -8,13 +8,14 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/shipwright-io/build/pkg/apis/build/v1alpha1"
-	"github.com/shipwright-io/build/pkg/ctxlog"
-	"github.com/shipwright-io/build/pkg/webhook"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
+
+	buildapialpha "github.com/shipwright-io/build/pkg/apis/build/v1alpha1"
+	"github.com/shipwright-io/build/pkg/ctxlog"
+	"github.com/shipwright-io/build/pkg/webhook"
 )
 
 const (
@@ -29,34 +30,38 @@ var _ webhook.Conversion = (*Build)(nil)
 func (src *Build) ConvertTo(ctx context.Context, obj *unstructured.Unstructured) error {
 	ctxlog.Info(ctx, "converting Build from beta to alpha", "namespace", src.Namespace, "name", src.Name)
 
-	var alphaBuild v1alpha1.Build
+	var alphaBuild buildapialpha.Build
 
 	alphaBuild.TypeMeta = src.TypeMeta
-	alphaBuild.TypeMeta.APIVersion = alphaGroupVersion
+	alphaBuild.APIVersion = alphaGroupVersion
 
 	alphaBuild.ObjectMeta = src.ObjectMeta
 
-	src.Spec.ConvertTo(&alphaBuild.Spec)
+	if err := src.Spec.ConvertTo(&alphaBuild.Spec); err != nil {
+		ctxlog.Error(ctx, err, "failed to convert object")
+		return err
+	}
 
-	alphaBuild.Status = v1alpha1.BuildStatus{
+	alphaBuild.Status = buildapialpha.BuildStatus{
 		Registered: src.Status.Registered,
-		Reason:     (*v1alpha1.BuildReason)(src.Status.Reason),
+		Reason:     (*buildapialpha.BuildReason)(src.Status.Reason),
 		Message:    src.Status.Message,
 	}
 
 	// convert annotation-controlled features
 	if src.Spec.Retention != nil && src.Spec.Retention.AtBuildDeletion != nil {
 		// We must create a new Map as otherwise the addition is not kept
-		alphaBuild.ObjectMeta.Annotations = map[string]string{}
+		alphaBuild.Annotations = map[string]string{}
 		for k, v := range src.Annotations {
-			alphaBuild.ObjectMeta.Annotations[k] = v
+			alphaBuild.Annotations[k] = v
 		}
-		alphaBuild.ObjectMeta.Annotations[v1alpha1.AnnotationBuildRunDeletion] = strconv.FormatBool(*src.Spec.Retention.AtBuildDeletion)
+		alphaBuild.Annotations[buildapialpha.AnnotationBuildRunDeletion] = strconv.FormatBool(*src.Spec.Retention.AtBuildDeletion)
 	}
 
 	mapito, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&alphaBuild)
 	if err != nil {
 		ctxlog.Error(ctx, err, "failed structuring the newObject")
+		return err
 	}
 	obj.Object = mapito
 
@@ -64,32 +69,36 @@ func (src *Build) ConvertTo(ctx context.Context, obj *unstructured.Unstructured)
 
 }
 
-// ConvertFrom converts a provided v1alpha1.Build object into this v1beta1.Build object.
+// ConvertFrom converts a provided buildapialpha.Build object into this v1beta1.Build object.
 func (src *Build) ConvertFrom(ctx context.Context, obj *unstructured.Unstructured) error {
 
-	var alphaBuild v1alpha1.Build
+	var alphaBuild buildapialpha.Build
 
 	unstructured := obj.UnstructuredContent()
 	err := runtime.DefaultUnstructuredConverter.FromUnstructured(unstructured, &alphaBuild)
 	if err != nil {
 		ctxlog.Error(ctx, err, "failed unstructuring the convertedObject")
+		return err
 	}
 
 	ctxlog.Info(ctx, "converting Build from alpha to beta", "namespace", alphaBuild.Namespace, "name", alphaBuild.Name)
 
 	src.ObjectMeta = alphaBuild.ObjectMeta
 	src.TypeMeta = alphaBuild.TypeMeta
-	src.TypeMeta.APIVersion = betaGroupVersion
+	src.APIVersion = betaGroupVersion
 
-	src.Spec.ConvertFrom(&alphaBuild.Spec)
+	if err := src.Spec.ConvertFrom(&alphaBuild.Spec); err != nil {
+		ctxlog.Error(ctx, err, "failed to convert object")
+		return err
+	}
 
 	// convert annotation-controlled features
-	if value, set := alphaBuild.Annotations[v1alpha1.AnnotationBuildRunDeletion]; set {
+	if value, set := alphaBuild.Annotations[buildapialpha.AnnotationBuildRunDeletion]; set {
 		if src.Spec.Retention == nil {
 			src.Spec.Retention = &BuildRetention{}
 		}
 		src.Spec.Retention.AtBuildDeletion = ptr.To(value == "true")
-		delete(src.ObjectMeta.Annotations, v1alpha1.AnnotationBuildRunDeletion)
+		delete(src.Annotations, buildapialpha.AnnotationBuildRunDeletion)
 	}
 
 	src.Status = BuildStatus{
@@ -101,12 +110,12 @@ func (src *Build) ConvertFrom(ctx context.Context, obj *unstructured.Unstructure
 	return nil
 }
 
-func (dest *BuildSpec) ConvertFrom(orig *v1alpha1.BuildSpec) error {
+func (dest *BuildSpec) ConvertFrom(orig *buildapialpha.BuildSpec) error {
 	// Handle BuildSpec Source
 
 	// only interested on spec.sources as long as an item of the list
 	// is of the type LocalCopy. Otherwise, we move into bundle or git types.
-	index, isLocal := v1alpha1.IsLocalCopyType(orig.Sources)
+	index, isLocal := buildapialpha.IsLocalCopyType(orig.Sources)
 	if isLocal {
 		dest.Source = &Source{
 			Type: LocalType,
@@ -227,12 +236,12 @@ func (dest *BuildSpec) ConvertFrom(orig *v1alpha1.BuildSpec) error {
 	return nil
 }
 
-func (dest *BuildSpec) ConvertTo(bs *v1alpha1.BuildSpec) error {
+func (dest *BuildSpec) ConvertTo(bs *buildapialpha.BuildSpec) error {
 	// Handle BuildSpec Sources or Source
 	if dest.Source != nil && dest.Source.Type == LocalType && dest.Source.Local != nil {
-		bs.Sources = append(bs.Sources, v1alpha1.BuildSource{
+		bs.Sources = append(bs.Sources, buildapialpha.BuildSource{
 			Name:    dest.Source.Local.Name,
-			Type:    v1alpha1.LocalCopy,
+			Type:    buildapialpha.LocalCopy,
 			Timeout: dest.Source.Local.Timeout,
 		})
 	} else {
@@ -241,9 +250,9 @@ func (dest *BuildSpec) ConvertTo(bs *v1alpha1.BuildSpec) error {
 
 	// Handle BuildSpec Trigger
 	if dest.Trigger != nil {
-		bs.Trigger = &v1alpha1.Trigger{}
+		bs.Trigger = &buildapialpha.Trigger{}
 		for _, t := range dest.Trigger.When {
-			tw := v1alpha1.TriggerWhen{}
+			tw := buildapialpha.TriggerWhen{}
 			t.convertToAlpha(&tw)
 			bs.Trigger.When = append(bs.Trigger.When, tw)
 		}
@@ -253,9 +262,9 @@ func (dest *BuildSpec) ConvertTo(bs *v1alpha1.BuildSpec) error {
 	}
 
 	// Handle BuildSpec Strategy
-	bs.Strategy = v1alpha1.Strategy{
+	bs.Strategy = buildapialpha.Strategy{
 		Name: dest.StrategyName(),
-		Kind: (*v1alpha1.BuildStrategyKind)(dest.Strategy.Kind),
+		Kind: (*buildapialpha.BuildStrategyKind)(dest.Strategy.Kind),
 	}
 
 	// Handle BuildSpec Builder, TODO
@@ -265,17 +274,17 @@ func (dest *BuildSpec) ConvertTo(bs *v1alpha1.BuildSpec) error {
 	bs.ParamValues = nil
 	for _, p := range dest.ParamValues {
 		if p.Name == "dockerfile" && p.SingleValue != nil {
-			bs.Dockerfile = p.SingleValue.Value
+			bs.Dockerfile = p.Value
 			continue
 		}
 
 		if p.Name == "builder-image" && p.SingleValue != nil {
-			bs.Builder = &v1alpha1.Image{
-				Image: *p.SingleValue.Value,
+			bs.Builder = &buildapialpha.Image{
+				Image: *p.Value,
 			}
 			continue
 		}
-		param := v1alpha1.ParamValue{}
+		param := buildapialpha.ParamValue{}
 		p.convertToAlpha(&param)
 		bs.ParamValues = append(bs.ParamValues, param)
 	}
@@ -303,7 +312,7 @@ func (dest *BuildSpec) ConvertTo(bs *v1alpha1.BuildSpec) error {
 			dest.Retention.SucceededLimit != nil ||
 			dest.Retention.TTLAfterFailed != nil ||
 			dest.Retention.TTLAfterSucceeded != nil) {
-		bs.Retention = &v1alpha1.BuildRetention{
+		bs.Retention = &buildapialpha.BuildRetention{
 			FailedLimit:       dest.Retention.FailedLimit,
 			SucceededLimit:    dest.Retention.SucceededLimit,
 			TTLAfterFailed:    dest.Retention.TTLAfterFailed,
@@ -312,9 +321,9 @@ func (dest *BuildSpec) ConvertTo(bs *v1alpha1.BuildSpec) error {
 	}
 
 	// Handle BuildSpec Volumes
-	bs.Volumes = []v1alpha1.BuildVolume{}
+	bs.Volumes = []buildapialpha.BuildVolume{}
 	for _, vol := range dest.Volumes {
-		aux := v1alpha1.BuildVolume{
+		aux := buildapialpha.BuildVolume{
 			Name:         vol.Name,
 			VolumeSource: vol.VolumeSource,
 		}
@@ -324,54 +333,54 @@ func (dest *BuildSpec) ConvertTo(bs *v1alpha1.BuildSpec) error {
 	return nil
 }
 
-func (p ParamValue) convertToAlpha(dest *v1alpha1.ParamValue) {
+func (p ParamValue) convertToAlpha(dest *buildapialpha.ParamValue) {
 
-	if p.SingleValue != nil && p.SingleValue.Value != nil {
-		dest.SingleValue = &v1alpha1.SingleValue{}
+	if p.SingleValue != nil && p.Value != nil {
+		dest.SingleValue = &buildapialpha.SingleValue{}
 		dest.Value = p.Value
 	}
 
 	if p.ConfigMapValue != nil {
-		dest.SingleValue = &v1alpha1.SingleValue{
-			ConfigMapValue: (*v1alpha1.ObjectKeyRef)(p.ConfigMapValue),
+		dest.SingleValue = &buildapialpha.SingleValue{
+			ConfigMapValue: (*buildapialpha.ObjectKeyRef)(p.ConfigMapValue),
 		}
 	}
 
 	if p.SecretValue != nil {
-		dest.SingleValue = &v1alpha1.SingleValue{
-			SecretValue: (*v1alpha1.ObjectKeyRef)(p.SecretValue),
+		dest.SingleValue = &buildapialpha.SingleValue{
+			SecretValue: (*buildapialpha.ObjectKeyRef)(p.SecretValue),
 		}
 	}
 
 	dest.Name = p.Name
 
 	for _, singleValue := range p.Values {
-		dest.Values = append(dest.Values, v1alpha1.SingleValue{
+		dest.Values = append(dest.Values, buildapialpha.SingleValue{
 			Value:          singleValue.Value,
-			ConfigMapValue: (*v1alpha1.ObjectKeyRef)(singleValue.ConfigMapValue),
-			SecretValue:    (*v1alpha1.ObjectKeyRef)(singleValue.SecretValue),
+			ConfigMapValue: (*buildapialpha.ObjectKeyRef)(singleValue.ConfigMapValue),
+			SecretValue:    (*buildapialpha.ObjectKeyRef)(singleValue.SecretValue),
 		})
 	}
 }
 
-func (p TriggerWhen) convertToAlpha(dest *v1alpha1.TriggerWhen) {
+func (p TriggerWhen) convertToAlpha(dest *buildapialpha.TriggerWhen) {
 	dest.Name = p.Name
-	dest.Type = v1alpha1.TriggerType(p.Type)
+	dest.Type = buildapialpha.TriggerType(p.Type)
 
-	dest.GitHub = &v1alpha1.WhenGitHub{}
+	dest.GitHub = &buildapialpha.WhenGitHub{}
 	for _, e := range p.GitHub.Events {
-		dest.GitHub.Events = append(dest.GitHub.Events, v1alpha1.GitHubEventName(e))
+		dest.GitHub.Events = append(dest.GitHub.Events, buildapialpha.GitHubEventName(e))
 	}
 	dest.GitHub.Branches = p.GetBranches(GitHubWebHookTrigger)
 
-	dest.Image = (*v1alpha1.WhenImage)(p.Image)
-	dest.ObjectRef = (*v1alpha1.WhenObjectRef)(p.ObjectRef)
+	dest.Image = (*buildapialpha.WhenImage)(p.Image)
+	dest.ObjectRef = (*buildapialpha.WhenObjectRef)(p.ObjectRef)
 
 }
 
-func convertBetaParamValue(orig v1alpha1.ParamValue) ParamValue {
+func convertBetaParamValue(orig buildapialpha.ParamValue) ParamValue {
 	p := ParamValue{}
-	if orig.SingleValue != nil && orig.SingleValue.Value != nil {
+	if orig.SingleValue != nil && orig.Value != nil {
 		p.SingleValue = &SingleValue{}
 		p.Value = orig.Value
 	}
@@ -397,7 +406,7 @@ func convertBetaParamValue(orig v1alpha1.ParamValue) ParamValue {
 	return p
 }
 
-func convertToBetaTriggers(orig *v1alpha1.TriggerWhen) TriggerWhen {
+func convertToBetaTriggers(orig *buildapialpha.TriggerWhen) TriggerWhen {
 	dest := TriggerWhen{
 		Name: orig.Name,
 		Type: TriggerType(orig.Type),
@@ -408,15 +417,15 @@ func convertToBetaTriggers(orig *v1alpha1.TriggerWhen) TriggerWhen {
 		dest.GitHub.Events = append(dest.GitHub.Events, GitHubEventName(e))
 	}
 
-	dest.GitHub.Branches = orig.GetBranches(v1alpha1.GitHubWebHookTrigger)
+	dest.GitHub.Branches = orig.GetBranches(buildapialpha.GitHubWebHookTrigger)
 	dest.Image = (*WhenImage)(orig.Image)
 	dest.ObjectRef = (*WhenObjectRef)(orig.ObjectRef)
 
 	return dest
 }
 
-func getAlphaBuildSource(src BuildSpec) v1alpha1.Source {
-	source := v1alpha1.Source{}
+func getAlphaBuildSource(src BuildSpec) buildapialpha.Source {
+	source := buildapialpha.Source{}
 
 	if src.Source == nil {
 		return source
@@ -432,9 +441,9 @@ func getAlphaBuildSource(src BuildSpec) v1alpha1.Source {
 				Name: *src.Source.OCIArtifact.PullSecret,
 			}
 		}
-		source.BundleContainer = &v1alpha1.BundleContainer{
+		source.BundleContainer = &buildapialpha.BundleContainer{
 			Image: src.Source.OCIArtifact.Image,
-			Prune: (*v1alpha1.PruneOption)(src.Source.OCIArtifact.Prune),
+			Prune: (*buildapialpha.PruneOption)(src.Source.OCIArtifact.Prune),
 		}
 	default:
 		if src.Source.Git != nil && src.Source.Git.CloneSecret != nil {
