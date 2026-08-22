@@ -17,6 +17,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
@@ -443,8 +444,43 @@ func (r *ImageBuildReconciler) handleUploadingState(
 		return ctrl.Result{}, nil
 	}
 
-	uploadsComplete := imageBuild.Annotations != nil &&
-		imageBuild.Annotations["automotive.sdv.cloud.redhat.com/uploads-complete"] == "true"
+	if err := r.ensureWorkspaceHydrate(ctx, imageBuild); err != nil {
+		if stderrors.Is(err, buildapi.ErrUploadPodNotReady) {
+			if imageBuild.Status.Message != "Waiting for upload pod" {
+				if statusErr := r.updateStatus(ctx, imageBuild, "Uploading", "Waiting for upload pod"); statusErr != nil {
+					log.Error(statusErr, "Failed to update status while waiting for upload pod")
+				}
+			}
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
+		log.Error(err, "Failed to hydrate workspace files into upload pod")
+		if shutdownErr := r.shutdownUploadPod(ctx, imageBuild); shutdownErr != nil {
+			log.Error(shutdownErr, "Failed to shutdown upload pod after hydrate failure")
+		}
+		if statusErr := r.updateStatus(ctx, imageBuild, phaseFailed,
+			fmt.Sprintf("Workspace file hydrate failed: %v", err)); statusErr != nil {
+			log.Error(statusErr, "Failed to update status to Failed")
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{}, nil
+	}
+
+	var uploadsComplete bool
+	if buildapi.ShouldSelfCompleteUploads(imageBuild.Annotations) {
+		patched := imageBuild.DeepCopy()
+		if patched.Annotations == nil {
+			patched.Annotations = map[string]string{}
+		}
+		patched.Annotations[labels.UploadsComplete] = labels.ValueTrue
+		if err := r.Patch(ctx, patched, client.MergeFrom(imageBuild)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("mark uploads complete after workspace hydrate: %w", err)
+		}
+		imageBuild.Annotations = patched.Annotations
+		uploadsComplete = true
+	} else {
+		uploadsComplete = imageBuild.Annotations != nil &&
+			imageBuild.Annotations[labels.UploadsComplete] == labels.ValueTrue
+	}
 
 	if !uploadsComplete {
 		return ctrl.Result{RequeueAfter: time.Second * 10}, nil
@@ -459,6 +495,31 @@ func (r *ImageBuildReconciler) handleUploadingState(
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{Requeue: true}, nil
+}
+
+func (r *ImageBuildReconciler) ensureWorkspaceHydrate(
+	ctx context.Context,
+	imageBuild *automotivev1alpha1.ImageBuild,
+) error {
+	if imageBuild.Annotations == nil || imageBuild.Annotations[labels.WorkspaceHydrate] == "" {
+		return nil
+	}
+	if imageBuild.Annotations[labels.WorkspaceHydrateDone] == labels.ValueTrue {
+		return nil
+	}
+	if err := buildapi.HydrateWorkspaceForImageBuild(ctx, r.RestConfig, r.Client, imageBuild); err != nil {
+		return err
+	}
+	patched := imageBuild.DeepCopy()
+	if patched.Annotations == nil {
+		patched.Annotations = map[string]string{}
+	}
+	patched.Annotations[labels.WorkspaceHydrateDone] = labels.ValueTrue
+	if err := r.Patch(ctx, patched, client.MergeFrom(imageBuild)); err != nil {
+		return fmt.Errorf("mark workspace hydrate done: %w", err)
+	}
+	imageBuild.Annotations = patched.Annotations
+	return nil
 }
 
 func (r *ImageBuildReconciler) handleBuildingState(
