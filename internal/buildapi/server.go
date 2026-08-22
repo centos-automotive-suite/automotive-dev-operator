@@ -957,8 +957,8 @@ func resolveOCIRepoImages(req *BuildRequest) error {
 // - Creates/finds a build-cache PVC for osbuild checkpoint persistence
 // - Forwards the workspace's lease if the build has flash enabled but no explicit lease
 // - Starts an HTTP file server in the workspace pod and injects workspace_url as a custom define
-// Returns the build-cache PVC name.
-func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *BuildRequest) (string, error) {
+// Returns the build-cache PVC name and the workspace PVC name (for mounting /workspace/src in the build pod).
+func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *BuildRequest) (string, string, error) {
 	operatorConfig, _ := loadOperatorConfigFn(ctx, k8sClient, namespace)
 	var wsConfig *automotivev1alpha1.WorkspacesConfig
 	if operatorConfig != nil {
@@ -969,7 +969,7 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 	err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: wsName}, ws)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
-			return "", fmt.Errorf("checking workspace %q: %w", wsName, err)
+			return "", "", fmt.Errorf("checking workspace %q: %w", wsName, err)
 		}
 		// Auto-create workspace with defaults from OperatorConfig
 		ws = &automotivev1alpha1.Workspace{
@@ -985,14 +985,16 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 			},
 		}
 		if err := k8sClient.Create(ctx, ws); err != nil {
-			return "", fmt.Errorf("creating workspace %q: %w", wsName, err)
+			return "", "", fmt.Errorf("creating workspace %q: %w", wsName, err)
 		}
 		a.log.Info("Auto-created workspace for build", "workspace", wsName, "requester", requester)
 	} else {
 		if ws.Spec.Owner != requester {
-			return "", fmt.Errorf("workspace %q not found", wsName)
+			return "", "", fmt.Errorf("workspace %q not found", wsName)
 		}
 	}
+
+	workspacePVCName := ws.Status.PVCName
 
 	// Forward workspace lease if flash is enabled and no explicit lease was provided
 	if req.FlashEnabled && req.FlashLeaseName == "" && ws.Spec.LeaseID != "" {
@@ -1028,11 +1030,11 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 		client.InNamespace(namespace),
 		client.MatchingLabels(buildCacheLabels),
 	); err != nil {
-		return "", fmt.Errorf("listing build-cache PVCs: %w", err)
+		return "", "", fmt.Errorf("listing build-cache PVCs: %w", err)
 	}
 	for i := range pvcList.Items {
 		if pvcList.Items[i].DeletionTimestamp == nil {
-			return pvcList.Items[i].Name, nil
+			return pvcList.Items[i].Name, workspacePVCName, nil
 		}
 	}
 
@@ -1049,7 +1051,7 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 	}
 	cacheSizeQty, err := resource.ParseQuantity(cacheSize)
 	if err != nil {
-		return "", fmt.Errorf("invalid buildCacheSize %q: %w", cacheSize, err)
+		return "", "", fmt.Errorf("invalid buildCacheSize %q: %w", cacheSize, err)
 	}
 
 	pvc := &corev1.PersistentVolumeClaim{
@@ -1077,11 +1079,11 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 		},
 	}
 	if err := k8sClient.Create(ctx, pvc); err != nil {
-		return "", fmt.Errorf("creating build-cache PVC: %w", err)
+		return "", "", fmt.Errorf("creating build-cache PVC: %w", err)
 	}
 
 	a.log.Info("Created build-cache PVC", "workspace", wsName, "pvc", pvc.Name, "size", cacheSize)
-	return pvc.Name, nil
+	return pvc.Name, workspacePVCName, nil
 }
 
 // buildAIBSpec creates AIBSpec configuration from build request
@@ -1278,7 +1280,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 
 	// Resolve --workspace: create/find build-cache PVC, forward lease, start file server
-	var buildCachePVCName string
+	var buildCachePVCName, workspacePVCName string
 	if req.Workspace != "" {
 		restCfg, restErr := getRESTConfigFromRequest(c)
 		if restErr != nil {
@@ -1286,13 +1288,14 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
 			return
 		}
-		pvcName, wsErr := a.resolveWorkspaceForBuild(ctx, k8sClient, restCfg, namespace, req.Workspace, requestedBy, &req)
+		cachePVC, wsPVC, wsErr := a.resolveWorkspaceForBuild(ctx, k8sClient, restCfg, namespace, req.Workspace, requestedBy, &req)
 		if wsErr != nil {
 			spanError(span, wsErr)
 			c.JSON(http.StatusBadRequest, gin.H{"error": wsErr.Error()})
 			return
 		}
-		buildCachePVCName = pvcName
+		buildCachePVCName = cachePVC
+		workspacePVCName = wsPVC
 	}
 
 	existing := &automotivev1alpha1.ImageBuild{}
@@ -1386,6 +1389,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			Export:            buildExportSpec(&req),
 			Flash:             flashSpec,
 			BuildCachePVC:     buildCachePVCName,
+			WorkspacePVC:      workspacePVCName,
 			Workspace:         req.Workspace,
 			SecureBuild:       req.SecureBuild,
 			Reproducible:      req.Reproducible,
