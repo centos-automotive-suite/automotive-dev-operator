@@ -930,7 +930,7 @@ func resolveOCIRepoImages(req *BuildRequest) error {
 	if mergedIdx >= 0 {
 		// Parse existing extra_repos JSON and append OCI entries
 		existingJSON := req.CustomDefs[mergedIdx][len(prefix):]
-		var existing []repoEntry
+		var existing []repoEntry //nolint:prealloc // length comes from JSON, not ociRepos
 		if err := json.Unmarshal([]byte(existingJSON), &existing); err != nil {
 			return fmt.Errorf("parsing existing extra_repos: %w", err)
 		}

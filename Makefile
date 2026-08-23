@@ -226,7 +226,7 @@ GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 ENVTEST_VERSION ?= release-0.19
-GOLANGCI_LINT_VERSION ?= v2.5.0
+GOLANGCI_LINT_VERSION ?= v2.13.1
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -474,4 +474,3 @@ bump-go: ## Update Go version everywhere (usage: make bump-go GO_PATCH_VERSION=1
 
 .PHONY: release-images
 release-images: docker-buildx bundle-build bundle-push catalog-build catalog-push ## Build and push all release images (operator, bundle, catalog)
-

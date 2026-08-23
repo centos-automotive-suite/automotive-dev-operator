@@ -1,4 +1,4 @@
-version: 2
+version: "2"
 
 run:
   timeout: 5m
@@ -7,17 +7,11 @@ run:
     - containers_image_openpgp
 
 issues:
-  # don't skip warning about doc comments
-  # don't exclude the default set of lint
-  exclude-use-default: false
-  # restore some of the defaults
-  # (fill in the rest as needed)
-  exclude-rules:
-    - path: "internal/*"
-      linters:
-        - dupl
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 linters:
-  disable-all: true
+  default: none
   enable:
     - dupl
     - errcheck
@@ -35,8 +29,39 @@ linters:
     - unconvert
     - unparam
     - unused
-
-linters-settings:
-  revive:
+  settings:
+    # goconst 1.11 and staticcheck 0.8 (golangci-lint v2.13) are noisier than v2.5.
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+      exclude-types:
+        - Call
+        - CompositeLit
+    prealloc:
+      simple: true
+      range-loops: false
+      for-loops: false
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+    revive:
+      rules:
+        - name: comment-spacings
+  exclusions:
+    generated: disable
     rules:
-      - name: comment-spacings
+      - path: internal/.*
+        linters:
+          - dupl
+      - path: _test\.go
+        linters:
+          - goconst
+      - source: "^//\\+"
+        linters:
+          - revive

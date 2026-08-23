@@ -522,7 +522,7 @@ func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
 	scriptBuf.WriteString("cd /workspace/src\n")
 	for path := range req.Files {
 		// Only hash regular files that exist; skip missing ones silently
-		scriptBuf.WriteString(fmt.Sprintf("[ -f %s ] && sha256sum %s\n", shellQuote(path), shellQuote(path)))
+		fmt.Fprintf(&scriptBuf, "[ -f %s ] && sha256sum %s\n", shellQuote(path), shellQuote(path))
 	}
 	scriptBuf.WriteString("true\n") // ensure exit 0
 

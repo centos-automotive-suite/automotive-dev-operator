@@ -38,7 +38,7 @@ func main() {
 
 	// Use nil buildConfig for defaults — bundle resources should not bake in
 	// cluster-specific settings like memory volumes or custom timeouts.
-	taskList := []*tektonv1.Task{
+	taskList := []*tektonv1.Task{ //nolint:prealloc // sealed tasks appended below
 		tasks.GenerateBuildAutomotiveImageTask("", nil, ""),
 		tasks.GeneratePushArtifactRegistryTask("", nil),
 		tasks.GeneratePushArtifactS3Task("", nil),
