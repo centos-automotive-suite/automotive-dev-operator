@@ -33,7 +33,6 @@ var (
 	OidPublicKeyDSA   = asn1.ObjectIdentifier{1, 2, 840, 10040, 4, 1}
 	OidPublicKeyECDSA = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
 
-	oidSignatureMD2WithRSA      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 2}
 	oidSignatureMD5WithRSA      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 4}
 	oidSignatureSHA1WithRSA     = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 5}
 	oidSignatureSHA256WithRSA   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
@@ -51,7 +50,12 @@ var (
 	OidMGF1            = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 8}
 	OidSignatureRSAPSS = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 10}
 
-	Asn1TagBMPString = 30
+	oidExtensionSubjectKeyId     = asn1.ObjectIdentifier{2, 5, 29, 14}
+	oidExtensionKeyUsage         = asn1.ObjectIdentifier{2, 5, 29, 15}
+	oidExtensionSubjectAltName   = asn1.ObjectIdentifier{2, 5, 29, 17}
+	oidExtensionBasicConstraints = asn1.ObjectIdentifier{2, 5, 29, 19}
+	oidExtensionAuthorityKeyId   = asn1.ObjectIdentifier{2, 5, 29, 35}
+	oidExtensionExtendedKeyUsage = asn1.ObjectIdentifier{2, 5, 29, 37}
 )
 
 type sigAlgInfo struct {

@@ -19,7 +19,10 @@ package x509tools
 import (
 	"bytes"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -32,7 +35,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 var (
@@ -80,7 +83,7 @@ func splitAndTrim(s string) []string {
 	if s == "" {
 		return nil
 	}
-	s = strings.Replace(s, ",", " ", -1)
+	s = strings.ReplaceAll(s, ",", " ")
 	pieces := strings.Split(s, " ")
 	ret := make([]string, 0, len(pieces))
 	for _, p := range pieces {
@@ -222,15 +225,30 @@ func SignCSR(csrBytes []byte, rand io.Reader, key crypto.Signer, cacert *x509.Ce
 	}
 	csr, err := x509.ParseCertificateRequest(csrBytes)
 	if err != nil {
-		return "", fmt.Errorf("parsing CSR: %s", err)
+		return "", fmt.Errorf("parsing CSR: %w", err)
 	}
 	if err := csr.CheckSignature(); err != nil {
-		return "", fmt.Errorf("validating CSR: %s", err)
+		return "", fmt.Errorf("validating CSR: %w", err)
 	}
 	// update fields
 	template := &x509.Certificate{Subject: csr.Subject}
 	if copyExtensions {
-		template.ExtraExtensions = csr.Extensions
+		// drop CSR extensions that are overridden or merged with our args
+		for _, ex := range csr.Extensions {
+			switch {
+			case ArgCertAuthority && ex.Id.Equal(oidExtensionBasicConstraints):
+				// arg has set CA constraint
+			case ArgKeyUsage != "" && (ex.Id.Equal(oidExtensionKeyUsage) || ex.Id.Equal(oidExtensionExtendedKeyUsage)):
+				// arg has set key usage
+			case ex.Id.Equal(oidExtensionSubjectKeyId) || ex.Id.Equal(oidExtensionAuthorityKeyId):
+				// we always set this
+			case ex.Id.Equal(oidExtensionSubjectAltName):
+				// these are copied piecemeal below
+			default:
+				// copy the extension as-is
+				template.ExtraExtensions = append(template.ExtraExtensions, ex)
+			}
+		}
 		template.DNSNames = csr.DNSNames
 		template.EmailAddresses = csr.EmailAddresses
 		template.IPAddresses = csr.IPAddresses
@@ -255,7 +273,7 @@ func CrossSign(certBytes []byte, rand io.Reader, key crypto.Signer, cacert *x509
 	}
 	template, err := x509.ParseCertificate(certBytes)
 	if err != nil {
-		return "", fmt.Errorf("parsing certificate: %s", err)
+		return "", fmt.Errorf("parsing certificate: %w", err)
 	}
 	if err := fillCertFields(template, template.PublicKey, key.Public()); err != nil {
 		return "", err
@@ -267,50 +285,74 @@ func CrossSign(certBytes []byte, rand io.Reader, key crypto.Signer, cacert *x509
 	return toPemString(newCert, "CERTIFICATE"), nil
 }
 
-type fakeSigner struct{ pub crypto.PublicKey }
-
-func (f fakeSigner) Public() crypto.PublicKey {
-	return f.pub
-}
-
-func (f fakeSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
-	return nil, nil
-}
-
-func confirmAndCreate(template, parent *x509.Certificate, pub crypto.PublicKey, priv crypto.PrivateKey) ([]byte, error) {
+func confirmAndCreate(template, parent *x509.Certificate, leafPub crypto.PublicKey, issuerPriv crypto.PrivateKey) ([]byte, error) {
 	if ArgInteractive {
-		// call CreateCertificate with a fake signer to get what the final cert will look like
-		pub := priv.(crypto.Signer).Public()
-		der, err := x509.CreateCertificate(rand.Reader, template, parent, pub, fakeSigner{pub})
-		if err != nil {
-			return nil, err
+		origSigner, ok := issuerPriv.(crypto.Signer)
+		if !ok {
+			return nil, errors.New("private key must satisfy crypto.Signer")
 		}
-		cert, err := x509.ParseCertificate(der)
+		ok, err := confirmCertificate(template, parent, leafPub, origSigner.Public())
 		if err != nil {
-			return nil, err
-		}
-		fmt.Fprintln(os.Stderr, "Signing certificate:")
-		fmt.Fprintln(os.Stderr)
-		FprintCertificate(os.Stderr, cert)
-		fmt.Fprintln(os.Stderr)
-		if !promptYN("Sign this cert? [Y/n] ") {
+			return nil, fmt.Errorf("mocking cert for interactive confirmation: %w", err)
+		} else if !ok {
 			fmt.Fprintln(os.Stderr, "operation canceled")
 			os.Exit(2)
 		}
 	}
-	return x509.CreateCertificate(rand.Reader, template, parent, pub, priv)
+	return x509.CreateCertificate(rand.Reader, template, parent, leafPub, issuerPriv)
+}
+
+func confirmCertificate(template, parent *x509.Certificate, leafPub, origSigner crypto.PublicKey) (bool, error) {
+	// generate a key with the same parameters as the real signer
+	fakePriv, err := generateAlike(origSigner)
+	if err != nil {
+		return false, err
+	}
+	// mangle parent cert
+	fakeParent := new(x509.Certificate)
+	*fakeParent = *parent
+	fakeParent.PublicKey = fakePriv.Public()
+	// call CreateCertificate with a fake signer to get what the final cert will look like
+	der, err := x509.CreateCertificate(rand.Reader, template, fakeParent, leafPub, fakePriv)
+	if err != nil {
+		return false, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return false, err
+	}
+	fmt.Fprintln(os.Stderr, "Signing certificate:")
+	fmt.Fprintln(os.Stderr)
+	FprintCertificate(os.Stderr, cert)
+	fmt.Fprintln(os.Stderr)
+	return promptYN("Sign this cert? [Y/n] "), nil
+}
+
+func generateAlike(pub crypto.PublicKey) (crypto.Signer, error) {
+	// generate a dummy key of the same type as pub
+	switch pub := pub.(type) {
+	case *rsa.PublicKey:
+		return rsa.GenerateKey(rand.Reader, 1024)
+	case *ecdsa.PublicKey:
+		return ecdsa.GenerateKey(pub.Curve, rand.Reader)
+	case ed25519.PublicKey:
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		return priv, err
+	default:
+		return nil, fmt.Errorf("unrecognized key type %T", pub)
+	}
 }
 
 func promptYN(prompt string) bool {
 	fmt.Fprint(os.Stderr, prompt)
-	if !terminal.IsTerminal(0) {
+	if !term.IsTerminal(0) {
 		fmt.Fprintln(os.Stderr, "input is not a terminal, assuming true")
 		return true
 	}
-	state, err := terminal.MakeRaw(0)
+	state, err := term.MakeRaw(0)
 	if err == nil {
 		defer fmt.Fprintln(os.Stderr)
-		defer terminal.Restore(0, state)
+		defer func() { _ = term.Restore(0, state) }()
 	}
 	var d [1]byte
 	if _, err := os.Stdin.Read(d[:]); err != nil {

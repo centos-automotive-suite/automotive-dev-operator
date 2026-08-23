@@ -25,12 +25,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/sassoftware/relic/lib/x509tools"
+	"github.com/sassoftware/relic/v8/lib/x509tools"
 )
 
 type SignatureBuilder struct {
 	contentInfo ContentInfo
-	hash        crypto.Hash
 	digest      []byte
 	certs       []*x509.Certificate
 	privateKey  crypto.Signer
@@ -99,7 +98,7 @@ func (sb *SignatureBuilder) Sign() (*ContentInfoSignedData, error) {
 	pubKey := sb.privateKey.Public()
 	digestAlg, pkeyAlg, err := x509tools.PkixAlgorithms(pubKey, sb.signerOpts)
 	if err != nil {
-		return nil, fmt.Errorf("pkcs7: %s", err)
+		return nil, fmt.Errorf("pkcs7: %w", err)
 	}
 	if len(sb.certs) < 1 || !x509tools.SameKey(pubKey, sb.certs[0].PublicKey) {
 		return nil, errors.New("pkcs7: first certificate must match private key")
@@ -135,7 +134,7 @@ func (sb *SignatureBuilder) Sign() (*ContentInfoSignedData, error) {
 			ContentInfo:                sb.contentInfo,
 			Certificates:               marshalCertificates(sb.certs),
 			CRLs:                       nil,
-			SignerInfos: []SignerInfo{SignerInfo{
+			SignerInfos: []SignerInfo{{
 				Version: 1,
 				IssuerAndSerialNumber: IssuerAndSerial{
 					IssuerName:   asn1.RawValue{FullBytes: sb.certs[0].RawIssuer},
