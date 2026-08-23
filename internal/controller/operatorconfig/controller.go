@@ -225,9 +225,7 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			log.Error(err, "Failed to add finalizer")
 			return ctrl.Result{}, err
 		}
-		log.Info("Finalizer added, requeuing")
-		// Requeue to avoid doing more work in this reconciliation
-		return ctrl.Result{Requeue: true}, nil
+		// GenerationChangedPredicate drops this Update; continue here.
 	}
 
 	// Handle deletion

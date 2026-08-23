@@ -398,14 +398,14 @@ func (r *ImageBuildReconciler) handleInitialState(
 			log.Error(err, "Failed to update status to Uploading")
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{}, nil
 	}
 
 	if err := r.updateStatus(ctx, imageBuild, phaseBuilding, "Build started"); err != nil {
 		log.Error(err, "Failed to update status to Building")
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{}, nil
 }
 
 func (r *ImageBuildReconciler) handleUploadingState(
@@ -458,7 +458,7 @@ func (r *ImageBuildReconciler) handleUploadingState(
 		log.Error(err, "Failed to update status to Building")
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{}, nil
 }
 
 func (r *ImageBuildReconciler) handleBuildingState(
@@ -1879,7 +1879,7 @@ func (r *ImageBuildReconciler) handlePushingState(
 				log.Error(statusErr, "Failed to clear PushTaskRunName in status")
 				return ctrl.Result{}, statusErr
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
@@ -1896,7 +1896,7 @@ func (r *ImageBuildReconciler) handlePushingState(
 			if err := r.updateStatus(ctx, imageBuild, "Flashing", "Flashing image to device"); err != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{}, nil
 		}
 
 		if err := r.updateStatus(ctx, imageBuild, phaseCompleted, "Build and push completed successfully"); err != nil {
@@ -1951,7 +1951,7 @@ func (r *ImageBuildReconciler) handleFlashingState(
 				log.Error(statusErr, "Failed to clear FlashTaskRunName in status")
 				return ctrl.Result{}, statusErr
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}

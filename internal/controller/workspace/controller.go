@@ -87,11 +87,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 		return ctrl.Result{}, err
 	}
 
-	// Ensure Pod exists (needs PVC name from status)
-	if ws.Status.PVCName == "" {
-		return ctrl.Result{Requeue: true}, nil
-	}
-
 	// Handle stopped state: delete pod but keep PVC
 	if ws.Spec.Stopped {
 		if err := r.deleteWorkspacePod(ctx, ws, log); err != nil {

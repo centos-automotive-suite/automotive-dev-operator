@@ -67,7 +67,7 @@ func (r *ImageReconciler) handleInitialState(
 	if err := r.updateStatus(ctx, image, "Verifying", "Starting image location verification"); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{}, nil
 }
 
 func (r *ImageReconciler) handleVerifyingState(
@@ -109,7 +109,7 @@ func (r *ImageReconciler) handleAvailableState(
 		if err := r.updateStatus(ctx, image, "Verifying", "Re-verifying image location"); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{}, nil
 	}
 
 	// Already Available — only update LastVerified, and only if stale (>30 min)
@@ -131,7 +131,7 @@ func (r *ImageReconciler) handleUnavailableState(
 	if err := r.updateStatus(ctx, image, "Verifying", "Retrying image location verification"); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{}, nil
 }
 
 func (r *ImageReconciler) verifyImageLocation(ctx context.Context, image *automotivev1alpha1.Image) (bool, error) {

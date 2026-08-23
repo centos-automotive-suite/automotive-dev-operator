@@ -77,7 +77,6 @@ func (r *CatalogImageReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err := r.Update(ctx, catalogImage); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
 	}
 
 	log.Info("Reconciling CatalogImage", "phase", catalogImage.Status.Phase)
@@ -140,7 +139,7 @@ func (r *CatalogImageReconciler) handlePendingPhase(
 	if err := r.Status().Update(ctx, catalogImage); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{}, nil
 }
 
 // handleVerifyingPhase handles registry verification
@@ -241,7 +240,7 @@ func (r *CatalogImageReconciler) handleAvailablePhase(
 		if err := r.Status().Update(ctx, catalogImage); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{}, nil
 	}
 
 	// Check if re-verification is needed based on interval
@@ -263,7 +262,7 @@ func (r *CatalogImageReconciler) handleAvailablePhase(
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{}, nil
 }
 
 // handleUnavailablePhase handles retry logic
@@ -281,7 +280,7 @@ func (r *CatalogImageReconciler) handleUnavailablePhase(
 	if err := r.Status().Update(ctx, catalogImage); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{}, nil
 }
 
 // handleFailedPhase handles permanent failures
@@ -299,7 +298,7 @@ func (r *CatalogImageReconciler) handleFailedPhase(
 		if err := r.Status().Update(ctx, catalogImage); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{}, nil
 	}
 
 	return ctrl.Result{}, nil
