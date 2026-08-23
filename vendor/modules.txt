@@ -321,7 +321,7 @@ github.com/gin-gonic/gin/codec/json
 github.com/gin-gonic/gin/internal/bytesconv
 github.com/gin-gonic/gin/internal/fs
 github.com/gin-gonic/gin/render
-# github.com/go-chi/chi/v5 v5.3.1
+# github.com/go-chi/chi/v5 v5.3.2
 ## explicit; go 1.23
 github.com/go-chi/chi/v5
 github.com/go-chi/chi/v5/middleware
