@@ -211,6 +211,7 @@ type ImageBuildReconciler struct {
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get
 // +kubebuilder:rbac:groups=route.openshift.io,namespace=system,resources=routes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,namespace=system,resources=events,verbs=create;patch
 
 // Reconcile handles ImageBuild reconciliation and manages the build lifecycle
 func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {

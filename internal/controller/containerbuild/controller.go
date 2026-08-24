@@ -74,6 +74,7 @@ type ContainerBuildReconciler struct {
 //+kubebuilder:rbac:groups="",namespace=system,resources=pods,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",namespace=system,resources=pods/exec,verbs=create
 //+kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
+//+kubebuilder:rbac:groups=events.k8s.io,namespace=system,resources=events,verbs=create;patch
 
 // Reconcile handles the reconciliation loop for ContainerBuild resources.
 func (r *ContainerBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

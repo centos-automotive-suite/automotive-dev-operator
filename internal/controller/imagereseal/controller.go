@@ -65,6 +65,7 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=tasks;taskruns;pipelineruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,namespace=system,resources=events,verbs=create;patch
 
 // Reconcile handles reconciliation of ImageReseal resources.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
