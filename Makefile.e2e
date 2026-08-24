@@ -25,6 +25,7 @@ include hack/e2e/timeouts.env
 #   test-e2e-auth            - OIDC authentication (OpenShift only)
 #   test-e2e-package-mode    - package mode builds
 #   test-e2e-features        - TTL, image propagation, Build API logs
+#   e2e-spec-index           - print a lane-grouped index of all specs (no cluster needed)
 .PHONY: test-e2e
 # Full suite runs all labeled tests sequentially.
 test-e2e:
@@ -57,3 +58,10 @@ test-e2e-package-mode:
 .PHONY: test-e2e-features
 test-e2e-features:
 	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-features} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="features" -timeout $(E2E_TIMEOUT_features)
+
+# Prints a lane-grouped index of all e2e specs (name + source location),
+# generated via `ginkgo --dry-run`. Use it to check e2e-test-summary.md's
+# Lane/Label/Test/File columns for drift; requires no live cluster.
+.PHONY: e2e-spec-index
+e2e-spec-index:
+	./test/e2e/scripts/gen-spec-index.sh

@@ -1,0 +1,50 @@
+---
+description: keep e2e docs synchronized with e2e tests and runners
+alwaysApply: false
+---
+# E2E Documentation Synchronization
+
+Keep `test/e2e/README.md` and `test/e2e/e2e-test-summary.md` synchronized with the current E2E test implementation.
+
+## When This Rule Applies
+
+Apply this rule whenever changes touch E2E behavior or execution paths, especially:
+
+- `test/e2e/*.go` (new/renamed/removed lanes, labels, or specs)
+- `hack/run-e2e-local.sh`, `hack/e2e/*.sh`
+- `test/e2e/scripts/gen-spec-index.sh` (lane grouping list)
+- `.github/workflows/e2e.yml`, `.github/workflows/e2e-lanes.yml`
+- `Makefile.e2e` and `Makefile` E2E targets
+- E2E manifests/configs that alter prerequisites or expected checks
+
+## Required Updates
+
+When E2E behavior changes, update `test/e2e/README.md` and `test/e2e/e2e-test-summary.md` in the same PR:
+
+1. Keep lane names, labels, and source files accurate.
+2. Keep each test row aligned with real prerequisites, steps, and pass checks.
+3. Keep setup/run prerequisites and CI execution notes current.
+4. Keep skip conditions and compatibility notes in sync with code/workflows.
+5. When adding, renaming, or removing a Ginkgo lane `Label(...)`, update
+   `KNOWN_LANES_JSON` in `test/e2e/scripts/gen-spec-index.sh` in the same PR.
+   Keep the list ordered as the desired Markdown section order. Do not include
+   secondary tags (`operator-only`, `Serial`); unknown lane labels silently
+   fall back to first-alphabetic grouping.
+
+## Validation Checklist
+
+### Recommended Workflow (Every Time)
+
+1. Run `make e2e-spec-index > /tmp/e2e-spec-index.md`.
+2. Use `/tmp/e2e-spec-index.md` to verify Lane/Label/Test/File alignment in `test/e2e/e2e-test-summary.md`.
+3. Update `test/e2e/e2e-test-summary.md` (and `test/e2e/README.md` if lane docs changed).
+4. Do not commit generated files (`/tmp/e2e-spec-index.md`, `out.md`, or similar scratch output).
+
+### Before finishing
+
+- Verify `Describe(... Label(...))` and `It("...")` names match README/summary entries, including the exact `Label(s)` column values (e.g. `operator`, `smoke`).
+- Verify new/renamed/removed lane labels are present in `KNOWN_LANES_JSON`
+  (`test/e2e/scripts/gen-spec-index.sh`).
+- Verify commands/flags in docs match scripts, Make targets, workflows, and tests.
+- Prefer concrete resource names over shorthand aliases.
+- If the PR is docs-only, still cross-check against current `test/e2e` sources.
