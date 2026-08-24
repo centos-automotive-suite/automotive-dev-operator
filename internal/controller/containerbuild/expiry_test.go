@@ -39,7 +39,7 @@ func newExpiryReconciler(objs ...automotivev1alpha1.ContainerBuild) *ContainerBu
 		Client:   builder.Build(),
 		Scheme:   scheme,
 		Log:      logr.Discard(),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 }
 
@@ -243,7 +243,7 @@ func TestHandleExpiredState_DeletesBuildRun(t *testing.T) {
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Log:      logr.Discard(),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 
 	result, err := r.handleExpiredState(context.Background(), &cb)
@@ -361,7 +361,7 @@ func TestReconcile_ExpiredPhaseCallsCleanup(t *testing.T) {
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Log:      logr.Discard(),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{

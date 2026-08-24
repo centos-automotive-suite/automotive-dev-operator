@@ -31,7 +31,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -56,7 +56,7 @@ type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Log      logr.Logger
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagereseals,verbs=get;list;watch;create;update;patch;delete
@@ -698,7 +698,7 @@ func (r *Reconciler) emitEventf(
 	if r.Recorder == nil || sealed == nil {
 		return
 	}
-	r.Recorder.Eventf(sealed, eventType, reason, messageFmt, args...)
+	r.Recorder.Eventf(sealed, nil, eventType, reason, reason, messageFmt, args...)
 }
 
 // transientLabel is the label used to mark secrets that were created by the API server

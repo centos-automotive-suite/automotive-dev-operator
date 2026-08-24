@@ -42,7 +42,7 @@ func newReconcilerWithClient(c client.Client) *ImageBuildReconciler {
 		Client:   c,
 		Scheme:   scheme,
 		Log:      ctrl.Log.WithName("test"),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 }
 

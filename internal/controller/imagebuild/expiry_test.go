@@ -33,7 +33,7 @@ func newExpiryReconciler(objs ...automotivev1alpha1.ImageBuild) *ImageBuildRecon
 		Client:   builder.Build(),
 		Scheme:   scheme,
 		Log:      logr.Discard(),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 }
 
@@ -313,7 +313,7 @@ func newExpiredBuildWithResources(t *testing.T) (*ImageBuildReconciler, *automot
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Log:      logr.Discard(),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 
 	return r, &ib
@@ -519,7 +519,7 @@ func TestReconcile_ExpiredPhaseCallsCleanup(t *testing.T) {
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Log:      logr.Discard(),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -620,7 +620,7 @@ func TestHandleExpiredState_SkipsSharedBuildCachePVC(t *testing.T) {
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Log:      logr.Discard(),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 
 	r.handleExpiredState(context.Background(), &ib) //nolint:errcheck
@@ -650,7 +650,7 @@ func TestHandleExpiredState_DeletesMultipleImageStreams(t *testing.T) {
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Log:      logr.Discard(),
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(10)),
 	}
 
 	ctx := context.Background()

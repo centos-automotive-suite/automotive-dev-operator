@@ -1021,7 +1021,7 @@ func newTestReconciler(objs ...client.Object) *ImageBuildReconciler {
 	return &ImageBuildReconciler{
 		Client:   builder.Build(),
 		Scheme:   scheme,
-		Recorder: record.NewFakeRecorder(100),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(100)),
 	}
 }
 

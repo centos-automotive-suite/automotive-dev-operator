@@ -17,7 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -62,7 +62,7 @@ type ContainerBuildReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Log      logr.Logger
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=containerbuilds,verbs=get;list;watch;create;update;patch;delete
@@ -423,7 +423,7 @@ func (r *ContainerBuildReconciler) emitEventf(
 	if r.Recorder == nil || cb == nil {
 		return
 	}
-	r.Recorder.Eventf(cb, eventType, reason, messageFmt, args...)
+	r.Recorder.Eventf(cb, nil, eventType, reason, reason, messageFmt, args...)
 }
 
 func (r *ContainerBuildReconciler) buildShipwrightBuildRun(
