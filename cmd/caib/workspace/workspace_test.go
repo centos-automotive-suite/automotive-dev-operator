@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -395,4 +398,174 @@ func TestProgressReaderQuietMode(t *testing.T) {
 			t.Errorf("expected no output from finish() in quiet mode, got: %s", buf.String())
 		}
 	})
+}
+
+// initTestGitRepo creates a temporary git repo with committed, untracked, and
+// gitignored files, returning the repo directory path.
+func initTestGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test",
+			"GIT_AUTHOR_EMAIL=test@test",
+			"GIT_COMMITTER_NAME=test",
+			"GIT_COMMITTER_EMAIL=test@test",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+	}
+
+	run("git", "init")
+	run("git", "checkout", "-b", "main")
+
+	// committed file
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("tracked"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", "tracked.txt")
+	run("git", "commit", "-m", "initial")
+
+	// untracked file (not git-added, not in .gitignore)
+	if err := os.WriteFile(filepath.Join(dir, "untracked.rpm"), []byte("rpm-data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// gitignored file
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored.log\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ignored.log"), []byte("log"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", ".gitignore")
+	run("git", "commit", "-m", "add gitignore")
+
+	return dir
+}
+
+func TestGitListFiles(t *testing.T) {
+	dir := initTestGitRepo(t)
+
+	t.Run("default mode includes untracked non-ignored files", func(t *testing.T) {
+		files, err := gitListFiles(dir, false)
+		if err != nil {
+			t.Fatalf("gitListFiles failed: %v", err)
+		}
+		sort.Strings(files)
+
+		hasTracked := false
+		hasUntracked := false
+		hasIgnored := false
+		for _, f := range files {
+			switch f {
+			case "tracked.txt":
+				hasTracked = true
+			case "untracked.rpm":
+				hasUntracked = true
+			case "ignored.log":
+				hasIgnored = true
+			}
+		}
+
+		if !hasTracked {
+			t.Error("expected tracked.txt in file list")
+		}
+		if !hasUntracked {
+			t.Error("expected untracked.rpm in file list (untracked but not ignored)")
+		}
+		if hasIgnored {
+			t.Error("ignored.log should be excluded by .gitignore")
+		}
+	})
+
+	t.Run("tracked-only mode excludes untracked files", func(t *testing.T) {
+		files, err := gitListFiles(dir, true)
+		if err != nil {
+			t.Fatalf("gitListFiles failed: %v", err)
+		}
+
+		hasTracked := false
+		hasUntracked := false
+		for _, f := range files {
+			switch f {
+			case "tracked.txt":
+				hasTracked = true
+			case "untracked.rpm":
+				hasUntracked = true
+			}
+		}
+
+		if !hasTracked {
+			t.Error("expected tracked.txt in file list")
+		}
+		if hasUntracked {
+			t.Error("untracked.rpm should be excluded in tracked-only mode")
+		}
+	})
+}
+
+func TestComputeManifestWarnsOnSkippedFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "good.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	manifest := computeManifest(dir, []string{"good.txt", "nonexistent.txt"})
+
+	_ = w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+
+	if _, ok := manifest["good.txt"]; !ok {
+		t.Error("expected good.txt in manifest")
+	}
+	if _, ok := manifest["nonexistent.txt"]; ok {
+		t.Error("nonexistent.txt should not be in manifest")
+	}
+	if !strings.Contains(buf.String(), "Warning: skipping nonexistent.txt") {
+		t.Errorf("expected warning for nonexistent file, got: %s", buf.String())
+	}
+}
+
+func TestTarTrackedFilesWarnsOnMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exists.txt"), []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	var buf bytes.Buffer
+	err := tarTrackedFiles(dir, []string{"exists.txt", "gone.txt"}, &buf)
+
+	_ = w.Close()
+	os.Stderr = old
+
+	if err != nil {
+		t.Fatalf("tarTrackedFiles failed: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Error("expected tar archive to contain data")
+	}
+
+	var stderrBuf bytes.Buffer
+	_, _ = stderrBuf.ReadFrom(r)
+	if !strings.Contains(stderrBuf.String(), "Warning: skipping gone.txt") {
+		t.Errorf("expected warning for missing file, got: %s", stderrBuf.String())
+	}
 }
