@@ -996,6 +996,56 @@ func (c *Client) SyncWorkspace(ctx context.Context, name string, body io.Reader)
 	return nil
 }
 
+// SyncWorkspaceClean uploads a tar stream after clearing the destination directory.
+func (c *Client) SyncWorkspaceClean(ctx context.Context, name string, body io.Reader) error {
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "sync")) + "?clean=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("sync workspace (clean) failed: %s: %s", resp.Status, string(b))
+	}
+	return nil
+}
+
+// SyncDelete removes the specified files from a workspace.
+func (c *Client) SyncDelete(ctx context.Context, name string, req buildapi.SyncDeleteRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "sync", "delete"))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("sync delete failed: %s: %s", resp.Status, string(b))
+	}
+	return nil
+}
+
 // workspaceStreamRequest performs a POST with a JSON body and returns the streaming response body.
 func (c *Client) workspaceStreamRequest(ctx context.Context, name, action string, reqBody any) (io.ReadCloser, error) {
 	body, err := json.Marshal(reqBody)

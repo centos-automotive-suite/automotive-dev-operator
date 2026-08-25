@@ -62,6 +62,7 @@ var (
 
 	// sync flags
 	gitTrackedOnly bool
+	syncDelete     bool
 )
 
 // NewWorkspaceCmd creates the workspace command with subcommands.
@@ -218,14 +219,19 @@ By default, all files in the directory are included except those excluded by
 .gitignore. Use --git-tracked-only to sync only files that have been committed
 or staged with git add.
 
+Use --delete to remove files from the workspace that no longer exist locally
+(similar to rsync --delete). Without this flag, stale files are left in place.
+
 Examples:
   caib workspace sync my-app ./src
   caib workspace sync my-app
-  caib workspace sync my-app --git-tracked-only`,
+  caib workspace sync my-app --git-tracked-only
+  caib workspace sync my-app --delete`,
 		Args: cobra.RangeArgs(1, 2),
 		Run:  runSync,
 	}
 	cmd.Flags().BoolVar(&gitTrackedOnly, "git-tracked-only", false, "sync only git-tracked files (committed or staged)")
+	cmd.Flags().BoolVar(&syncDelete, "delete", false, "remove files from workspace that no longer exist locally")
 	return cmd
 }
 
@@ -536,7 +542,10 @@ func runSync(_ *cobra.Command, args []string) {
 	}
 
 	manifest := computeManifest(absDir, files)
-	planReq := buildapitypes.SyncPlanRequest{Files: manifest}
+	planReq := buildapitypes.SyncPlanRequest{
+		Files:          manifest,
+		IncludeDeleted: syncDelete,
+	}
 
 	var plan *buildapitypes.SyncPlanResponse
 	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
@@ -551,18 +560,39 @@ func runSync(_ *cobra.Command, args []string) {
 		// Fall back to full sync — warn so users know why delta didn't work
 		fmt.Fprintf(os.Stderr, "Warning: sync plan unavailable (%v), uploading all files\n", err)
 		clilog.Infof("Syncing %d files to workspace %q...\n", len(files), name)
-		uploadFiles(name, absDir, files)
+		if syncDelete {
+			uploadFilesClean(name, absDir, files)
+		} else {
+			uploadFiles(name, absDir, files)
+		}
 		return
 	}
 
-	if len(plan.Changed) == 0 {
+	if len(plan.Changed) == 0 && len(plan.Deleted) == 0 {
 		clilog.Infof("Workspace %q is up to date (%d files)\n", name, plan.Unchanged)
 		return
 	}
 
-	clilog.Infof("Syncing %d changed files to workspace %q (%d unchanged)...\n",
-		len(plan.Changed), name, plan.Unchanged)
-	uploadFiles(name, absDir, plan.Changed)
+	if len(plan.Changed) > 0 {
+		clilog.Infof("Syncing %d changed files to workspace %q (%d unchanged)...\n",
+			len(plan.Changed), name, plan.Unchanged)
+		uploadFiles(name, absDir, plan.Changed)
+	}
+
+	if syncDelete && len(plan.Deleted) > 0 {
+		for _, f := range plan.Deleted {
+			fmt.Fprintf(os.Stderr, "  delete: %s\n", f)
+		}
+		clilog.Infof("Removing %d stale file(s) from workspace %q...\n", len(plan.Deleted), name)
+		deleteReq := buildapitypes.SyncDeleteRequest{Files: plan.Deleted}
+		err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+			return client.SyncDelete(context.Background(), name, deleteReq)
+		})
+		if err != nil {
+			handleError(fmt.Errorf("failed to delete stale files: %w", err))
+		}
+		clilog.Infoln("Stale files removed")
+	}
 }
 
 func uploadFiles(name, absDir string, files []string) {
@@ -585,6 +615,28 @@ func uploadFiles(name, absDir string, files []string) {
 		handleError(fmt.Errorf("failed to sync workspace: %w", err))
 	}
 	clilog.Infoln("Files synced")
+}
+
+func uploadFilesClean(name, absDir string, files []string) {
+	var buf bytes.Buffer
+	if err := tarTrackedFiles(absDir, files, &buf); err != nil {
+		handleError(fmt.Errorf("failed to create tar archive: %w", err))
+	}
+
+	totalBytes := int64(buf.Len())
+	archive := buf.Bytes()
+
+	var pr *progressReader
+	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+		pr = newProgressReader(bytes.NewReader(archive), totalBytes)
+		err := client.SyncWorkspaceClean(context.Background(), name, pr)
+		pr.finish()
+		return err
+	})
+	if err != nil {
+		handleError(fmt.Errorf("failed to sync workspace: %w", err))
+	}
+	clilog.Infoln("Files synced (clean)")
 }
 
 func computeManifest(baseDir string, files []string) map[string]string {

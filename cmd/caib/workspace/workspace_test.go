@@ -540,6 +540,124 @@ func TestComputeManifestWarnsOnSkippedFiles(t *testing.T) {
 	}
 }
 
+func TestNewSyncCmdHasDeleteFlag(t *testing.T) {
+	cmd := newSyncCmd()
+
+	f := cmd.Flags().Lookup("delete")
+	if f == nil {
+		t.Fatal("expected --delete flag on sync command")
+	}
+	if f.DefValue != "false" {
+		t.Errorf("expected --delete default to be false, got %q", f.DefValue)
+	}
+
+	gt := cmd.Flags().Lookup("git-tracked-only")
+	if gt == nil {
+		t.Fatal("expected --git-tracked-only flag on sync command")
+	}
+}
+
+func TestSyncPlanRequestIncludeDeleted(t *testing.T) {
+	manifest := map[string]string{"a.go": "abc123"}
+
+	t.Run("IncludeDeleted false by default", func(t *testing.T) {
+		req := buildapitypes.SyncPlanRequest{Files: manifest}
+		if req.IncludeDeleted {
+			t.Error("expected IncludeDeleted to be false by default")
+		}
+	})
+
+	t.Run("IncludeDeleted true when set", func(t *testing.T) {
+		req := buildapitypes.SyncPlanRequest{Files: manifest, IncludeDeleted: true}
+		if !req.IncludeDeleted {
+			t.Error("expected IncludeDeleted to be true")
+		}
+	})
+}
+
+func TestSyncPlanResponseDeletedField(t *testing.T) {
+	t.Run("Deleted field present in response", func(t *testing.T) {
+		resp := buildapitypes.SyncPlanResponse{
+			Changed:   []string{"new.go"},
+			Unchanged: 2,
+			Deleted:   []string{"old.go", "removed.go"},
+		}
+		if len(resp.Deleted) != 2 {
+			t.Errorf("expected 2 deleted files, got %d", len(resp.Deleted))
+		}
+		if resp.Deleted[0] != "old.go" {
+			t.Errorf("expected first deleted file 'old.go', got %q", resp.Deleted[0])
+		}
+	})
+
+	t.Run("Deleted field nil when omitted", func(t *testing.T) {
+		resp := buildapitypes.SyncPlanResponse{
+			Changed:   []string{"a.go"},
+			Unchanged: 1,
+		}
+		if resp.Deleted != nil {
+			t.Errorf("expected Deleted to be nil when not set, got %v", resp.Deleted)
+		}
+	})
+}
+
+func TestSyncDeleteRequestValidation(t *testing.T) {
+	t.Run("valid relative paths", func(t *testing.T) {
+		req := buildapitypes.SyncDeleteRequest{
+			Files: []string{"src/main.go", "pkg/util.go"},
+		}
+		if len(req.Files) != 2 {
+			t.Errorf("expected 2 files, got %d", len(req.Files))
+		}
+	})
+
+	t.Run("JSON round-trip preserves fields", func(t *testing.T) {
+		req := buildapitypes.SyncDeleteRequest{
+			Files: []string{"a.go", "b/c.go"},
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+		var decoded buildapitypes.SyncDeleteRequest
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+		if len(decoded.Files) != 2 {
+			t.Errorf("expected 2 files after round-trip, got %d", len(decoded.Files))
+		}
+	})
+}
+
+func TestSyncPlanRequestJSONIncludeDeleted(t *testing.T) {
+	t.Run("IncludeDeleted omitted when false", func(t *testing.T) {
+		req := buildapitypes.SyncPlanRequest{
+			Files: map[string]string{"a.go": "hash1"},
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+		if strings.Contains(string(data), "includeDeleted") {
+			t.Error("expected includeDeleted to be omitted from JSON when false")
+		}
+	})
+
+	t.Run("IncludeDeleted present when true", func(t *testing.T) {
+		req := buildapitypes.SyncPlanRequest{
+			Files:          map[string]string{"a.go": "hash1"},
+			IncludeDeleted: true,
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+		if !strings.Contains(string(data), `"includeDeleted":true`) {
+			t.Errorf("expected includeDeleted:true in JSON, got: %s", string(data))
+		}
+	})
+}
+
 func TestTarTrackedFilesWarnsOnMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "exists.txt"), []byte("data"), 0644); err != nil {
