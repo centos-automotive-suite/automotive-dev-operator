@@ -636,6 +636,7 @@ func (a *APIServer) syncDeleteWorkspace(c *gin.Context, name string) {
 	for _, p := range req.Files {
 		fmt.Fprintf(&scriptBuf, "rm -f %s\n", shellQuote(p))
 	}
+	scriptBuf.WriteString("find /workspace/src -mindepth 1 -type d -empty -delete 2>/dev/null\n")
 	scriptBuf.WriteString("true\n")
 
 	cmd := []string{"/bin/sh", "-c", scriptBuf.String()}
