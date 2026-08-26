@@ -39,7 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	kuberneteslib "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -186,7 +186,7 @@ type ImageBuildReconciler struct {
 	APIReader       client.Reader
 	Scheme          *runtime.Scheme
 	Log             logr.Logger
-	Recorder        record.EventRecorder
+	Recorder        events.EventRecorder
 	RestConfig      *rest.Config
 	verifiedBundles sync.Map
 }
@@ -211,6 +211,7 @@ type ImageBuildReconciler struct {
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get
 // +kubebuilder:rbac:groups=route.openshift.io,namespace=system,resources=routes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,namespace=system,resources=events,verbs=create;patch
 
 // Reconcile handles ImageBuild reconciliation and manages the build lifecycle
 func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {
@@ -2917,7 +2918,7 @@ func (r *ImageBuildReconciler) emitEventf(
 	if r.Recorder == nil || imageBuild == nil {
 		return
 	}
-	r.Recorder.Eventf(imageBuild, eventType, reason, messageFmt, args...)
+	r.Recorder.Eventf(imageBuild, nil, eventType, reason, reason, messageFmt, args...)
 }
 
 func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(

@@ -262,7 +262,7 @@ func main() {
 			APIReader:  mgr.GetAPIReader(),
 			Scheme:     mgr.GetScheme(),
 			Log:        ctrl.Log.WithName("controllers").WithName("ImageBuild"),
-			Recorder:   mgr.GetEventRecorderFor("imagebuild-controller"),
+			Recorder:   mgr.GetEventRecorder("imagebuild-controller"),
 			RestConfig: mgr.GetConfig(),
 		}
 
@@ -297,7 +297,7 @@ func main() {
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Log:      ctrl.Log.WithName("controllers").WithName("ContainerBuild"),
-			Recorder: mgr.GetEventRecorderFor("containerbuild-controller"),
+			Recorder: mgr.GetEventRecorder("containerbuild-controller"),
 		}
 
 		if err = containerBuildReconciler.SetupWithManager(mgr); err != nil {
@@ -309,7 +309,7 @@ func main() {
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Log:      ctrl.Log.WithName("controllers").WithName("ImageReseal"),
-			Recorder: mgr.GetEventRecorderFor("imagereseal-controller"),
+			Recorder: mgr.GetEventRecorder("imagereseal-controller"),
 		}
 		if err = imageResealReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "ImageReseal")
@@ -337,7 +337,7 @@ func main() {
 			Client:    mgr.GetClient(),
 			Scheme:    mgr.GetScheme(),
 			Log:       ctrl.Log.WithName("controllers").WithName("ScheduledImageBuild"),
-			Recorder:  mgr.GetEventRecorderFor("scheduledimagebuild-controller"),
+			Recorder:  mgr.GetEventRecorder("scheduledimagebuild-controller"),
 			Publisher: &catalogPublisherAdapter{publisher: sibPublisher},
 		}
 		if err = scheduledImageBuildReconciler.SetupWithManager(mgr); err != nil {

@@ -51,7 +51,7 @@ func newReconciler(objs []runtime.Object, now time.Time) *Reconciler {
 		Client:   client,
 		Scheme:   scheme,
 		Log:      zap.New(zap.UseDevMode(true)),
-		Recorder: record.NewFakeRecorder(100),
+		Recorder: record.NewEventRecorderAdapter(record.NewFakeRecorder(100)),
 		Clock:    clock,
 	}
 }

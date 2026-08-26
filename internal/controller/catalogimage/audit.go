@@ -22,7 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -46,12 +46,12 @@ const (
 
 // AuditRecorder records audit events for CatalogImages
 type AuditRecorder struct {
-	recorder record.EventRecorder
+	recorder events.EventRecorder
 	scheme   *runtime.Scheme
 }
 
 // NewAuditRecorder creates a new AuditRecorder
-func NewAuditRecorder(recorder record.EventRecorder, scheme *runtime.Scheme) *AuditRecorder {
+func NewAuditRecorder(recorder events.EventRecorder, scheme *runtime.Scheme) *AuditRecorder {
 	return &AuditRecorder{
 		recorder: recorder,
 		scheme:   scheme,
@@ -64,13 +64,13 @@ func (a *AuditRecorder) RecordPublished(
 	catalogImage *automotivev1alpha1.CatalogImage,
 	source string,
 ) {
-	a.recorder.Eventf(catalogImage, corev1.EventTypeNormal, string(AuditEventPublished),
+	a.recorder.Eventf(catalogImage, nil, corev1.EventTypeNormal, string(AuditEventPublished), string(AuditEventPublished),
 		"Image published to catalog from %s", source)
 }
 
 // RecordVerified records that an image was verified in the registry
 func (a *AuditRecorder) RecordVerified(_ context.Context, catalogImage *automotivev1alpha1.CatalogImage) {
-	a.recorder.Event(catalogImage, corev1.EventTypeNormal, string(AuditEventVerified),
+	a.recorder.Eventf(catalogImage, nil, corev1.EventTypeNormal, string(AuditEventVerified), string(AuditEventVerified),
 		"Image verified and accessible in registry")
 }
 
@@ -80,19 +80,19 @@ func (a *AuditRecorder) RecordUnavailable(
 	catalogImage *automotivev1alpha1.CatalogImage,
 	reason string,
 ) {
-	a.recorder.Eventf(catalogImage, corev1.EventTypeWarning, string(AuditEventUnavailable),
+	a.recorder.Eventf(catalogImage, nil, corev1.EventTypeWarning, string(AuditEventUnavailable), string(AuditEventUnavailable),
 		"Image became unavailable: %s", reason)
 }
 
 // RecordRemoved records that an image was removed from the catalog
 func (a *AuditRecorder) RecordRemoved(_ context.Context, catalogImage *automotivev1alpha1.CatalogImage) {
-	a.recorder.Event(catalogImage, corev1.EventTypeNormal, string(AuditEventRemoved),
+	a.recorder.Eventf(catalogImage, nil, corev1.EventTypeNormal, string(AuditEventRemoved), string(AuditEventRemoved),
 		"Image removed from catalog")
 }
 
 // RecordAccessError records that an access error occurred
 func (a *AuditRecorder) RecordAccessError(_ context.Context, catalogImage *automotivev1alpha1.CatalogImage, err error) {
-	a.recorder.Eventf(catalogImage, corev1.EventTypeWarning, string(AuditEventAccessError),
+	a.recorder.Eventf(catalogImage, nil, corev1.EventTypeWarning, string(AuditEventAccessError), string(AuditEventAccessError),
 		"Registry access error: %v", err)
 }
 

@@ -80,13 +80,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - ""
-  resources:
   - pods/exec
   verbs:
   - create
@@ -103,6 +96,14 @@ rules:
   - serviceaccounts/token
   verbs:
   - create
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - apps
   resources:

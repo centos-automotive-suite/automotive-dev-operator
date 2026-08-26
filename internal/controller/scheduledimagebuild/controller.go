@@ -34,7 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	clockutil "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -76,7 +76,7 @@ type Reconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	Log       logr.Logger
-	Recorder  record.EventRecorder
+	Recorder  events.EventRecorder
 	Clock     clockutil.Clock
 	Publisher CatalogPublisher
 }
@@ -87,6 +87,7 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagebuilds,verbs=get;list;watch;create;delete;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=catalogimages,verbs=get;list;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,namespace=system,resources=events,verbs=create;patch
 
 // Reconcile handles a single ScheduledImageBuild reconciliation loop.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -145,12 +146,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		count, err := r.createImageBuilds(ctx, sib, *missedRun)
 		if err != nil {
 			log.Error(err, "Failed to create ImageBuild")
-			r.Recorder.Eventf(sib, corev1.EventTypeWarning, "CreateFailed", "Failed to create ImageBuild: %v", err)
+			r.Recorder.Eventf(sib, nil, corev1.EventTypeWarning, "CreateFailed", "CreateFailed", "Failed to create ImageBuild: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		sib.Status.LastScheduleTime = &metav1.Time{Time: *missedRun}
-		r.Recorder.Eventf(sib, corev1.EventTypeNormal, "BuildCreated", "Created %d scheduled ImageBuild(s)", count)
+		r.Recorder.Eventf(sib, nil, corev1.EventTypeNormal, "BuildCreated", "BuildCreated", "Created %d scheduled ImageBuild(s)", count)
 	}
 
 	requeueAfter := nextRun.Sub(now)
@@ -286,7 +287,7 @@ func (r *Reconciler) handleCompletedBuilds(ctx context.Context, sib *automotivev
 			}
 			if sib.Status.LastSuccessfulTime == nil || completionTime.After(sib.Status.LastSuccessfulTime.Time) {
 				sib.Status.LastSuccessfulTime = completionTime
-				r.Recorder.Eventf(sib, corev1.EventTypeNormal, "BuildSucceeded",
+				r.Recorder.Eventf(sib, nil, corev1.EventTypeNormal, "BuildSucceeded", "BuildSucceeded",
 					"ImageBuild %s completed successfully", build.Name)
 				r.setLastBuildCondition(sib, metav1.ConditionTrue, "BuildSucceeded",
 					fmt.Sprintf("ImageBuild %s completed successfully", build.Name))
@@ -307,7 +308,7 @@ func (r *Reconciler) handleCompletedBuilds(ctx context.Context, sib *automotivev
 				if msg == "" {
 					msg = "unknown error"
 				}
-				r.Recorder.Eventf(sib, corev1.EventTypeWarning, "BuildFailed",
+				r.Recorder.Eventf(sib, nil, corev1.EventTypeWarning, "BuildFailed", "BuildFailed",
 					"ImageBuild %s failed: %s", build.Name, msg)
 				r.setLastBuildCondition(sib, metav1.ConditionFalse, "BuildFailed",
 					fmt.Sprintf("ImageBuild %s failed: %s", build.Name, msg))
@@ -355,7 +356,7 @@ func (r *Reconciler) publishToCatalog(ctx context.Context, sib *automotivev1alph
 	result, err := r.Publisher.PublishFromImageBuild(ctx, build, catalogNameForPublish(sib, build), tags, authSecretRef)
 	if err != nil {
 		log.Error(err, "Failed to publish to catalog")
-		r.Recorder.Eventf(sib, corev1.EventTypeWarning, "PublishFailed",
+		r.Recorder.Eventf(sib, nil, corev1.EventTypeWarning, "PublishFailed", "PublishFailed",
 			"Failed to publish ImageBuild %s to catalog: %v", build.Name, err)
 		meta.SetStatusCondition(&sib.Status.Conditions, metav1.Condition{
 			Type:               ConditionLastPublishSucceeded,
@@ -387,7 +388,7 @@ func (r *Reconciler) publishToCatalog(ctx context.Context, sib *automotivev1alph
 		Message:            fmt.Sprintf("ImageBuild %s published to catalog", build.Name),
 		ObservedGeneration: sib.Generation,
 	})
-	r.Recorder.Eventf(sib, corev1.EventTypeNormal, "Published",
+	r.Recorder.Eventf(sib, nil, corev1.EventTypeNormal, "Published", "Published",
 		"Published ImageBuild %s to catalog", build.Name)
 }
 
@@ -424,7 +425,7 @@ func (r *Reconciler) checkConcurrency(ctx context.Context, sib *automotivev1alph
 			if err := r.Delete(ctx, &active[i]); err != nil && !apierrors.IsNotFound(err) {
 				return false, fmt.Errorf("failed to delete active ImageBuild %s: %w", active[i].Name, err)
 			}
-			r.Recorder.Eventf(sib, corev1.EventTypeNormal, "Replaced",
+			r.Recorder.Eventf(sib, nil, corev1.EventTypeNormal, "Replaced", "Replaced",
 				"Deleted active ImageBuild %s for replacement", active[i].Name)
 		}
 		return true, nil
