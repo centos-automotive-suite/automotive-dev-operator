@@ -18,13 +18,13 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/shipwright-io/build v0.18.3
+	github.com/shipwright-io/build v0.20.13
 	github.com/sigstore/cosign/v3 v3.1.3
 	github.com/sigstore/sigstore v1.10.9
 	github.com/sigstore/sigstore-go v1.3.0
 	golang.org/x/term v0.45.0
 	k8s.io/apimachinery v0.36.3
-	k8s.io/apiserver v0.36.0
+	k8s.io/apiserver v0.36.1
 	k8s.io/client-go v0.36.2
 	knative.dev/pkg v0.0.0-20260820190123-c9015f8bfdea
 	oras.land/oras-go/v2 v2.6.2
@@ -232,8 +232,8 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.36.2
-	k8s.io/apiextensions-apiserver v0.36.0
-	k8s.io/component-base v0.36.0 // indirect
+	k8s.io/apiextensions-apiserver v0.36.1
+	k8s.io/component-base v0.36.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
