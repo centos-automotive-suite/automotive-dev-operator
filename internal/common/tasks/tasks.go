@@ -181,6 +181,9 @@ const volumeNameContainerStorage = "container-storage"
 // workspaceNameShared is the Tekton workspace name for the shared PVC workspace.
 const workspaceNameShared = "shared-workspace"
 
+// WorkspaceNameSrc is the Tekton workspace name for the workspace source PVC.
+const WorkspaceNameSrc = "workspace-src"
+
 // workspaceVolumeRef is the Tekton variable reference for the shared workspace volume name.
 // Tekton resolves this at runtime to the actual volume name in the pod spec.
 const workspaceVolumeRef = "$(workspaces." + workspaceNameShared + ".volume)"
@@ -987,11 +990,24 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 	// The actual Volume definition is provided at PipelineRun time via PodTemplate.
 	for i := range task.Spec.Steps {
 		if task.Spec.Steps[i].Name == PipelineTaskBuildImage {
-			task.Spec.Steps[i].VolumeMounts = append(task.Spec.Steps[i].VolumeMounts, corev1.VolumeMount{
-				Name:      OCIRepoVolumeName,
-				MountPath: OCIRepoMountPath,
-				ReadOnly:  true,
-			})
+			task.Spec.Steps[i].VolumeMounts = append(task.Spec.Steps[i].VolumeMounts,
+				corev1.VolumeMount{
+					Name:      OCIRepoVolumeName,
+					MountPath: OCIRepoMountPath,
+					ReadOnly:  true,
+				},
+				// workspace-src: provides file:// access to content synced via `caib workspace sync`.
+				// Volume is provided at PipelineRun time via PodTemplate (PVC or emptyDir fallback).
+				// SubPath "src" is required because the workspace PVC root is mounted at /workspace
+				// in the workspace pod, and sync writes into /workspace/src/ — so the files live
+				// under the "src" subdirectory of the PVC.
+				corev1.VolumeMount{
+					Name:      WorkspaceNameSrc,
+					MountPath: "/workspace/src",
+					SubPath:   "src",
+					ReadOnly:  true,
+				},
+			)
 			break
 		}
 	}

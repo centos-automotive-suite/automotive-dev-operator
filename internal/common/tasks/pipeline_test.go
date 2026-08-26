@@ -770,6 +770,66 @@ func TestPipeline_S3AuthWorkspace_Optional(t *testing.T) {
 	t.Fatal("pipeline should declare s3-auth workspace")
 }
 
+func TestBuildTask_WorkspaceSrc_VolumeMount(t *testing.T) {
+	task := GenerateBuildAutomotiveImageTask("test-ns", nil, "")
+
+	// workspace-src should NOT be a Tekton workspace (avoids multi-PVC affinity conflict)
+	for _, ws := range task.Spec.Workspaces {
+		if ws.Name == WorkspaceNameSrc {
+			t.Fatal("workspace-src must not be a Tekton workspace; use podTemplate volume instead")
+		}
+	}
+
+	// workspace-src should be a volumeMount on the build-image step
+	for _, step := range task.Spec.Steps {
+		if step.Name != PipelineTaskBuildImage {
+			continue
+		}
+		for _, vm := range step.VolumeMounts {
+			if vm.Name == WorkspaceNameSrc {
+				if vm.MountPath != "/workspace/src" {
+					t.Errorf("workspace-src mount path = %q, want /workspace/src", vm.MountPath)
+				}
+				if vm.SubPath != "src" {
+					t.Errorf("workspace-src subPath = %q, want \"src\"", vm.SubPath)
+				}
+				if !vm.ReadOnly {
+					t.Error("workspace-src should be read-only")
+				}
+				return
+			}
+		}
+		t.Fatal("build-image step should have workspace-src volumeMount")
+	}
+	t.Fatal("build task should have build-image step")
+}
+
+func TestPipeline_WorkspaceSrc_NotDeclared(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	// workspace-src must not be a pipeline workspace (volume is provided via podTemplate)
+	for _, ws := range pipeline.Spec.Workspaces {
+		if ws.Name == WorkspaceNameSrc {
+			t.Fatal("pipeline must not declare workspace-src; use podTemplate volume instead")
+		}
+	}
+}
+
+func TestPipeline_BuildImageTask_NoWorkspaceSrcBinding(t *testing.T) {
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+
+	buildTask := findPipelineTask(pipeline.Spec.Tasks, PipelineTaskBuildImage)
+	if buildTask == nil {
+		t.Fatal("pipeline missing build-image task")
+	}
+
+	for _, ws := range buildTask.Workspaces {
+		if ws.Name == WorkspaceNameSrc {
+			t.Fatal("build-image pipeline task must not bind workspace-src; volume comes from podTemplate")
+		}
+	}
+}
+
 // TestImagesResultFormat verifies the image@digest format Chains expects
 func TestImagesResultFormat(t *testing.T) {
 	// Simulate what the collect-images script produces

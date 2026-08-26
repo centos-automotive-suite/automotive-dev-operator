@@ -298,6 +298,12 @@ spec:
                   When set, the controller writes the acquired lease back to the workspace
                   on completion so subsequent builds can reuse it.
                 type: string
+              workspacePVC:
+                description: |-
+                  WorkspacePVC is the name of the workspace PVC to mount at /workspace/src
+                  in the build pod, giving AIB direct filesystem access to files synced
+                  via `caib workspace sync`.
+                type: string
             type: object
             x-kubernetes-validations:
             - message: reproducible builds require secureBuild to be true
