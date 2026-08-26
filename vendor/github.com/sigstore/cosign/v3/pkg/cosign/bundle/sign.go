@@ -15,26 +15,30 @@
 package bundle
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/sigstore/cosign/v3/internal/ui"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/sign"
+	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/sigstore/sigstore/pkg/signature"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type SignOptions struct {
-	TSAClientTransport http.RoundTripper
+	TSAClientTransport  http.RoundTripper
+	CertificateProvider sign.CertificateProvider
 }
 
-func SignData(ctx context.Context, content sign.Content, keypair sign.Keypair, idToken string, cert []byte, signingConfig *root.SigningConfig, trustedMaterial root.TrustedMaterial, opts SignOptions) ([]byte, error) {
+func SignData(ctx context.Context, content sign.Content, keypair sign.Keypair, idToken string, cert []byte, certChain []byte, signingConfig *root.SigningConfig, trustedMaterial root.TrustedMaterial, opts SignOptions) ([]byte, error) {
 	var bundleOpts sign.BundleOptions
 
 	if trustedMaterial != nil {
@@ -42,23 +46,24 @@ func SignData(ctx context.Context, content sign.Content, keypair sign.Keypair, i
 	}
 
 	switch {
-	case idToken != "":
-		if len(signingConfig.FulcioCertificateAuthorityURLs()) == 0 {
-			return nil, fmt.Errorf("no fulcio URLs provided in signing config")
+	case opts.CertificateProvider != nil:
+		bundleOpts.CertificateProvider = opts.CertificateProvider
+		if idToken != "" {
+			bundleOpts.CertificateProviderOptions = &sign.CertificateProviderOptions{
+				IDToken: idToken,
+			}
 		}
-		fulcioSvc, err := root.SelectService(signingConfig.FulcioCertificateAuthorityURLs(), sign.FulcioAPIVersions, time.Now())
+	case idToken != "":
+		provider, err := newFulcioProvider(signingConfig)
 		if err != nil {
 			return nil, err
 		}
-		fulcioOpts := &sign.FulcioOptions{
-			BaseURL: fulcioSvc.URL,
-			Timeout: 30 * time.Second,
-			Retries: 1,
-		}
-		bundleOpts.CertificateProvider = sign.NewFulcio(fulcioOpts)
+		bundleOpts.CertificateProvider = provider
 		bundleOpts.CertificateProviderOptions = &sign.CertificateProviderOptions{
 			IDToken: idToken,
 		}
+	case cert != nil && len(certChain) > 0:
+		bundleOpts.CertificateChainProvider = &localCertChainProvider{cert: cert, chain: certChain}
 	case cert != nil:
 		bundleOpts.CertificateProvider = &localCertProvider{cert}
 	default:
@@ -79,11 +84,13 @@ func SignData(ctx context.Context, content sign.Content, keypair sign.Keypair, i
 		keyTrustedMaterial := root.NewTrustedPublicKeyMaterial(func(_ string) (root.TimeConstrainedVerifier, error) {
 			return key, nil
 		})
-		trustedMaterial := &verifyTrustedMaterial{
-			TrustedMaterial:    bundleOpts.TrustedRoot,
-			keyTrustedMaterial: keyTrustedMaterial,
+		if bundleOpts.TrustedRoot != nil {
+			trustedMaterial := &verifyTrustedMaterial{
+				TrustedMaterial:    bundleOpts.TrustedRoot,
+				keyTrustedMaterial: keyTrustedMaterial,
+			}
+			bundleOpts.TrustedRoot = trustedMaterial
 		}
-		bundleOpts.TrustedRoot = trustedMaterial
 	}
 
 	if len(signingConfig.TimestampAuthorityURLs()) != 0 {
@@ -138,7 +145,6 @@ func SignData(ctx context.Context, content sign.Content, keypair sign.Keypair, i
 	defer spinner.Stop()
 
 	bundle, err := sign.Bundle(content, keypair, bundleOpts)
-
 	if err != nil {
 		return nil, fmt.Errorf("error signing bundle: %w", err)
 	}
@@ -164,4 +170,82 @@ func (c *localCertProvider) GetCertificate(_ context.Context, _ sign.Keypair, _ 
 		return nil, fmt.Errorf("could not decode cert")
 	}
 	return certBlock.Bytes, nil
+}
+
+type localCertChainProvider struct {
+	cert  []byte
+	chain []byte
+}
+
+func (c *localCertChainProvider) GetCertificateChain(_ context.Context, _ sign.Keypair, _ *sign.CertificateProviderOptions) ([][]byte, error) {
+	leafCerts, err := cryptoutils.UnmarshalCertificatesFromPEM(c.cert)
+	if err != nil || len(leafCerts) == 0 {
+		return nil, fmt.Errorf("could not decode leaf certificate")
+	}
+	chainCerts, err := cryptoutils.UnmarshalCertificatesFromPEM(c.chain)
+	if err != nil || len(chainCerts) == 0 {
+		return nil, fmt.Errorf("could not decode certificate chain")
+	}
+
+	leaf := leafCerts[0]
+	derChain := [][]byte{leaf.Raw}
+	for _, cert := range chainCerts {
+		if cert.Equal(leaf) {
+			continue
+		}
+		if isSelfSigned(cert) {
+			continue
+		}
+		derChain = append(derChain, cert.Raw)
+	}
+	return derChain, nil
+}
+
+func isSelfSigned(cert *x509.Certificate) bool {
+	if !bytes.Equal(cert.RawSubject, cert.RawIssuer) {
+		return false
+	}
+	return cert.CheckSignatureFrom(cert) == nil
+}
+
+type cachingCertProvider struct {
+	provider sign.CertificateProvider
+	once     sync.Once
+	fetch    func() ([]byte, error)
+}
+
+func (c *cachingCertProvider) GetCertificate(ctx context.Context, keypair sign.Keypair, opts *sign.CertificateProviderOptions) ([]byte, error) {
+	c.once.Do(func() {
+		c.fetch = sync.OnceValues(func() ([]byte, error) {
+			return c.provider.GetCertificate(ctx, keypair, opts)
+		})
+	})
+	return c.fetch()
+}
+
+func newFulcioProvider(signingConfig *root.SigningConfig) (sign.CertificateProvider, error) {
+	if len(signingConfig.FulcioCertificateAuthorityURLs()) == 0 {
+		return nil, fmt.Errorf("no fulcio URLs provided in signing config")
+	}
+	fulcioSvc, err := root.SelectService(signingConfig.FulcioCertificateAuthorityURLs(), sign.FulcioAPIVersions, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	fulcioOpts := &sign.FulcioOptions{
+		BaseURL: fulcioSvc.URL,
+		Timeout: 30 * time.Second,
+		Retries: 1,
+	}
+	return sign.NewFulcio(fulcioOpts), nil
+}
+
+// NewCachingFulcioProvider creates a caching Fulcio provider from the given signing config.
+// This function should not be used in long-running processes, as the certificate will
+// expire.
+func NewCachingFulcioProvider(signingConfig *root.SigningConfig) (sign.CertificateProvider, error) {
+	provider, err := newFulcioProvider(signingConfig)
+	if err != nil {
+		return nil, err
+	}
+	return &cachingCertProvider{provider: provider}, nil
 }
