@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -36,6 +37,38 @@ const (
 // quotes escaped, safe for interpolation into a /bin/sh -c script.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// validateWorkspaceRelPath rejects empty, absolute, and path-traversal
+// relative paths. Names that contain ".." as a substring but are not
+// traversal (e.g. "notes..old") are allowed.
+func validateWorkspaceRelPath(p string) error {
+	if p == "" || strings.HasPrefix(p, "/") || strings.ContainsRune(p, 0) {
+		return fmt.Errorf("invalid path: %s", p)
+	}
+	cleaned := path.Clean(p)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fmt.Errorf("invalid path: %s", p)
+	}
+	return nil
+}
+
+// buildSyncDeleteScript removes the given relative paths under /workspace/src
+// and prunes empty parent directories of those paths only.
+func buildSyncDeleteScript(files []string) string {
+	var b strings.Builder
+	b.WriteString("set -e\n")
+	b.WriteString("cd /workspace/src || exit 1\n")
+	for _, p := range files {
+		q := shellQuote(p)
+		fmt.Fprintf(&b, "rm -f -- %s\n", q)
+		fmt.Fprintf(&b, "dir=$(dirname -- %s)\n", q)
+		b.WriteString("while [ \"$dir\" != \".\" ] && [ \"$dir\" != \"/\" ]; do\n")
+		b.WriteString("  rmdir -- \"$dir\" 2>/dev/null || break\n")
+		b.WriteString("  dir=$(dirname -- \"$dir\")\n")
+		b.WriteString("done\n")
+	}
+	return b.String()
 }
 
 // WorkspaceRequest is the payload to create a workspace.
@@ -77,9 +110,10 @@ type SyncPlanRequest struct {
 
 // SyncPlanResponse tells the client which files need uploading.
 type SyncPlanResponse struct {
-	Changed   []string `json:"changed"`           // files to upload (new or modified)
-	Unchanged int      `json:"unchanged"`         // count of files already up to date
-	Deleted   []string `json:"deleted,omitempty"` // files on remote not in local manifest (only when IncludeDeleted)
+	Changed        []string `json:"changed"`                  // files to upload (new or modified)
+	Unchanged      int      `json:"unchanged"`                // count of files already up to date
+	Deleted        []string `json:"deleted,omitempty"`        // files on remote not in local manifest (only when IncludeDeleted)
+	IncludeDeleted bool     `json:"includeDeleted,omitempty"` // echoed so clients can detect servers that ignore IncludeDeleted
 }
 
 // SyncDeleteRequest is the payload to delete files from a workspace.
@@ -490,17 +524,34 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	if c.Query("clean") == "true" {
-		cleanCmd := []string{"/bin/sh", "-c", "rm -rf /workspace/src/* /workspace/src/.[!.]* /workspace/src/..?* 2>/dev/null; mkdir -p /workspace/src; true"}
-		if err := podExec(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, cleanCmd, io.Discard); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to clean workspace: %v", err)})
+	destDir := "/workspace/src/"
+	clean := c.Query("clean") == "true"
+	if clean {
+		// Extract into a sidecar directory first so a failed upload leaves
+		// the existing /workspace/src tree intact.
+		prepCmd := []string{"/bin/sh", "-c", "rm -rf /workspace/src.next && mkdir -p /workspace/src.next"}
+		if err := podExec(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, prepCmd, io.Discard); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to prepare clean sync: %v", err)})
 			return
 		}
+		destDir = "/workspace/src.next/"
 	}
 
-	if err := copyToPod(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, tmpFile, "/workspace/src/"); err != nil {
+	if err := copyToPod(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, tmpFile, destDir); err != nil {
+		if clean {
+			_ = podExec(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName,
+				[]string{"/bin/sh", "-c", "rm -rf /workspace/src.next"}, io.Discard)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to sync files: %v", err)})
 		return
+	}
+
+	if clean {
+		swapCmd := []string{"/bin/sh", "-c", "set -e; rm -rf /workspace/src.old; mv /workspace/src /workspace/src.old; mv /workspace/src.next /workspace/src; rm -rf /workspace/src.old"}
+		if err := podExec(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, swapCmd, io.Discard); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to replace workspace after clean sync: %v", err)})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "files synced"})
@@ -535,10 +586,10 @@ func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
 	// Build a shell script that hashes only the files the client cares about.
 	// This avoids scanning build artifacts or other untracked content.
 	var scriptBuf strings.Builder
-	scriptBuf.WriteString("cd /workspace/src\n")
-	for path := range req.Files {
+	scriptBuf.WriteString("cd /workspace/src || exit 1\n")
+	for relPath := range req.Files {
 		// Only hash regular files that exist; skip missing ones silently
-		fmt.Fprintf(&scriptBuf, "[ -f %s ] && sha256sum %s\n", shellQuote(path), shellQuote(path))
+		fmt.Fprintf(&scriptBuf, "[ -f %s ] && sha256sum %s\n", shellQuote(relPath), shellQuote(relPath))
 	}
 	scriptBuf.WriteString("true\n") // ensure exit 0
 
@@ -574,7 +625,7 @@ func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
 	var deleted []string
 	if req.IncludeDeleted {
 		var findBuf bytes.Buffer
-		findCmd := []string{"/bin/sh", "-c", "cd /workspace/src && find . -type f -o -type l | sed 's|^\\./||'"}
+		findCmd := []string{"/bin/sh", "-c", "cd /workspace/src || exit 1; find . \\( -type f -o -type l \\) | sed 's|^\\./||'"}
 		if err := podExec(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, findCmd, &findBuf); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to list remote files: %v", err)})
 			return
@@ -591,9 +642,10 @@ func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
 	}
 
 	c.JSON(http.StatusOK, SyncPlanResponse{
-		Changed:   changed,
-		Unchanged: unchanged,
-		Deleted:   deleted,
+		Changed:        changed,
+		Unchanged:      unchanged,
+		Deleted:        deleted,
+		IncludeDeleted: req.IncludeDeleted,
 	})
 }
 
@@ -609,8 +661,8 @@ func (a *APIServer) syncDeleteWorkspace(c *gin.Context, name string) {
 	}
 
 	for _, p := range req.Files {
-		if strings.Contains(p, "..") || strings.HasPrefix(p, "/") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid path: %s", p)})
+		if err := validateWorkspaceRelPath(p); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 	}
@@ -631,15 +683,7 @@ func (a *APIServer) syncDeleteWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	var scriptBuf strings.Builder
-	scriptBuf.WriteString("cd /workspace/src\n")
-	for _, p := range req.Files {
-		fmt.Fprintf(&scriptBuf, "rm -f %s\n", shellQuote(p))
-	}
-	scriptBuf.WriteString("find /workspace/src -mindepth 1 -type d -empty -delete 2>/dev/null\n")
-	scriptBuf.WriteString("true\n")
-
-	cmd := []string{"/bin/sh", "-c", scriptBuf.String()}
+	cmd := []string{"/bin/sh", "-c", buildSyncDeleteScript(req.Files)}
 	if err := podExec(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to delete files: %v", err)})
 		return

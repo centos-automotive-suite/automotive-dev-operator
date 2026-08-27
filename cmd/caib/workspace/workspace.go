@@ -542,6 +542,14 @@ func runSync(_ *cobra.Command, args []string) {
 	}
 
 	manifest := computeManifest(absDir, files)
+	if syncDelete {
+		if gitTrackedOnly {
+			fmt.Fprintf(os.Stderr, "Warning: --git-tracked-only with --delete removes remote files that are not git-tracked locally\n")
+		}
+		if err := abortDeleteIfUnreadable(absDir, files, manifest); err != nil {
+			handleError(err)
+		}
+	}
 	planReq := buildapitypes.SyncPlanRequest{
 		Files:          manifest,
 		IncludeDeleted: syncDelete,
@@ -557,15 +565,21 @@ func runSync(_ *cobra.Command, args []string) {
 		return nil
 	})
 	if err != nil {
-		// Fall back to full sync — warn so users know why delta didn't work
+		if syncDelete {
+			handleError(fmt.Errorf("sync plan required for --delete: %w", err))
+		}
+		// Fall back to full overlay sync — warn so users know why delta didn't work
 		fmt.Fprintf(os.Stderr, "Warning: sync plan unavailable (%v), uploading all files\n", err)
 		clilog.Infof("Syncing %d files to workspace %q...\n", len(files), name)
-		if syncDelete {
-			uploadFilesClean(name, absDir, files)
-		} else {
-			uploadFiles(name, absDir, files)
-		}
+		uploadFiles(name, absDir, files)
 		return
+	}
+
+	if syncDelete && !plan.IncludeDeleted {
+		handleError(fmt.Errorf("server does not support --delete; upgrade the build API"))
+	}
+	if syncDelete {
+		plan.Deleted = filterDeletedMissingLocal(absDir, plan.Deleted)
 	}
 
 	if len(plan.Changed) == 0 && len(plan.Deleted) == 0 {
@@ -617,28 +631,6 @@ func uploadFiles(name, absDir string, files []string) {
 	clilog.Infoln("Files synced")
 }
 
-func uploadFilesClean(name, absDir string, files []string) {
-	var buf bytes.Buffer
-	if err := tarTrackedFiles(absDir, files, &buf); err != nil {
-		handleError(fmt.Errorf("failed to create tar archive: %w", err))
-	}
-
-	totalBytes := int64(buf.Len())
-	archive := buf.Bytes()
-
-	var pr *progressReader
-	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
-		pr = newProgressReader(bytes.NewReader(archive), totalBytes)
-		err := client.SyncWorkspaceClean(context.Background(), name, pr)
-		pr.finish()
-		return err
-	})
-	if err != nil {
-		handleError(fmt.Errorf("failed to sync workspace: %w", err))
-	}
-	clilog.Infoln("Files synced (clean)")
-}
-
 func computeManifest(baseDir string, files []string) map[string]string {
 	manifest := make(map[string]string, len(files))
 	for _, relPath := range files {
@@ -660,11 +652,46 @@ func computeManifest(baseDir string, files []string) map[string]string {
 	return manifest
 }
 
+// abortDeleteIfUnreadable refuses --delete when a git-listed path was omitted
+// from the manifest for any reason other than confirmed absence. Omitting an
+// unreadable-but-present file would make the server treat it as remote-only.
+func abortDeleteIfUnreadable(baseDir string, files []string, manifest map[string]string) error {
+	for _, rel := range files {
+		if _, ok := manifest[rel]; ok {
+			continue
+		}
+		_, err := os.Lstat(filepath.Join(baseDir, rel))
+		if err == nil {
+			return fmt.Errorf("refusing --delete: %s exists locally but could not be hashed (aborting to avoid deleting the remote copy)", rel)
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("refusing --delete: %s: %w", rel, err)
+		}
+	}
+	return nil
+}
+
+// filterDeletedMissingLocal drops remote paths that still exist locally
+// (including gitignored files) so --delete matches "no longer exist locally".
+func filterDeletedMissingLocal(baseDir string, deleted []string) []string {
+	if len(deleted) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(deleted))
+	for _, rel := range deleted {
+		_, err := os.Lstat(filepath.Join(baseDir, rel))
+		if os.IsNotExist(err) {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
 // gitListFiles returns files relative to dir. When trackedOnly is true, only
 // git-indexed files are returned. Otherwise both tracked and untracked files
 // are returned, excluding those matched by .gitignore.
 func gitListFiles(dir string, trackedOnly bool) ([]string, error) {
-	args := []string{"ls-files", "--cached", "--exclude-standard"}
+	args := []string{"ls-files", "-z", "--cached", "--exclude-standard"}
 	if !trackedOnly {
 		args = append(args, "--others")
 	}
@@ -675,9 +702,9 @@ func gitListFiles(dir string, trackedOnly bool) ([]string, error) {
 		return nil, fmt.Errorf("git ls-files failed (is this a git repo?): %w", err)
 	}
 	var files []string
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
-			files = append(files, line)
+	for _, f := range bytes.Split(bytes.TrimRight(out, "\x00"), []byte{0}) {
+		if len(f) > 0 {
+			files = append(files, string(f))
 		}
 	}
 	return files, nil

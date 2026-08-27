@@ -436,6 +436,9 @@ func initTestGitRepo(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "untracked.rpm"), []byte("rpm-data"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "file with spaces.txt"), []byte("spaces"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// gitignored file
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored.log\n"), 0644); err != nil {
@@ -463,6 +466,7 @@ func TestGitListFiles(t *testing.T) {
 		hasTracked := false
 		hasUntracked := false
 		hasIgnored := false
+		hasSpaced := false
 		for _, f := range files {
 			switch f {
 			case "tracked.txt":
@@ -471,6 +475,8 @@ func TestGitListFiles(t *testing.T) {
 				hasUntracked = true
 			case "ignored.log":
 				hasIgnored = true
+			case "file with spaces.txt":
+				hasSpaced = true
 			}
 		}
 
@@ -479,6 +485,9 @@ func TestGitListFiles(t *testing.T) {
 		}
 		if !hasUntracked {
 			t.Error("expected untracked.rpm in file list (untracked but not ignored)")
+		}
+		if !hasSpaced {
+			t.Error("expected 'file with spaces.txt' in file list")
 		}
 		if hasIgnored {
 			t.Error("ignored.log should be excluded by .gitignore")
@@ -685,5 +694,65 @@ func TestTarTrackedFilesWarnsOnMissingFile(t *testing.T) {
 	_, _ = stderrBuf.ReadFrom(r)
 	if !strings.Contains(stderrBuf.String(), "Warning: skipping gone.txt") {
 		t.Errorf("expected warning for missing file, got: %s", stderrBuf.String())
+	}
+}
+
+func TestAbortDeleteIfUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "unread.txt"), []byte("secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := map[string]string{"ok.txt": "abc"}
+	files := []string{"ok.txt", "unread.txt", "gone.txt"}
+	if err := abortDeleteIfUnreadable(dir, files, manifest); err == nil {
+		t.Fatal("expected error when an unhashed local file still exists")
+	}
+
+	if err := os.Remove(filepath.Join(dir, "unread.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := abortDeleteIfUnreadable(dir, files, manifest); err != nil {
+		t.Fatalf("IsNotExist should be allowed for --delete: %v", err)
+	}
+}
+
+func TestFilterDeletedMissingLocal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ignored.log"), []byte("log"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := filterDeletedMissingLocal(dir, []string{"ignored.log", "stale.c", "also-gone.h"})
+	want := []string{"stale.c", "also-gone.h"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestSyncPlanResponseEchoesIncludeDeleted(t *testing.T) {
+	resp := buildapitypes.SyncPlanResponse{IncludeDeleted: true}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"includeDeleted":true`) {
+		t.Errorf("expected includeDeleted echo in JSON, got %s", data)
+	}
+
+	var decoded buildapitypes.SyncPlanResponse
+	if err := json.Unmarshal([]byte(`{"changed":[],"unchanged":0}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.IncludeDeleted {
+		t.Error("old server response must not look like it supports --delete")
 	}
 }
