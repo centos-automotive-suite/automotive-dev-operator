@@ -2013,7 +2013,7 @@ k8s.io/utils/ptr
 k8s.io/utils/strings/slices
 k8s.io/utils/third_party/forked/golang/btree
 k8s.io/utils/trace
-# knative.dev/pkg v0.0.0-20260820190123-c9015f8bfdea
+# knative.dev/pkg v0.0.0-20260825072334-d2a153acc00c
 ## explicit; go 1.25.0
 knative.dev/pkg/apis
 knative.dev/pkg/apis/duck
