@@ -569,8 +569,8 @@ github.com/stretchr/testify v1.12.0 h1:K6Mr6jO9JICuend/5xzTM03ydSV3vdNRYAdPSukj8
 github.com/stretchr/testify v1.12.0/go.mod h1:bOYBZb5qJ00vPzWfIqBUZPaxK8jWiXc6d3ErP4Ca9Gw=
 github.com/syndtr/goleveldb v1.0.1-0.20220721030215-126854af5e6d h1:vfofYNRScrDdvS342BElfbETmL1Aiz3i2t0zfRj16Hs=
 github.com/syndtr/goleveldb v1.0.1-0.20220721030215-126854af5e6d/go.mod h1:RRCYJbIwD5jmqPI9XoAFR0OcDxqUctll6zUj/+B4S48=
-github.com/tektoncd/pipeline v1.15.0 h1:ZGboFUaEdpYurZWqeGT5rn9e6qmomGL/gLSKhHp2vvQ=
-github.com/tektoncd/pipeline v1.15.0/go.mod h1:HghtkZ1D9b91o0YiXABDUd+c2C6R4kbk+PumnHqs3Bk=
+github.com/tektoncd/pipeline v1.15.1 h1:eCGlMonJr7OhiLaaykO/+qXZv15eijswriT7JrLW9aQ=
+github.com/tektoncd/pipeline v1.15.1/go.mod h1:t2/vjjHPODK3hvx1OFgWVyo9Va/gGE1gR3o/beAsXKg=
 github.com/theupdateframework/go-tuf v0.7.0 h1:CqbQFrWo1ae3/I0UCblSbczevCCbS31Qvs5LdxRWqRI=
 github.com/theupdateframework/go-tuf v0.7.0/go.mod h1:uEB7WSY+7ZIugK6R1hiBMBjQftaFzn7ZCDJcp1tCUug=
 github.com/theupdateframework/go-tuf/v2 v2.4.2 h1:w7976/W8uTwlsegP5nRymlpjPgrwSh+AXUf85is6nJk=
