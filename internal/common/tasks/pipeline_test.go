@@ -455,22 +455,51 @@ func TestReproducibleParams_PushScript_References(t *testing.T) {
 	}
 }
 
-func TestReproducibleParams_BuildScript_References(t *testing.T) {
+func TestBuildScript_ReceivesParamsThroughEnvironment(t *testing.T) {
 	task := GenerateBuildAutomotiveImageTask("test-ns", nil, "")
 
-	var buildStep string
+	want := map[string]string{
+		"TARGET_ARCH":            "$(params.target-architecture)",
+		"DISTRO":                 "$(params.distro)",
+		"TARGET":                 "$(params.target)",
+		"BUILD_MODE":             "$(params.mode)",
+		"EXPORT_FORMAT":          "$(params.export-format)",
+		"COMPRESSION":            "$(params.compression)",
+		"AIB_IMAGE_REF":          "$(params.automotive-image-builder)",
+		"CONTAINER_PUSH":         "$(params.container-push)",
+		"BUILD_DISK_IMAGE":       "$(params.build-disk-image)",
+		"BUILDER_IMAGE":          "$(params.builder-image)",
+		"CLUSTER_REGISTRY_ROUTE": "$(params.cluster-registry-route)",
+		"CONTAINER_REF":          "$(params.container-ref)",
+		"REBUILD_BUILDER":        "$(params.rebuild-builder)",
+		"USE_PERSISTENT_CACHE":   "$(params.use-persistent-cache)",
+		"REPRODUCIBLE":           "$(params.reproducible)",
+		"RESTORE_SOURCES_REF":    "$(params.restore-sources-ref)",
+		"INSECURE_REGISTRY":      "$(params.insecure-registry)",
+	}
+
+	var script string
+	got := make(map[string]string)
 	for _, s := range task.Spec.Steps {
 		if s.Name == buildImageStepName {
-			buildStep = s.Script
+			script = s.Script
+			for _, env := range s.Env {
+				got[env.Name] = env.Value
+			}
 			break
 		}
 	}
-	if buildStep == "" {
+	if script == "" {
 		t.Fatal("build task has no 'build-image' step")
 	}
 
-	if !strings.Contains(buildStep, "$(params.reproducible)") {
-		t.Error("build script missing $(params.reproducible) reference")
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("environment %s = %q, want %q", name, got[name], value)
+		}
+	}
+	if strings.Contains(script, "$(params.") {
+		t.Error("build script must not interpolate Tekton parameters into shell source")
 	}
 }
 

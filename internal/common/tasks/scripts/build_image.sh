@@ -1,495 +1,520 @@
 # shellcheck shell=bash
 # NOTE: common.sh is prepended to this script at embed time.
 
-# Initialize optimizations
+set -o pipefail
+
 WORKSPACE_PATH="$(workspaces.shared-workspace.path)"
+MANIFEST_CONFIG_PATH="$(workspaces.manifest-config-workspace.path)"
 BUILD_START_TIME=$(date +%s)
+
+: "${BUILD_MODE:=bootc}"
+: "${COMPRESSION:=gzip}"
+: "${BUILD_DISK_IMAGE:=false}"
+: "${REBUILD_BUILDER:=false}"
+: "${USE_PERSISTENT_CACHE:=false}"
+: "${REPRODUCIBLE:=false}"
+: "${INSECURE_REGISTRY:=false}"
+: "${BUILDER_IMAGE:=}"
+: "${CLUSTER_REGISTRY_ROUTE:=}"
+: "${CONTAINER_PUSH:=}"
+: "${CONTAINER_REF:=}"
+: "${RESTORE_SOURCES_REF:=}"
+: "${EXPORT_FORMAT:=}"
+
+BUILD_DIR=""
+LOCAL_BUILDER_IMAGE=""
+CONTAINER_PUSH_PID=""
+AIB_METADATA_PID=""
+AIB_METADATA_FINISHED=false
+RESTORE_TMPDIR=""
+CONTAINER_OCI_DIR=""
+AIB_COMMAND=""
+AIB_VERSION=""
+AIB_IMAGE_PINNED=""
+FINAL_NAME=""
+
+cleanup() {
+  local status=$?
+
+  if [ "$status" -ne 0 ] && [ -n "$CONTAINER_PUSH_PID" ] && kill -0 "$CONTAINER_PUSH_PID" 2>/dev/null; then
+    kill "$CONTAINER_PUSH_PID" 2>/dev/null || true
+    wait "$CONTAINER_PUSH_PID" 2>/dev/null || true
+  fi
+  if [ -n "$AIB_METADATA_PID" ] && kill -0 "$AIB_METADATA_PID" 2>/dev/null; then
+    kill "$AIB_METADATA_PID" 2>/dev/null || true
+    wait "$AIB_METADATA_PID" 2>/dev/null || true
+  fi
+  [ -z "$RESTORE_TMPDIR" ] || rm -rf "$RESTORE_TMPDIR"
+  [ -z "$CONTAINER_OCI_DIR" ] || rm -rf "$CONTAINER_OCI_DIR"
+
+  return "$status"
+}
+trap cleanup EXIT
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+validate_boolean() {
+  local name="$1" value="$2"
+  case "$value" in
+    true|false) ;;
+    *) fail "$name must be true or false, got '$value'" ;;
+  esac
+}
+
+validate_config() {
+  [ -n "$DISTRO" ] || fail "distro is required"
+  [ -n "$TARGET" ] || fail "target is required"
+  [ -n "$TARGET_ARCH" ] || fail "target architecture is required"
+  [ -n "$AIB_IMAGE_REF" ] || fail "automotive-image-builder is required"
+
+  case "$BUILD_MODE" in
+    bootc|image|package|disk) ;;
+    *) fail "unknown build mode '$BUILD_MODE'; expected bootc, image, package, or disk" ;;
+  esac
+  case "$COMPRESSION" in
+    gzip|lz4|xz) ;;
+    *) fail "unknown compression '$COMPRESSION'; expected gzip, lz4, or xz" ;;
+  esac
+
+  validate_boolean "build-disk-image" "$BUILD_DISK_IMAGE"
+  validate_boolean "rebuild-builder" "$REBUILD_BUILDER"
+  validate_boolean "use-persistent-cache" "$USE_PERSISTENT_CACHE"
+  validate_boolean "reproducible" "$REPRODUCIBLE"
+  validate_boolean "insecure-registry" "$INSECURE_REGISTRY"
+
+  validate_container_ref "$AIB_IMAGE_REF"
+  [ -z "$BUILDER_IMAGE" ] || validate_container_ref "$BUILDER_IMAGE"
+  [ -z "$CONTAINER_PUSH" ] || validate_container_ref "$CONTAINER_PUSH"
+
+  if [ "$BUILD_MODE" = "disk" ]; then
+    [ -n "$CONTAINER_REF" ] || fail "container-ref is required for disk mode"
+    validate_container_ref "$CONTAINER_REF"
+  fi
+}
+
+validate_config
+
+NEEDS_DISK=false
+case "$BUILD_MODE" in
+  image|package|disk) NEEDS_DISK=true ;;
+  bootc) [ "$BUILD_DISK_IMAGE" = "true" ] && NEEDS_DISK=true ;;
+esac
+
+NEEDS_PUSH=false
+if [ "$BUILD_MODE" = "bootc" ] && [ -n "$CONTAINER_PUSH" ]; then
+  NEEDS_PUSH=true
+fi
+
+PREPARES_BUILDER=false
+PULLS_BUILDER=false
+if [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; then
+  if [ -z "$BUILDER_IMAGE" ] && [ -n "$CLUSTER_REGISTRY_ROUTE" ]; then
+    PREPARES_BUILDER=true
+    PULLS_BUILDER=true
+  elif [ -n "$BUILDER_IMAGE" ]; then
+    PULLS_BUILDER=true
+  fi
+fi
+
+SPLIT_BUILD=false
+if [ "$NEEDS_PUSH" = "true" ] && [ "$NEEDS_DISK" = "true" ]; then
+  SPLIT_BUILD=true
+fi
+
+if [ "$NEEDS_PUSH" = "true" ] && [ -z "$BUILDER_IMAGE" ] && [ "$PREPARES_BUILDER" = "false" ]; then
+  fail "container push requires builder-image or cluster-registry-route"
+fi
+
+ARCH="$TARGET_ARCH"
+case "$ARCH" in
+  arm64) ARCH="aarch64" ;;
+  amd64) ARCH="x86_64" ;;
+esac
+
+SAFE_DISTRO="${DISTRO//[^[:alnum:]_.-]/_}"
+SAFE_TARGET="${TARGET//[^[:alnum:]_.-]/_}"
+CLEAN_NAME="${SAFE_DISTRO}-${SAFE_TARGET}"
+
+declare -a FORMAT_ARGS=()
+case "$EXPORT_FORMAT" in
+  "") FILE_EXTENSION=".raw" ;;
+  image)
+    FILE_EXTENSION=".raw"
+    FORMAT_ARGS=(--format raw)
+    ;;
+  *)
+    SAFE_FORMAT="${EXPORT_FORMAT//[^[:alnum:]_.-]/_}"
+    FILE_EXTENSION=".${SAFE_FORMAT}"
+    FORMAT_ARGS=(--format "$EXPORT_FORMAT")
+    ;;
+esac
+EXPORT_FILE="${CLEAN_NAME}${FILE_EXTENSION}"
+
 detect_stat_command
-
-# Make the internal registry trusted
-# TODO think about whether this is really the right approach
-setup_container_config
-setup_var_tmp
-
 umask 0077
 
+setup_container_config
+setup_var_tmp
 setup_cluster_auth
 
-# Initialize Tekton results with empty defaults.
-# Tekton requires all declared results to exist; these are overwritten
-# later when applicable.
-echo -n "" > /tekton/results/IMAGE_URL
-echo -n "" > /tekton/results/IMAGE_DIGEST
-echo -n "" > /tekton/results/ARTIFACT_INTEGRITY_DIGEST
+for result in IMAGE_URL IMAGE_DIGEST ARTIFACT_INTEGRITY_DIGEST artifact-filename builder-image aib-version automotive-image-builder aib-command build-timing; do
+  write_result "$result" ""
+done
 
-# Clear stale Chains result files from previous builds on reused workspace PVCs.
 rm -rf "$WORKSPACE_PATH/.chains"
 
-# Read registry credentials from workspace and set up auth
 read_registry_creds "/workspace/registry-auth"
 setup_registry_auth || echo "No custom registry auth found, using cluster auth only"
-
-# Use REGISTRY_AUTH_FILE for buildah if available
 [ -n "$REGISTRY_AUTH_FILE" ] && export BUILDAH_REGISTRY_AUTH_FILE="$REGISTRY_AUTH_FILE"
 
 MANIFEST_FILE=$(cat /tekton/results/manifest-file-path)
-if [ -z "$MANIFEST_FILE" ]; then
-    echo "Error: No manifest file path provided"
-    exit 1
-fi
+[ -n "$MANIFEST_FILE" ] || fail "no manifest file path provided"
+[ -f "$MANIFEST_FILE" ] || fail "manifest file not found at $MANIFEST_FILE"
+echo "Using manifest file: $MANIFEST_FILE"
 
-echo "using manifest file: $MANIFEST_FILE"
+prepare_build_directory() {
+  if [ "$USE_PERSISTENT_CACHE" = "true" ]; then
+    BUILD_DIR="$WORKSPACE_PATH/build-cache"
 
-if [ ! -f "$MANIFEST_FILE" ]; then
-    echo "error: Manifest file not found at $MANIFEST_FILE"
-    exit 1
-fi
+    chmod g-s "$WORKSPACE_PATH" 2>/dev/null || true
+    mkdir -p "$BUILD_DIR"
+    echo "Using persistent build cache at $BUILD_DIR"
 
-if mountpoint -q "$OSBUILD_PATH"; then
-    exit 0
-fi
+    find "$BUILD_DIR" -type d -perm /2000 -exec chmod g-s {} + 2>/dev/null || true
+    chown -R :0 "$BUILD_DIR" 2>/dev/null || true
 
-if [ "$(params.use-persistent-cache)" = "true" ]; then
-  BUILD_DIR="$WORKSPACE_PATH/build-cache"
+    echo "Cleaning stale artifacts from persistent workspace"
+    find "$WORKSPACE_PATH" -mindepth 1 -maxdepth 1 \
+      ! -name build-cache \
+      ! -name scratch-build \
+      ! -name scratch-output \
+      ! -name scratch-run \
+      -exec rm -rf -- {} +
 
-  # OpenShift applies setgid + namespace GID on the PVC mount point every time
-  # a new pod mounts it. Clear setgid BEFORE creating any directories.
-  chmod g-s "$WORKSPACE_PATH" 2>/dev/null || true
+    find "$BUILD_DIR" -maxdepth 1 -name 'image_output--*' -exec rm -rf -- {} +
+  else
+    BUILD_DIR="/_build"
+    chmod g-s "$BUILD_DIR" 2>/dev/null || true
+  fi
+}
 
-  mkdir -p "$BUILD_DIR"
-  echo "Using persistent build cache at $BUILD_DIR"
+restore_sources_if_requested() {
+  [ -n "$RESTORE_SOURCES_REF" ] || return 0
 
-  # OpenShift re-applies setgid + namespace GID on PVC directories each pod
-  # mount. Clear setgid so NEW files get root GID (0) going forward.
-  find "$BUILD_DIR" -type d -perm /2000 -exec chmod g-s {} + 2>/dev/null || true
+  echo "Restoring sources from $RESTORE_SOURCES_REF"
+  install_oras || fail "failed to install oras"
 
-  # Kubernetes also changes GIDs on ALL existing files to the namespace
-  # supplemental GID at mount time. Reset to root GID so osbuild's cp -a
-  # doesn't try to preserve namespace GIDs on FAT (EFI) partitions.
-  chown -R :0 "$BUILD_DIR" 2>/dev/null || true
-
-  echo "Cleaning up stale artifacts from persistent workspace..."
-  for item in "$WORKSPACE_PATH"/*; do
-    # Keep build-cache (osbuild store) and PVC-backed scratch subPath directories.
-    # Scratch names must match pvcScratchRedirects in tasks.go.
-    case "$(basename "$item")" in
-      build-cache|scratch-build|scratch-output|scratch-run) continue ;;
-    esac
-    rm -rf "$item"
-  done
-
-  for orphan in "$BUILD_DIR"/image_output--*; do
-    [ -e "$orphan" ] || break
-    echo "Removing orphaned build output: $(basename "$orphan")"
-    rm -rf "$orphan"
-  done
-else
-  BUILD_DIR="/_build"
-
-  # When scratch volumes are PVC-backed (usePVCScratchVolumes), OpenShift applies
-  # setgid + namespace GID on the mount. Clear it so osbuild doesn't create files
-  # with GIDs that don't exist in the target rootfs.
-  chmod g-s "/_build" 2>/dev/null || true
-fi
-
-RESTORE_SOURCES_REF="$(params.restore-sources-ref)"
-if [ -n "$RESTORE_SOURCES_REF" ]; then
-  echo "=== Restoring sources from $RESTORE_SOURCES_REF ==="
-
-  install_oras || exit 1
-
-  ORAS_AUTH_FLAGS=()
+  local -a auth_flags=()
   if [ -n "$REGISTRY_AUTH_FILE" ] && [ -f "$REGISTRY_AUTH_FILE" ]; then
-    ORAS_AUTH_FLAGS=(--registry-config "$REGISTRY_AUTH_FILE")
+    auth_flags=(--registry-config "$REGISTRY_AUTH_FILE")
   fi
 
-  SOURCES_TYPE="$OCI_REFERRER_TYPE_BUILD_SOURCES"
-  SOURCES_DIGEST=$(oras discover "${ORAS_AUTH_FLAGS[@]}" "$RESTORE_SOURCES_REF" \
-    --artifact-type "$SOURCES_TYPE" --format json \
-    | grep -o 'sha256:[a-f0-9]\{64\}' | head -1)
+  local sources_digest sources_repo sources_archive
+  sources_digest=$(oras discover "${auth_flags[@]}" "$RESTORE_SOURCES_REF" \
+    --artifact-type "$OCI_REFERRER_TYPE_BUILD_SOURCES" --format json \
+    | grep -o 'sha256:[a-f0-9]\{64\}' | sed -n '1p' || true)
+  [ -n "$sources_digest" ] || fail "no sources referrer found for $RESTORE_SOURCES_REF"
 
-  if [ -z "$SOURCES_DIGEST" ]; then
-    echo "ERROR: No sources referrer found for $RESTORE_SOURCES_REF" >&2
-    exit 1
-  fi
-
-  # Strip digest to get repo (ref is always digest-pinned: registry/repo@sha256:...)
-  SOURCES_REPO="${RESTORE_SOURCES_REF%%@*}"
-
+  sources_repo="${RESTORE_SOURCES_REF%%@*}"
   RESTORE_TMPDIR=$(mktemp -d)
-  oras pull "${ORAS_AUTH_FLAGS[@]}" "${SOURCES_REPO}@${SOURCES_DIGEST}" -o "$RESTORE_TMPDIR"
-  SOURCES_ARCHIVE=$(find "$RESTORE_TMPDIR" -name '*.tar.gz' -print -quit)
-
-  if [ -z "$SOURCES_ARCHIVE" ]; then
-    echo "ERROR: No archive found after pulling sources referrer" >&2
-    exit 1
-  fi
+  oras pull "${auth_flags[@]}" "${sources_repo}@${sources_digest}" -o "$RESTORE_TMPDIR"
+  sources_archive=$(find "$RESTORE_TMPDIR" -name '*.tar.gz' -print -quit)
+  [ -n "$sources_archive" ] || fail "no archive found after pulling sources referrer"
 
   mkdir -p "$BUILD_DIR/osbuild_store"
-  tar -xzf "$SOURCES_ARCHIVE" -C "$BUILD_DIR/osbuild_store"
+  tar --no-same-owner --no-same-permissions -xzf "$sources_archive" -C "$BUILD_DIR/osbuild_store"
   rm -rf "$RESTORE_TMPDIR"
+  RESTORE_TMPDIR=""
   echo "Sources restored: $(find "$BUILD_DIR/osbuild_store/sources" -type f | wc -l) blobs"
-  echo "=== Sources restoration complete ==="
-fi
+}
 
+prepare_build_directory
+restore_sources_if_requested
 install_custom_ca_certs
 setup_osbuild
 
-cd "$WORKSPACE_PATH" || exit
+cd "$WORKSPACE_PATH" || exit 1
 
-EXPORT_FORMAT="$(params.export-format)"
-# If format is empty, AIB defaults to raw
-if [ -z "$EXPORT_FORMAT" ] || [ "$EXPORT_FORMAT" = "image" ]; then
-  file_extension=".raw"
-elif [ "$EXPORT_FORMAT" = "qcow2" ]; then
-  file_extension=".qcow2"
-else
-  file_extension=".$EXPORT_FORMAT"
-fi
-
-# Only pass --format to AIB if explicitly specified
-# Note: to-disk-image accepts raw/qcow2/simg, not "image"
-FORMAT_ARG=""
-if [ -n "$EXPORT_FORMAT" ]; then
-  AIB_FORMAT="$EXPORT_FORMAT"
-  # Translate "image" to "raw" for AIB compatibility
-  if [ "$AIB_FORMAT" = "image" ]; then
-    AIB_FORMAT="raw"
-  fi
-  FORMAT_ARG="--format $AIB_FORMAT"
-fi
-
-cleanName=$(params.distro)-$(params.target)
-exportFile=${cleanName}${file_extension}
-
-BUILD_MODE="$(params.mode)"
-if [ -z "$BUILD_MODE" ]; then
-  BUILD_MODE="bootc"
-fi
-
-# Generic file loader for validated arguments
 load_args_from_file() {
   local file="$1"
   local description="$2"
   local validator="$3"
-  local -n result_array=$4  # nameref to output array
+  local -n result_array=$4
 
-  if [ ! -f "$file" ]; then
-    return 1
-  fi
+  [ -f "$file" ] || return 1
 
   echo "Loading $description from $file"
   while IFS= read -r line || [[ -n "$line" ]]; do
-    # Skip empty lines and comments
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    [ -n "$validator" ] && $validator "$line" "$description"
+    [ -z "$validator" ] || "$validator" "$line" "$description"
     result_array+=("$line")
   done < "$file"
   echo "Loaded ${#result_array[@]} items for $description"
-  return 0
 }
 
-# Load custom definitions
-load_custom_definitions "$(workspaces.manifest-config-workspace.path)/custom-definitions.env"
+load_custom_definitions "$MANIFEST_CONFIG_PATH/custom-definitions.env"
 
-# Load AIB extra arguments
 declare -a AIB_EXTRA_ARGS=()
-AIB_EXTRA_ARGS_FILE="$(workspaces.manifest-config-workspace.path)/aib-extra-args.txt"
-
-if load_args_from_file "$AIB_EXTRA_ARGS_FILE" "AIB extra args" "" AIB_EXTRA_ARGS; then
-  :  # Extra args loaded successfully
-else
+if ! load_args_from_file "$MANIFEST_CONFIG_PATH/aib-extra-args.txt" "AIB extra args" "" AIB_EXTRA_ARGS; then
   echo "No AIB extra args file found"
 fi
 
-# Load root password
 declare -a ROOT_PASSWORD_ARGS=()
-ROOT_PASSWORD_FILE="$(workspaces.manifest-config-workspace.path)/root-password.txt"
-if [ -f "$ROOT_PASSWORD_FILE" ] && [ -s "$ROOT_PASSWORD_FILE" ]; then
-  ROOT_PASSWORD_ARGS=("--root-password" "file:${ROOT_PASSWORD_FILE}")
+ROOT_PASSWORD_FILE="$MANIFEST_CONFIG_PATH/root-password.txt"
+if [ -s "$ROOT_PASSWORD_FILE" ]; then
+  ROOT_PASSWORD_ARGS=(--root-password "file:${ROOT_PASSWORD_FILE}")
   echo "Root password override configured"
 fi
 
-arch="$(params.target-architecture)"
-case "$arch" in
-  "arm64")
-    arch="aarch64"
-    ;;
-  "amd64")
-    arch="x86_64"
-    ;;
-esac
-
-CONTAINER_PUSH="$(params.container-push)"
-BUILD_DISK_IMAGE="$(params.build-disk-image)"
-EXPORT_OCI="$(params.export-oci)"
-BUILDER_IMAGE="$(params.builder-image)"
-CLUSTER_REGISTRY_ROUTE="$(params.cluster-registry-route)"
-CONTAINER_REF="$(params.container-ref)"
-INSECURE_REGISTRY="$(params.insecure-registry)"
-
-SKOPEO_COPY_TLS_ARGS=()
-SKOPEO_INSPECT_TLS_ARGS=()
+declare -a SKOPEO_COPY_TLS_ARGS=()
+declare -a SKOPEO_INSPECT_TLS_ARGS=()
 if [ "$INSECURE_REGISTRY" = "true" ]; then
   SKOPEO_COPY_TLS_ARGS=(--src-tls-verify=false --dest-tls-verify=false)
   SKOPEO_INSPECT_TLS_ARGS=(--tls-verify=false)
 fi
 
-echo "=== Build Configuration ==="
-echo "BUILD_MODE: $BUILD_MODE"
-echo "CONTAINER_PUSH: ${CONTAINER_PUSH:-<empty>}"
-echo "BUILD_DISK_IMAGE: $BUILD_DISK_IMAGE"
-echo "EXPORT_OCI: ${EXPORT_OCI:-<empty>}"
-echo "==========================="
+copy_from_registry() {
+  local ref="$1" destination="$2"
 
-REBUILD_BUILDER="$(params.rebuild-builder)"
+  if skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" "docker://$ref" "$destination" 2>/dev/null; then
+    return 0
+  fi
 
-# Calculate total progress steps based on build options.
+  [ -f "$REGISTRY_AUTH_FILE" ] || return 1
+  skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" --authfile="$REGISTRY_AUTH_FILE" \
+    "docker://$ref" "$destination"
+}
+
+copy_cluster_image() {
+  local ref="$1" destination="$2"
+  local registry_host="${ref%%/*}"
+  local auth_file
+  auth_file=$(mktemp /tmp/cluster-registry-auth.XXXXXX)
+  create_service_account_auth "$registry_host" "$auth_file"
+  if ! skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" --authfile="$auth_file" \
+    "docker://$ref" "$destination"; then
+    rm -f "$auth_file"
+    return 1
+  fi
+  rm -f "$auth_file"
+}
+
+pull_registry_image() {
+  local ref="$1" destination="$2"
+  local registry_host="${ref%%/*}"
+  local route_host="${CLUSTER_REGISTRY_ROUTE%%/*}"
+
+  if [ "$registry_host" = "$INTERNAL_REGISTRY" ] || { [ -n "$route_host" ] && [ "$registry_host" = "$route_host" ]; }; then
+    copy_cluster_image "$ref" "$destination"
+  else
+    copy_from_registry "$ref" "$destination"
+  fi
+}
+
+copy_to_registry() {
+  local source="$1" destination="$2" digest_file="${3:-}"
+  local -a args=("${SKOPEO_COPY_TLS_ARGS[@]}")
+  local registry_host="${destination%%/*}"
+  local route_host="${CLUSTER_REGISTRY_ROUTE%%/*}"
+  local auth_file=""
+
+  [ -z "$digest_file" ] || args+=(--digestfile "$digest_file")
+  if [ "$registry_host" = "$INTERNAL_REGISTRY" ] || { [ -n "$route_host" ] && [ "$registry_host" = "$route_host" ]; }; then
+    auth_file=$(mktemp /tmp/registry-push-auth.XXXXXX)
+    create_service_account_auth "$registry_host" "$auth_file"
+  elif [ -f "$REGISTRY_AUTH_FILE" ]; then
+    auth_file="$REGISTRY_AUTH_FILE"
+  fi
+  [ -z "$auth_file" ] || args+=(--authfile="$auth_file")
+
+  if ! skopeo copy "${args[@]}" "$source" "docker://$destination"; then
+    if [ -n "$auth_file" ] && [ "$auth_file" != "$REGISTRY_AUTH_FILE" ]; then
+      rm -f "$auth_file"
+    fi
+    return 1
+  fi
+  if [ -n "$auth_file" ] && [ "$auth_file" != "$REGISTRY_AUTH_FILE" ]; then
+    rm -f "$auth_file"
+  fi
+}
+
 # SYNC: keep in sync with internal/buildapi/progress.go (estimateBuildSteps).
-# Base steps: 1=Preparing, 2=Building, 3=Finalizing
 PROGRESS_TOTAL=3
 STEP_BUILD=2
 STEP_FINALIZE=3
-# Builder preparation steps (bootc/disk without explicit builder + cluster registry available)
-# 2 extra steps: "Preparing builder" (cache check + optional build/push) + "Pulling builder"
-if [ -z "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; } && [ -n "$CLUSTER_REGISTRY_ROUTE" ]; then
-  PROGRESS_TOTAL=$((PROGRESS_TOTAL + 2))
-  STEP_BUILD=$((STEP_BUILD + 2))
-  STEP_FINALIZE=$((STEP_FINALIZE + 2))
-elif [ -n "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; }; then
+if [ "$PREPARES_BUILDER" = "true" ]; then
   PROGRESS_TOTAL=$((PROGRESS_TOTAL + 1))
   STEP_BUILD=$((STEP_BUILD + 1))
   STEP_FINALIZE=$((STEP_FINALIZE + 1))
 fi
-if [ -n "$CONTAINER_PUSH" ] && [ "$BUILD_MODE" = "bootc" ]; then
+if [ "$PULLS_BUILDER" = "true" ]; then
+  PROGRESS_TOTAL=$((PROGRESS_TOTAL + 1))
+  STEP_BUILD=$((STEP_BUILD + 1))
+  STEP_FINALIZE=$((STEP_FINALIZE + 1))
+fi
+if [ "$NEEDS_PUSH" = "true" ]; then
   PROGRESS_TOTAL=$((PROGRESS_TOTAL + 1))
   STEP_FINALIZE=$((STEP_FINALIZE + 1))
 fi
-# Compression step (for disk image builds)
-if [ "$BUILD_DISK_IMAGE" = "true" ] || [ "$BUILD_MODE" = "image" ] || [ "$BUILD_MODE" = "package" ] || [ "$BUILD_MODE" = "disk" ]; then
+if [ "$NEEDS_DISK" = "true" ]; then
   PROGRESS_TOTAL=$((PROGRESS_TOTAL + 1))
   STEP_FINALIZE=$((STEP_FINALIZE + 1))
 fi
 
 emit_progress "Preparing build" 1 "$PROGRESS_TOTAL"
 
-# Use parameter expansion for cleaner default value assignment
-BOOTC_CONTAINER_NAME="${CONTAINER_PUSH:-localhost/aib-build:$(params.distro)-$(params.target)}"
+BOOTC_CONTAINER_NAME="${CONTAINER_PUSH:-localhost/aib-build:${DISTRO}-${TARGET}}"
+AIB_HASH=$(printf '%s' "$AIB_IMAGE_REF" | sha256sum | cut -c1-8)
+LOCAL_BUILDER_IMAGE="localhost/aib-build:${DISTRO}-${TARGET_ARCH}-${AIB_HASH}"
 
-# Calculate AIB hash for consistent naming with build_builder.sh
-AIB_HASH=$(echo -n "$(params.automotive-image-builder)" | sha256sum | cut -c1-8)
-# Local builder image name (matches what build_builder.sh creates with --out)
-LOCAL_BUILDER_IMAGE="localhost/aib-build:$(params.distro)-${TARGET_ARCH}-${AIB_HASH}"
-
-# For bootc/disk builds, if no builder-image is provided but cluster-registry-route is set,
-# prepare the builder image inline (previously done by separate prepare-builder task)
-if [ -z "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; } && [ -n "$CLUSTER_REGISTRY_ROUTE" ]; then
-  TARGET_BUILDER_IMAGE="${CLUSTER_REGISTRY_ROUTE}/${NAMESPACE}/aib-build:$(params.distro)-${TARGET_ARCH}-${AIB_HASH}"
-
-  # Add auth entry for the external registry route hostname.
-  # setup_cluster_auth only created an entry for the internal registry;
-  # skopeo needs credentials for the route hostname too.
-  ROUTE_HOST=$(echo "$CLUSTER_REGISTRY_ROUTE" | cut -d'/' -f1)
-  TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || echo "")
-  if [ -n "$TOKEN" ] && [ -n "$REGISTRY_AUTH_FILE" ]; then
-    ROUTE_AUTH=$(echo -n "serviceaccount:$TOKEN" | base64 -w0)
-    python3 -c "
-import json, sys
-f = sys.argv[1]
-with open(f) as fh: d = json.load(fh)
-d['auths'][sys.argv[2]] = {'auth': sys.argv[3]}
-with open(f, 'w') as fh: json.dump(d, fh)
-" "$REGISTRY_AUTH_FILE" "$ROUTE_HOST" "$ROUTE_AUTH"
-    echo "Added auth entry for registry route: $ROUTE_HOST"
-  fi
-
-  emit_progress "Preparing builder" 2 "$PROGRESS_TOTAL"
-
-  BUILDER_CACHED=false
-  if [ "$REBUILD_BUILDER" = "true" ]; then
-    echo "Rebuild requested, skipping cache check"
-  else
-    echo "Checking if $TARGET_BUILDER_IMAGE exists in cluster registry..."
-    if skopeo inspect "${SKOPEO_INSPECT_TLS_ARGS[@]}" --authfile="$REGISTRY_AUTH_FILE" "docker://$TARGET_BUILDER_IMAGE" >/dev/null 2>&1; then
-      echo "Builder image found in cluster registry: $TARGET_BUILDER_IMAGE"
-      BUILDER_CACHED=true
-    fi
-  fi
-
-  if [ "$BUILDER_CACHED" = "false" ]; then
-    echo "Builder image not found, building..."
-    echo "Running: aib build-builder --distro $(params.distro) --build-dir $BUILD_DIR --cache $BUILD_DIR/dnf-cache ${CUSTOM_DEFS_ARGS[*]} $LOCAL_BUILDER_IMAGE"
-    aib --verbose build-builder --build-dir "$BUILD_DIR" --cache "$BUILD_DIR/dnf-cache" --distro "$(params.distro)" "${CUSTOM_DEFS_ARGS[@]}" "$LOCAL_BUILDER_IMAGE"
-
-    echo "Built local image: $LOCAL_BUILDER_IMAGE"
-    echo "Pushing to cluster registry: $TARGET_BUILDER_IMAGE"
-    skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" --authfile="$REGISTRY_AUTH_FILE" \
-      "containers-storage:$LOCAL_BUILDER_IMAGE" \
-      "docker://$TARGET_BUILDER_IMAGE"
-    echo "Builder image pushed: $TARGET_BUILDER_IMAGE"
-  fi
-
-  BUILDER_IMAGE="$TARGET_BUILDER_IMAGE"
-  echo "Using builder image: $BUILDER_IMAGE"
-fi
-
-# Record the effective builder image used for annotation
-echo -n "${BUILDER_IMAGE:-}" > /tekton/results/builder-image
-
-# Start AIB metadata capture in the background (runs in parallel with the build)
-AIB_IMAGE_REF="$(params.automotive-image-builder)"
-(
-  aib --version 2>&1 | head -1 | tr -d '\r\n' | sed 's/^aib //' > /tmp/aib-version.txt 2>/dev/null || true
-  AIB_DIGEST=$(skopeo inspect "${SKOPEO_INSPECT_TLS_ARGS[@]}" --format '{{.Digest}}' "docker://${AIB_IMAGE_REF}" 2>/dev/null || echo "")
-  if [ -n "$AIB_DIGEST" ]; then
-    case "$AIB_IMAGE_REF" in
-      *@*) echo -n "$AIB_IMAGE_REF" > /tmp/aib-pinned.txt ;;
-      *)   AIB_BASE=$(echo "$AIB_IMAGE_REF" | sed 's/:[^/]*$//')
-           echo -n "${AIB_BASE}@${AIB_DIGEST}" > /tmp/aib-pinned.txt ;;
-    esac
-  else
-    echo -n "$AIB_IMAGE_REF" > /tmp/aib-pinned.txt
-  fi
-) &
-AIB_METADATA_PID=$!
-
-# Set up builder image if needed (consolidated logic)
 declare -a BUILD_CONTAINER_ARGS=()
-if [ -n "$BUILDER_IMAGE" ] && { [ "$BUILD_MODE" = "bootc" ] || [ "$BUILD_MODE" = "disk" ]; }; then
-  emit_progress "Pulling builder image" $((STEP_BUILD - 1)) "$PROGRESS_TOTAL"
-  echo "Pulling builder image to local storage: $BUILDER_IMAGE"
 
-  TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || echo "")
-  if [ -n "$TOKEN" ]; then
-    REGISTRY_HOST=$(echo "$BUILDER_IMAGE" | cut -d'/' -f1)
-    create_service_account_auth "$REGISTRY_HOST" /tmp/builder-auth.json
-    skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" --authfile=/tmp/builder-auth.json \
-      "docker://$BUILDER_IMAGE" \
-      "containers-storage:$LOCAL_BUILDER_IMAGE"
-  else
-    skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" \
-      "docker://$BUILDER_IMAGE" \
-      "containers-storage:$LOCAL_BUILDER_IMAGE"
+prepare_builder_if_needed() {
+  if [ "$PREPARES_BUILDER" = "true" ]; then
+    local target_builder_image route_host auth_file builder_cached=false
+    target_builder_image="${CLUSTER_REGISTRY_ROUTE}/${NAMESPACE}/aib-build:${DISTRO}-${TARGET_ARCH}-${AIB_HASH}"
+    route_host="${CLUSTER_REGISTRY_ROUTE%%/*}"
+    auth_file=$(mktemp /tmp/builder-registry-auth.XXXXXX)
+    create_service_account_auth "$route_host" "$auth_file"
+
+    emit_progress "Preparing builder" 2 "$PROGRESS_TOTAL"
+    if [ "$REBUILD_BUILDER" = "true" ]; then
+      echo "Rebuild requested, skipping builder cache check"
+    elif skopeo inspect "${SKOPEO_INSPECT_TLS_ARGS[@]}" --authfile="$auth_file" \
+      "docker://$target_builder_image" >/dev/null 2>&1; then
+      echo "Builder image found in cluster registry: $target_builder_image"
+      builder_cached=true
+    fi
+
+    if [ "$builder_cached" = "false" ]; then
+      echo "Building builder image $LOCAL_BUILDER_IMAGE"
+      aib --verbose build-builder --build-dir "$BUILD_DIR" --cache "$BUILD_DIR/dnf-cache" \
+        --distro "$DISTRO" "${CUSTOM_DEFS_ARGS[@]}" "$LOCAL_BUILDER_IMAGE"
+      copy_to_registry "containers-storage:$LOCAL_BUILDER_IMAGE" "$target_builder_image"
+    fi
+
+    rm -f "$auth_file"
+    BUILDER_IMAGE="$target_builder_image"
   fi
 
-  echo "Builder image ready in local storage: $LOCAL_BUILDER_IMAGE"
-  BUILD_CONTAINER_ARGS=("--build-container" "$LOCAL_BUILDER_IMAGE")
+  write_result builder-image "$BUILDER_IMAGE"
+
+  if [ "$PULLS_BUILDER" = "true" ]; then
+    emit_progress "Pulling builder image" $((STEP_BUILD - 1)) "$PROGRESS_TOTAL"
+    echo "Pulling builder image: $BUILDER_IMAGE"
+    pull_registry_image "$BUILDER_IMAGE" "containers-storage:$LOCAL_BUILDER_IMAGE"
+    BUILD_CONTAINER_ARGS=(--build-container "$LOCAL_BUILDER_IMAGE")
+  fi
+}
+
+prepare_builder_if_needed
+
+configure_compressor() {
+  case "$COMPRESSION" in
+    gzip)
+      if command -v pigz >/dev/null 2>&1; then
+        GZIP_COMPRESSOR="pigz"
+      elif command -v gzip >/dev/null 2>&1; then
+        GZIP_COMPRESSOR="gzip"
+      else
+        fail "gzip compression requested but neither pigz nor gzip is installed in $AIB_IMAGE_REF"
+      fi
+      EXT_FILE=".gz"
+      EXT_DIR=".tar.gz"
+      ;;
+    lz4)
+      command -v lz4 >/dev/null 2>&1 || fail "lz4 compression requested but lz4 is not installed in $AIB_IMAGE_REF"
+      EXT_FILE=".lz4"
+      EXT_DIR=".tar.lz4"
+      ;;
+    xz)
+      command -v xz >/dev/null 2>&1 || fail "xz compression requested but xz is not installed in $AIB_IMAGE_REF"
+      EXT_FILE=".xz"
+      EXT_DIR=".tar.xz"
+      ;;
+  esac
+}
+
+if [ "$NEEDS_DISK" = "true" ]; then
+  configure_compressor
 fi
 
-# Parse FORMAT_ARG safely
-declare -a FORMAT_ARGS=()
-if [ -n "$FORMAT_ARG" ]; then
-  # FORMAT_ARG is "--format <value>" or similar
-  for word in $FORMAT_ARG; do
-    FORMAT_ARGS+=("$word")
-  done
-fi
+start_aib_metadata_capture() {
+  rm -f /tmp/aib-version.txt /tmp/aib-pinned.txt
+  (
+    aib --version 2>&1 | head -1 | tr -d '\r\n' | sed 's/^aib //' > /tmp/aib-version.txt 2>/dev/null || true
 
-# Common build arguments used across all modes
+    local -a inspect_args=("${SKOPEO_INSPECT_TLS_ARGS[@]}")
+    [ ! -f "$REGISTRY_AUTH_FILE" ] || inspect_args+=(--authfile="$REGISTRY_AUTH_FILE")
+    local digest
+    digest=$(skopeo inspect "${inspect_args[@]}" --format '{{.Digest}}' "docker://${AIB_IMAGE_REF}" 2>/dev/null || true)
+    if [ -n "$digest" ]; then
+      case "$AIB_IMAGE_REF" in
+        *@*) printf '%s' "$AIB_IMAGE_REF" > /tmp/aib-pinned.txt ;;
+        *)
+          local base
+          base=$(printf '%s' "$AIB_IMAGE_REF" | sed 's/:[^/]*$//')
+          printf '%s@%s' "$base" "$digest" > /tmp/aib-pinned.txt
+          ;;
+      esac
+    else
+      printf '%s' "$AIB_IMAGE_REF" > /tmp/aib-pinned.txt
+    fi
+  ) &
+  AIB_METADATA_PID=$!
+}
+
+finish_aib_metadata_capture() {
+  [ "$AIB_METADATA_FINISHED" = "false" ] || return 0
+
+  wait "$AIB_METADATA_PID" 2>/dev/null || true
+  AIB_METADATA_PID=""
+  AIB_VERSION=$(cat /tmp/aib-version.txt 2>/dev/null || true)
+  AIB_IMAGE_PINNED=$(cat /tmp/aib-pinned.txt 2>/dev/null || printf '%s' "$AIB_IMAGE_REF")
+  write_result aib-version "$AIB_VERSION"
+  write_result automotive-image-builder "$AIB_IMAGE_PINNED"
+  AIB_METADATA_FINISHED=true
+  echo "AIB image reference: $AIB_IMAGE_PINNED"
+}
+
+start_aib_metadata_capture
+
 declare -a COMMON_BUILD_ARGS=(
   --build-dir="$BUILD_DIR"
   --cache="$BUILD_DIR/dnf-cache"
   --osbuild-manifest="$BUILD_DIR/image.json"
 )
-
-if [ "$(params.use-persistent-cache)" = "true" ]; then
-  COMMON_BUILD_ARGS+=(--define "reproducible_image=true")
-  COMMON_BUILD_ARGS+=(--cache-max-size=unlimited)
-elif [ "$(params.reproducible)" = "true" ]; then
+if [ "$USE_PERSISTENT_CACHE" = "true" ]; then
+  COMMON_BUILD_ARGS+=(--define "reproducible_image=true" --cache-max-size=unlimited)
+elif [ "$REPRODUCIBLE" = "true" ]; then
   COMMON_BUILD_ARGS+=(--define "reproducible_image=true")
 fi
 
-AIB_INVOKE_TIME=$(date +%s)
-echo "⏱ Setup phase: $((AIB_INVOKE_TIME - BUILD_START_TIME))s"
+run_aib_command() {
+  local description="$1"
+  shift
+  local -a command=("$@")
 
-case "$BUILD_MODE" in
-    bootc)
-      # When both container push and disk build are needed, split into two phases
-      # so container push can overlap with disk creation:
-      #   Phase 1: aib build (container only, no disk)
-      #   Phase 2: container push (background) + aib to-disk-image (foreground, parallel)
-      # When only one is needed, use the single aib build command.
-      SPLIT_BUILD="false"
-      if [ -n "$CONTAINER_PUSH" ] && [ "$BUILD_DISK_IMAGE" = "true" ]; then
-        SPLIT_BUILD="true"
-      fi
+  AIB_COMMAND=$(printf '%q ' "${command[@]}")
+  AIB_COMMAND="${AIB_COMMAND% }"
+  write_result aib-command "$AIB_COMMAND"
+  echo "$description"
+  emit_progress "Building image" "$STEP_BUILD" "$PROGRESS_TOTAL"
+  "${command[@]}"
+}
 
-      if [ "$SPLIT_BUILD" = "true" ]; then
-        # Phase 1: Build container only (no disk output)
-        declare -a AIB_CMD=(
-          aib --verbose build
-          --distro "$(params.distro)"
-          --target "$(params.target)"
-          "--arch=${arch}"
-          "${COMMON_BUILD_ARGS[@]}"
-          "${BUILD_CONTAINER_ARGS[@]}"
-          "${CUSTOM_DEFS_ARGS[@]}"
-          "${AIB_EXTRA_ARGS[@]}"
-          "${ROOT_PASSWORD_ARGS[@]}"
-          "$MANIFEST_FILE"
-          "$BOOTC_CONTAINER_NAME"
-        )
-      else
-        declare -a DISK_OUTPUT_ARGS=()
-        if [ "$BUILD_DISK_IMAGE" = "true" ]; then
-          DISK_OUTPUT_ARGS=("/output/${exportFile}")
-        fi
-
-        declare -a AIB_CMD=(
-          aib --verbose build
-          --distro "$(params.distro)"
-          --target "$(params.target)"
-          "--arch=${arch}"
-          "${COMMON_BUILD_ARGS[@]}"
-          "${FORMAT_ARGS[@]}"
-          "${BUILD_CONTAINER_ARGS[@]}"
-          "${CUSTOM_DEFS_ARGS[@]}"
-          "${AIB_EXTRA_ARGS[@]}"
-          "${ROOT_PASSWORD_ARGS[@]}"
-          "$MANIFEST_FILE"
-          "$BOOTC_CONTAINER_NAME"
-          "${DISK_OUTPUT_ARGS[@]}"
-        )
-      fi
-
-      AIB_COMMAND=$(printf '%q ' "${AIB_CMD[@]}" | sed 's/ $//')
-      echo -n "$AIB_COMMAND" > /tekton/results/aib-command
-
-      echo "Running bootc build"
-      emit_progress "Building image" "$STEP_BUILD" "$PROGRESS_TOTAL"
-      "${AIB_CMD[@]}"
-
-      CONTAINER_PUSH_PID=""
-      if [ -n "$CONTAINER_PUSH" ]; then
-        emit_progress "Pushing container" "$((STEP_BUILD + 1))" "$PROGRESS_TOTAL"
-
-        if [ -z "$BUILDER_IMAGE" ]; then
-          echo "Error: BUILDER_IMAGE is empty; cannot annotate bootc container"
-          exit 1
-        fi
-
-        # Annotate + push container to registry in the background.
-        # This overlaps with disk compression, saving wall-clock time.
-        (
-          PUSH_START=$(date +%s)
-          PUSH_SRC="containers-storage:$BOOTC_CONTAINER_NAME"
-          OCI_DIR="/tmp/bootc-oci"
-          rm -rf "$OCI_DIR"
-          skopeo copy "$PUSH_SRC" "oci:${OCI_DIR}:latest"
-          COPY_DONE=$(date +%s)
-          echo "⏱ Container copy to OCI: $((COPY_DONE - PUSH_START))s"
-
-          # Wait for AIB metadata to be available for annotations
-          # (can't use `wait` here — AIB_METADATA_PID is a sibling, not a child of this subshell)
-          while kill -0 "$AIB_METADATA_PID" 2>/dev/null; do sleep 1; done
-          _AIB_VERSION=$(cat /tmp/aib-version.txt 2>/dev/null || echo "")
-          _AIB_IMAGE_PINNED=$(cat /tmp/aib-pinned.txt 2>/dev/null || echo "$AIB_IMAGE_REF")
-
-          echo "Annotating bootc container with builder image: $BUILDER_IMAGE"
-          python3 - "$OCI_DIR" "$BUILDER_IMAGE" "$_AIB_VERSION" "$_AIB_IMAGE_PINNED" "$AIB_COMMAND" \
-              "$OCI_ANN_BUILDER_IMAGE" "$OCI_ANN_AIB_VERSION" "$OCI_ANN_AUTOMOTIVE_IMAGE_BUILDER" "$OCI_ANN_AIB_COMMAND" <<'PYEOF'
-import json, sys, hashlib, os
+annotate_oci_image() {
+  local oci_dir="$1"
+  python3 - "$oci_dir" "$BUILDER_IMAGE" "$AIB_VERSION" "$AIB_IMAGE_PINNED" "$AIB_COMMAND" \
+    "$OCI_ANN_BUILDER_IMAGE" "$OCI_ANN_AIB_VERSION" "$OCI_ANN_AUTOMOTIVE_IMAGE_BUILDER" "$OCI_ANN_AIB_COMMAND" <<'PYEOF'
+import hashlib
+import json
+import sys
 from pathlib import Path
+
 
 def update_blob(oci_dir, old_digest, data):
     content = json.dumps(data, indent=2).encode()
@@ -502,380 +527,280 @@ def update_blob(oci_dir, old_digest, data):
         old_path.unlink()
     return new_digest, len(content)
 
+
 oci_dir, builder_image, aib_version, aib_image, aib_command = sys.argv[1:6]
 key_builder, key_aib_version, key_aib_image, key_aib_command = sys.argv[6:10]
 
 index_path = Path(oci_dir) / "index.json"
 index = json.loads(index_path.read_text())
 manifest_entry = index["manifests"][0]
-
 manifest_path = Path(oci_dir) / "blobs" / manifest_entry["digest"].replace(":", "/")
 manifest = json.loads(manifest_path.read_text())
-
 config_path = Path(oci_dir) / "blobs" / manifest["config"]["digest"].replace(":", "/")
 config = json.loads(config_path.read_text())
 
 labels = config.setdefault("config", {}).setdefault("Labels", {})
 labels[key_builder] = builder_image
-if aib_version:   labels[key_aib_version]   = aib_version
-if aib_image:     labels[key_aib_image]      = aib_image
-if aib_command:   labels[key_aib_command]    = aib_command
-manifest["config"]["digest"], manifest["config"]["size"] = update_blob(oci_dir, manifest["config"]["digest"], config)
+if aib_version:
+    labels[key_aib_version] = aib_version
+if aib_image:
+    labels[key_aib_image] = aib_image
+if aib_command:
+    labels[key_aib_command] = aib_command
+manifest["config"]["digest"], manifest["config"]["size"] = update_blob(
+    oci_dir, manifest["config"]["digest"], config
+)
 
 annotations = manifest.setdefault("annotations", {})
 annotations[key_builder] = builder_image
-if aib_version:   annotations[key_aib_version]   = aib_version
-if aib_image:     annotations[key_aib_image]      = aib_image
-if aib_command:   annotations[key_aib_command]    = aib_command
-manifest_entry["digest"], manifest_entry["size"] = update_blob(oci_dir, manifest_entry["digest"], manifest)
-
+if aib_version:
+    annotations[key_aib_version] = aib_version
+if aib_image:
+    annotations[key_aib_image] = aib_image
+if aib_command:
+    annotations[key_aib_command] = aib_command
+manifest_entry["digest"], manifest_entry["size"] = update_blob(
+    oci_dir, manifest_entry["digest"], manifest
+)
 index_path.write_text(json.dumps(index, indent=2))
 PYEOF
-          ANNOTATE_DONE=$(date +%s)
-          echo "⏱ Container annotate: $((ANNOTATE_DONE - COPY_DONE))s"
+}
 
-          echo "Pushing container to registry: $CONTAINER_PUSH"
-          skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" --digestfile /tmp/container-push-digest.txt \
-            --authfile="$REGISTRY_AUTH_FILE" "oci:${OCI_DIR}:latest" "docker://$CONTAINER_PUSH"
-          rm -rf "${OCI_DIR:-/tmp/nonexistent}" 2>/dev/null || true
-          PUSH_DONE=$(date +%s)
-          echo "⏱ Container registry push: $((PUSH_DONE - ANNOTATE_DONE))s"
-          echo "⏱ Container push total: $((PUSH_DONE - PUSH_START))s"
-          echo "Container pushed successfully to $CONTAINER_PUSH"
-          echo "Container digest: $(cat /tmp/container-push-digest.txt 2>/dev/null)"
-        ) &
-        CONTAINER_PUSH_PID=$!
-      fi
+start_container_push() {
+  [ "$NEEDS_PUSH" = "true" ] || return 0
+  [ -n "$BUILDER_IMAGE" ] || fail "builder image is required to annotate the bootc container"
 
-      if [ "$SPLIT_BUILD" = "true" ]; then
-        # Phase 2b: Create disk image in foreground (runs in parallel with container push)
-        echo "Creating disk image from container (parallel with push)..."
-        DISK_START=$(date +%s)
-        aib --verbose to-disk-image \
-          "${FORMAT_ARGS[@]}" \
-          "${BUILD_CONTAINER_ARGS[@]}" \
-          "${AIB_EXTRA_ARGS[@]}" \
-          "$BOOTC_CONTAINER_NAME" \
-          "/output/${exportFile}"
-        DISK_DONE=$(date +%s)
-        echo "⏱ Disk creation: $((DISK_DONE - DISK_START))s"
-        echo "Disk image created: /output/${exportFile}"
-      elif [ "$BUILD_DISK_IMAGE" = "true" ]; then
-        echo "Disk image created: /output/${exportFile}"
-      fi
-      # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
-      ;;
-    image|package)
-      declare -a AIB_CMD=(
-        aib-dev --verbose build
-        "${CUSTOM_DEFS_ARGS[@]}"
-        --distro "$(params.distro)"
-        --target "$(params.target)"
-        "--arch=${arch}"
-        "${FORMAT_ARGS[@]}"
-        "${COMMON_BUILD_ARGS[@]}"
-        "${AIB_EXTRA_ARGS[@]}"
-        "${ROOT_PASSWORD_ARGS[@]}"
-        "$MANIFEST_FILE"
-        "/output/${exportFile}"
-      )
-      AIB_COMMAND=$(printf '%q ' "${AIB_CMD[@]}" | sed 's/ $//')
-      echo -n "$AIB_COMMAND" > /tekton/results/aib-command
+  finish_aib_metadata_capture
+  emit_progress "Pushing container" $((STEP_BUILD + 1)) "$PROGRESS_TOTAL"
+  rm -f /tmp/container-push-digest.txt
+  CONTAINER_OCI_DIR=$(mktemp -d /tmp/bootc-oci.XXXXXX)
+  local oci_dir="$CONTAINER_OCI_DIR"
 
-      echo "Running $BUILD_MODE build"
-      emit_progress "Building image" "$STEP_BUILD" "$PROGRESS_TOTAL"
-      "${AIB_CMD[@]}"
-      ;;
-    disk)
-      # Disk mode: create disk image from existing bootc container
-      if [ -z "$CONTAINER_REF" ]; then
-        echo "Error: container-ref is required for disk mode"
-        exit 1
-      fi
-      validate_container_ref "$CONTAINER_REF"
-      echo "Creating disk image from container: $CONTAINER_REF"
+  (
+    local push_start copy_done annotate_done push_done
+    push_start=$(date +%s)
+    skopeo copy "containers-storage:$BOOTC_CONTAINER_NAME" "oci:${oci_dir}:latest"
+    copy_done=$(date +%s)
+    log_elapsed "Container copy to OCI" "$push_start" "$copy_done"
 
-      # Pull the container image first
-      echo "Pulling container image..."
-      # Try without auth first (for public images), fall back to auth file if needed
-      if ! skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" "docker://$CONTAINER_REF" "containers-storage:$CONTAINER_REF" 2>/dev/null; then
-        echo "Public pull failed, trying with auth..."
-        skopeo copy "${SKOPEO_COPY_TLS_ARGS[@]}" --authfile="$REGISTRY_AUTH_FILE" \
-          "docker://$CONTAINER_REF" \
-          "containers-storage:$CONTAINER_REF"
-      fi
+    annotate_oci_image "$oci_dir"
+    annotate_done=$(date +%s)
+    log_elapsed "Container annotation" "$copy_done" "$annotate_done"
 
-      declare -a AIB_CMD=(
-        aib --verbose to-disk-image
-        "${FORMAT_ARGS[@]}"
-        "${BUILD_CONTAINER_ARGS[@]}"
-        "${AIB_EXTRA_ARGS[@]}"
-        "$CONTAINER_REF"
-        "/output/${exportFile}"
-      )
-      AIB_COMMAND=$(printf '%q ' "${AIB_CMD[@]}" | sed 's/ $//')
-      echo -n "$AIB_COMMAND" > /tekton/results/aib-command
+    copy_to_registry "oci:${oci_dir}:latest" "$CONTAINER_PUSH" /tmp/container-push-digest.txt
+    push_done=$(date +%s)
+    log_elapsed "Container registry push" "$annotate_done" "$push_done"
+    log_elapsed "Container push total" "$push_start" "$push_done"
+    rm -rf "$oci_dir"
+  ) &
+  CONTAINER_PUSH_PID=$!
+}
 
-      echo "Running to-disk-image"
-      emit_progress "Building image" "$STEP_BUILD" "$PROGRESS_TOTAL"
-      "${AIB_CMD[@]}"
+run_bootc() {
+  local -a disk_output_args=()
+  if [ "$NEEDS_DISK" = "true" ] && [ "$SPLIT_BUILD" = "false" ]; then
+    disk_output_args=("/output/${EXPORT_FILE}")
+  fi
 
-      # Note: Disk image push to OCI registry is handled by the separate push-disk-artifact task
-      ;;
-    *)
-      echo "Error: Unknown build mode '$BUILD_MODE'. Supported modes: bootc, image, package, disk"
-      exit 1
-      ;;
-  esac
+  local -a command=(
+    aib --verbose build
+    --distro "$DISTRO"
+    --target "$TARGET"
+    --arch="$ARCH"
+    "${COMMON_BUILD_ARGS[@]}"
+  )
+  if [ "$SPLIT_BUILD" = "false" ]; then
+    command+=("${FORMAT_ARGS[@]}")
+  fi
+  command+=(
+    "${BUILD_CONTAINER_ARGS[@]}"
+    "${CUSTOM_DEFS_ARGS[@]}"
+    "${AIB_EXTRA_ARGS[@]}"
+    "${ROOT_PASSWORD_ARGS[@]}"
+    "$MANIFEST_FILE"
+    "$BOOTC_CONTAINER_NAME"
+    "${disk_output_args[@]}"
+  )
 
-AIB_END_TIME=$(date +%s)
-echo "⏱ AIB build phase: $((AIB_END_TIME - BUILD_START_TIME))s"
+  run_aib_command "Running bootc build" "${command[@]}"
+  start_container_push
 
-# Wait for background AIB metadata capture to finish
-wait $AIB_METADATA_PID 2>/dev/null || true
-AIB_VERSION=$(cat /tmp/aib-version.txt 2>/dev/null || echo "")
-echo -n "${AIB_VERSION}" > /tekton/results/aib-version
-AIB_IMAGE_PINNED=$(cat /tmp/aib-pinned.txt 2>/dev/null || echo "$AIB_IMAGE_REF")
-echo "AIB image pinned reference: $AIB_IMAGE_PINNED"
-echo -n "${AIB_IMAGE_PINNED}" > /tekton/results/automotive-image-builder
-
-pushd /output || exit
-mkdir -p "$WORKSPACE_PATH"
-
-# Check if disk image was created (only exists when BUILD_DISK_IMAGE=true or non-bootc mode)
-DISK_IMAGE_EXISTS=false
-DISK_IMAGE_SOURCE="/output"
-if [ -e "/output/${exportFile}" ]; then
-    DISK_IMAGE_EXISTS=true
-
-    if [ -d "/output/${exportFile}" ]; then
-        echo "${exportFile} is a directory, copying recursively to workspace..."
-        cp -rv "/output/${exportFile}" "$WORKSPACE_PATH/" || echo "Failed to copy ${exportFile}"
-        DISK_IMAGE_SOURCE="$WORKSPACE_PATH"
-    fi
-    # For regular files, skip copy — compress directly from /output later
-else
-    echo "No disk image created (container-only build)"
-fi
-
-cp "$BUILD_DIR/image.json" "$WORKSPACE_PATH/image.json" || echo "Failed to copy image.json"
-
-COMPRESSION="$(params.compression)"
-if [ "$BUILD_DISK_IMAGE" = "true" ] || [ "$BUILD_MODE" = "image" ] || [ "$BUILD_MODE" = "package" ] || [ "$BUILD_MODE" = "disk" ]; then
-  emit_progress "Compressing artifacts" "$((STEP_FINALIZE - 1))" "$PROGRESS_TOTAL"
-fi
-echo "Requested compression: $COMPRESSION"
-GZIP_COMPRESSOR="gzip"
-
-ensure_lz4() {
-  if ! command -v lz4 >/dev/null 2>&1; then
-    echo "lz4 not found. Attempting to install..."
-    if command -v dnf >/dev/null 2>&1; then
-      dnf -y install lz4 || true
-    fi
-    if command -v microdnf >/dev/null 2>&1; then
-      microdnf install -y lz4 || true
-    fi
-    if command -v yum >/dev/null 2>&1; then
-      yum -y install lz4 || true
-    fi
-    if ! command -v lz4 >/dev/null 2>&1; then
-      echo "lz4 still not available; falling back to gzip"
-      COMPRESSION="gzip"
-      setup_gzip_compressor
-    fi
+  if [ "$SPLIT_BUILD" = "true" ]; then
+    local disk_start
+    disk_start=$(date +%s)
+    aib --verbose to-disk-image \
+      "${FORMAT_ARGS[@]}" \
+      "${BUILD_CONTAINER_ARGS[@]}" \
+      "${AIB_EXTRA_ARGS[@]}" \
+      "$BOOTC_CONTAINER_NAME" \
+      "/output/${EXPORT_FILE}"
+    log_elapsed "Disk creation" "$disk_start"
   fi
 }
 
-setup_gzip_compressor() {
-  if command -v pigz >/dev/null 2>&1; then
-    GZIP_COMPRESSOR="pigz"
-    echo "Using pigz for gzip compression"
-  else
-    echo "pigz not found; using gzip for compression"
-  fi
+run_traditional() {
+  local -a command=(
+    aib-dev --verbose build
+    "${CUSTOM_DEFS_ARGS[@]}"
+    --distro "$DISTRO"
+    --target "$TARGET"
+    --arch="$ARCH"
+    "${FORMAT_ARGS[@]}"
+    "${COMMON_BUILD_ARGS[@]}"
+    "${AIB_EXTRA_ARGS[@]}"
+    "${ROOT_PASSWORD_ARGS[@]}"
+    "$MANIFEST_FILE"
+    "/output/${EXPORT_FILE}"
+  )
+  run_aib_command "Running $BUILD_MODE build" "${command[@]}"
 }
 
-ensure_xz() {
-  if ! command -v xz >/dev/null 2>&1; then
-    echo "xz not found. Attempting to install..."
-    if command -v dnf >/dev/null 2>&1; then
-      dnf -y install xz || true
-    fi
-    if command -v microdnf >/dev/null 2>&1; then
-      microdnf install -y xz || true
-    fi
-    if command -v yum >/dev/null 2>&1; then
-      yum -y install xz || true
-    fi
-    if ! command -v xz >/dev/null 2>&1; then
-      echo "xz still not available; falling back to gzip"
-      COMPRESSION="gzip"
-      setup_gzip_compressor
-    fi
-  fi
+run_disk() {
+  echo "Pulling source container: $CONTAINER_REF"
+  pull_registry_image "$CONTAINER_REF" "containers-storage:$CONTAINER_REF"
+
+  local -a command=(
+    aib --verbose to-disk-image
+    "${FORMAT_ARGS[@]}"
+    "${BUILD_CONTAINER_ARGS[@]}"
+    "${AIB_EXTRA_ARGS[@]}"
+    "$CONTAINER_REF"
+    "/output/${EXPORT_FILE}"
+  )
+  run_aib_command "Running disk build" "${command[@]}"
 }
 
-if [ "$COMPRESSION" = "lz4" ]; then
-  ensure_lz4
-elif [ "$COMPRESSION" = "gzip" ]; then
-  setup_gzip_compressor
-elif [ "$COMPRESSION" = "xz" ]; then
-  ensure_xz
-fi
+AIB_INVOKE_TIME=$(date +%s)
+log_elapsed "Setup phase" "$BUILD_START_TIME" "$AIB_INVOKE_TIME"
 
-# Simplified compression functions - no unnecessary dispatching
-compress_file() {
-  local src="$1" dest="$2"
-  case "$COMPRESSION" in
-    lz4) lz4 -z -f -q "$src" "$dest" ;;
-    xz) xz -T0 -c "$src" > "$dest" ;;
-    gzip|*) "$GZIP_COMPRESSOR" -c "$src" > "$dest" ;;
-  esac
-}
-
-tar_dir() {
-  local dir="$1" out="$2"
-  case "$COMPRESSION" in
-    lz4) tar -C "$WORKSPACE_PATH" -cf - "$dir" | lz4 -z -f -q > "$out" ;;
-    xz) tar -C "$WORKSPACE_PATH" -cf - "$dir" | xz -T0 -c > "$out" ;;
-    gzip|*) tar -C "$WORKSPACE_PATH" -cf - "$dir" | "$GZIP_COMPRESSOR" -c > "$out" ;;
-  esac
-}
-
-case "$COMPRESSION" in
-  lz4)
-    EXT_FILE=".lz4"
-    EXT_DIR=".tar.lz4"
-    ;;
-  xz)
-    EXT_FILE=".xz"
-    EXT_DIR=".tar.xz"
-    ;;
-  gzip|*)
-    EXT_FILE=".gz"
-    EXT_DIR=".tar.gz"
-    ;;
+case "$BUILD_MODE" in
+  bootc) run_bootc ;;
+  image|package) run_traditional ;;
+  disk) run_disk ;;
 esac
 
-final_name=""
+AIB_END_TIME=$(date +%s)
+log_elapsed "AIB build phase" "$AIB_INVOKE_TIME" "$AIB_END_TIME"
+finish_aib_metadata_capture
 
-# For container-only builds (no disk image), record the container push URL as the artifact
-if [ "$DISK_IMAGE_EXISTS" = "false" ] && [ -n "$CONTAINER_PUSH" ]; then
-  echo "Container-only build completed. Container pushed to: $CONTAINER_PUSH"
-  final_name="container:$CONTAINER_PUSH"
-elif [ -d "$WORKSPACE_PATH/${exportFile}" ]; then
-  echo "Preparing compressed parts for directory ${exportFile}..."
-  final_compressed_name="${exportFile}${EXT_DIR}"
-  parts_dir="$WORKSPACE_PATH/${final_compressed_name}-parts"
+compress_stream() {
+  case "$COMPRESSION" in
+    gzip) "$GZIP_COMPRESSOR" -c ;;
+    lz4) lz4 -z -f -q ;;
+    xz) xz -T0 -c ;;
+  esac
+}
+
+compress_file_atomic() {
+  local source="$1" destination="$2"
+  local temporary="${destination}.tmp.$$"
+  rm -f "$temporary"
+
+  if ! compress_stream < "$source" > "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  mv "$temporary" "$destination"
+}
+
+tar_path_atomic() {
+  local root="$1" relative_path="$2" destination="$3"
+  local temporary="${destination}.tmp.$$"
+  rm -f "$temporary"
+
+  if ! tar -C "$root" -cf - "$relative_path" | compress_stream > "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  mv "$temporary" "$destination"
+}
+
+finalize_directory_artifact() {
+  local source="$1"
+  local final_compressed_name="${EXPORT_FILE}${EXT_DIR}"
+  local parts_dir="$WORKSPACE_PATH/${final_compressed_name}-parts"
+  local parts_count=0 item base uncompressed_size
+  local -a items=()
+
+  rm -rf "$parts_dir"
   mkdir -p "$parts_dir"
-  (
-    cd "$WORKSPACE_PATH" || exit
-    for item in "${exportFile}"/*; do
-      [ -e "$item" ] || continue
-      base=$(basename "$item")
-      if [ -f "$item" ]; then
-        # Record uncompressed size before compression (for OCI layer annotations)
-        uncompressed_size=$($GET_SIZE_CMD "$item" 2>/dev/null || echo "")
-        echo "Creating $parts_dir/${base}${EXT_FILE} (uncompressed: ${uncompressed_size:-unknown} bytes)"
-        compress_file "$item" "$parts_dir/${base}${EXT_FILE}" || echo "Failed to create $parts_dir/${base}${EXT_FILE}"
-        # Store uncompressed size in sidecar file for push_artifact.sh
-        if [ -n "$uncompressed_size" ]; then
-          echo "$uncompressed_size" > "$parts_dir/${base}${EXT_FILE}.size"
-        fi
-      elif [ -d "$item" ]; then
-        echo "Creating $parts_dir/${base}${EXT_DIR}"
-        tar_dir "${exportFile}/$base" "$parts_dir/${base}${EXT_DIR}" || echo "Failed to create $parts_dir/${base}${EXT_DIR}"
+
+  shopt -s nullglob dotglob
+  items=("$source"/*)
+  shopt -u nullglob dotglob
+
+  for item in "${items[@]}"; do
+    base=$(basename "$item")
+    if [ -f "$item" ]; then
+      uncompressed_size=$($GET_SIZE_CMD "$item" 2>/dev/null || true)
+      compress_file_atomic "$item" "$parts_dir/${base}${EXT_FILE}" \
+        || fail "failed to compress $item"
+      if [ -n "$uncompressed_size" ]; then
+        printf '%s\n' "$uncompressed_size" > "$parts_dir/${base}${EXT_FILE}.size"
       fi
-    done
-  )
-  # push_artifact.sh consumes the parts directory when it is populated; the
-  # monolithic archive is only needed as its single-file fallback. Skip the
-  # second full compression pass unless parts compression produced nothing.
-  parts_count=$(find "$parts_dir" -maxdepth 1 -type f ! -name '*.size' 2>/dev/null | wc -l)
-  if [ "$parts_count" -gt 0 ]; then
-    echo "Parts directory populated (${parts_count} files); skipping monolithic archive"
-    echo "Removing uncompressed directory ${exportFile} (keeping parts directory)"
-    rm -rf "${WORKSPACE_PATH:?}/${exportFile:?}"
-    final_name="${final_compressed_name}"
-    echo "Individual compressed parts in ${final_compressed_name}-parts/:"
-    ls -la "$parts_dir/" || true
-  else
-    echo "Parts compression produced no files; falling back to monolithic archive"
-    # Remove the useless parts dir (may hold only .size sidecars) so
-    # push_artifact.sh takes its single-file fallback instead of multi-layer.
-    rm -rf "$parts_dir"
-    echo "Creating compressed archive ${final_compressed_name} in shared workspace..."
-    tar_dir "${exportFile}" "$WORKSPACE_PATH/${final_compressed_name}" || echo "Failed to create ${final_compressed_name}"
-    echo "Compressed archive size:" && ls -lah "$WORKSPACE_PATH/${final_compressed_name}" || true
-    if [ -f "$WORKSPACE_PATH/${final_compressed_name}" ]; then
-      echo "Removing uncompressed directory ${exportFile}"
-      rm -rf "${WORKSPACE_PATH:?}/${exportFile:?}"
-      pushd "$WORKSPACE_PATH" || exit
-      ln -sf "${final_compressed_name}" disk.img
-      final_name="${final_compressed_name}"
-      popd || exit
-      echo "Available artifacts:"
-      ls -la "$WORKSPACE_PATH/" || true
+      parts_count=$((parts_count + 1))
+    elif [ -d "$item" ]; then
+      tar_path_atomic /output "${EXPORT_FILE}/${base}" "$parts_dir/${base}${EXT_DIR}" \
+        || fail "failed to archive $item"
+      parts_count=$((parts_count + 1))
     fi
-  fi
-elif [ -f "${DISK_IMAGE_SOURCE}/${exportFile}" ]; then
-  echo "Compressing ${exportFile} directly to workspace..."
-  compress_file "${DISK_IMAGE_SOURCE}/${exportFile}" "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" || { echo "Error: Failed to compress ${exportFile}"; exit 1; }
-  echo "Compressed file size:" && ls -lah "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" || true
-  if [ -f "$WORKSPACE_PATH/${exportFile}${EXT_FILE}" ]; then
-    pushd "$WORKSPACE_PATH" || exit
-    ln -sf "${exportFile}${EXT_FILE}" disk.img
-    final_name="${exportFile}${EXT_FILE}"
-    popd || exit
-  fi
-fi
+  done
 
-if [ -z "$final_name" ]; then
-  # Try to find artifact with priority: compressed file > compressed dir > any file
-  # This ensures we prefer compressed artifacts when compression is enabled
-  patterns_to_try=(
-    "${cleanName}*${EXT_FILE}"
-    "${cleanName}*${EXT_DIR}"
-    "${cleanName}*"
-  )
-
-  # If compression is disabled, only try the general pattern
-  if [ "$COMPRESSION" = "none" ]; then
-    patterns_to_try=("${cleanName}*")
+  if [ "$parts_count" -gt 0 ]; then
+    FINAL_NAME="$final_compressed_name"
+  else
+    rm -rf "$parts_dir"
+    tar_path_atomic /output "$EXPORT_FILE" "$WORKSPACE_PATH/$final_compressed_name" \
+      || fail "failed to archive $source"
+    ln -sfn "$final_compressed_name" "$WORKSPACE_PATH/disk.img"
+    FINAL_NAME="$final_compressed_name"
   fi
 
-  if final_name=$(find_artifact "$WORKSPACE_PATH" "${patterns_to_try[@]}"); then
-    echo "Fallback: using found artifact: $final_name"
+  rm -rf "$source"
+}
+
+finalize_artifact() {
+  FINAL_NAME=""
+
+  if [ "$NEEDS_DISK" = "true" ]; then
+    local source="/output/${EXPORT_FILE}"
+    [ -e "$source" ] || fail "expected disk artifact was not created at $source"
+    emit_progress "Compressing artifacts" $((STEP_FINALIZE - 1)) "$PROGRESS_TOTAL"
+
+    if [ -d "$source" ]; then
+      finalize_directory_artifact "$source"
+    else
+      compress_file_atomic "$source" "$WORKSPACE_PATH/${EXPORT_FILE}${EXT_FILE}" \
+        || fail "failed to compress $source"
+      rm -f "$source"
+      ln -sfn "${EXPORT_FILE}${EXT_FILE}" "$WORKSPACE_PATH/disk.img"
+      FINAL_NAME="${EXPORT_FILE}${EXT_FILE}"
+    fi
+  elif [ "$NEEDS_PUSH" = "true" ]; then
+    FINAL_NAME="container:$CONTAINER_PUSH"
+  else
+    echo "Build completed without a requested export"
   fi
-fi
 
-emit_progress "Finalizing build" "$PROGRESS_TOTAL" "$PROGRESS_TOTAL"
+  write_result artifact-filename "$FINAL_NAME"
+  cp "$BUILD_DIR/image.json" "$WORKSPACE_PATH/image.json" || echo "Failed to copy image.json"
+}
 
-if [ -n "$final_name" ]; then
-  echo "$final_name" > /tekton/results/artifact-filename || echo "Failed to write Tekton result"
-else
-  echo "Warning: final_name is empty, no artifact filename will be recorded"
-fi
+finalize_artifact
 
-# Compute artifact integrity digest for cross-task verification.
-# Covers both multi-layer (parts directory) and single-file modes.
-if [ -n "$final_name" ] && [ "$final_name" != "container:$CONTAINER_PUSH" ]; then
-  parts_dir="$WORKSPACE_PATH/${final_name}-parts"
+record_artifact_integrity() {
+  [ -n "$FINAL_NAME" ] || return 0
+  [ "$FINAL_NAME" != "container:$CONTAINER_PUSH" ] || return 0
 
-  # For ride4/ridesx4 targets, duplicate boot_a as boot_b BEFORE computing the
-  # integrity digest so the digest covers the complete artifact that will be pushed.
+  local parts_dir="$WORKSPACE_PATH/${FINAL_NAME}-parts"
   if [ -d "$parts_dir" ]; then
-    # ride4/ridesx4 use A/B partition slots. AIB only populates the _a slot;
-    # duplicate as _b so the full partition set is present in the artifact.
-    # abl_a is only produced on SIG distros (qcom-abl package); glob skips when absent.
-    case "$(params.target)" in
+    case "$TARGET" in
       ride4*|ridesx4*)
-        for a_file in "${parts_dir}"/boot_a.* "${parts_dir}"/abl_a.*; do
+        local a_file b_file
+        for a_file in "$parts_dir"/boot_a.* "$parts_dir"/abl_a.*; do
           [ -f "$a_file" ] || continue
-          b_file=$(echo "$a_file" | sed 's/_a\./_b./')
+          b_file="${a_file/_a./_b.}"
           if [ ! -f "$b_file" ]; then
-            echo "Duplicating $(basename "$a_file") as $(basename "$b_file") for target $(params.target)"
             cp "$a_file" "$b_file"
           fi
         done
@@ -883,57 +808,67 @@ if [ -n "$final_name" ] && [ "$final_name" != "container:$CONTAINER_PUSH" ]; the
     esac
   fi
 
-  ARTIFACT_DIGEST=$(compute_artifact_digest "$parts_dir" "$WORKSPACE_PATH/$final_name")
-  if [ -n "$ARTIFACT_DIGEST" ]; then
-    echo "Artifact integrity digest: $ARTIFACT_DIGEST"
-    echo -n "$ARTIFACT_DIGEST" > /tekton/results/ARTIFACT_INTEGRITY_DIGEST
+  local digest
+  digest=$(compute_artifact_digest "$parts_dir" "$WORKSPACE_PATH/$FINAL_NAME")
+  if [ -n "$digest" ]; then
+    echo "Artifact integrity digest: $digest"
+    write_result ARTIFACT_INTEGRITY_DIGEST "$digest"
   fi
-fi
+}
 
-# Wait for background container push to complete (bootc mode only)
-if [ -n "${CONTAINER_PUSH_PID:-}" ]; then
-  echo "Waiting for container push to complete..."
-  wait "$CONTAINER_PUSH_PID" || { echo "Error: Container push failed"; exit 1; }
-fi
+record_artifact_integrity
 
-# Write Tekton Chains type hint results for bootc container
-if [ -n "${CONTAINER_PUSH:-}" ]; then
-  PUSHED_DIGEST=$(cat /tmp/container-push-digest.txt 2>/dev/null || echo "")
-  if [ -z "$PUSHED_DIGEST" ]; then
-    echo "WARNING: container push completed but no digest was captured, skipping Chains hints"
-  fi
-  echo -n "$CONTAINER_PUSH" > /tekton/results/IMAGE_URL
-  echo -n "$PUSHED_DIGEST" > /tekton/results/IMAGE_DIGEST
-  echo "Tekton Chains: IMAGE_URL=$CONTAINER_PUSH IMAGE_DIGEST=$PUSHED_DIGEST"
-  # Write to workspace for cross-task access (avoids Tekton result-ref issues with skipped tasks)
-  mkdir -p "$WORKSPACE_PATH/.chains/container"
-  echo -n "$CONTAINER_PUSH" > "$WORKSPACE_PATH/.chains/container/url"
-  echo -n "$PUSHED_DIGEST" > "$WORKSPACE_PATH/.chains/container/digest"
-fi
+wait_for_container_push() {
+  [ -n "$CONTAINER_PUSH_PID" ] || return 0
+  echo "Waiting for container push"
+  wait "$CONTAINER_PUSH_PID" || fail "container push failed"
+  CONTAINER_PUSH_PID=""
+  rm -rf "$CONTAINER_OCI_DIR"
+  CONTAINER_OCI_DIR=""
+}
 
-# Package osbuild sources and manifest for reproducible builds.
-# osbuild stores downloaded files (RPMs, etc.) as content-addressed blobs in
-# osbuild_store/sources/org.osbuild.files/ — we archive the entire sources dir
-# so a future rebuild can restore the exact same binaries.
-if [ "$(params.reproducible)" = "true" ]; then
-  echo "=== Reproducible build: packaging artifacts ==="
-  SOURCES_DIR="$BUILD_DIR/osbuild_store/sources"
-  SOURCES_ARCHIVE="$WORKSPACE_PATH/build-sources.tar.gz"
-  if [ -d "$SOURCES_DIR" ]; then
-    tar -czf "$SOURCES_ARCHIVE" -C "$BUILD_DIR/osbuild_store" sources
-    echo "Sources archive: $(du -sh "$SOURCES_ARCHIVE" | cut -f1)"
+write_container_results() {
+  [ "$NEEDS_PUSH" = "true" ] || return 0
+
+  local pushed_digest result_path
+  pushed_digest=$(cat /tmp/container-push-digest.txt 2>/dev/null || true)
+  [ -n "$pushed_digest" ] || fail "container push completed without a digest"
+
+  write_result IMAGE_URL "$CONTAINER_PUSH"
+  write_result IMAGE_DIGEST "$pushed_digest"
+  result_path="$WORKSPACE_PATH/.chains/container"
+  mkdir -p "$result_path"
+  printf '%s' "$CONTAINER_PUSH" > "$result_path/url"
+  printf '%s' "$pushed_digest" > "$result_path/digest"
+}
+
+wait_for_container_push
+write_container_results
+
+package_reproducible_inputs() {
+  [ "$REPRODUCIBLE" = "true" ] || return 0
+
+  local sources_dir="$BUILD_DIR/osbuild_store/sources"
+  local sources_archive="$WORKSPACE_PATH/build-sources.tar.gz"
+  if [ -d "$sources_dir" ]; then
+    tar -czf "$sources_archive" -C "$BUILD_DIR/osbuild_store" sources
+    echo "Sources archive: $(du -sh "$sources_archive" | cut -f1)"
   else
-    echo "WARNING: No osbuild sources found at $SOURCES_DIR"
+    echo "WARNING: no osbuild sources found at $sources_dir"
   fi
   cp "$MANIFEST_FILE" "$WORKSPACE_PATH/aib-manifest.yml"
-  echo "AIB manifest saved to workspace"
-fi
+}
+
+package_reproducible_inputs
+emit_progress "Finalizing build" "$PROGRESS_TOTAL" "$PROGRESS_TOTAL"
 
 BUILD_END_TIME=$(date +%s)
-echo "⏱ Post-build phase: $((BUILD_END_TIME - AIB_END_TIME))s"
-echo "⏱ Total build-image step: $((BUILD_END_TIME - BUILD_START_TIME))s"
+log_elapsed "Post-build phase" "$AIB_END_TIME" "$BUILD_END_TIME"
+log_elapsed "Total build-image step" "$BUILD_START_TIME" "$BUILD_END_TIME"
 
-# Write structured timing data as a Tekton result for Prometheus metrics
-cat > /tekton/results/build-timing <<TIMING_EOF
-{"setup_s":$((AIB_INVOKE_TIME - BUILD_START_TIME)),"build_s":$((AIB_END_TIME - AIB_INVOKE_TIME)),"post_build_s":$((BUILD_END_TIME - AIB_END_TIME)),"total_s":$((BUILD_END_TIME - BUILD_START_TIME))}
-TIMING_EOF
+BUILD_TIMING=$(printf '{"setup_s":%d,"build_s":%d,"post_build_s":%d,"total_s":%d}' \
+  "$((AIB_INVOKE_TIME - BUILD_START_TIME))" \
+  "$((AIB_END_TIME - AIB_INVOKE_TIME))" \
+  "$((BUILD_END_TIME - AIB_END_TIME))" \
+  "$((BUILD_END_TIME - BUILD_START_TIME))")
+write_result build-timing "$BUILD_TIMING"

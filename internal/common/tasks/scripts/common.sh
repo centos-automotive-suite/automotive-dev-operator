@@ -17,6 +17,19 @@ emit_progress() {
     > /dev/null 2>&1 || true) &
 }
 
+write_result() {
+  local name="$1"
+  local value="${2:-}"
+  printf '%s' "$value" > "/tekton/results/$name"
+}
+
+log_elapsed() {
+  local label="$1"
+  local start_time="$2"
+  local end_time="${3:-$(date +%s)}"
+  echo "$label: $((end_time - start_time))s"
+}
+
 INTERNAL_REGISTRY="image-registry.openshift-image-registry.svc:5000"
 OSBUILD_PATH="/usr/bin/osbuild"
 OSBUILD_STORE="/_build"

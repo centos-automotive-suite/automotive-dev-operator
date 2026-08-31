@@ -63,6 +63,13 @@ func traceIDEnvVar() corev1.EnvVar {
 	}
 }
 
+func taskParamEnvVar(name, param string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name:  name,
+		Value: "$(params." + param + ")",
+	}
+}
+
 func traceIDPipelineParam() tektonv1.Param {
 	return tektonv1.Param{
 		Name: "trace-id",
@@ -877,14 +884,23 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					Script:  BuildImageScript,
 					EnvFrom: buildEnvFrom(envSecretRef),
 					Env: []corev1.EnvVar{
-						{
-							Name:  "BUILDER_IMAGE",
-							Value: "$(params.builder-image)",
-						},
-						{
-							Name:  "TARGET_ARCH",
-							Value: "$(params.target-architecture)",
-						},
+						taskParamEnvVar("TARGET_ARCH", "target-architecture"),
+						taskParamEnvVar("DISTRO", "distro"),
+						taskParamEnvVar("TARGET", "target"),
+						taskParamEnvVar("BUILD_MODE", "mode"),
+						taskParamEnvVar("EXPORT_FORMAT", "export-format"),
+						taskParamEnvVar("COMPRESSION", "compression"),
+						taskParamEnvVar("AIB_IMAGE_REF", "automotive-image-builder"),
+						taskParamEnvVar("CONTAINER_PUSH", "container-push"),
+						taskParamEnvVar("BUILD_DISK_IMAGE", "build-disk-image"),
+						taskParamEnvVar("BUILDER_IMAGE", "builder-image"),
+						taskParamEnvVar("CLUSTER_REGISTRY_ROUTE", "cluster-registry-route"),
+						taskParamEnvVar("CONTAINER_REF", "container-ref"),
+						taskParamEnvVar("REBUILD_BUILDER", "rebuild-builder"),
+						taskParamEnvVar("USE_PERSISTENT_CACHE", "use-persistent-cache"),
+						taskParamEnvVar("REPRODUCIBLE", "reproducible"),
+						taskParamEnvVar("RESTORE_SOURCES_REF", "restore-sources-ref"),
+						taskParamEnvVar("INSECURE_REGISTRY", "insecure-registry"),
 						{
 							Name:  "USE_MEMORY_VOLUMES",
 							Value: fmt.Sprintf("%t", buildConfig != nil && buildConfig.UseMemoryVolumes),
