@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,33 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 )
+
+type testHTTPStatusError struct {
+	code int
+}
+
+func (e *testHTTPStatusError) Error() string {
+	return http.StatusText(e.code)
+}
+
+func (e *testHTTPStatusError) HTTPStatusCode() int {
+	return e.code
+}
+
+var _ = Describe("IsAuthError", func() {
+	DescribeTable("classifies only authentication failures for reauthentication",
+		func(err error, expected bool) {
+			Expect(IsAuthError(err)).To(Equal(expected))
+		},
+		Entry("nil error", nil, false),
+		Entry("401 response", &testHTTPStatusError{code: http.StatusUnauthorized}, true),
+		Entry("wrapped 401 response", fmt.Errorf("request failed: %w", &testHTTPStatusError{code: http.StatusUnauthorized}), true),
+		Entry("unstructured unauthorized response", errors.New("request failed: unauthorized"), false),
+		Entry("403 workspace image policy response", &testHTTPStatusError{code: http.StatusForbidden}, false),
+		Entry("forbidden response", errors.New("request failed: forbidden"), false),
+		Entry("unrelated response", errors.New("request failed: 500 Internal Server Error"), false),
+	)
+})
 
 var _ = Describe("CreateClientWithReauth", func() {
 	It("should handle nil authToken pointer safely", func() {
