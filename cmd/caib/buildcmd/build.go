@@ -551,12 +551,17 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 var s3DefaultsFn = config.S3Defaults
 
 func (h *Handler) applyS3Options(cmd *cobra.Command, req *buildapitypes.BuildRequest) error {
+	bucket := ptrStr(h.opts.S3Bucket)
+	s3Requested := flagChanged(cmd, "s3-bucket") || bucket != ""
+
 	s3Cfg, err := s3DefaultsFn()
 	if err != nil {
+		if !s3Requested {
+			return nil
+		}
 		return err
 	}
 
-	bucket := ptrStr(h.opts.S3Bucket)
 	if !flagChanged(cmd, "s3-bucket") && bucket == "" && s3Cfg != nil {
 		bucket = s3Cfg.Bucket
 	}

@@ -497,6 +497,7 @@ func TestApplyS3Options_ConfigPartialCredentialsError(t *testing.T) {
 
 func TestApplyS3Options_ConfigReadError(t *testing.T) {
 	opts := newTestDiskOpts()
+	*opts.S3Bucket = testS3Bucket
 	h := newS3TestHandler(opts)
 
 	orig := s3DefaultsFn
@@ -622,4 +623,48 @@ func TestApplyS3Options_ExplicitEmptyConnectionParamsOverrideConfig(t *testing.T
 			t.Errorf("S3Region = %q, want empty (explicit --s3-region '' should override config)", req.S3Region)
 		}
 	})
+}
+
+func TestApplyS3Options_MalformedConfigIgnoredWhenNoS3Flags(t *testing.T) {
+	opts := newTestDiskOpts()
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	h := newS3TestHandler(opts)
+
+	orig := s3DefaultsFn
+	s3DefaultsFn = func() (*config.S3Config, error) {
+		return nil, fmt.Errorf("reading config for S3 defaults: invalid character 'i' looking for beginning of value")
+	}
+	defer func() { s3DefaultsFn = orig }()
+
+	var req buildapitypes.BuildRequest
+	if err := h.applyS3Options(nil, &req); err != nil {
+		t.Fatalf("malformed config should be tolerated when no S3 flags are set, got: %v", err)
+	}
+	if req.S3Bucket != "" {
+		t.Errorf("S3Bucket = %q, want empty", req.S3Bucket)
+	}
+}
+
+func TestApplyS3Options_MalformedConfigErrorsWhenS3FlagSet(t *testing.T) {
+	opts := newTestDiskOpts()
+	*opts.S3Bucket = testS3Bucket
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	h := newS3TestHandler(opts)
+
+	orig := s3DefaultsFn
+	s3DefaultsFn = func() (*config.S3Config, error) {
+		return nil, fmt.Errorf("reading config for S3 defaults: invalid character 'i' looking for beginning of value")
+	}
+	defer func() { s3DefaultsFn = orig }()
+
+	var req buildapitypes.BuildRequest
+	err := h.applyS3Options(nil, &req)
+	if err == nil {
+		t.Fatal("expected error from malformed config when --s3-bucket is set")
+	}
+	if !strings.Contains(err.Error(), "reading config") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "reading config")
+	}
 }
