@@ -32,7 +32,6 @@ const (
 // Supported compression algorithms for build artifacts.
 const (
 	CompressionGzip Compression = "gzip"
-	CompressionLZ4  Compression = "lz4"
 	CompressionXZ   Compression = "xz"
 )
 
@@ -85,7 +84,7 @@ func (e ExportFormat) IsValid() bool { return IsValid(string(e)) }
 // IsValid returns true if the compression value is a supported algorithm.
 func (c Compression) IsValid() bool {
 	switch c {
-	case CompressionGzip, CompressionLZ4, CompressionXZ:
+	case CompressionGzip, CompressionXZ:
 		return true
 	}
 	return false

@@ -226,7 +226,7 @@ type ExportSpec struct {
 	Format string `json:"format,omitempty"`
 
 	// Compression specifies the compression algorithm for artifacts
-	// +kubebuilder:validation:Enum=lz4;gzip;xz
+	// +kubebuilder:validation:Enum=gzip;xz
 	// +kubebuilder:default=gzip
 	Compression string `json:"compression,omitempty"`
 

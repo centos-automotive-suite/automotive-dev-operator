@@ -99,13 +99,10 @@ func TestMediaTypeComposition(t *testing.T) {
 		want        string
 	}{
 		{"raw", "gzip", "application/vnd.automotive.disk.raw+gzip"},
-		{"raw", "lz4", "application/vnd.automotive.disk.raw+lz4"},
 		{"raw", "xz", "application/vnd.automotive.disk.raw+xz"},
 		{"qcow2", "gzip", "application/vnd.automotive.disk.qcow2+gzip"},
-		{"qcow2", "lz4", "application/vnd.automotive.disk.qcow2+lz4"},
 		{"qcow2", "xz", "application/vnd.automotive.disk.qcow2+xz"},
 		{"simg", "gzip", "application/vnd.automotive.disk.simg+gzip"},
-		{"simg", "lz4", "application/vnd.automotive.disk.simg+lz4"},
 		{"simg", "xz", "application/vnd.automotive.disk.simg+xz"},
 	}
 	for _, tc := range cases {

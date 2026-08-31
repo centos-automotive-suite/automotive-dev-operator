@@ -317,8 +317,6 @@ func compressionExtension(algo string) string {
 		return ".tar.gz"
 	case "gzip":
 		return ".gz"
-	case "lz4":
-		return ".lz4"
 	case "xz":
 		return ".xz"
 	default:
@@ -331,7 +329,6 @@ func hasCompressionExtension(filename string) bool {
 	lower := strings.ToLower(filename)
 	return strings.HasSuffix(lower, ".tar.gz") ||
 		strings.HasSuffix(lower, ".gz") ||
-		strings.HasSuffix(lower, ".lz4") ||
 		strings.HasSuffix(lower, ".xz")
 }
 
@@ -358,9 +355,6 @@ func detectFileCompression(filePath string) string {
 			return "tar.gz"
 		}
 		return "gzip"
-	}
-	if n >= 4 && header[0] == 0x04 && header[1] == 0x22 && header[2] == 0x4d && header[3] == 0x18 {
-		return "lz4"
 	}
 	if n >= 6 && header[0] == 0xfd && header[1] == 0x37 && header[2] == 0x7a &&
 		header[3] == 0x58 && header[4] == 0x5a && header[5] == 0x00 {

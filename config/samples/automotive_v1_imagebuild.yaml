@@ -34,7 +34,7 @@ spec:
   # ─── Export Configuration ───
   export:
     format: "qcow2"         # raw, qcow2, simg
-    compression: "gzip"     # gzip, lz4, xz
+    compression: "gzip"     # gzip, xz
     buildDiskImage: false   # whether to create disk image
     #container: "quay.io/myorg/my-container:latest"  # bootc container destination
     #disk:                  # disk image export options

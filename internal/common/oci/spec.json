@@ -41,18 +41,15 @@
     },
     "compressionSuffixes": {
       "gzip": "+gzip",
-      "lz4": "+lz4",
       "xz": "+xz"
     },
     "containerLayers": {
       "base": "application/vnd.oci.image.layer.v1.tar",
       "gzip": "application/vnd.oci.image.layer.v1.tar+gzip",
-      "lz4": "application/vnd.oci.image.layer.v1.tar+lz4",
       "xz": "application/vnd.oci.image.layer.v1.tar+xz"
     },
     "generic": {
       "gzip": "application/gzip",
-      "lz4": "application/x-lz4",
       "xz": "application/x-xz",
       "octetStream": "application/octet-stream"
     }

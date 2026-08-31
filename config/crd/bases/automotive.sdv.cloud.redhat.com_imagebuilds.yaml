@@ -142,7 +142,6 @@ spec:
                     description: Compression specifies the compression algorithm for
                       artifacts
                     enum:
-                    - lz4
                     - gzip
                     - xz
                     type: string

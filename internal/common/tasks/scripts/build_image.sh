@@ -75,8 +75,8 @@ validate_config() {
     *) fail "unknown build mode '$BUILD_MODE'; expected bootc, image, package, or disk" ;;
   esac
   case "$COMPRESSION" in
-    gzip|lz4|xz) ;;
-    *) fail "unknown compression '$COMPRESSION'; expected gzip, lz4, or xz" ;;
+    gzip|xz) ;;
+    *) fail "unknown compression '$COMPRESSION'; expected gzip or xz" ;;
   esac
 
   validate_boolean "build-disk-image" "$BUILD_DISK_IMAGE"
@@ -425,11 +425,6 @@ configure_compressor() {
       EXT_FILE=".gz"
       EXT_DIR=".tar.gz"
       ;;
-    lz4)
-      command -v lz4 >/dev/null 2>&1 || fail "lz4 compression requested but lz4 is not installed in $AIB_IMAGE_REF"
-      EXT_FILE=".lz4"
-      EXT_DIR=".tar.lz4"
-      ;;
     xz)
       command -v xz >/dev/null 2>&1 || fail "xz compression requested but xz is not installed in $AIB_IMAGE_REF"
       EXT_FILE=".xz"
@@ -686,7 +681,6 @@ finish_aib_metadata_capture
 compress_stream() {
   case "$COMPRESSION" in
     gzip) "$GZIP_COMPRESSOR" -c ;;
-    lz4) lz4 -z -f -q ;;
     xz) xz -T0 -c ;;
   esac
 }
