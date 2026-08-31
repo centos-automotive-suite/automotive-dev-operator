@@ -7,18 +7,14 @@ install_oras || exit 1
 get_media_type() {
   case "$1" in
     *.tar.gz)         echo "$OCI_MEDIA_LAYER_GZIP" ;;
-    *.tar.lz4)        echo "$OCI_MEDIA_LAYER_LZ4" ;;
     *.tar.xz)         echo "$OCI_MEDIA_LAYER_XZ" ;;
     *.tar)            echo "$OCI_MEDIA_LAYER_BASE" ;;
 
     *.simg.gz)        echo "${OCI_MEDIA_DISK_SIMG}${OCI_COMPRESS_SUFFIX_GZIP}" ;;
-    *.simg.lz4)       echo "${OCI_MEDIA_DISK_SIMG}${OCI_COMPRESS_SUFFIX_LZ4}" ;;
     *.simg.xz)        echo "${OCI_MEDIA_DISK_SIMG}${OCI_COMPRESS_SUFFIX_XZ}" ;;
     *.raw.gz|*.img.gz) echo "${OCI_MEDIA_DISK_RAW}${OCI_COMPRESS_SUFFIX_GZIP}" ;;
-    *.raw.lz4|*.img.lz4) echo "${OCI_MEDIA_DISK_RAW}${OCI_COMPRESS_SUFFIX_LZ4}" ;;
     *.raw.xz|*.img.xz) echo "${OCI_MEDIA_DISK_RAW}${OCI_COMPRESS_SUFFIX_XZ}" ;;
     *.qcow2.gz)       echo "${OCI_MEDIA_DISK_QCOW2}${OCI_COMPRESS_SUFFIX_GZIP}" ;;
-    *.qcow2.lz4)      echo "${OCI_MEDIA_DISK_QCOW2}${OCI_COMPRESS_SUFFIX_LZ4}" ;;
     *.qcow2.xz)       echo "${OCI_MEDIA_DISK_QCOW2}${OCI_COMPRESS_SUFFIX_XZ}" ;;
 
     *.simg)           echo "$OCI_MEDIA_DISK_SIMG" ;;
@@ -26,7 +22,6 @@ get_media_type() {
     *.qcow2)          echo "$OCI_MEDIA_DISK_QCOW2" ;;
 
     *.gz)             echo "$OCI_MEDIA_GZIP" ;;
-    *.lz4)            echo "$OCI_MEDIA_LZ4" ;;
     *.xz)             echo "$OCI_MEDIA_XZ" ;;
 
     *)                echo "$OCI_MEDIA_OCTETSTREAM" ;;
@@ -40,17 +35,17 @@ json_escape() {
 
 get_artifact_type() {
   case "$1" in
-    *.simg.gz|*.simg.lz4|*.simg.xz|*.simg) echo "$OCI_MEDIA_DISK_SIMG" ;;
-    *.qcow2.gz|*.qcow2.lz4|*.qcow2.xz|*.qcow2) echo "$OCI_MEDIA_DISK_QCOW2" ;;
-    *.raw.gz|*.raw.lz4|*.raw.xz|*.raw|*.img.gz|*.img.lz4|*.img.xz|*.img) echo "$OCI_MEDIA_DISK_RAW" ;;
+    *.simg.gz|*.simg.xz|*.simg) echo "$OCI_MEDIA_DISK_SIMG" ;;
+    *.qcow2.gz|*.qcow2.xz|*.qcow2) echo "$OCI_MEDIA_DISK_QCOW2" ;;
+    *.raw.gz|*.raw.xz|*.raw|*.img.gz|*.img.xz|*.img) echo "$OCI_MEDIA_DISK_RAW" ;;
     *) echo "$OCI_MEDIA_OCTETSTREAM" ;;
   esac
 }
 
 get_partition_name() {
-  # Strip base extension (.simg/.raw/.img), optional .tar, and optional compression (.gz/.lz4/.xz)
-  # Examples: boot_a.simg.gz -> boot_a, foo.simg.tar.gz -> foo, system.raw.lz4 -> system
-  basename "$1" | sed -E 's/\.(simg|raw|img)(\.tar)?(\.(gz|lz4|xz))?$//'
+  # Strip base extension (.simg/.raw/.img), optional .tar, and optional compression (.gz/.xz)
+  # Examples: boot_a.simg.gz -> boot_a, foo.simg.tar.gz -> foo, system.raw.xz -> system
+  basename "$1" | sed -E 's/\.(simg|raw|img)(\.tar)?(\.(gz|xz))?$//'
 }
 
 # Remap partition names for specific targets where AIB's logical names

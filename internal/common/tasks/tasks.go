@@ -672,7 +672,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 				{
 					Name:        "compression",
 					Type:        tektonv1.ParamTypeString,
-					Description: "Compression algorithm for artifacts (lz4, gzip, xz)",
+					Description: "Compression algorithm for artifacts (gzip, xz)",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
 						StringVal: "gzip",
@@ -1185,9 +1185,9 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					Type: tektonv1.ParamTypeString,
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
-						StringVal: "lz4",
+						StringVal: "gzip",
 					},
-					Description: "Compression algorithm for artifacts (lz4, gzip, xz)",
+					Description: "Compression algorithm for artifacts (gzip, xz)",
 				},
 				{
 					Name: "automotive-image-builder",

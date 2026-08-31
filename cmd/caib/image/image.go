@@ -145,7 +145,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringVar(
 		opts.DiskFormat, "format", "", "disk image format (qcow2, raw, simg); inferred from output filename if not set",
 	)
-	buildCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
+	buildCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
 	buildCmd.Flags().StringVar(opts.ExportOCI, "push-disk", "", "push disk image as OCI artifact to registry (implies --disk)")
 	buildCmd.Flags().StringVar(
 		opts.RegistryAuthFile,
@@ -214,7 +214,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	diskCmd.Flags().StringVar(
 		opts.DiskFormat, "format", "", "disk image format (qcow2, raw, simg); inferred from output filename if not set",
 	)
-	diskCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
+	diskCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
 	diskCmd.Flags().StringVar(opts.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
 	diskCmd.Flags().StringVar(
 		opts.RegistryAuthFile,
@@ -261,7 +261,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVar(opts.Mode, "mode", "package", "build mode: image (ostree) or package (package-based)")
 	buildDevCmd.Flags().StringVar(opts.ExportFormat, "format", "", "export format: qcow2, raw, simg, etc.")
 	buildDevCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "download artifact to file from registry (uses --internal-registry when no --push given)")
-	buildDevCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, lz4, xz)")
+	buildDevCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
 	buildDevCmd.Flags().StringVar(opts.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
 	buildDevCmd.Flags().StringVar(
 		opts.RegistryAuthFile,

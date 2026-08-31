@@ -114,7 +114,7 @@ func applyBuildDefaults(req *BuildRequest) error {
 		req.Compression = CompressionGzip
 	}
 	if !req.Compression.IsValid() {
-		return fmt.Errorf("invalid compression %q: must be lz4, gzip, or xz", req.Compression)
+		return fmt.Errorf("invalid compression %q: must be gzip or xz", req.Compression)
 	}
 	if !req.Distro.IsValid() {
 		return fmt.Errorf("distro cannot be empty")

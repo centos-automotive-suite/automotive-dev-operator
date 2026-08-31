@@ -184,11 +184,10 @@ var _ = Describe("Internal Registry", func() {
 				Expect(req.Compression).To(Equal(CompressionGzip))
 			})
 
-			It("should accept lz4 compression", func() {
-				req := &BuildRequest{Compression: CompressionLZ4}
+			It("should reject lz4 compression", func() {
+				req := &BuildRequest{Compression: "lz4"}
 				err := applyBuildDefaults(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Compression).To(Equal(CompressionLZ4))
+				Expect(err).To(HaveOccurred())
 			})
 
 			It("should accept xz compression", func() {

@@ -128,14 +128,14 @@ var _ = Describe("applyBuildDefaults", func() {
 			Target:       "aws",
 			Architecture: "amd64",
 			Mode:         ModeDisk,
-			Compression:  CompressionLZ4,
+			Compression:  CompressionXZ,
 		}
 		Expect(applyBuildDefaults(req)).To(Succeed())
 		Expect(string(req.Distro)).To(Equal("cs9"))
 		Expect(string(req.Target)).To(Equal("aws"))
 		Expect(string(req.Architecture)).To(Equal("amd64"))
 		Expect(string(req.Mode)).To(Equal("disk"))
-		Expect(string(req.Compression)).To(Equal("lz4"))
+		Expect(string(req.Compression)).To(Equal("xz"))
 	})
 
 	It("normalizes x86_64 to amd64", func() {
