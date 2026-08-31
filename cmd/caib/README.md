@@ -683,9 +683,7 @@ Supported locations:
     "endpoint": "https://minio.example.com",
     "region": "us-east-1",
     "insecure_skip_tls_verify": false,
-    "credentials_secret": "my-k8s-secret",
-    "access_key_id": "AKIA...",
-    "secret_access_key": "wJa..."
+    "credentials_secret": "my-k8s-secret"
   }
 }
 ```
@@ -696,14 +694,14 @@ CLI flags override config values. Explicitly passing an empty flag (e.g. `--s3-r
 
 **Credential sources** — use exactly one:
 
-| Source | Fields |
-|--------|--------|
-| Kubernetes secret | `credentials_secret` |
-| Inline keys | `access_key_id` + `secret_access_key` (both required) |
+| Source | How to configure |
+|--------|------------------|
+| Kubernetes secret | `credentials_secret` in config file or `--s3-credentials-secret` flag |
+| Inline keys | `--s3-access-key-id` + `--s3-secret-access-key` flags |
 | Environment variables | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
 | IAM / instance profile | Omit all credential fields |
 
-Mixing `credentials_secret` with `access_key_id`/`secret_access_key` in the config file is an error.
+Inline access keys (`access_key_id`/`secret_access_key`) are not supported in the config file to avoid storing long-lived secrets in plaintext on disk. Use `credentials_secret` (a Kubernetes secret reference), CLI flags, or environment variables instead.
 
 ## Environment Variables
 

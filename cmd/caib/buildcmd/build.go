@@ -656,24 +656,8 @@ func (h *Handler) applyS3Credentials(req *buildapitypes.BuildRequest, s3Cfg *con
 			AccessKeyID:     envAccess,
 			SecretAccessKey: envSecret,
 		}
-	} else if s3Cfg != nil {
-		if s3Cfg.CredentialsSecret != "" && (s3Cfg.AccessKeyID != "" || s3Cfg.SecretAccessKey != "") {
-			return fmt.Errorf("config file has both s3.credentials_secret and s3.access_key_id/s3.secret_access_key; use only one")
-		}
-		if s3Cfg.CredentialsSecret != "" {
-			req.S3CredentialsSecretName = s3Cfg.CredentialsSecret
-		} else if s3Cfg.AccessKeyID != "" || s3Cfg.SecretAccessKey != "" {
-			if s3Cfg.AccessKeyID == "" {
-				return fmt.Errorf("config file has s3.secret_access_key but s3.access_key_id is missing")
-			}
-			if s3Cfg.SecretAccessKey == "" {
-				return fmt.Errorf("config file has s3.access_key_id but s3.secret_access_key is missing")
-			}
-			req.S3Credentials = &buildapitypes.S3Credentials{
-				AccessKeyID:     s3Cfg.AccessKeyID,
-				SecretAccessKey: s3Cfg.SecretAccessKey,
-			}
-		}
+	} else if s3Cfg != nil && s3Cfg.CredentialsSecret != "" {
+		req.S3CredentialsSecretName = s3Cfg.CredentialsSecret
 	}
 
 	return nil

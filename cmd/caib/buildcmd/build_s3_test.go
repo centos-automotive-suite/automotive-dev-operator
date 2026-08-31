@@ -427,9 +427,8 @@ func TestApplyS3Options_EnvVarsOverrideConfigCredentials(t *testing.T) {
 	h := newS3TestHandler(opts)
 
 	cfg := &config.S3Config{
-		Bucket:          "config-bucket",
-		AccessKeyID:     "config-akid",
-		SecretAccessKey: "config-secret",
+		Bucket:            "config-bucket",
+		CredentialsSecret: "config-secret-ref",
 	}
 
 	withS3Defaults(cfg, func() {
@@ -443,54 +442,8 @@ func TestApplyS3Options_EnvVarsOverrideConfigCredentials(t *testing.T) {
 		if req.S3Credentials.AccessKeyID != "ENV_AKID" {
 			t.Errorf("AccessKeyID = %q, want %q (env should override config)", req.S3Credentials.AccessKeyID, "ENV_AKID")
 		}
-	})
-}
-
-func TestApplyS3Options_ConfigInlineCredentials(t *testing.T) {
-	opts := newTestDiskOpts()
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	h := newS3TestHandler(opts)
-
-	cfg := &config.S3Config{
-		Bucket:          "config-bucket",
-		AccessKeyID:     "config-akid",
-		SecretAccessKey: "config-secret",
-	}
-
-	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
-		if err := h.applyS3Options(nil, &req); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if req.S3Credentials == nil {
-			t.Fatal("expected S3Credentials from config file")
-		}
-		if req.S3Credentials.AccessKeyID != "config-akid" {
-			t.Errorf("AccessKeyID = %q, want %q", req.S3Credentials.AccessKeyID, "config-akid")
-		}
-		if req.S3Credentials.SecretAccessKey != "config-secret" {
-			t.Errorf("SecretAccessKey = %q, want %q", req.S3Credentials.SecretAccessKey, "config-secret")
-		}
-	})
-}
-
-func TestApplyS3Options_ConfigPartialCredentialsError(t *testing.T) {
-	opts := newTestDiskOpts()
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	h := newS3TestHandler(opts)
-
-	cfg := &config.S3Config{
-		Bucket:      "config-bucket",
-		AccessKeyID: "config-akid",
-	}
-
-	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
-		err := h.applyS3Options(nil, &req)
-		if err == nil {
-			t.Fatal("expected error for partial config file credentials")
+		if req.S3CredentialsSecretName != "" {
+			t.Errorf("S3CredentialsSecretName = %q, want empty (env vars take priority over config secret)", req.S3CredentialsSecretName)
 		}
 	})
 }
@@ -527,31 +480,6 @@ func TestApplyS3Options_NoBucketWithConfigNil(t *testing.T) {
 		}
 		if req.S3Bucket != "" {
 			t.Error("expected empty S3Bucket when no flag and no config")
-		}
-	})
-}
-
-func TestApplyS3Options_ConfigMixedCredentialSourcesError(t *testing.T) {
-	opts := newTestDiskOpts()
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	h := newS3TestHandler(opts)
-
-	cfg := &config.S3Config{
-		Bucket:            "config-bucket",
-		CredentialsSecret: "my-k8s-secret",
-		AccessKeyID:       "config-akid",
-		SecretAccessKey:   "config-secret",
-	}
-
-	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
-		err := h.applyS3Options(nil, &req)
-		if err == nil {
-			t.Fatal("expected error for mixed credential sources in config file")
-		}
-		if !strings.Contains(err.Error(), "credentials_secret") {
-			t.Errorf("error = %q, want it to mention credentials_secret", err.Error())
 		}
 	})
 }

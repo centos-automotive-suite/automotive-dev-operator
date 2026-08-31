@@ -28,14 +28,15 @@ const (
 var healthHTTPClient *http.Client
 
 // S3Config holds default S3 artifact upload settings.
+// Inline credentials (access_key_id / secret_access_key) are intentionally
+// not supported here to avoid storing long-lived secrets in plaintext on disk.
+// Use credentials_secret (a Kubernetes secret ref), CLI flags, or env vars.
 type S3Config struct {
 	Bucket                string `json:"bucket,omitempty"`
 	Prefix                string `json:"prefix,omitempty"`
 	Endpoint              string `json:"endpoint,omitempty"`
 	Region                string `json:"region,omitempty"`
 	CredentialsSecret     string `json:"credentials_secret,omitempty"`
-	AccessKeyID           string `json:"access_key_id,omitempty"`
-	SecretAccessKey       string `json:"secret_access_key,omitempty"`
 	InsecureSkipTLSVerify bool   `json:"insecure_skip_tls_verify,omitempty"`
 }
 
