@@ -90,3 +90,36 @@ jobs:
             git diff --name-only
             exit 1
           fi
+
+  validate-bundle:
+    name: Validate OLM Bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install operator-sdk
+        run: |
+          ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+          OS=$(uname | awk '{print tolower($0)}')
+          OPERATOR_SDK_DL_URL=https://github.com/operator-framework/operator-sdk/releases/download/v1.42.0
+          curl -LO "${OPERATOR_SDK_DL_URL}/operator-sdk_${OS}_${ARCH}"
+          chmod +x "operator-sdk_${OS}_${ARCH}"
+          sudo mv "operator-sdk_${OS}_${ARCH}" /usr/local/bin/operator-sdk
+
+      - name: Generate bundle
+        run: make bundle VERSION=0.0.1-dev
+
+      - name: Validate bundle
+        run: |
+          operator-sdk bundle validate ./bundle
+          operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2
+          operator-sdk bundle validate ./bundle --select-optional name=capabilities
+          operator-sdk bundle validate ./bundle --select-optional name=categories
