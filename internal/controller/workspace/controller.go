@@ -41,6 +41,9 @@ const (
 	pvcSuffix                   = "-workspace"
 	leaseAnn                    = "automotive.sdv.cloud.redhat.com/lease-id"
 	workspaceServiceAccountName = "ado-workspace"
+	phaseCreating               = "Creating"
+	phaseFailed                 = "Failed"
+	phaseStopped                = "Stopped"
 )
 
 // Reconciler reconciles a Workspace object.
@@ -81,7 +84,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 
 	// Ensure PVC exists
 	if err := r.ensurePVC(ctx, ws); err != nil {
-		if statusErr := r.setStatus(ctx, ws, "Failed", fmt.Sprintf("PVC error: %v", err)); statusErr != nil {
+		if statusErr := r.setStatus(ctx, ws, "Failed", automotivev1alpha1.WorkspaceReasonStorageError, fmt.Sprintf("PVC error: %v", err)); statusErr != nil {
 			log.Error(statusErr, "failed to update status after PVC error")
 		}
 		return ctrl.Result{}, err
@@ -92,38 +95,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 		if err := r.deleteWorkspacePod(ctx, ws, log); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Preserve existing message (e.g., auto-pause reason) if already Stopped
-		msg := ws.Status.Message
-		return ctrl.Result{}, r.setStatus(ctx, ws, "Stopped", msg)
+		var reason automotivev1alpha1.WorkspaceStatusReason
+		msg := ""
+		if ws.Status.Phase == phaseStopped {
+			reason, msg = ws.Status.Reason, ws.Status.Message
+		}
+		return ctrl.Result{}, r.setStatus(ctx, ws, phaseStopped, reason, msg)
 	}
 
 	pod, err := r.ensurePod(ctx, ws, log)
 	if err != nil {
-		if statusErr := r.setStatus(ctx, ws, "Failed", fmt.Sprintf("Pod error: %v", err)); statusErr != nil {
+		if statusErr := r.setStatus(ctx, ws, "Failed", automotivev1alpha1.WorkspaceReasonPodCreationError, fmt.Sprintf("Pod error: %v", err)); statusErr != nil {
 			log.Error(statusErr, "failed to update status after pod error")
 		}
 		return ctrl.Result{}, err
 	}
 
-	// Update status from pod phase
-	phase := "Pending"
-	msg := ""
-	if pod != nil {
-		switch pod.Status.Phase {
-		case corev1.PodRunning:
-			phase = "Running"
-		case corev1.PodFailed:
-			phase = "Failed"
-			msg = "Pod failed"
-		case corev1.PodSucceeded:
-			phase = "Failed"
-			msg = "Pod exited unexpectedly"
-		default:
-			phase = "Creating"
-		}
-	}
+	phase, reason, msg := workspacePodStatus(pod)
 
-	if err := r.setStatus(ctx, ws, phase, msg); err != nil {
+	if err := r.setStatus(ctx, ws, phase, reason, msg); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -133,6 +123,118 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func workspacePodStatus(pod *corev1.Pod) (string, automotivev1alpha1.WorkspaceStatusReason, string) {
+	if pod == nil {
+		return "Pending", "", ""
+	}
+
+	if (pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded) &&
+		(pod.Status.Reason != "" || pod.Status.Message != "") {
+		fallback := "Pod failed"
+		if pod.Status.Phase == corev1.PodSucceeded {
+			fallback = "Pod exited unexpectedly"
+		}
+		reason := automotivev1alpha1.WorkspaceReasonPodFailed
+		if pod.Status.Phase == corev1.PodSucceeded {
+			reason = automotivev1alpha1.WorkspaceReasonPodExited
+		}
+		return phaseFailed, reason, statusMessage("pod", pod.Status.Reason, pod.Status.Message, fallback)
+	}
+
+	var creatingReason automotivev1alpha1.WorkspaceStatusReason
+	creatingMessage := ""
+	for _, status := range pod.Status.InitContainerStatuses {
+		failed, reason, message := workspaceContainerStatus(status, true)
+		if failed {
+			return phaseFailed, reason, message
+		}
+		if creatingMessage == "" {
+			creatingReason = reason
+			creatingMessage = message
+		}
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		failed, reason, message := workspaceContainerStatus(status, false)
+		if failed {
+			return phaseFailed, reason, message
+		}
+		if creatingMessage == "" {
+			creatingReason = reason
+			creatingMessage = message
+		}
+	}
+
+	switch pod.Status.Phase {
+	case corev1.PodFailed:
+		return phaseFailed, automotivev1alpha1.WorkspaceReasonPodFailed, "pod: Pod failed"
+	case corev1.PodSucceeded:
+		return phaseFailed, automotivev1alpha1.WorkspaceReasonPodExited, "pod: Pod exited unexpectedly"
+	}
+
+	if pod.Status.Phase == corev1.PodRunning {
+		if creatingMessage == "" {
+			return "Running", "", ""
+		}
+	}
+
+	if creatingMessage != "" {
+		return phaseCreating, creatingReason, creatingMessage
+	}
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
+			return phaseCreating, automotivev1alpha1.WorkspaceReasonScheduling, statusMessage("pod", condition.Reason, condition.Message, "Waiting to be scheduled")
+		}
+	}
+
+	return phaseCreating, "", ""
+}
+
+func workspaceContainerStatus(status corev1.ContainerStatus, initContainer bool) (bool, automotivev1alpha1.WorkspaceStatusReason, string) {
+	if waiting := status.State.Waiting; waiting != nil {
+		message := statusMessage("container "+status.Name, waiting.Reason, waiting.Message, "Waiting")
+		reason, failed := workspaceWaitingReason(waiting.Reason)
+		return failed, reason, message
+	}
+	if terminated := status.State.Terminated; terminated != nil {
+		if initContainer && terminated.ExitCode == 0 {
+			return false, "", ""
+		}
+		fallback := fmt.Sprintf("Exited with code %d", terminated.ExitCode)
+		return true, automotivev1alpha1.WorkspaceReasonContainerExited, statusMessage("container "+status.Name, terminated.Reason, terminated.Message, fallback)
+	}
+	return false, "", ""
+}
+
+func statusMessage(subject, reason, message, fallback string) string {
+	detail := reason
+	if detail == "" {
+		detail = fallback
+	}
+	result := subject + ": " + detail
+	if message != "" {
+		result += ": " + message
+	}
+	return result
+}
+
+// Kubelet reasons are free-form strings; map them to the stable Workspace API contract here.
+func workspaceWaitingReason(reason string) (automotivev1alpha1.WorkspaceStatusReason, bool) {
+	switch reason {
+	case "CreateContainerConfigError":
+		return automotivev1alpha1.WorkspaceReasonContainerConfigError, true
+	case "CreateContainerError", "RunContainerError":
+		return automotivev1alpha1.WorkspaceReasonContainerRuntimeError, true
+	case "ErrImageNeverPull", "InvalidImageName":
+		return automotivev1alpha1.WorkspaceReasonImageConfigError, true
+	case "ErrImagePull", "ImagePullBackOff":
+		return automotivev1alpha1.WorkspaceReasonImagePulling, false
+	case "CrashLoopBackOff":
+		return automotivev1alpha1.WorkspaceReasonContainerRestarting, false
+	default:
+		return automotivev1alpha1.WorkspaceReasonContainerStarting, false
+	}
 }
 
 func (r *Reconciler) ensurePVC(ctx context.Context, ws *automotivev1alpha1.Workspace) (err error) {
@@ -512,19 +614,26 @@ func (r *Reconciler) deleteWorkspacePod(ctx context.Context, ws *automotivev1alp
 	return client.IgnoreNotFound(err)
 }
 
-func (r *Reconciler) setStatus(ctx context.Context, ws *automotivev1alpha1.Workspace, phase, message string) error {
+func (r *Reconciler) setStatus(
+	ctx context.Context,
+	ws *automotivev1alpha1.Workspace,
+	phase string,
+	reason automotivev1alpha1.WorkspaceStatusReason,
+	message string,
+) error {
 	podName := "workspace-" + ws.Name
-	if phase == "Stopped" {
+	if phase == phaseStopped {
 		podName = ""
 	}
-	if ws.Status.Phase == phase && ws.Status.Message == message && ws.Status.PodName == podName {
+	if ws.Status.Phase == phase && ws.Status.Reason == reason && ws.Status.Message == message && ws.Status.PodName == podName {
 		return nil // no change
 	}
 	patch := client.MergeFrom(ws.DeepCopy())
 	ws.Status.Phase = phase
+	ws.Status.Reason = reason
 	ws.Status.Message = message
 	ws.Status.PodName = podName
-	if phase == "Stopped" || phase == "Pending" || phase == "Creating" {
+	if phase == phaseStopped || phase == "Pending" || phase == phaseCreating {
 		ws.Status.LastActivityTime = nil
 	}
 	return r.Status().Patch(ctx, ws, patch)
@@ -601,7 +710,7 @@ func (r *Reconciler) checkAutoPause(ctx context.Context, ws *automotivev1alpha1.
 		}
 
 		msg := fmt.Sprintf("Auto-paused after %s of inactivity", idleDuration.Truncate(time.Minute))
-		return ctrl.Result{}, r.setStatus(ctx, ws, "Stopped", msg)
+		return ctrl.Result{}, r.setStatus(ctx, ws, phaseStopped, automotivev1alpha1.WorkspaceReasonAutoPaused, msg)
 	}
 
 	remaining := timeout - idleDuration

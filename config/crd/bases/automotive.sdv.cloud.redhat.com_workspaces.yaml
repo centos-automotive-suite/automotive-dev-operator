@@ -224,6 +224,24 @@ spec:
               pvcName:
                 description: PVCName is the generated name of the workspace PVC
                 type: string
+              reason:
+                description: Reason is a stable, machine-readable explanation of the
+                  current phase
+                enum:
+                - AutoPaused
+                - ContainerConfigurationError
+                - ContainerExited
+                - ContainerRestarting
+                - ContainerRuntimeError
+                - ContainerStarting
+                - ImageConfigurationError
+                - ImagePulling
+                - PodCreationError
+                - PodExited
+                - PodFailed
+                - Scheduling
+                - StorageError
+                type: string
             type: object
         type: object
     served: true

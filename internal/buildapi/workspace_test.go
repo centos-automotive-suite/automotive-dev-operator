@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
@@ -63,6 +64,11 @@ var _ = Describe("Workspace API", func() {
 	})
 
 	Context("Create Workspace", func() {
+		It("should reject memory below the container runtime minimum", func() {
+			_, err := buildWorkspaceResources("", "4", nil)
+			Expect(err).To(MatchError(`invalid --memory value "4": must be at least 6Mi`))
+		})
+
 		It("should reject request with missing name", func() {
 			body, _ := json.Marshal(WorkspaceRequest{})
 			req, err := http.NewRequest("POST", "/v1/workspaces", bytes.NewReader(body))
@@ -86,6 +92,42 @@ var _ = Describe("Workspace API", func() {
 
 			Expect(w.Code).To(Equal(http.StatusUnauthorized))
 		})
+	})
+
+	Context("Workspace response", func() {
+		DescribeTable("status mapping",
+			func(stopped bool, status automotivev1alpha1.WorkspaceStatus, wantPhase, wantReason, wantMessage string) {
+				response := workspaceResponseFromCR(&automotivev1alpha1.Workspace{
+					Spec:   automotivev1alpha1.WorkspaceSpec{Stopped: stopped},
+					Status: status,
+				})
+
+				Expect(response.Phase).To(Equal(wantPhase))
+				Expect(response.Reason).To(Equal(wantReason))
+				Expect(response.Message).To(Equal(wantMessage))
+			},
+			Entry("propagates reason and message", false,
+				automotivev1alpha1.WorkspaceStatus{
+					Phase:   "Failed",
+					Reason:  automotivev1alpha1.WorkspaceReasonContainerRuntimeError,
+					Message: "container toolchain: CreateContainerError",
+				},
+				"Failed", string(automotivev1alpha1.WorkspaceReasonContainerRuntimeError), "container toolchain: CreateContainerError"),
+			Entry("clears stale status while stopping", true,
+				automotivev1alpha1.WorkspaceStatus{
+					Phase:   "Failed",
+					Reason:  automotivev1alpha1.WorkspaceReasonContainerRuntimeError,
+					Message: "container toolchain: CreateContainerError",
+				},
+				"Stopping", "", ""),
+			Entry("clears stale status while starting", false,
+				automotivev1alpha1.WorkspaceStatus{
+					Phase:   "Stopped",
+					Reason:  automotivev1alpha1.WorkspaceReasonAutoPaused,
+					Message: "Auto-paused after 30m of inactivity",
+				},
+				"Starting", "", ""),
+		)
 	})
 
 	Context("Exec Workspace", func() {

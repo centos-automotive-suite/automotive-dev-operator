@@ -20,6 +20,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -442,6 +443,12 @@ func printWorkspaceDetails(ws *buildapitypes.WorkspaceResponse) error {
 	fmt.Printf("Name:         %s\n", ws.Name)
 	fmt.Printf("Architecture: %s\n", ws.Arch)
 	fmt.Printf("Phase:        %s\n", ws.Phase)
+	if ws.Reason != "" {
+		fmt.Printf("Reason:       %s\n", ws.Reason)
+	}
+	if ws.Message != "" {
+		fmt.Printf("Message:      %s\n", ws.Message)
+	}
 	fmt.Printf("Pod:          %s\n", ws.PodName)
 	if ws.Lease != "" {
 		fmt.Printf("Lease:        %s\n", ws.Lease)
@@ -916,7 +923,8 @@ func waitForRunning(name string) {
 	defer ticker.Stop()
 
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	lastPhase := ""
+	lastStatus := ""
+	lastReason := ""
 
 	for {
 		select {
@@ -925,10 +933,11 @@ func waitForRunning(name string) {
 			return
 		case <-timeout:
 			fmt.Println()
-			handleError(caibcommon.NewActionableError(
-				fmt.Errorf("timed out waiting for workspace %q to be running", name),
-				"caib workspace logs "+name,
-			))
+			err := fmt.Errorf("timed out waiting for workspace %q to be running", name)
+			if lastStatus != "" {
+				err = fmt.Errorf("%w (last status: %s)", err, lastStatus)
+			}
+			handleError(workspaceStatusError(err, lastReason))
 		case <-ticker.C:
 			var ws *buildapitypes.WorkspaceResponse
 			err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
@@ -944,13 +953,21 @@ func waitForRunning(name string) {
 			}
 
 			showProgress := !clilog.IsQuiet()
-			if ws.Phase != lastPhase {
-				lastPhase = ws.Phase
+			status := ws.Phase
+			lastReason = ws.Reason
+			if ws.Reason != "" {
+				status += " (" + ws.Reason + ")"
+			}
+			if ws.Message != "" {
+				status += ": " + ws.Message
+			}
+			if status != lastStatus {
+				lastStatus = status
 				if showProgress {
 					if isTTY {
-						fmt.Printf("\r  Phase:        %-20s", ws.Phase)
+						fmt.Printf("\r  Phase:        %s\033[K", status)
 					} else {
-						fmt.Printf("  Phase: %s\n", ws.Phase)
+						fmt.Printf("  Phase: %s\n", status)
 					}
 				}
 			}
@@ -973,9 +990,32 @@ func waitForRunning(name string) {
 				if isTTY && showProgress {
 					fmt.Println()
 				}
-				handleError(fmt.Errorf("workspace %q failed", name))
+				handleError(workspaceFailureError(name, ws))
 			}
 		}
+	}
+}
+
+func workspaceFailureError(name string, ws *buildapitypes.WorkspaceResponse) error {
+	err := fmt.Errorf("workspace %q failed", name)
+	if ws.Reason != "" {
+		err = fmt.Errorf("workspace %q failed (%s)", name, ws.Reason)
+	}
+	if ws.Message != "" {
+		err = fmt.Errorf("%w: %s", err, ws.Message)
+	}
+
+	return workspaceStatusError(err, ws.Reason)
+}
+
+func workspaceStatusError(err error, reason string) error {
+	switch reason {
+	case string(automotivev1alpha1.WorkspaceReasonImagePulling):
+		return caibcommon.NewActionableError(err, "verify the workspace image name and registry access")
+	case string(automotivev1alpha1.WorkspaceReasonScheduling):
+		return caibcommon.NewActionableError(err, "contact your service administrator to check cluster capacity for the requested architecture")
+	default:
+		return fmt.Errorf("%w; contact your service administrator with this status", err)
 	}
 }
 
