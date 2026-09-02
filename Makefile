@@ -135,7 +135,6 @@ lint-shell: ## Run shellcheck on shell scripts
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
-	go build -o bin/init-secrets cmd/init-secrets/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.

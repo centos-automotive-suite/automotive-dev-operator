@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build all binaries
-make build                    # Builds manager and init-secrets binaries
+make build                    # Builds manager binary
 
 # Build specific components
 make build-caib               # Build CLI tool
@@ -65,7 +65,6 @@ This is a Kubernetes operator for automotive OS image building, built with Kubeb
 - **Controller Manager** (cmd/main.go): Main operator process running all controllers.
 - **Build API** (cmd/build-api/, internal/buildapi/): REST API for build operations, used by CLI.
 - **caib CLI** (cmd/caib/): CLI tool for creating/monitoring builds. See cmd/caib/README.md for usage.
-- **Init Secrets** (cmd/init-secrets/): Init container for OAuth secret setup.
 
 ### Key Integrations
 - **Tekton Pipelines**: Builds run as Tekton TaskRuns. Task definitions in internal/common/tasks/.

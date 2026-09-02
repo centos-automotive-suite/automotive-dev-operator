@@ -49,42 +49,15 @@ var _ = Describe("OperatorConfig Resources", func() {
 
 	Describe("buildBuildAPIDeployment", func() {
 		It("should use ado-operator service account", func() {
-			deployment := r.buildBuildAPIDeployment("test-namespace", false, defaultTestConfig())
-			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-operator"))
-		})
-
-		It("should use ado-operator service account on OpenShift", func() {
-			deployment := r.buildBuildAPIDeployment("test-namespace", true, defaultTestConfig())
+			deployment := r.buildBuildAPIDeployment("test-namespace", defaultTestConfig())
 			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-operator"))
 		})
 	})
 
 	Describe("buildBuildAPIContainers", func() {
-		It("should not include oauth-proxy on non-OpenShift", func() {
-			containers := r.buildBuildAPIContainers("test-namespace", false, defaultTestConfig())
-			Expect(containers).To(HaveLen(1))
-			Expect(containers[0].Name).To(Equal("build-api"))
-		})
-
-		It("should include oauth-proxy on OpenShift with ado-operator SA", func() {
-			containers := r.buildBuildAPIContainers("test-namespace", true, defaultTestConfig())
-			Expect(containers).To(HaveLen(2))
-
-			oauthProxy := containers[1]
-			Expect(oauthProxy.Name).To(Equal("oauth-proxy"))
-			Expect(oauthProxy.Args).To(ContainElement("--openshift-service-account=ado-operator"))
-		})
-
-		It("should not reference ado-controller-manager in oauth-proxy args", func() {
-			containers := r.buildBuildAPIContainers("test-namespace", true, defaultTestConfig())
-			for _, arg := range containers[1].Args {
-				Expect(arg).NotTo(ContainSubstring("controller-manager"))
-			}
-		})
-
 		It("should set BUILD_API_NAMESPACE environment variable to provided namespace", func() {
 			testNamespace := "custom-test-namespace"
-			containers := r.buildBuildAPIContainers(testNamespace, false, defaultTestConfig())
+			containers := r.buildBuildAPIContainers(testNamespace, defaultTestConfig())
 
 			buildAPIContainer := containers[0]
 			var foundBuildAPINamespace bool
@@ -100,7 +73,7 @@ var _ = Describe("OperatorConfig Resources", func() {
 		})
 
 		It("should have health check probes configured for build-api container", func() {
-			containers := r.buildBuildAPIContainers("test-namespace", false, defaultTestConfig())
+			containers := r.buildBuildAPIContainers("test-namespace", defaultTestConfig())
 			buildAPIContainer := containers[0]
 
 			// Check liveness probe

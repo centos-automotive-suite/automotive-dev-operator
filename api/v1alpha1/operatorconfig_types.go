@@ -33,9 +33,6 @@ const (
 	// DefaultYQHelperImage is the default yq helper image used in Tekton task steps
 	DefaultYQHelperImage = "quay.io/konflux-ci/yq:latest"
 
-	// DefaultOAuthProxyImage is the default OAuth proxy sidecar image for OpenShift
-	DefaultOAuthProxyImage = "registry.redhat.io/openshift4/ose-oauth-proxy:latest"
-
 	// DefaultOperatorImage is the default operator container image
 	DefaultOperatorImage = "quay.io/rh-sdv-cloud/automotive-dev-operator:latest"
 
@@ -93,10 +90,6 @@ type ImagesConfig struct {
 	// +optional
 	YQHelper string `json:"yqHelper,omitempty"`
 
-	// OAuthProxy is the OAuth proxy sidecar image for OpenShift deployments
-	// +optional
-	OAuthProxy string `json:"oauthProxy,omitempty"`
-
 	// Operator is the operator container image (overridden by OPERATOR_IMAGE env var when set)
 	// +optional
 	Operator string `json:"operator,omitempty"`
@@ -123,14 +116,6 @@ func (c *ImagesConfig) GetYQHelperImage() string {
 	return DefaultYQHelperImage
 }
 
-// GetOAuthProxyImage returns the OAuth proxy image, falling back to the default
-func (c *ImagesConfig) GetOAuthProxyImage() string {
-	if c != nil && c.OAuthProxy != "" {
-		return c.OAuthProxy
-	}
-	return DefaultOAuthProxyImage
-}
-
 // GetOperatorImage returns the operator image, falling back to the default
 func (c *ImagesConfig) GetOperatorImage() string {
 	if c != nil && c.Operator != "" {
@@ -153,10 +138,6 @@ type BuildAPIResourcesConfig struct {
 	// +optional
 	BuildAPI *corev1.ResourceRequirements `json:"buildAPI,omitempty"`
 
-	// OAuthProxy defines resource requirements for the OAuth proxy sidecar
-	// +optional
-	OAuthProxy *corev1.ResourceRequirements `json:"oauthProxy,omitempty"`
-
 	// BuildController defines resource requirements for the build controller container
 	// +optional
 	BuildController *corev1.ResourceRequirements `json:"buildController,omitempty"`
@@ -175,23 +156,6 @@ func (c *BuildAPIResourcesConfig) GetBuildAPIResources() corev1.ResourceRequirem
 		Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("200m"),
 			corev1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-	}
-}
-
-// GetOAuthProxyResources returns the OAuth proxy resource requirements with defaults
-func (c *BuildAPIResourcesConfig) GetOAuthProxyResources() corev1.ResourceRequirements {
-	if c != nil && c.OAuthProxy != nil {
-		return *c.OAuthProxy
-	}
-	return corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("10m"),
-			corev1.ResourceMemory: resource.MustParse("32Mi"),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("100m"),
-			corev1.ResourceMemory: resource.MustParse("128Mi"),
 		},
 	}
 }
