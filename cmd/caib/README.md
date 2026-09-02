@@ -670,6 +670,39 @@ Supported locations:
 - `content.add_files[].source_path`
 - `qm.content.add_files[].source_path`
 
+## Configuration File
+
+`caib` reads defaults from `~/.config/caib/cli.json`. The file is created automatically by `caib login`; you can also edit it by hand.
+
+```json
+{
+  "server_url": "https://build-api.example.com",
+  "s3": {
+    "bucket": "my-builds",
+    "prefix": "artifacts/",
+    "endpoint": "https://minio.example.com",
+    "region": "us-east-1",
+    "insecure_skip_tls_verify": false,
+    "credentials_secret": "my-k8s-secret"
+  }
+}
+```
+
+All `s3` fields are optional. Setting `s3.bucket` causes **disk-artifact builds** (`build`, `disk`, `build-dev`) to upload artifacts to S3 (equivalent to always passing `--s3-bucket`). Pass `--s3-bucket ""` to disable S3 for a single build when a default bucket is configured.
+
+CLI flags override config values. Explicitly passing an empty flag (e.g. `--s3-region ""`) clears the config default for that field.
+
+**Credential sources** — use exactly one:
+
+| Source | How to configure |
+|--------|------------------|
+| Kubernetes secret | `credentials_secret` in config file or `--s3-credentials-secret` flag |
+| Inline keys | `--s3-access-key-id` + `--s3-secret-access-key` flags |
+| Environment variables | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
+| IAM / instance profile | Omit all credential fields |
+
+Inline access keys (`access_key_id`/`secret_access_key`) are not supported in the config file to avoid storing long-lived secrets in plaintext on disk. Use `credentials_secret` (a Kubernetes secret reference), CLI flags, or environment variables instead.
+
 ## Environment Variables
 
 | Variable | Description |

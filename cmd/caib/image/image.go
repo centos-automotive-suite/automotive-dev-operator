@@ -697,7 +697,7 @@ Input, signed artifact, and output can be given as positionals or via --input, -
 func addS3Flags(cmd *cobra.Command, opts Options) {
 	cmd.Flags().StringVar(opts.S3Bucket, "s3-bucket", "", "S3 bucket name for artifact upload")
 	cmd.Flags().StringVar(opts.S3Prefix, "s3-prefix", "", "S3 key prefix (path within bucket)")
-	cmd.Flags().StringVar(opts.S3Region, "s3-region", "us-east-1", "S3 region")
+	cmd.Flags().StringVar(opts.S3Region, "s3-region", "", "S3 region (defaults to us-east-1 if not specified)")
 	cmd.Flags().StringVar(opts.S3Endpoint, "s3-endpoint", "", "Custom S3 endpoint URL (for MinIO/Ceph)")
 	cmd.Flags().StringVar(opts.S3AccessKeyID, "s3-access-key-id", "", "S3 access key ID (env: AWS_ACCESS_KEY_ID)")
 	cmd.Flags().StringVar(opts.S3SecretAccessKey, "s3-secret-access-key", "", "S3 secret access key (env: AWS_SECRET_ACCESS_KEY)")
