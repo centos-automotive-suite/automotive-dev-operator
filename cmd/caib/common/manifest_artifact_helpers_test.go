@@ -58,7 +58,7 @@ func TestManifestTarget(t *testing.T) {
 	}
 }
 
-func TestFindLocalFileReferences_SourcePath(t *testing.T) {
+func TestPrepareLocalFileUploads_SourcePath(t *testing.T) {
 	manifest := `
 content:
   add_files:
@@ -67,22 +67,22 @@ content:
     - path: /etc/config.yaml
       source_path: configs/config.yaml
 `
-	refs, err := FindLocalFileReferences(manifest, "/tmp/manifest-dir")
+	_, refs, err := PrepareLocalFileUploads(manifest, "/tmp/manifest-dir", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(refs) != 2 {
 		t.Fatalf("expected 2 refs, got %d", len(refs))
 	}
-	if refs[0]["source_path"] != "app-binary" {
-		t.Errorf("expected source_path 'app-binary', got %q", refs[0]["source_path"])
+	if refs[0]["dest"] != "app-binary" {
+		t.Errorf("expected destination 'app-binary', got %q", refs[0]["dest"])
 	}
-	if refs[1]["source_path"] != "configs/config.yaml" {
-		t.Errorf("expected source_path 'configs/config.yaml', got %q", refs[1]["source_path"])
+	if refs[1]["dest"] != "configs/config.yaml" {
+		t.Errorf("expected destination 'configs/config.yaml', got %q", refs[1]["dest"])
 	}
 }
 
-func TestFindLocalFileReferences_QMSourcePath(t *testing.T) {
+func TestPrepareLocalFileUploads_QMSourcePath(t *testing.T) {
 	manifest := `
 qm:
   content:
@@ -90,19 +90,19 @@ qm:
       - path: /etc/qm.conf
         source_path: qm.conf
 `
-	refs, err := FindLocalFileReferences(manifest, "/tmp/manifest-dir")
+	_, refs, err := PrepareLocalFileUploads(manifest, "/tmp/manifest-dir", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
-	if refs[0]["source_path"] != "qm.conf" {
-		t.Errorf("expected source_path 'qm.conf', got %q", refs[0]["source_path"])
+	if refs[0]["dest"] != "qm.conf" {
+		t.Errorf("expected destination 'qm.conf', got %q", refs[0]["dest"])
 	}
 }
 
-func TestFindLocalFileReferences_TextAndURL(t *testing.T) {
+func TestPrepareLocalFileUploads_TextAndURL(t *testing.T) {
 	manifest := `
 content:
   add_files:
@@ -111,7 +111,7 @@ content:
     - path: /etc/data.json
       url: https://example.com/data.json
 `
-	refs, err := FindLocalFileReferences(manifest, "/tmp/manifest-dir")
+	_, refs, err := PrepareLocalFileUploads(manifest, "/tmp/manifest-dir", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ content:
 	}
 }
 
-func TestFindLocalFileReferences_SourceGlob(t *testing.T) {
+func TestPrepareLocalFileUploads_SourceGlob(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create test files matching the glob
@@ -140,7 +140,7 @@ content:
     - path: /etc/configs
       source_glob: "conf/*.yaml"
 `
-	refs, err := FindLocalFileReferences(manifest, dir)
+	_, refs, err := PrepareLocalFileUploads(manifest, dir, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +150,7 @@ content:
 
 	paths := map[string]bool{}
 	for _, ref := range refs {
-		paths[ref["source_path"]] = true
+		paths[ref["dest"]] = true
 	}
 	if !paths["conf/a.yaml"] {
 		t.Error("expected conf/a.yaml in results")
@@ -163,7 +163,7 @@ content:
 	}
 }
 
-func TestFindLocalFileReferences_SourceGlobSkipsDirectories(t *testing.T) {
+func TestPrepareLocalFileUploads_SourceGlobSkipsDirectories(t *testing.T) {
 	dir := t.TempDir()
 
 	confDir := filepath.Join(dir, "data")
@@ -180,7 +180,7 @@ content:
     - path: /etc/data
       source_glob: "data/*"
 `
-	refs, err := FindLocalFileReferences(manifest, dir)
+	_, refs, err := PrepareLocalFileUploads(manifest, dir, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,12 +188,12 @@ content:
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref (file only, not dir), got %d: %v", len(refs), refs)
 	}
-	if refs[0]["source_path"] != "data/file.txt" {
-		t.Errorf("expected data/file.txt, got %q", refs[0]["source_path"])
+	if refs[0]["dest"] != "data/file.txt" {
+		t.Errorf("expected data/file.txt, got %q", refs[0]["dest"])
 	}
 }
 
-func TestFindLocalFileReferences_SourceGlobNoMatches(t *testing.T) {
+func TestPrepareLocalFileUploads_SourceGlobNoMatches(t *testing.T) {
 	dir := t.TempDir()
 
 	manifest := `
@@ -202,7 +202,7 @@ content:
     - path: /etc/configs
       source_glob: "nonexistent/*.yaml"
 `
-	refs, err := FindLocalFileReferences(manifest, dir)
+	_, refs, err := PrepareLocalFileUploads(manifest, dir, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -212,7 +212,7 @@ content:
 	}
 }
 
-func TestFindLocalFileReferences_SourceGlobParentDir(t *testing.T) {
+func TestPrepareLocalFileUploads_SourceGlobParentDir(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create files in parent directory relative to a subdir
@@ -230,19 +230,19 @@ content:
     - path: /etc/configs
       source_glob: "../*.conf"
 `
-	refs, err := FindLocalFileReferences(manifest, subdir)
+	_, refs, err := PrepareLocalFileUploads(manifest, subdir, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d: %v", len(refs), refs)
 	}
-	if refs[0]["source_path"] != "../root.conf" {
-		t.Errorf("expected ../root.conf, got %q", refs[0]["source_path"])
+	if refs[0]["dest"] != "root.conf" {
+		t.Errorf("expected root.conf, got %q", refs[0]["dest"])
 	}
 }
 
-func TestFindLocalFileReferences_MixedSourceTypes(t *testing.T) {
+func TestPrepareLocalFileUploads_MixedSourceTypes(t *testing.T) {
 	dir := t.TempDir()
 
 	confDir := filepath.Join(dir, "conf")
@@ -265,7 +265,7 @@ content:
     - path: /etc/data.json
       url: https://example.com/data.json
 `
-	refs, err := FindLocalFileReferences(manifest, dir)
+	_, refs, err := PrepareLocalFileUploads(manifest, dir, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -275,7 +275,7 @@ content:
 	}
 	paths := map[string]bool{}
 	for _, ref := range refs {
-		paths[ref["source_path"]] = true
+		paths[ref["dest"]] = true
 	}
 	if !paths["my-binary"] {
 		t.Errorf("expected my-binary in results, got %v", refs)
@@ -285,7 +285,7 @@ content:
 	}
 }
 
-func TestFindLocalFileReferences_QMSourceGlob(t *testing.T) {
+func TestPrepareLocalFileUploads_QMSourceGlob(t *testing.T) {
 	dir := t.TempDir()
 
 	qmDir := filepath.Join(dir, "qm-files")
@@ -303,19 +303,19 @@ qm:
       - path: /etc/qm
         source_glob: "qm-files/*.conf"
 `
-	refs, err := FindLocalFileReferences(manifest, dir)
+	_, refs, err := PrepareLocalFileUploads(manifest, dir, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
-	if refs[0]["source_path"] != "qm-files/policy.conf" {
-		t.Errorf("expected qm-files/policy.conf, got %q", refs[0]["source_path"])
+	if refs[0]["dest"] != "qm-files/policy.conf" {
+		t.Errorf("expected qm-files/policy.conf, got %q", refs[0]["dest"])
 	}
 }
 
-func TestFindLocalFileReferences_RecursiveGlob(t *testing.T) {
+func TestPrepareLocalFileUploads_RecursiveGlob(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create a nested directory structure mimicking the CES2026 manifest
@@ -346,7 +346,7 @@ content:
       path: /usr/
       preserve_path: true
 `
-	refs, err := FindLocalFileReferences(manifest, dir)
+	_, refs, err := PrepareLocalFileUploads(manifest, dir, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -359,7 +359,7 @@ content:
 
 	paths := map[string]bool{}
 	for _, ref := range refs {
-		paths[ref["source_path"]] = true
+		paths[ref["dest"]] = true
 	}
 	for _, expected := range []string{
 		"files/root_fs/etc/lighttpd/lighttpd.conf",
@@ -496,7 +496,7 @@ func TestExpandSourceGlob_AbsolutePattern(t *testing.T) {
 	}
 }
 
-func TestFindLocalFileReferencesForWorkspaceBuild_SkipsClusterPaths(t *testing.T) {
+func TestPrepareLocalFileUploads_Workspace_SkipsClusterPaths(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "local.bin"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
@@ -511,19 +511,19 @@ content:
     - dest: /etc/
       source_glob: /workspace/src/etc/**/*.conf
 `
-	refs, err := FindLocalFileReferencesForWorkspaceBuild(manifest, dir)
+	_, refs, err := PrepareLocalFileUploads(manifest, dir, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 laptop ref, got %d: %v", len(refs), refs)
 	}
-	if refs[0]["source_path"] != "local.bin" {
-		t.Errorf("source_path = %q, want local.bin", refs[0]["source_path"])
+	if refs[0]["dest"] != "local.bin" {
+		t.Errorf("destination = %q, want local.bin", refs[0]["dest"])
 	}
 }
 
-func TestFindLocalFileReferencesForWorkspaceBuild_KeepsRelativeWorkspaceNames(t *testing.T) {
+func TestPrepareLocalFileUploads_Workspace_KeepsRelativeWorkspaceNames(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "workspace"), 0755); err != nil {
 		t.Fatal(err)
@@ -544,23 +544,23 @@ content:
     - path: /usr/bin/cluster
       source_path: /workspace/src/app
 `
-	refs, err := FindLocalFileReferencesForWorkspaceBuild(manifest, dir)
+	_, refs, err := PrepareLocalFileUploads(manifest, dir, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(refs) != 2 {
-		t.Fatalf("expected 2 laptop refs, got %d: %v", len(refs), refs)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 deduplicated laptop ref, got %d: %v", len(refs), refs)
 	}
 }
 
-func TestFindLocalFileReferences_DoesNotSkipWorkspaceWithoutFlag(t *testing.T) {
+func TestPrepareLocalFileUploads_DoesNotSkipWorkspaceWithoutFlag(t *testing.T) {
 	manifest := `
 content:
   add_files:
     - path: /usr/bin/app
       source_path: /workspace/src/build/app
 `
-	refs, err := FindLocalFileReferences(manifest, "/tmp")
+	_, refs, err := PrepareLocalFileUploads(manifest, "/tmp", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

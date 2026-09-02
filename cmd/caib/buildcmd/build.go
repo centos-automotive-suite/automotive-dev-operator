@@ -912,7 +912,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	localRefs, cleanup, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestBytes, manifestPath)
+	localRefs, cleanup, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestPath)
 	if refsErr != nil {
 		h.handleError(fmt.Errorf("manifest file reference error: %w", refsErr))
 		return
@@ -1212,7 +1212,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	localRefs, cleanup, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestBytes, manifestPath)
+	localRefs, cleanup, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestPath)
 	if refsErr != nil {
 		h.handleError(fmt.Errorf("manifest file reference error: %w", refsErr))
 		return
@@ -1244,29 +1244,21 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	h.displayBuildResults(ctx, api, resp.Name)
 }
 
-func (h *Handler) localFileReferences(manifestBytes []byte, manifestPath string) ([]map[string]string, error) {
-	dir := filepath.Dir(manifestPath)
-	content := string(manifestBytes)
-	if h.opts.Workspace != nil && strings.TrimSpace(*h.opts.Workspace) != "" {
-		return common.FindLocalFileReferencesForWorkspaceBuild(content, dir)
-	}
-	return common.FindLocalFileReferences(content, dir)
-}
-
 func nopWorkspaceCleanup() {}
 
 func (h *Handler) prepareManifestUploads(
 	ctx context.Context,
 	api *buildapiclient.Client,
 	req *buildapitypes.BuildRequest,
-	manifestBytes []byte,
 	manifestPath string,
 ) ([]map[string]string, func(), error) {
-	localRefs, err := h.localFileReferences(manifestBytes, manifestPath)
+	workspaceBuild := h.opts.Workspace != nil && strings.TrimSpace(*h.opts.Workspace) != ""
+	rewritten, localRefs, err := common.PrepareLocalFileUploads(req.Manifest, filepath.Dir(manifestPath), workspaceBuild)
 	if err != nil {
 		return nil, nil, err
 	}
-	if h.opts.Workspace == nil || strings.TrimSpace(*h.opts.Workspace) == "" {
+	req.Manifest = rewritten
+	if !workspaceBuild {
 		return localRefs, nopWorkspaceCleanup, nil
 	}
 	// CAIB_CLIENT_WORKSPACE_UPLOAD=0: send /workspace paths unchanged so the
@@ -1323,13 +1315,9 @@ func (h *Handler) handleFileUploads(
 
 	uploads := make([]buildapiclient.Upload, 0, len(localRefs))
 	for _, ref := range localRefs {
-		dest := ref["dest"]
-		if dest == "" {
-			dest = ref["source_path"]
-		}
 		uploads = append(uploads, buildapiclient.Upload{
 			SourcePath: ref["source_path"],
-			DestPath:   dest,
+			DestPath:   ref["dest"],
 		})
 	}
 

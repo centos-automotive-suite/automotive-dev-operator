@@ -24,130 +24,113 @@ func ManifestTarget(manifest []byte) string {
 	return strings.TrimSpace(m.Target)
 }
 
-// FindLocalFileReferences extracts manifest add_files source_path and
-// source_glob references. Glob patterns are expanded locally and each
-// matched file is returned as a separate source_path entry.
-// manifestDir is the directory containing the manifest, used to resolve
-// relative glob patterns.
-func FindLocalFileReferences(manifestContent string, manifestDir string) ([]map[string]string, error) {
-	return findLocalFileReferences(manifestContent, manifestDir, false)
-}
-
-// FindLocalFileReferencesForWorkspaceBuild is like FindLocalFileReferences but
-// skips source_path/source_glob under /workspace (those live on the cluster
-// workspace PVC, not the local machine).
-func FindLocalFileReferencesForWorkspaceBuild(manifestContent string, manifestDir string) ([]map[string]string, error) {
-	return findLocalFileReferences(manifestContent, manifestDir, true)
-}
-
-func findLocalFileReferences(manifestContent string, manifestDir string, excludeClusterWorkspace bool) ([]map[string]string, error) {
+// PrepareLocalFileUploads resolves local add_files sources relative to the
+// manifest directory and returns upload references and a manifest with matching
+// destinations. Cluster workspace sources are deferred when requested.
+func PrepareLocalFileUploads(manifestContent, manifestDir string, excludeClusterWorkspace bool) (string, []map[string]string, error) {
 	var manifestData map[string]any
-	var localFiles []map[string]string
-
 	if err := yaml.Unmarshal([]byte(manifestContent), &manifestData); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest YAML: %w", err)
+		return "", nil, fmt.Errorf("failed to parse manifest YAML: %w", err)
+	}
+	manifestDir, err := filepath.Abs(manifestDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve manifest directory: %w", err)
 	}
 
-	isPathSafe := func(path string) error {
-		if path == "" || path == "/" {
-			return fmt.Errorf("empty or root path is not allowed")
+	var localFiles []map[string]string
+	sources := make(map[string]string)
+	addFile := func(source string) error {
+		dest := localUploadDestination(source)
+		if dest == "" {
+			return fmt.Errorf("invalid upload source path: %q", source)
 		}
-
-		if filepath.IsAbs(path) {
-			safeDirectories := configuredSafeDirectories()
-			if len(safeDirectories) > 0 {
-				cleanedPath := filepath.Clean(path)
-				isInSafeDir := false
-				for _, dir := range safeDirectories {
-					if dir == "" {
-						continue
-					}
-					cleanedDir := filepath.Clean(dir)
-					if cleanedPath == cleanedDir ||
-						strings.HasPrefix(cleanedPath, cleanedDir+string(os.PathSeparator)) {
-						isInSafeDir = true
-						break
-					}
-				}
-				if !isInSafeDir {
-					return fmt.Errorf(
-						"absolute path outside configured safe directories: %s (set CAIB_SAFE_DIRECTORIES)",
-						path,
-					)
-				}
+		if !filepath.IsAbs(source) {
+			source = filepath.Join(manifestDir, source)
+		}
+		if previous, ok := sources[dest]; ok {
+			if previous != source {
+				return fmt.Errorf("local files %q and %q have the same upload destination %q", previous, source, dest)
 			}
+			return nil
 		}
+		sources[dest] = source
+		localFiles = append(localFiles, map[string]string{"source_path": source, "dest": dest})
 		return nil
 	}
 
-	if content, ok := manifestData["content"].(map[string]any); ok {
-		if addFiles, ok := content["add_files"].([]any); ok {
-			if err := collectAddFileRefs(addFiles, manifestDir, excludeClusterWorkspace, isPathSafe, &localFiles); err != nil {
-				return nil, err
-			}
+	content, _ := manifestData["content"].(map[string]any)
+	qm, _ := manifestData["qm"].(map[string]any)
+	qmContent, _ := qm["content"].(map[string]any)
+	changed := false
+	for _, section := range []map[string]any{content, qmContent} {
+		files, _ := section["add_files"].([]any)
+		rewritten, err := collectAddFileRefs(files, manifestDir, excludeClusterWorkspace, addFile)
+		if err != nil {
+			return "", nil, err
 		}
+		changed = changed || rewritten
 	}
-	if qm, ok := manifestData["qm"].(map[string]any); ok {
-		if qmContent, ok := qm["content"].(map[string]any); ok {
-			if addFiles, ok := qmContent["add_files"].([]any); ok {
-				if err := collectAddFileRefs(addFiles, manifestDir, excludeClusterWorkspace, isPathSafe, &localFiles); err != nil {
-					return nil, err
-				}
-			}
-		}
+	if !changed {
+		return manifestContent, localFiles, nil
 	}
-
-	return localFiles, nil
+	out, err := yaml.Marshal(manifestData)
+	if err != nil {
+		return "", nil, fmt.Errorf("rewrite manifest for local uploads: %w", err)
+	}
+	return string(out), localFiles, nil
 }
 
-func collectAddFileRefs(
-	addFiles []any,
-	manifestDir string,
-	excludeClusterWorkspace bool,
-	isPathSafe func(string) error,
-	localFiles *[]map[string]string,
-) error {
+func collectAddFileRefs(addFiles []any, manifestDir string, excludeClusterWorkspace bool, addFile func(string) error) (bool, error) {
+	changed := false
 	for _, file := range addFiles {
-		fileMap, ok := file.(map[string]any)
+		entry, ok := file.(map[string]any)
+		if !ok || entry["text"] != nil || entry["url"] != nil {
+			continue
+		}
+		key := "source_glob"
+		source, ok := entry[key].(string)
 		if !ok {
+			if _, hasPath := entry["path"].(string); !hasPath {
+				continue
+			}
+			key = "source_path"
+			source, ok = entry[key].(string)
+			if !ok {
+				key = "source"
+				source, ok = entry[key].(string)
+			}
+		}
+		if !ok || (excludeClusterWorkspace && isClusterWorkspacePath(source)) {
 			continue
 		}
 
-		if sourceGlob, hasGlob := fileMap["source_glob"].(string); hasGlob {
-			if excludeClusterWorkspace && isClusterWorkspacePath(sourceGlob) {
-				continue
-			}
-			matches, err := expandSourceGlob(sourceGlob, manifestDir)
+		matches := []string{source}
+		if key == "source_glob" {
+			var err error
+			matches, err = expandSourceGlob(source, manifestDir)
 			if err != nil {
-				return err
+				return false, err
 			}
-			for _, m := range matches {
-				if err := isPathSafe(m); err != nil {
-					return err
-				}
-				*localFiles = append(*localFiles, map[string]string{
-					"source_path": m,
-				})
-			}
-			continue
 		}
-
-		path, hasPath := fileMap["path"].(string)
-		sourcePath, hasSourcePath := fileMap["source_path"].(string)
-		if hasPath && hasSourcePath {
-			if excludeClusterWorkspace && isClusterWorkspacePath(sourcePath) {
-				continue
+		for _, match := range matches {
+			if err := addFile(match); err != nil {
+				return false, err
 			}
-			if err := isPathSafe(sourcePath); err != nil {
-				return err
+		}
+		if source != "" {
+			if dest := localUploadDestination(source); dest != source {
+				entry[key] = dest
+				changed = true
 			}
-			*localFiles = append(*localFiles, map[string]string{
-				"path":        path,
-				"source_path": sourcePath,
-			})
 		}
 	}
-	return nil
+	return changed, nil
+}
+
+func localUploadDestination(source string) string {
+	// Match the upload API's rooted path cleaning before find_manifest.sh adds
+	// /manifest-work/. Cleaning after that prefix would escape the staged files.
+	return strings.TrimPrefix(path.Clean("/"+filepath.ToSlash(source)), "/")
 }
 
 func isClusterWorkspacePath(p string) bool {
@@ -289,25 +272,6 @@ func expandDoubleStarGlob(pattern string) ([]string, error) {
 	}
 
 	return matches, nil
-}
-
-func configuredSafeDirectories() []string {
-	raw := strings.TrimSpace(os.Getenv("CAIB_SAFE_DIRECTORIES"))
-	if raw == "" {
-		// Default policy: allow absolute paths when no safe directories are configured.
-		return nil
-	}
-
-	parts := strings.Split(raw, string(os.PathListSeparator))
-	dirs := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		dirs = append(dirs, filepath.Clean(part))
-	}
-	return dirs
 }
 
 // compressionExtension returns the filename extension for a compression algorithm.
