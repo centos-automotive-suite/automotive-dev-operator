@@ -10,7 +10,6 @@ COPY go.sum go.sum
 COPY vendor/ vendor/
 COPY cmd/main.go cmd/main.go
 COPY cmd/build-api/main.go cmd/build-api/main.go
-COPY cmd/init-secrets/main.go cmd/init-secrets/main.go
 COPY api/ api/
 COPY internal/ internal/
 
@@ -22,7 +21,6 @@ ENV CGO_ENABLED=0
 ENV GOCACHE=/workspace/.cache
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o manager cmd/main.go
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o build-api cmd/build-api/main.go
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o init-secrets cmd/init-secrets/main.go
 
 FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi10/ubi-minimal:latest
 
@@ -43,7 +41,6 @@ COPY LICENSE /licenses/LICENSE
 WORKDIR /
 COPY --from=builder /workspace/manager .
 COPY --from=builder /workspace/build-api .
-COPY --from=builder /workspace/init-secrets .
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

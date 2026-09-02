@@ -324,12 +324,6 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
 	r.Log.Info("Starting Build-API deployment")
 
-	// Ensure OAuth secret for build-api
-	if err := r.ensureBuildAPIOAuthSecret(ctx, owner); err != nil {
-		r.Log.Error(err, "Failed to ensure build-api OAuth secret")
-		return fmt.Errorf("failed to ensure build-api OAuth secret: %w", err)
-	}
-
 	// Ensure internal JWT secret for build-api
 	if err := r.ensureBuildAPIInternalJWTSecret(ctx, owner); err != nil {
 		r.Log.Error(err, "Failed to ensure build-api internal JWT secret")
@@ -340,17 +334,9 @@ func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *au
 	// No need to generate ConfigMap anymore
 	r.Log.Info("Build API will read authentication config directly from OperatorConfig")
 
-	// Update ServiceAccount with build-api OAuth redirect annotation
-	if err := r.updateBuildAPIServiceAccountAnnotation(ctx, owner); err != nil {
-		r.Log.Error(err, "Failed to update ServiceAccount build-api OAuth annotation")
-		return fmt.Errorf("failed to update ServiceAccount build-api OAuth annotation: %w", err)
-	}
-
-	isOpenShift := r.detectOpenShift(ctx, owner.Namespace)
-
 	// Create/update build-api deployment
 	r.Log.Info("Creating/updating build-api deployment")
-	buildAPIDeployment := r.buildBuildAPIDeployment(owner.Namespace, isOpenShift, owner)
+	buildAPIDeployment := r.buildBuildAPIDeployment(owner.Namespace, owner)
 	if err := r.createOrUpdate(ctx, buildAPIDeployment, owner); err != nil {
 		r.Log.Error(err, "Failed to create/update build-api deployment")
 		return fmt.Errorf("failed to create/update build-api deployment: %w", err)
@@ -359,7 +345,7 @@ func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *au
 
 	// Create/update build-api service
 	r.Log.Info("Creating/updating build-api service")
-	buildAPIService := r.buildBuildAPIService(owner.Namespace, isOpenShift)
+	buildAPIService := r.buildBuildAPIService(owner.Namespace)
 	if err := r.createOrUpdate(ctx, buildAPIService, owner); err != nil {
 		r.Log.Error(err, "Failed to create/update build-api service")
 		return fmt.Errorf("failed to create/update build-api service: %w", err)
@@ -386,53 +372,6 @@ func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *au
 	}
 
 	r.Log.Info("Build-API deployment completed successfully")
-	return nil
-}
-
-func (r *OperatorConfigReconciler) ensureBuildAPIOAuthSecret(
-	ctx context.Context,
-	owner *automotivev1alpha1.OperatorConfig,
-) error {
-	secretName := "ado-build-api-oauth-proxy"
-	secret := &corev1.Secret{}
-	err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: owner.Namespace}, secret)
-
-	if err != nil {
-		if !errors.IsNotFound(err) {
-			return fmt.Errorf("failed to get secret %s: %w", secretName, err)
-		}
-		// Secret doesn't exist, create it
-		secret = r.buildOAuthSecret(secretName, owner.Namespace)
-		if err := r.Create(ctx, secret); err != nil {
-			return fmt.Errorf("failed to create secret %s: %w", secretName, err)
-		}
-		r.Log.Info("Created OAuth secret", "name", secretName)
-	}
-	return nil
-}
-
-func (r *OperatorConfigReconciler) updateBuildAPIServiceAccountAnnotation(ctx context.Context, owner *automotivev1alpha1.OperatorConfig) error {
-	sa := &corev1.ServiceAccount{}
-	if err := r.Get(ctx, client.ObjectKey{Name: "ado-operator", Namespace: owner.Namespace}, sa); err != nil {
-		return fmt.Errorf("failed to get service account: %w", err)
-	}
-
-	if sa.Annotations == nil {
-		sa.Annotations = make(map[string]string)
-	}
-
-	buildAPIAnnotation := `{"kind":"OAuthRedirectReference","apiVersion":"v1",` +
-		`"reference":{"kind":"Route","name":"ado-build-api"}}`
-	annotationKey := "serviceaccounts.openshift.io/oauth-redirectreference.buildapi"
-	if sa.Annotations[annotationKey] == buildAPIAnnotation {
-		return nil // Already set
-	}
-
-	sa.Annotations["serviceaccounts.openshift.io/oauth-redirectreference.buildapi"] = buildAPIAnnotation
-	if err := r.Update(ctx, sa); err != nil {
-		return fmt.Errorf("failed to update service account: %w", err)
-	}
-	r.Log.Info("Updated ServiceAccount with build-api OAuth annotation")
 	return nil
 }
 
@@ -467,14 +406,6 @@ func (r *OperatorConfigReconciler) cleanupBuildAPI(ctx context.Context, config *
 	ingress.Namespace = config.Namespace
 	if err := r.Delete(ctx, ingress); err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete build-api ingress: %w", err)
-	}
-
-	// Delete build-api OAuth secret
-	secret := &corev1.Secret{}
-	secret.Name = "ado-build-api-oauth-proxy"
-	secret.Namespace = config.Namespace
-	if err := r.Delete(ctx, secret); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build-api OAuth secret: %w", err)
 	}
 
 	// Delete build-api internal JWT secret

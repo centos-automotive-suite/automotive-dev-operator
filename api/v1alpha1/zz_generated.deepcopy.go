@@ -147,11 +147,6 @@ func (in *BuildAPIResourcesConfig) DeepCopyInto(out *BuildAPIResourcesConfig) {
 		*out = new(corev1.ResourceRequirements)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.OAuthProxy != nil {
-		in, out := &in.OAuthProxy, &out.OAuthProxy
-		*out = new(corev1.ResourceRequirements)
-		(*in).DeepCopyInto(*out)
-	}
 	if in.BuildController != nil {
 		in, out := &in.BuildController, &out.BuildController
 		*out = new(corev1.ResourceRequirements)

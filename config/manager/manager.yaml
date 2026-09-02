@@ -51,28 +51,6 @@ spec:
         # versions < 1.19 or on vendors versions which do NOT support this field by default (i.e. Openshift < 4.11 ).
         # seccompProfile:
         #   type: RuntimeDefault
-      initContainers:
-      - name: init-oauth-secrets
-        image: controller:latest
-        command:
-        - /init-secrets
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - "ALL"
-        resources:
-          limits:
-            cpu: 100m
-            memory: 64Mi
-          requests:
-            cpu: 10m
-            memory: 32Mi
       containers:
       - command:
         - /manager
