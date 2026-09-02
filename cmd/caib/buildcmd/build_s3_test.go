@@ -553,7 +553,7 @@ func TestApplyS3Options_ExplicitEmptyConnectionParamsOverrideConfig(t *testing.T
 	})
 }
 
-func TestApplyS3Options_MalformedConfigIgnoredWhenNoS3Flags(t *testing.T) {
+func TestApplyS3Options_MalformedConfigErrorsWhenNoS3Flags(t *testing.T) {
 	opts := newTestDiskOpts()
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
@@ -566,11 +566,12 @@ func TestApplyS3Options_MalformedConfigIgnoredWhenNoS3Flags(t *testing.T) {
 	defer func() { s3DefaultsFn = orig }()
 
 	var req buildapitypes.BuildRequest
-	if err := h.applyS3Options(nil, &req); err != nil {
-		t.Fatalf("malformed config should be tolerated when no S3 flags are set, got: %v", err)
+	err := h.applyS3Options(nil, &req)
+	if err == nil {
+		t.Fatal("expected error from malformed config even when no S3 flags are set")
 	}
-	if req.S3Bucket != "" {
-		t.Errorf("S3Bucket = %q, want empty", req.S3Bucket)
+	if !strings.Contains(err.Error(), "reading config") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "reading config")
 	}
 }
 

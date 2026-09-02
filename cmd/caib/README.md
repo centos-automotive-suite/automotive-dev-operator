@@ -688,7 +688,7 @@ Supported locations:
 }
 ```
 
-All `s3` fields are optional. Setting `s3.bucket` causes **every build** to upload artifacts to S3 (equivalent to always passing `--s3-bucket`). Pass `--s3-bucket ""` to disable S3 for a single build when a default bucket is configured.
+All `s3` fields are optional. Setting `s3.bucket` causes **disk-artifact builds** (`build`, `disk`, `build-dev`) to upload artifacts to S3 (equivalent to always passing `--s3-bucket`). Pass `--s3-bucket ""` to disable S3 for a single build when a default bucket is configured.
 
 CLI flags override config values. Explicitly passing an empty flag (e.g. `--s3-region ""`) clears the config default for that field.
 
