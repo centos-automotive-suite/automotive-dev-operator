@@ -1,0 +1,19 @@
+name: e2e-parent-path-uploads
+
+content:
+  add_files:
+    - path: /etc/caib-e2e-parent-path.txt
+      source_path: ../../files/message.txt
+    - path: /etc/
+      source_glob: ../../files/configs/*.conf
+      preserve_path: false
+      allow_empty: false
+
+  # Fail image assembly if the file or either glob match was not copied.
+  chmod_files:
+    - path: /etc/caib-e2e-parent-path.txt
+      mode: "0644"
+    - path: /etc/caib-e2e-first.conf
+      mode: "0644"
+    - path: /etc/caib-e2e-second.conf
+      mode: "0644"

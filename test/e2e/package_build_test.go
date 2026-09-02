@@ -48,8 +48,8 @@ var _ = Describe("Package Mode Build", Label("package-mode", "smoke"), Ordered, 
 		}
 	})
 
-	// #23 — Full package mode disk image build
-	It("should complete a package mode disk image build via caib build-dev", func() {
+	// #23 — Package mode disk image build with parent-relative local uploads
+	It("should build a package mode disk image with parent-relative local uploads", Label("uploads"), func() {
 		buildName := "e2e-package-mode"
 		var actualBuildName string
 
@@ -68,11 +68,11 @@ var _ = Describe("Package Mode Build", Label("package-mode", "smoke"), Ordered, 
 		}
 		pushURL := fmt.Sprintf("%s:5000/%s/%s", registryHost, pushNamespace, artifactImageName)
 
-		By("launching package mode build via caib build-dev")
+		By("launching package mode build with a nested manifest from the repository root")
 		go func() {
 			out, err := runCaibCommand(ctx,
 				"image", "build-dev",
-				caibBuildManifest,
+				"test/config/parent-path-uploads/manifests/nested/image.aib.yml",
 				"--name", buildName,
 				"--arch", arch,
 				"--mode", "package",
@@ -98,6 +98,8 @@ var _ = Describe("Package Mode Build", Label("package-mode", "smoke"), Ordered, 
 				buildName, string(r.output))
 			Expect(r.err).NotTo(HaveOccurred(),
 				fmt.Sprintf("package mode build failed:\n%sError: %v\n", string(r.output), r.err))
+			Expect(string(r.output)).To(ContainSubstring("Local files uploaded."),
+				"the build should exercise the client-to-build upload flow")
 		case <-ctx.Done():
 			Fail(fmt.Sprintf("package mode build did not complete within %v", caibBuildTimeout))
 		}
