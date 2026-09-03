@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
@@ -163,7 +165,9 @@ func TestRenderFormattedWorkspaceShow(t *testing.T) {
 	ws := &buildapitypes.WorkspaceResponse{
 		Name:             "test-ws",
 		Arch:             "amd64",
-		Phase:            "Running",
+		Phase:            "Failed",
+		Reason:           "ContainerConfigurationError",
+		Message:          "container toolchain: CreateContainerConfigError: invalid configuration",
 		PodName:          "test-ws-pod",
 		Lease:            "lease-123",
 		Age:              "10m",
@@ -204,6 +208,12 @@ func TestRenderFormattedWorkspaceShow(t *testing.T) {
 		}
 		if parsed["lease"] != "lease-123" {
 			t.Errorf("expected lease 'lease-123', got %q", parsed["lease"])
+		}
+		if parsed["reason"] != ws.Reason {
+			t.Errorf("expected reason %q, got %q", ws.Reason, parsed["reason"])
+		}
+		if parsed["message"] != ws.Message {
+			t.Errorf("expected message %q, got %q", ws.Message, parsed["message"])
 		}
 	})
 }
@@ -254,7 +264,9 @@ func TestPrintWorkspaceDetails(t *testing.T) {
 	ws := &buildapitypes.WorkspaceResponse{
 		Name:             "test-ws",
 		Arch:             "amd64",
-		Phase:            "Running",
+		Phase:            "Failed",
+		Reason:           "ContainerConfigurationError",
+		Message:          "container toolchain: CreateContainerConfigError: invalid configuration",
 		PodName:          "test-ws-pod",
 		AutoPauseTimeout: "30m",
 	}
@@ -282,6 +294,12 @@ func TestPrintWorkspaceDetails(t *testing.T) {
 	if !strings.Contains(output, "Architecture: amd64") {
 		t.Error("expected Architecture field in output")
 	}
+	if !strings.Contains(output, "Reason:       ContainerConfigurationError") {
+		t.Error("expected Reason field in output")
+	}
+	if !strings.Contains(output, "Message:      container toolchain: CreateContainerConfigError: invalid configuration") {
+		t.Error("expected failure message in output")
+	}
 	if !strings.Contains(output, "Auto-pause:   30m") {
 		t.Error("expected Auto-pause field in output")
 	}
@@ -291,6 +309,72 @@ func TestPrintWorkspaceDetails(t *testing.T) {
 	}
 	if strings.Contains(output, "Age:") {
 		t.Error("empty Age should not appear in output")
+	}
+}
+
+func TestWorkspaceFailureError(t *testing.T) {
+	t.Run("container exit carries support details", func(t *testing.T) {
+		err := workspaceFailureError("test-ws", &buildapitypes.WorkspaceResponse{
+			Reason:  "ContainerExited",
+			Message: "container toolchain: OOMKilled",
+		})
+		formatted := caibcommon.FormatError(err)
+		if !strings.Contains(formatted, "contact your service administrator with this status") {
+			t.Fatalf("expected administrator guidance, got %q", formatted)
+		}
+		if strings.Contains(formatted, "workspace logs") {
+			t.Fatalf("unexpected nonexistent logs command in %q", formatted)
+		}
+	})
+
+	t.Run("service failure carries support details", func(t *testing.T) {
+		err := workspaceFailureError("test-ws", &buildapitypes.WorkspaceResponse{
+			Reason:  "ContainerConfigurationError",
+			Message: "container toolchain: CreateContainerConfigError: secret not found",
+		})
+		formatted := caibcommon.FormatError(err)
+		if !strings.Contains(formatted, "contact your service administrator with this status") {
+			t.Fatalf("expected administrator guidance, got %q", formatted)
+		}
+		if !strings.Contains(formatted, "CreateContainerConfigError: secret not found") {
+			t.Fatalf("expected support detail, got %q", formatted)
+		}
+	})
+}
+
+func TestWorkspaceStatusError(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason automotivev1alpha1.WorkspaceStatusReason
+		want   string
+	}{
+		{
+			name:   "image pulling",
+			reason: automotivev1alpha1.WorkspaceReasonImagePulling,
+			want:   "Fix:   verify the workspace image name and registry access",
+		},
+		{
+			name:   "scheduling",
+			reason: automotivev1alpha1.WorkspaceReasonScheduling,
+			want:   "Fix:   contact your service administrator to check cluster capacity for the requested architecture",
+		},
+		{
+			name:   "container restarting",
+			reason: automotivev1alpha1.WorkspaceReasonContainerRestarting,
+			want:   "contact your service administrator with this status",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			formatted := caibcommon.FormatError(workspaceStatusError(fmt.Errorf("workspace unavailable"), string(tt.reason)))
+			if !strings.Contains(formatted, tt.want) {
+				t.Fatalf("expected %q, got %q", tt.want, formatted)
+			}
+			if strings.Contains(formatted, "workspace logs") {
+				t.Fatalf("unexpected nonexistent logs command in %q", formatted)
+			}
+		})
 	}
 }
 

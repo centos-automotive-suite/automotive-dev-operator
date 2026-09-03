@@ -22,7 +22,6 @@ import (
 
 const (
 	phaseRunning = "Running"
-	phaseStopped = "Stopped"
 )
 
 func newTestScheme() *runtime.Scheme {
@@ -274,6 +273,195 @@ func TestReconcile_DeletedWorkspace(t *testing.T) {
 	}
 }
 
+func TestReconcile_ContainerCreationFailure(t *testing.T) {
+	ws, pvc, pod := runningWorkspace("broken", "default")
+	ws.Status.Phase = "Creating"
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{
+			Name: containerName,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+				Reason:  "CreateContainerError",
+				Message: "set memory limit 4 too low",
+			}},
+		},
+	}
+
+	r, fc := newTestReconciler(ws, pvc, pod)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	updated := &automotivev1alpha1.Workspace{}
+	if err := fc.Get(context.Background(), client.ObjectKeyFromObject(ws), updated); err != nil {
+		t.Fatalf("failed to get workspace: %v", err)
+	}
+	if updated.Status.Phase != "Failed" {
+		t.Errorf("expected phase Failed, got %q", updated.Status.Phase)
+	}
+	if updated.Status.Reason != automotivev1alpha1.WorkspaceReasonContainerRuntimeError {
+		t.Errorf("expected reason %q, got %q", automotivev1alpha1.WorkspaceReasonContainerRuntimeError, updated.Status.Reason)
+	}
+	wantMessage := "container toolchain: CreateContainerError: set memory limit 4 too low"
+	if updated.Status.Message != wantMessage {
+		t.Errorf("expected message %q, got %q", wantMessage, updated.Status.Message)
+	}
+}
+
+func TestWorkspacePodStatus(t *testing.T) {
+	tests := []struct {
+		name        string
+		pod         *corev1.Pod
+		wantPhase   string
+		wantReason  automotivev1alpha1.WorkspaceStatusReason
+		wantMessage string
+	}{
+		{
+			name: "running",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  containerName,
+					State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				}},
+			}},
+			wantPhase: "Running",
+		},
+		{
+			name: "transient image pull failure",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: containerName,
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+						Reason:  "ImagePullBackOff",
+						Message: "back-off pulling image",
+					}},
+				}},
+			}},
+			wantPhase:   "Creating",
+			wantReason:  automotivev1alpha1.WorkspaceReasonImagePulling,
+			wantMessage: "container toolchain: ImagePullBackOff: back-off pulling image",
+		},
+		{
+			name: "container configuration failure",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: containerName,
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+						Reason:  "CreateContainerConfigError",
+						Message: "secret not found",
+					}},
+				}},
+			}},
+			wantPhase:   phaseFailed,
+			wantReason:  automotivev1alpha1.WorkspaceReasonContainerConfigError,
+			wantMessage: "container toolchain: CreateContainerConfigError: secret not found",
+		},
+		{
+			name: "crash loop remains retryable",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: containerName,
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+						Reason: "CrashLoopBackOff",
+					}},
+				}},
+			}},
+			wantPhase:   phaseCreating,
+			wantReason:  automotivev1alpha1.WorkspaceReasonContainerRestarting,
+			wantMessage: "container toolchain: CrashLoopBackOff",
+		},
+		{
+			name: "main container terminated",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: containerName,
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 137,
+						Reason:   "OOMKilled",
+					}},
+				}},
+			}},
+			wantPhase:   phaseFailed,
+			wantReason:  automotivev1alpha1.WorkspaceReasonContainerExited,
+			wantMessage: "container toolchain: OOMKilled",
+		},
+		{
+			name: "evicted pod uses pod failure details",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase:   corev1.PodFailed,
+				Reason:  "Evicted",
+				Message: "node was low on memory",
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: containerName,
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 137,
+						Reason:   "Error",
+					}},
+				}},
+			}},
+			wantPhase:   phaseFailed,
+			wantReason:  automotivev1alpha1.WorkspaceReasonPodFailed,
+			wantMessage: "pod: Evicted: node was low on memory",
+		},
+		{
+			name: "successful init container",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				InitContainerStatuses: []corev1.ContainerStatus{{
+					Name: "workspace-init",
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 0,
+						Reason:   "Completed",
+					}},
+				}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  containerName,
+					State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				}},
+			}},
+			wantPhase: "Running",
+		},
+		{
+			name: "unschedulable",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type:    corev1.PodScheduled,
+					Status:  corev1.ConditionFalse,
+					Reason:  "Unschedulable",
+					Message: "insufficient cpu",
+				}},
+			}},
+			wantPhase:   "Creating",
+			wantReason:  automotivev1alpha1.WorkspaceReasonScheduling,
+			wantMessage: "pod: Unschedulable: insufficient cpu",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			phase, reason, message := workspacePodStatus(tt.pod)
+			if phase != tt.wantPhase {
+				t.Errorf("workspacePodStatus() phase = %q, want %q", phase, tt.wantPhase)
+			}
+			if reason != tt.wantReason {
+				t.Errorf("workspacePodStatus() reason = %q, want %q", reason, tt.wantReason)
+			}
+			if message != tt.wantMessage {
+				t.Errorf("workspacePodStatus() message = %q, want %q", message, tt.wantMessage)
+			}
+		})
+	}
+}
+
 func TestSetStatus_StoppedClearsPodName(t *testing.T) {
 	ws := &automotivev1alpha1.Workspace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -289,7 +477,7 @@ func TestSetStatus_StoppedClearsPodName(t *testing.T) {
 	r, fc := newTestReconciler(ws)
 	ctx := context.Background()
 
-	err := r.setStatus(ctx, ws, phaseStopped, "")
+	err := r.setStatus(ctx, ws, phaseStopped, "", "")
 	if err != nil {
 		t.Fatalf("setStatus() error = %v", err)
 	}
@@ -321,7 +509,7 @@ func TestSetStatus_RunningSetsPodName(t *testing.T) {
 	r, fc := newTestReconciler(ws)
 	ctx := context.Background()
 
-	err := r.setStatus(ctx, ws, phaseRunning, "")
+	err := r.setStatus(ctx, ws, phaseRunning, "", "")
 	if err != nil {
 		t.Fatalf("setStatus() error = %v", err)
 	}
@@ -355,7 +543,7 @@ func TestSetStatus_NoOpWhenUnchanged(t *testing.T) {
 	ctx := context.Background()
 
 	// Should be a no-op — same phase, same message, same podName
-	err := r.setStatus(ctx, ws, phaseStopped, "")
+	err := r.setStatus(ctx, ws, phaseStopped, "", "")
 	if err != nil {
 		t.Fatalf("setStatus() error = %v", err)
 	}

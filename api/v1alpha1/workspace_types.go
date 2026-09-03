@@ -21,6 +21,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// WorkspaceStatusReason is a stable explanation of a workspace phase exposed through build-api.
+type WorkspaceStatusReason string
+
+const (
+	WorkspaceReasonAutoPaused            WorkspaceStatusReason = "AutoPaused"
+	WorkspaceReasonContainerConfigError  WorkspaceStatusReason = "ContainerConfigurationError"
+	WorkspaceReasonContainerExited       WorkspaceStatusReason = "ContainerExited"
+	WorkspaceReasonContainerRestarting   WorkspaceStatusReason = "ContainerRestarting"
+	WorkspaceReasonContainerRuntimeError WorkspaceStatusReason = "ContainerRuntimeError"
+	WorkspaceReasonContainerStarting     WorkspaceStatusReason = "ContainerStarting"
+	WorkspaceReasonImageConfigError      WorkspaceStatusReason = "ImageConfigurationError"
+	WorkspaceReasonImagePulling          WorkspaceStatusReason = "ImagePulling"
+	WorkspaceReasonPodCreationError      WorkspaceStatusReason = "PodCreationError"
+	WorkspaceReasonPodExited             WorkspaceStatusReason = "PodExited"
+	WorkspaceReasonPodFailed             WorkspaceStatusReason = "PodFailed"
+	WorkspaceReasonScheduling            WorkspaceStatusReason = "Scheduling"
+	WorkspaceReasonStorageError          WorkspaceStatusReason = "StorageError"
+)
+
 // WorkspaceSpec defines the desired state of a developer workspace.
 type WorkspaceSpec struct {
 	// Architecture is the target architecture (e.g., "arm64", "amd64")
@@ -83,6 +102,10 @@ type WorkspaceStatus struct {
 	// Phase is the current phase of the workspace
 	// +kubebuilder:validation:Enum=Pending;Creating;Running;Failed;Terminating;Stopped
 	Phase string `json:"phase,omitempty"`
+
+	// Reason is a stable, machine-readable explanation of the current phase
+	// +kubebuilder:validation:Enum=AutoPaused;ContainerConfigurationError;ContainerExited;ContainerRestarting;ContainerRuntimeError;ContainerStarting;ImageConfigurationError;ImagePulling;PodCreationError;PodExited;PodFailed;Scheduling;StorageError
+	Reason WorkspaceStatusReason `json:"reason,omitempty"`
 
 	// PodName is the name of the workspace pod
 	PodName string `json:"podName,omitempty"`

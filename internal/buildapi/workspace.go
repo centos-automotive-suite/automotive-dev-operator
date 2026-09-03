@@ -89,6 +89,8 @@ type WorkspaceRequest struct {
 type WorkspaceResponse struct {
 	Name             string `json:"name"`
 	Phase            string `json:"phase"`
+	Reason           string `json:"reason,omitempty"`
+	Message          string `json:"message,omitempty"`
 	Lease            string `json:"lease,omitempty"`
 	Arch             string `json:"architecture"`
 	PodName          string `json:"podName,omitempty"`
@@ -1012,6 +1014,10 @@ func buildWorkspaceResources(cpu, memory string, wsConfig *automotivev1alpha1.Wo
 		if err != nil {
 			return nil, fmt.Errorf("invalid --memory value %q: %v", memory, err)
 		}
+		minMemory := resource.MustParse("6Mi")
+		if q.Cmp(minMemory) < 0 {
+			return nil, fmt.Errorf("invalid --memory value %q: must be at least %s", memory, minMemory.String())
+		}
 		if wsConfig != nil && wsConfig.MaxResources != nil {
 			if maxMem, ok := wsConfig.MaxResources.Limits[corev1.ResourceMemory]; ok && q.Cmp(maxMem) > 0 {
 				return nil, fmt.Errorf("requested memory %s exceeds maximum %s", memory, maxMem.String())
@@ -1026,14 +1032,18 @@ func buildWorkspaceResources(cpu, memory string, wsConfig *automotivev1alpha1.Wo
 
 func workspaceResponseFromCR(ws *automotivev1alpha1.Workspace) WorkspaceResponse {
 	phase := ws.Status.Phase
+	reason := ws.Status.Reason
+	message := ws.Status.Message
 	if phase == "" {
 		phase = "Pending"
 	}
 	// Reflect spec intent when status hasn't caught up yet
 	if ws.Spec.Stopped && phase != "Stopped" {
 		phase = "Stopping"
+		reason, message = "", ""
 	} else if !ws.Spec.Stopped && phase == "Stopped" {
 		phase = "Starting"
+		reason, message = "", ""
 	}
 	age := ""
 	if !ws.CreationTimestamp.IsZero() {
@@ -1062,6 +1072,8 @@ func workspaceResponseFromCR(ws *automotivev1alpha1.Workspace) WorkspaceResponse
 	return WorkspaceResponse{
 		Name:             ws.Name,
 		Phase:            phase,
+		Reason:           string(reason),
+		Message:          message,
 		Lease:            ws.Spec.LeaseID,
 		Arch:             ws.Spec.Architecture,
 		PodName:          ws.Status.PodName,
