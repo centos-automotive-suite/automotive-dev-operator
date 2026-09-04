@@ -71,7 +71,7 @@ require (
 	github.com/go-openapi/loads v0.25.2 // indirect
 	github.com/go-openapi/runtime v0.33.1 // indirect
 	github.com/go-openapi/runtime/server-middleware v0.33.1 // indirect
-	github.com/go-openapi/spec v0.22.11 // indirect
+	github.com/go-openapi/spec v1.0.0 // indirect
 	github.com/go-openapi/strfmt v0.27.0 // indirect
 	github.com/go-openapi/swag/cmdutils v0.29.1 // indirect
 	github.com/go-openapi/swag/conv v0.29.1 // indirect
