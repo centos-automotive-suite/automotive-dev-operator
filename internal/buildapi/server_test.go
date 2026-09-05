@@ -196,6 +196,9 @@ var _ = Describe("APIServer", func() {
 			server.createBuild(c)
 
 			Expect(w.Code).To(Equal(http.StatusAccepted))
+			var response BuildResponse
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.Phase).To(Equal(phasePending))
 		})
 
 		It("should clean up inline S3 secret when ImageBuild creation fails", func() {

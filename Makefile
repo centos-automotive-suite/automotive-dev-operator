@@ -108,12 +108,20 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 fmt: ## Run go fmt against code.
 	go fmt ./...
 
+.PHONY: generate-openapi
+generate-openapi: ## Copy the canonical Build API specification to the documentation.
+	cp internal/buildapi/openapi.yaml docs/openapi.yaml
+
+.PHONY: verify-openapi
+verify-openapi: ## Check that the published OpenAPI matches the embedded specification.
+	@cmp internal/buildapi/openapi.yaml docs/openapi.yaml || { echo "OpenAPI drift: run make generate-openapi"; exit 1; }
+
 .PHONY: vet
 vet: ## Run go vet against code.
 	go vet -tags containers_image_openpgp ./...
 
 .PHONY: test
-test: manifests generate fmt vet envtest ## Run tests.
+test: verify-openapi manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -tags containers_image_openpgp $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 include Makefile.e2e

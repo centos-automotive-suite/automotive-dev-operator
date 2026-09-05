@@ -43,6 +43,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -1300,9 +1301,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	c.Request = c.Request.WithContext(ctx)
 
 	var req BuildRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		spanError(span, err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+	if !bindOperationRequest(c, &req) {
 		return
 	}
 
@@ -1331,6 +1330,11 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 
 	namespace := resolveNamespace()
+	if httpErr := validateCallbackAdmission(ctx, k8sClient, namespace, req.Callback); httpErr != nil {
+		spanError(span, errors.New(httpErr.message))
+		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
+		return
+	}
 
 	effectiveTTL, ttlErr := resolveAndClampTTL(ctx, k8sClient, namespace, req.TTL)
 	if ttlErr != nil {
@@ -1440,6 +1444,11 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		automotivev1alpha1.AnnotationRequestedBy: requestedBy,
 		automotivev1alpha1.AnnotationTraceID:     traceID,
 	}
+	callbackSecretRef := ""
+	if req.Callback != nil {
+		callbackSecretRef = notifications.CallbackSecretName(notifications.SubjectImageBuild, req.Name, uuid.NewString())
+		annotations[notifications.AnnotationCallbackInitializing] = labels.ValueTrue
+	}
 	if req.Reproducible && taskBundleRef != "" {
 		annotations[automotivev1alpha1.AnnotationTaskBundleRef] = taskBundleRef
 	}
@@ -1461,6 +1470,8 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			Annotations: annotations,
 		},
 		Spec: automotivev1alpha1.ImageBuildSpec{
+			ExternalID:        req.ExternalID,
+			CallbackSecretRef: callbackSecretRef,
 			Architecture:      string(req.Architecture),
 			StorageClass:      req.StorageClass,
 			SecretRef:         envSecretRef,
@@ -1485,11 +1496,19 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 
 	setBuildSecretOwnerRefs(ctx, k8sClient, namespace, imageBuild, envSecretRef, pushSecretName, flashSecretName, &req)
+	if err := completeBuildCallbackInitialization(ctx, k8sClient, imageBuild, req.Callback); err != nil {
+		if !errors.Is(err, errCallbackInitializationDeferred) {
+			spanError(span, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist callback configuration"})
+			return
+		}
+		a.log.Info("callback initialization will be completed by reconciliation", "build", imageBuild.Name)
+	}
 
 	writeJSON(c, http.StatusAccepted, BuildResponse{
 		Name:        req.Name,
-		Phase:       phaseBuilding,
-		Message:     "Build triggered",
+		Phase:       phasePending,
+		Message:     "Build accepted",
 		RequestedBy: requestedBy,
 		TraceID:     traceID,
 	})

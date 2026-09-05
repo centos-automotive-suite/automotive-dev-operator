@@ -266,6 +266,10 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	span.SetAttributes(
 		attribute.String("imagebuild.phase", imageBuild.Status.Phase),
 	)
+	initializationResult, initializing, initializationErr := r.reconcileCallbackInitialization(ctx, imageBuild)
+	if initializing || initializationErr != nil {
+		return initializationResult, initializationErr
+	}
 
 	expiryResult, expired, expiryErr := r.checkExpiry(ctx, imageBuild)
 	if expired || expiryErr != nil {

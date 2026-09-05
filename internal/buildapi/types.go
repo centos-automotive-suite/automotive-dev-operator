@@ -151,9 +151,11 @@ func ParseMode(s string) (Mode, error) {
 
 // BuildRequest is the payload to create a build via the REST API
 type BuildRequest struct {
-	Name             string `json:"name"`
-	Manifest         string `json:"manifest,omitempty"`
-	ManifestFileName string `json:"manifestFileName,omitempty"`
+	ExternalID       string         `json:"externalId,omitempty"`
+	Callback         *BuildCallback `json:"callback,omitempty"`
+	Name             string         `json:"name"`
+	Manifest         string         `json:"manifest,omitempty"`
+	ManifestFileName string         `json:"manifestFileName,omitempty"`
 	// ContainerRef is for disk mode: existing container to convert
 	ContainerRef           string               `json:"containerRef,omitempty"`
 	Distro                 Distro               `json:"distro"`
@@ -252,6 +254,8 @@ type JumpstarterInfo struct {
 
 // FlashRequest is the payload to flash an image via Jumpstarter
 type FlashRequest struct {
+	ExternalID string         `json:"externalId,omitempty"`
+	Callback   *BuildCallback `json:"callback,omitempty"`
 	// Name is the flash job name (auto-generated if omitted)
 	Name string `json:"name"`
 	// ImageRef is the OCI registry reference of the disk image to flash
@@ -279,42 +283,50 @@ type FlashRequest struct {
 
 // FlashResponse is returned by flash operations
 type FlashResponse struct {
-	Name           string `json:"name"`
-	Phase          string `json:"phase"`
-	Message        string `json:"message"`
-	RequestedBy    string `json:"requestedBy,omitempty"`
-	StartTime      string `json:"startTime,omitempty"`
-	CompletionTime string `json:"completionTime,omitempty"`
-	TaskRunName    string `json:"taskRunName,omitempty"`
-	LeaseID        string `json:"leaseId,omitempty"`
+	ExternalID     string              `json:"externalId,omitempty"`
+	Notification   *NotificationStatus `json:"notification,omitempty"`
+	Name           string              `json:"name"`
+	Phase          string              `json:"phase"`
+	Message        string              `json:"message"`
+	RequestedBy    string              `json:"requestedBy,omitempty"`
+	StartTime      string              `json:"startTime,omitempty"`
+	CompletionTime string              `json:"completionTime,omitempty"`
+	TaskRunName    string              `json:"taskRunName,omitempty"`
+	LeaseID        string              `json:"leaseId,omitempty"`
 }
 
 // FlashListItem represents a flash TaskRun in the list API
 type FlashListItem struct {
-	Name           string `json:"name"`
-	Phase          string `json:"phase"`
-	Message        string `json:"message"`
-	RequestedBy    string `json:"requestedBy,omitempty"`
-	CreatedAt      string `json:"createdAt"`
-	CompletionTime string `json:"completionTime,omitempty"`
+	ExternalID     string              `json:"externalId,omitempty"`
+	Notification   *NotificationStatus `json:"notification,omitempty"`
+	Name           string              `json:"name"`
+	Phase          string              `json:"phase"`
+	Message        string              `json:"message"`
+	RequestedBy    string              `json:"requestedBy,omitempty"`
+	CreatedAt      string              `json:"createdAt"`
+	CompletionTime string              `json:"completionTime,omitempty"`
 }
 
 // BuildResponse is returned by POST and GET build operations
 type BuildResponse struct {
-	Name           string           `json:"name"`
-	Phase          string           `json:"phase"`
-	Message        string           `json:"message"`
-	RequestedBy    string           `json:"requestedBy,omitempty"`
-	StartTime      string           `json:"startTime,omitempty"`
-	CompletionTime string           `json:"completionTime,omitempty"`
-	ContainerImage string           `json:"containerImage,omitempty"`
-	DiskImage      string           `json:"diskImage,omitempty"`
-	RegistryToken  string           `json:"registryToken,omitempty"`
-	TraceID        string           `json:"traceId,omitempty"`
-	Warning        string           `json:"warning,omitempty"`
-	ExpiresAt      string           `json:"expiresAt,omitempty"`
-	Jumpstarter    *JumpstarterInfo `json:"jumpstarter,omitempty"`
-	Parameters     *BuildParameters `json:"parameters,omitempty"`
+	ExternalID     string              `json:"externalId,omitempty"`
+	Artifacts      []ArtifactStatus    `json:"artifacts,omitempty"`
+	Flash          *FlashOutcomeStatus `json:"flash,omitempty"`
+	Notification   *NotificationStatus `json:"notification,omitempty"`
+	Name           string              `json:"name"`
+	Phase          string              `json:"phase"`
+	Message        string              `json:"message"`
+	RequestedBy    string              `json:"requestedBy,omitempty"`
+	StartTime      string              `json:"startTime,omitempty"`
+	CompletionTime string              `json:"completionTime,omitempty"`
+	ContainerImage string              `json:"containerImage,omitempty"`
+	DiskImage      string              `json:"diskImage,omitempty"`
+	RegistryToken  string              `json:"registryToken,omitempty"`
+	TraceID        string              `json:"traceId,omitempty"`
+	Warning        string              `json:"warning,omitempty"`
+	ExpiresAt      string              `json:"expiresAt,omitempty"`
+	Jumpstarter    *JumpstarterInfo    `json:"jumpstarter,omitempty"`
+	Parameters     *BuildParameters    `json:"parameters,omitempty"`
 }
 
 // BuildParameters describes the key input parameters that produced an ImageBuild.
@@ -347,15 +359,19 @@ type TokenResponse struct {
 
 // BuildListItem represents a build in the list API
 type BuildListItem struct {
-	Name           string `json:"name"`
-	Phase          string `json:"phase"`
-	Message        string `json:"message"`
-	RequestedBy    string `json:"requestedBy,omitempty"`
-	CreatedAt      string `json:"createdAt"`
-	StartTime      string `json:"startTime,omitempty"`
-	CompletionTime string `json:"completionTime,omitempty"`
-	ContainerImage string `json:"containerImage,omitempty"`
-	DiskImage      string `json:"diskImage,omitempty"`
+	ExternalID     string              `json:"externalId,omitempty"`
+	Artifacts      []ArtifactStatus    `json:"artifacts,omitempty"`
+	Flash          *FlashOutcomeStatus `json:"flash,omitempty"`
+	Notification   *NotificationStatus `json:"notification,omitempty"`
+	Name           string              `json:"name"`
+	Phase          string              `json:"phase"`
+	Message        string              `json:"message"`
+	RequestedBy    string              `json:"requestedBy,omitempty"`
+	CreatedAt      string              `json:"createdAt"`
+	StartTime      string              `json:"startTime,omitempty"`
+	CompletionTime string              `json:"completionTime,omitempty"`
+	ContainerImage string              `json:"containerImage,omitempty"`
+	DiskImage      string              `json:"diskImage,omitempty"`
 }
 
 // JumpstarterTarget contains flash-specific config for a target (from CRD)

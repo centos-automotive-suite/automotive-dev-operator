@@ -1,0 +1,21 @@
+{
+  "apiVersion": "notifications.caib.dev/v1alpha1",
+  "id": "event-build-1",
+  "type": "build.terminal",
+  "time": "2026-09-03T10:00:00Z",
+  "build": {
+    "name": "image-build",
+    "externalId": "pipeline-42",
+    "traceId": "0123456789abcdef0123456789abcdef",
+    "phase": "Completed",
+    "message": "Build and flash completed",
+    "startedAt": "2026-09-03T09:00:00Z",
+    "completedAt": "2026-09-03T10:00:00Z",
+    "artifacts": [{
+      "kind": "container",
+      "url": "quay.io/example/os:build-42",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }],
+    "flash": { "enabled": true, "state": "Succeeded", "leaseId": "lease-42" }
+  }
+}

@@ -5,381 +5,1047 @@ info:
 servers:
   - url: /
 paths:
-  /v1/healthz:
-    get:
-      summary: Health check
-      operationId: healthz
-      responses:
-        '200':
-          description: OK
-          content:
-            text/plain:
-              schema:
-                type: string
   /v1/builds:
     get:
-      summary: List builds
       operationId: listBuilds
       responses:
-        '200':
-          description: List of builds
+        "200":
           content:
             application/json:
               schema:
-                type: array
                 items:
                   $ref: '#/components/schemas/BuildListItem'
+                type: array
+          description: List of builds
+      summary: List builds
     post:
-      summary: Create a build
       operationId: createBuild
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/BuildRequest'
+        required: true
       responses:
-        '202':
-          description: Build accepted
+        "202":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BuildResponse'
-        '400':
+          description: Build accepted
+        "400":
           description: Invalid input
+        "413":
+          description: Operation JSON body exceeds 4 MiB
+      summary: Create a build
   /v1/builds/{name}:
-    parameters:
-      - in: path
-        name: name
-        schema:
-          type: string
-        required: true
     get:
-      summary: Get build status
       operationId: getBuild
       responses:
-        '200':
-          description: Build status
+        "200":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BuildResponse'
-        '404':
+          description: Build status
+        "404":
           description: Not found
-  /v1/builds/{name}/logs:
+      summary: Get build status
     parameters:
       - in: path
         name: name
+        required: true
         schema:
           type: string
-        required: true
-      - in: query
-        name: follow
-        schema:
-          type: boolean
-        required: false
-        description: If true, stream logs
+  /v1/builds/{name}/logs:
     get:
-      summary: Stream build logs
       operationId: streamLogs
       responses:
-        '200':
+        "200":
+          content:
+            text/plain:
+              schema:
+                type: string
           description: Log stream
+        "503":
           content:
             text/plain:
               schema:
                 type: string
-        '503':
           description: Logs not available yet
-          content:
-            text/plain:
-              schema:
-                type: string
-  /v1/builds/{name}/uploads:
+      summary: Stream build logs
     parameters:
       - in: path
         name: name
+        required: true
         schema:
           type: string
-        required: true
-    post:
-      summary: Upload local files referenced by manifest
-      operationId: uploadFiles
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                file:
-                  type: string
-                  format: binary
-      responses:
-        '200':
-          description: Upload complete
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-        '503':
-          description: Upload pod not ready
-          content:
-            text/plain:
-              schema:
-                type: string
+      - description: If true, stream logs
+        in: query
+        name: follow
+        required: false
+        schema:
+          type: boolean
   /v1/builds/{name}/progress:
-    parameters:
-      - in: path
-        name: name
-        schema:
-          type: string
-        required: true
     get:
-      summary: Get build progress
-      operationId: getBuildProgress
       description: Returns the current build phase and, for active builds, the latest progress step from build script markers.
+      operationId: getBuildProgress
       responses:
-        '200':
-          description: Build progress
+        "200":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BuildProgress'
-        '404':
+          description: Build progress
+        "404":
           description: Not found
-  /v1/builds/{name}/template:
+      summary: Get build progress
     parameters:
       - in: path
         name: name
+        required: true
         schema:
           type: string
-        required: true
+  /v1/builds/{name}/template:
     get:
-      summary: Get a build's inputs as a template
       operationId: getBuildTemplate
       responses:
-        '200':
-          description: Build template
+        "200":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BuildTemplateResponse'
-        '404':
+          description: Build template
+        "404":
           description: Not found
+      summary: Get a build's inputs as a template
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+  /v1/builds/{name}/uploads:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: uploadFiles
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              properties:
+                file:
+                  format: binary
+                  type: string
+              type: object
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                properties:
+                  status:
+                    type: string
+                type: object
+          description: Upload complete
+        "503":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Upload pod not ready
+      summary: Upload local files referenced by manifest
+  /v1/flash:
+    get:
+      operationId: listFlashes
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/FlashListItem'
+                type: array
+          description: Standalone flashes
+      summary: List standalone flashes
+    post:
+      operationId: createFlash
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlashRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlashResponse'
+          description: Flash accepted
+        "400":
+          description: Invalid input
+        "413":
+          description: Operation JSON body exceeds 4 MiB
+      summary: Create a standalone flash
+  /v1/flash/{name}:
+    get:
+      operationId: getFlash
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlashResponse'
+          description: Flash status
+        "404":
+          description: Not found
+      summary: Get standalone flash status
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+  /v1/healthz:
+    get:
+      operationId: healthz
+      responses:
+        "200":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: OK
+      summary: Health check
 components:
   schemas:
-    BuildRequest:
-      type: object
-      required: [name, manifest]
+    ArtifactStatus:
+      description: ArtifactStatus describes an output actually published by a build stage.
       properties:
-        name:
+        digest:
+          description: Digest is the OCI digest or a checksum of uploaded bytes, never an S3 ETag.
+          pattern: ^sha256:[a-f0-9]{64}$
           type: string
-        manifest:
+        kind:
+          enum:
+            - container
+            - disk
+            - s3
           type: string
-          description: Manifest YAML content
-        manifestFileName:
+        url:
+          maxLength: 2048
+          minLength: 1
           type: string
-          default: manifest.aib.yml
-        distro:
-          type: string
-        target:
-          type: string
-        architecture:
-          type: string
-        exportFormat:
-          type: string
-        mode:
-          type: string
-        automotiveImageBuilder:
-          type: string
-          default: quay.io/centos-sig-automotive/automotive-image-builder:1.3.4
-        storageClass:
-          type: string
-        runtimeClassName:
-          type: string
-        customDefs:
-          type: array
-          items:
-            type: string
-        aibExtraArgs:
-          type: array
-          items:
-            type: string
-        useInternalRegistry:
-          type: boolean
-          description: Push disk images to OpenShift internal registry (mutually exclusive with exportOci; can be combined with containerPush for hybrid builds)
-        internalRegistryImageName:
-          type: string
-          description: Override image name for internal registry (default is build name)
-        internalRegistryTag:
-          type: string
-          description: Tag for internal registry image (default is build name)
-        ttl:
-          type: string
-          description: 'Time-to-live for the build (e.g. "24h", "72h"). Empty uses server default, "0" disables expiry.'
-    BuildResponse:
+      required:
+        - kind
+        - url
       type: object
+    BuildCallback:
+      description: Endpoint and signing key are write-only. No callback URL, key, or backing Secret name is returned in operation responses.
       properties:
-        name:
+        secret:
+          description: Standard base64 of 32–4096 random bytes. Decoded length is validated; bytes are never trimmed.
+          format: byte
+          maxLength: 5464
+          minLength: 44
           type: string
-        phase:
+          writeOnly: true
+        url:
+          format: uri
+          maxLength: 2048
+          pattern: ^https://[^/@#\s]+[^#\s]*$
           type: string
-        message:
-          type: string
-        requestedBy:
-          type: string
-          nullable: true
-        startTime:
-          type: string
-          format: date-time
-          description: When the build started (RFC 3339)
-        completionTime:
-          type: string
-          format: date-time
-          description: When the build completed (RFC 3339)
-        containerImage:
-          type: string
-          description: Container image reference for the built image
-        diskImage:
-          type: string
-          description: Disk image artifact reference
-        registryToken:
-          type: string
-          description: Short-lived token for pulling from internal registry
-        traceId:
-          type: string
-          description: OTel trace ID for cross-pod log and trace correlation
-        warning:
-          type: string
-          description: Non-fatal warnings (e.g. token expiry notices)
-        expiresAt:
-          type: string
-          format: date-time
-          description: When the build will be automatically deleted (RFC 3339)
-        jumpstarter:
-          $ref: '#/components/schemas/JumpstarterInfo'
-        parameters:
-          $ref: '#/components/schemas/BuildParameters'
+          writeOnly: true
+      required:
+        - url
+        - secret
+      type: object
+      writeOnly: true
     BuildListItem:
-      type: object
       properties:
-        name:
-          type: string
-        phase:
-          type: string
-        message:
-          type: string
-        requestedBy:
-          type: string
-          nullable: true
-        createdAt:
-          type: string
-          format: date-time
-        startTime:
-          type: string
-          format: date-time
+        artifacts:
+          items:
+            $ref: '#/components/schemas/ArtifactStatus'
+          maxItems: 64
+          type: array
         completionTime:
-          type: string
           format: date-time
+          type: string
         containerImage:
+          type: string
+        createdAt:
+          format: date-time
           type: string
         diskImage:
           type: string
-    BuildProgress:
-      type: object
-      properties:
+        externalId:
+          $ref: '#/components/schemas/ExternalID'
+        flash:
+          $ref: '#/components/schemas/FlashOutcomeStatus'
+        message:
+          type: string
+        name:
+          type: string
+        notification:
+          $ref: '#/components/schemas/NotificationStatus'
         phase:
+          enum:
+            - Pending
+            - Uploading
+            - Building
+            - Pushing
+            - Flashing
+            - Completed
+            - Failed
+            - Cancelled
+            - Expired
           type: string
-          description: ImageBuild phase (Pending, Building, Completed, Failed, etc.)
-        step:
-          $ref: '#/components/schemas/BuildStep'
-      required:
-        - phase
-    BuildStep:
+        requestedBy:
+          nullable: true
+          type: string
+        startTime:
+          format: date-time
+          type: string
       type: object
-      description: A progress checkpoint emitted by the build script
-      properties:
-        stage:
-          type: string
-          description: Human-readable stage name
-        done:
-          type: integer
-          description: Number of steps completed
-        total:
-          type: integer
-          description: Total number of steps
-      required:
-        - stage
-        - done
-        - total
-    JumpstarterInfo:
-      type: object
-      description: Information about Jumpstarter device flashing availability
-      properties:
-        available:
-          type: boolean
-          description: Whether Jumpstarter is installed in the cluster
-        exporterSelector:
-          type: string
-          description: Label selector for matching Jumpstarter exporters
-        flashCmd:
-          type: string
-          description: Command for flashing the device
-        leaseId:
-          type: string
-          description: Jumpstarter lease ID acquired during flash
     BuildParameters:
-      type: object
       description: Key input parameters that produced an ImageBuild
       properties:
         architecture:
           type: string
-        distro:
-          type: string
-        target:
-          type: string
-        mode:
-          type: string
-        exportFormat:
-          type: string
-        compression:
-          type: string
-        storageClass:
-          type: string
         automotiveImageBuilder:
-          type: string
-        builderImage:
-          type: string
-        containerRef:
           type: string
         buildDiskImage:
           type: boolean
+        builderImage:
+          type: string
+        compression:
+          type: string
+        containerRef:
+          type: string
+        distro:
+          type: string
+        exportFormat:
+          type: string
         flashEnabled:
           type: boolean
         flashLeaseDuration:
           type: string
         flashLeaseName:
           type: string
+        mode:
+          type: string
+        storageClass:
+          type: string
+        target:
+          type: string
         useServiceAccountAuth:
           type: boolean
+      type: object
+    BuildProgress:
+      properties:
+        phase:
+          description: ImageBuild phase (Pending, Building, Completed, Failed, etc.)
+          type: string
+        step:
+          $ref: '#/components/schemas/BuildStep'
+      required:
+        - phase
+      type: object
+    BuildRequest:
+      description: 'Operation request limit: 4 MiB before JSON binding. Correlation and callbacks apply to existing build inputs.'
+      properties:
+        aibExtraArgs:
+          items:
+            type: string
+          nullable: true
+          type: array
+        architecture:
+          type: string
+        automotiveImageBuilder:
+          type: string
+        buildDiskImage:
+          type: boolean
+        builderImage:
+          type: string
+        callback:
+          allOf:
+            - $ref: '#/components/schemas/BuildCallback'
+          writeOnly: true
+        compression:
+          type: string
+        containerPush:
+          type: string
+        containerRef:
+          type: string
+        customDefs:
+          items:
+            type: string
+          nullable: true
+          type: array
+        distro:
+          type: string
+        exportFormat:
+          type: string
+        exportOci:
+          type: string
+        externalId:
+          $ref: '#/components/schemas/ExternalID'
+        extraRepos:
+          items:
+            type: string
+          type: array
+        flashClientConfig:
+          type: string
+          writeOnly: true
+        flashCmd:
+          type: string
+        flashEnabled:
+          type: boolean
+        flashExporterSelector:
+          type: string
+        flashLeaseDuration:
+          type: string
+        flashLeaseName:
+          type: string
+        flashLeaseTags:
+          type: string
+        hasLocalFiles:
+          type: boolean
+        internalRegistryImageName:
+          description: Override image name for internal registry (default is build name)
+          type: string
+        internalRegistryTag:
+          description: Tag for internal registry image (default is build name)
+          type: string
+        localRepo:
+          type: boolean
+        manifest:
+          description: Inline AIB YAML. Maximum 900 KiB UTF-8 bytes.
+          maxLength: 921600
+          type: string
+        manifestFileName:
+          default: manifest.aib.yml
+          type: string
+        mode:
+          description: Omission uses the server default.
+          enum:
+            - package
+            - image
+            - bootc
+            - disk
+            - ""
+          type: string
+        name:
+          type: string
+        ociRepoImages:
+          items:
+            type: string
+          type: array
+        pushRepository:
+          type: string
+        rebuildBuilder:
+          type: boolean
+        registryCredentials:
+          allOf:
+            - $ref: '#/components/schemas/RegistryCredentials'
+          writeOnly: true
+        reproducible:
+          type: boolean
+        restoreSourcesRef:
+          type: string
+        rootPassword:
+          type: string
+          writeOnly: true
+        s3Bucket:
+          type: string
+        s3Credentials:
+          allOf:
+            - $ref: '#/components/schemas/S3Credentials'
+          writeOnly: true
+        s3CredentialsSecretName:
+          type: string
+        s3Endpoint:
+          type: string
+        s3InsecureSkipTLSVerify:
+          type: boolean
+        s3Prefix:
+          type: string
+        s3Region:
+          type: string
+        secureBuild:
+          type: boolean
+        storageClass:
+          type: string
+        target:
+          type: string
+        taskBundleRef:
+          type: string
+        ttl:
+          description: Time-to-live for the build (e.g. "24h", "72h"). Empty uses server default, "0" disables expiry.
+          type: string
+        useInternalRegistry:
+          description: Push disk images to OpenShift internal registry (mutually exclusive with exportOci; can be combined with containerPush for hybrid builds)
+          type: boolean
+        workspace:
+          type: string
+      required:
+        - name
+      type: object
+    BuildResponse:
+      description: Newly accepted builds report Pending. Outcomes are populated as work completes.
+      properties:
+        artifacts:
+          items:
+            $ref: '#/components/schemas/ArtifactStatus'
+          maxItems: 64
+          type: array
+        completionTime:
+          description: When the build completed (RFC 3339)
+          format: date-time
+          type: string
+        containerImage:
+          description: Container image reference for the built image
+          type: string
+        diskImage:
+          description: Disk image artifact reference
+          type: string
+        expiresAt:
+          description: When terminal build resources expire. The ImageBuild and its terminal result remain.
+          format: date-time
+          type: string
+        externalId:
+          $ref: '#/components/schemas/ExternalID'
+        flash:
+          $ref: '#/components/schemas/FlashOutcomeStatus'
+        jumpstarter:
+          $ref: '#/components/schemas/JumpstarterInfo'
+        message:
+          type: string
+        name:
+          type: string
+        notification:
+          $ref: '#/components/schemas/NotificationStatus'
+        parameters:
+          $ref: '#/components/schemas/BuildParameters'
+        phase:
+          enum:
+            - Pending
+            - Uploading
+            - Building
+            - Pushing
+            - Flashing
+            - Completed
+            - Failed
+            - Cancelled
+            - Expired
+          type: string
+        registryToken:
+          description: Short-lived token for pulling from internal registry
+          type: string
+        requestedBy:
+          nullable: true
+          type: string
+        startTime:
+          description: When the build started (RFC 3339)
+          format: date-time
+          type: string
+        traceId:
+          description: OTel trace ID for cross-pod log and trace correlation
+          type: string
+        warning:
+          description: Non-fatal warnings (e.g. token expiry notices)
+          type: string
+      type: object
+    BuildStep:
+      description: A progress checkpoint emitted by the build script
+      properties:
+        done:
+          description: Number of steps completed
+          type: integer
+        stage:
+          description: Human-readable stage name
+          type: string
+        total:
+          description: Total number of steps
+          type: integer
+      required:
+        - stage
+        - done
+        - total
+      type: object
     BuildTemplateResponse:
       allOf:
-        - $ref: '#/components/schemas/BuildRequest'
-        - type: object
-          properties:
-            sourceFiles:
-              type: array
+        - properties:
+            aibExtraArgs:
               items:
                 type: string
-            phase:
+              type: array
+            architecture:
+              type: string
+            automotiveImageBuilder:
+              type: string
+            buildDiskImage:
+              type: boolean
+            builderImage:
+              type: string
+            compression:
+              type: string
+            containerPush:
+              type: string
+            containerRef:
+              type: string
+            customDefs:
+              items:
+                type: string
+              type: array
+            distro:
+              type: string
+            exportFormat:
+              type: string
+            exportOci:
+              type: string
+            externalId:
+              $ref: '#/components/schemas/ExternalID'
+            extraRepos:
+              items:
+                type: string
+              type: array
+            flashCmd:
+              type: string
+            flashEnabled:
+              type: boolean
+            flashExporterSelector:
+              type: string
+            flashLeaseDuration:
+              type: string
+            flashLeaseName:
+              type: string
+            flashLeaseTags:
+              type: string
+            hasLocalFiles:
+              type: boolean
+            internalRegistryImageName:
+              description: Override image name for internal registry (default is build name)
+              type: string
+            internalRegistryTag:
+              description: Tag for internal registry image (default is build name)
+              type: string
+            localRepo:
+              type: boolean
+            manifest:
+              description: Inline AIB YAML. Maximum 900 KiB UTF-8 bytes.
+              maxLength: 921600
+              type: string
+            manifestFileName:
+              default: manifest.aib.yml
+              type: string
+            mode:
+              description: Omission uses the server default.
+              enum:
+                - package
+                - image
+                - bootc
+                - disk
+              type: string
+            name:
+              type: string
+            ociRepoImages:
+              items:
+                type: string
+              type: array
+            pushRepository:
+              type: string
+            rebuildBuilder:
+              type: boolean
+            reproducible:
+              type: boolean
+            restoreSourcesRef:
+              type: string
+            s3Bucket:
+              type: string
+            s3CredentialsSecretName:
+              type: string
+            s3Endpoint:
+              type: string
+            s3InsecureSkipTLSVerify:
+              type: boolean
+            s3Prefix:
+              type: string
+            s3Region:
+              type: string
+            secureBuild:
+              type: boolean
+            storageClass:
+              type: string
+            target:
+              type: string
+            taskBundleRef:
+              type: string
+            ttl:
+              description: Time-to-live for the build (e.g. "24h", "72h"). Empty uses server default, "0" disables expiry.
+              type: string
+            useInternalRegistry:
+              description: Push disk images to OpenShift internal registry (mutually exclusive with exportOci; can be combined with containerPush for hybrid builds)
+              type: boolean
+            workspace:
+              type: string
+          type: object
+        - properties:
+            createdAt:
+              format: date-time
               type: string
             message:
               type: string
-            createdAt:
+            phase:
               type: string
-              format: date-time
-
+            sourceFiles:
+              items:
+                type: string
+              type: array
+          type: object
+    BuildTerminalEvent:
+      properties:
+        artifacts:
+          items:
+            $ref: '#/components/schemas/ArtifactStatus'
+          maxItems: 64
+          type: array
+        completedAt:
+          format: date-time
+          type: string
+        externalId:
+          $ref: '#/components/schemas/ExternalID'
+        flash:
+          $ref: '#/components/schemas/FlashOutcomeStatus'
+        message:
+          maxLength: 1024
+          type: string
+        name:
+          maxLength: 253
+          minLength: 1
+          type: string
+        phase:
+          enum:
+            - Completed
+            - Failed
+            - Cancelled
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        traceId:
+          type: string
+      required:
+        - name
+        - completedAt
+        - message
+        - phase
+      type: object
+    BuildTerminalResult:
+      description: BuildTerminalResult remains unchanged when the display phase later becomes Expired.
+      properties:
+        artifacts:
+          items:
+            $ref: '#/components/schemas/ArtifactStatus'
+          maxItems: 64
+          type: array
+        completedAt:
+          format: date-time
+          type: string
+        flash:
+          $ref: '#/components/schemas/FlashOutcomeStatus'
+        message:
+          maxLength: 1024
+          type: string
+        phase:
+          enum:
+            - Completed
+            - Failed
+            - Cancelled
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+      required:
+        - completedAt
+        - message
+        - phase
+      type: object
+    ExternalID:
+      description: Opaque caller correlation value; maximum 512 UTF-8 bytes.
+      maxLength: 512
+      pattern: ^[^\x00-\x1f\x7f]*$
+      type: string
+    FlashListItem:
+      properties:
+        completionTime:
+          type: string
+        createdAt:
+          type: string
+        externalId:
+          $ref: '#/components/schemas/ExternalID'
+        message:
+          type: string
+        name:
+          type: string
+        notification:
+          $ref: '#/components/schemas/NotificationStatus'
+        phase:
+          type: string
+        requestedBy:
+          type: string
+      type: object
+    FlashOutcomeStatus:
+      description: FlashOutcomeStatus excludes device credentials and command configuration.
+      properties:
+        enabled:
+          type: boolean
+        leaseId:
+          maxLength: 253
+          type: string
+        message:
+          maxLength: 1024
+          type: string
+        state:
+          enum:
+            - NotStarted
+            - Running
+            - Succeeded
+            - Failed
+            - Cancelled
+          type: string
+      required:
+        - enabled
+        - state
+      type: object
+    FlashRequest:
+      properties:
+        callback:
+          allOf:
+            - $ref: '#/components/schemas/BuildCallback'
+          writeOnly: true
+        catalogImage:
+          type: string
+        clientConfig:
+          type: string
+          writeOnly: true
+        exporterSelector:
+          type: string
+        externalId:
+          $ref: '#/components/schemas/ExternalID'
+        flashCmd:
+          type: string
+        imageRef:
+          type: string
+        leaseDuration:
+          type: string
+        leaseName:
+          type: string
+        leaseTags:
+          type: string
+        name:
+          type: string
+        registryCredentials:
+          allOf:
+            - $ref: '#/components/schemas/RegistryCredentials'
+          writeOnly: true
+        target:
+          type: string
+      required:
+        - clientConfig
+      type: object
+    FlashResponse:
+      properties:
+        completionTime:
+          type: string
+        externalId:
+          $ref: '#/components/schemas/ExternalID'
+        leaseId:
+          type: string
+        message:
+          type: string
+        name:
+          type: string
+        notification:
+          $ref: '#/components/schemas/NotificationStatus'
+        phase:
+          type: string
+        requestedBy:
+          type: string
+        startTime:
+          type: string
+        taskRunName:
+          type: string
+      type: object
+    FlashTerminalEvent:
+      properties:
+        completedAt:
+          format: date-time
+          type: string
+        externalId:
+          $ref: '#/components/schemas/ExternalID'
+        imageRef:
+          maxLength: 2048
+          type: string
+        leaseId:
+          maxLength: 253
+          type: string
+        message:
+          maxLength: 1024
+          type: string
+        name:
+          maxLength: 253
+          minLength: 1
+          type: string
+        phase:
+          enum:
+            - Completed
+            - Failed
+            - Cancelled
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        traceId:
+          type: string
+      required:
+        - name
+        - phase
+        - message
+        - imageRef
+        - completedAt
+      type: object
+    JumpstarterInfo:
+      description: Information about Jumpstarter device flashing availability
+      properties:
+        available:
+          description: Whether Jumpstarter is installed in the cluster
+          type: boolean
+        exporterSelector:
+          description: Label selector for matching Jumpstarter exporters
+          type: string
+        flashCmd:
+          description: Command for flashing the device
+          type: string
+        leaseId:
+          description: Jumpstarter lease ID acquired during flash
+          type: string
+      type: object
+    NotificationStatus:
+      properties:
+        attempts:
+          format: int32
+          maximum: 1000
+          minimum: 0
+          type: integer
+        completionTime:
+          format: date-time
+          type: string
+        lastAttemptTime:
+          format: date-time
+          type: string
+        lastError:
+          description: Sanitized diagnostic; never an HTTP response body or raw transport error.
+          maxLength: 1024
+          type: string
+        lastHttpStatus:
+          maximum: 599
+          minimum: 100
+          type: integer
+        nextAttemptTime:
+          format: date-time
+          type: string
+        state:
+          enum:
+            - Pending
+            - Delivering
+            - Delivered
+            - Failed
+          type: string
+      required:
+        - state
+        - attempts
+      type: object
+    RegistryCredentials:
+      properties:
+        authType:
+          type: string
+        dockerConfig:
+          type: string
+        enabled:
+          type: boolean
+        password:
+          type: string
+        registryUrl:
+          type: string
+        token:
+          type: string
+        username:
+          type: string
+      type: object
+    S3Credentials:
+      properties:
+        accessKeyId:
+          type: string
+        secretAccessKey:
+          type: string
+      type: object
+    TerminalEvent:
+      description: 'Maximum encoded JSON payload: 256 KiB. A stable event ID and exact payload bytes are reused on every delivery attempt. Expiry does not produce another terminal event.'
+      oneOf:
+        - not:
+            anyOf:
+              - required:
+                  - flash
+          properties:
+            type:
+              enum:
+                - build.terminal
+              type: string
+          required:
+            - build
+        - not:
+            anyOf:
+              - required:
+                  - build
+          properties:
+            type:
+              enum:
+                - flash.terminal
+              type: string
+          required:
+            - flash
+      properties:
+        apiVersion:
+          enum:
+            - notifications.caib.dev/v1alpha1
+          type: string
+        build:
+          $ref: '#/components/schemas/BuildTerminalEvent'
+        flash:
+          $ref: '#/components/schemas/FlashTerminalEvent'
+        id:
+          maxLength: 128
+          minLength: 1
+          type: string
+        time:
+          format: date-time
+          type: string
+        type:
+          enum:
+            - build.terminal
+            - flash.terminal
+          type: string
+      required:
+        - apiVersion
+        - id
+        - type
+        - time
+      type: object
