@@ -251,7 +251,7 @@ spec:
               "${ARTIFACT}" \
               --output - | tar xz -C /var/workdir/source
         - name: prepare-bundle
-          image: registry.access.redhat.com/ubi10/go-toolset:10.2-1787080020
+          image: registry.access.redhat.com/ubi10/go-toolset:10.2-1788411200
           securityContext:
             runAsUser: 0
           script: |
