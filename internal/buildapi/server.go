@@ -820,7 +820,8 @@ func (a *APIServer) setupInternalRegistryBuild(
 
 // buildExportSpec creates ExportSpec configuration from build request
 // resolveExtraRepos processes --extra-repo flags (workspace:path pairs), starts HTTP
-// servers in the workspace pods, and injects extra_repos into the build's CustomDefs.
+// servers in the workspace pods, and injects the repos into the image and build
+// depsolver CustomDefs.
 func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, req *BuildRequest) error {
 	if len(req.ExtraRepos) == 0 {
 		return nil
@@ -881,8 +882,16 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 	if err != nil {
 		return fmt.Errorf("marshaling extra_repos: %w", err)
 	}
-	req.CustomDefs = append(req.CustomDefs, fmt.Sprintf("extra_repos=%s", string(reposJSON)))
+	appendWorkspaceRepoCustomDefs(req, reposJSON)
 	return nil
+}
+
+func appendWorkspaceRepoCustomDefs(req *BuildRequest, reposJSON []byte) {
+	repos := string(reposJSON)
+	req.CustomDefs = append(req.CustomDefs,
+		fmt.Sprintf("extra_repos=%s", repos),
+		fmt.Sprintf("extra_build_repos=%s", repos),
+	)
 }
 
 // resolveOCIRepoImages validates the OCI repo image ref and injects a file:// extra_repos
