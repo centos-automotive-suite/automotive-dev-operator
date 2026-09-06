@@ -1541,6 +1541,37 @@ func TestUpdateStatusSetsCompletionTime(t *testing.T) {
 	}
 }
 
+func TestUpdateStatusSkipsLiveResultCollection(t *testing.T) {
+	ib := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: "test-ns"},
+		Status: automotivev1alpha1.ImageBuildStatus{
+			Phase: phaseBuilding, PipelineRunName: "pipeline",
+		},
+	}
+	scheme := newTestSchemeWithTekton()
+	collected := false
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ib).
+		WithStatusSubresource(ib).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*tektonv1.PipelineRun); ok {
+					collected = true
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	r := &ImageBuildReconciler{Client: fakeClient, Scheme: scheme}
+
+	if err := r.updateStatus(context.Background(), ib, phaseBuilding, "Building"); err != nil {
+		t.Fatal(err)
+	}
+	if collected {
+		t.Fatal("heartbeat collected PipelineRun results")
+	}
+}
+
 func TestVerifiedBundlesCacheHitSkipsLookup(t *testing.T) {
 	const ref = "registry.example.com/bundle@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 

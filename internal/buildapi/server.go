@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -43,6 +44,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -617,6 +619,20 @@ func (a *APIServer) deleteBuild(c *gin.Context, name string) {
 	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("build %q deleted", name)})
 }
 
+func cancellationRejection(build *automotivev1alpha1.ImageBuild, requester string, cancelledIsSuccess bool) (int, string) {
+	if build.Annotations[labels.RequestedBy] != requester {
+		return http.StatusForbidden, "you can only cancel your own builds"
+	}
+	if build.Status.Phase == phaseCancelled && cancelledIsSuccess {
+		return 0, ""
+	}
+	switch build.Status.Phase {
+	case "", phasePending, phaseUploading, phaseBuilding, phasePushing, phaseFlashing:
+		return 0, ""
+	}
+	return http.StatusConflict, fmt.Sprintf("build is in %q phase and cannot be cancelled", build.Status.Phase)
+}
+
 func (a *APIServer) cancelBuild(c *gin.Context, name string) {
 	k8sClient, err := getK8sClientOrFail(c)
 	if err != nil {
@@ -632,19 +648,8 @@ func (a *APIServer) cancelBuild(c *gin.Context, name string) {
 	}
 
 	requester := a.resolveRequester(c)
-	owner := build.Annotations[labels.RequestedBy]
-	if owner != requester {
-		c.JSON(http.StatusForbidden, gin.H{"error": "you can only cancel your own builds"})
-		return
-	}
-
-	switch build.Status.Phase {
-	case "", phasePending, phaseUploading, phaseBuilding, phasePushing, phaseFlashing:
-		// cancellable
-	default:
-		c.JSON(http.StatusConflict, gin.H{
-			"error": fmt.Sprintf("build is in %q phase and cannot be cancelled", build.Status.Phase),
-		})
+	if status, message := cancellationRejection(build, requester, false); status != 0 {
+		c.JSON(status, gin.H{"error": message})
 		return
 	}
 
@@ -656,12 +661,12 @@ func (a *APIServer) cancelBuild(c *gin.Context, name string) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching PipelineRun: %v", err)})
 				return
 			}
-		} else if pipelineRun.Status.CompletionTime != nil {
+		} else if pipelineRun.Status.CompletionTime != nil && build.Status.Phase != phasePushing && build.Status.Phase != phaseFlashing {
 			c.JSON(http.StatusConflict, gin.H{
 				"error": "build has already completed; refresh and retry",
 			})
 			return
-		} else {
+		} else if pipelineRun.Status.CompletionTime == nil {
 			pipelineRun.Spec.Status = tektonv1.PipelineRunSpecStatusCancelled
 			if err := k8sClient.Update(ctx, pipelineRun); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to cancel PipelineRun: %v", err)})
@@ -670,19 +675,40 @@ func (a *APIServer) cancelBuild(c *gin.Context, name string) {
 		}
 	}
 
-	build.Status.Phase = phaseCancelled
-	build.Status.Message = "Build cancelled by user"
-	now := metav1.Now()
-	if build.Status.CompletionTime == nil {
-		build.Status.CompletionTime = &now
+	if build.Annotations == nil {
+		build.Annotations = map[string]string{}
 	}
-	if err := k8sClient.Status().Update(ctx, build); err != nil {
-		// Controller may have already set phase to Cancelled after seeing the PipelineRun cancel
-		if k8serrors.IsConflict(err) {
-			c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("build %q cancelled", name)})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update build status: %v", err)})
+	build.Annotations[terminal.CancellationAnnotation] = labels.ValueTrue
+	err = k8sClient.Update(ctx, build)
+	var retryStatus int
+	var retryMessage string
+	if k8serrors.IsConflict(err) {
+		key := client.ObjectKeyFromObject(build)
+		err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			fresh := &automotivev1alpha1.ImageBuild{}
+			if err := k8sClient.Get(ctx, key, fresh); err != nil {
+				return err
+			}
+			retryStatus, retryMessage = cancellationRejection(fresh, requester, true)
+			if retryStatus != 0 {
+				return nil
+			}
+			if fresh.Status.Phase == phaseCancelled {
+				return nil
+			}
+			if fresh.Annotations == nil {
+				fresh.Annotations = map[string]string{}
+			}
+			fresh.Annotations[terminal.CancellationAnnotation] = labels.ValueTrue
+			return k8sClient.Update(ctx, fresh)
+		})
+	}
+	if retryStatus != 0 {
+		c.JSON(retryStatus, gin.H{"error": retryMessage})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to request cancellation: %v", err)})
 		return
 	}
 
@@ -1565,6 +1591,9 @@ func listBuilds(c *gin.Context) {
 			containerImage = b.Spec.GetContainerPush()
 			diskImage = b.Spec.GetExportOCI()
 		}
+		if b.Status.TerminalResult != nil {
+			containerImage, diskImage = storedArtifactURLs(&b)
+		}
 		if b.Spec.GetUseServiceAccountAuth() && externalRoute != "" {
 			if containerImage != "" {
 				containerImage = translateToExternalURL(containerImage, externalRoute)
@@ -1575,6 +1604,7 @@ func listBuilds(c *gin.Context) {
 		}
 
 		resp = append(resp, BuildListItem{
+			ExternalID: b.Spec.ExternalID, Artifacts: storedArtifacts(&b), Flash: storedFlash(&b),
 			Name:           b.Name,
 			Phase:          b.Status.Phase,
 			Message:        b.Status.Message,
@@ -1608,6 +1638,9 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 	if buildProducedArtifacts(build) {
 		containerImage = build.Spec.GetContainerPush()
 		diskImage = build.Spec.GetExportOCI()
+	}
+	if build.Status.TerminalResult != nil {
+		containerImage, diskImage = storedArtifactURLs(build)
 	}
 	var warning string
 
@@ -1686,6 +1719,7 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 	}
 
 	writeJSON(c, http.StatusOK, BuildResponse{
+		ExternalID: build.Spec.ExternalID, Artifacts: storedArtifacts(build), Flash: storedFlash(build),
 		Name:        build.Name,
 		Phase:       build.Status.Phase,
 		Message:     build.Status.Message,

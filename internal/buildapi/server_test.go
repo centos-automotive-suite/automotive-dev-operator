@@ -24,6 +24,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
@@ -645,9 +646,53 @@ var _ = Describe("APIServer", func() {
 			Expect(fakeClient.Get(context.Background(), types.NamespacedName{
 				Name: "my-build", Namespace: testNamespace,
 			}, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal("Cancelled"))
-			Expect(updated.Status.Message).To(Equal("Build cancelled by user"))
-			Expect(updated.Status.CompletionTime).NotTo(BeNil())
+			Expect(updated.Status.Phase).To(Equal("Pending"))
+			Expect(updated.Annotations["automotive.sdv.cloud.redhat.com/cancel-requested"]).To(Equal("true"))
+			Expect(updated.Status.CompletionTime).To(BeNil())
+		})
+
+		It("should retry a conflicting cancellation annotation update", func() {
+			build := newCancelTestBuild("Pending", "")
+			baseClient := newCancelFakeClient(build)
+			updateAttempts := 0
+			fakeClient := interceptor.NewClient(baseClient.(ctrlclient.WithWatch), interceptor.Funcs{
+				Update: func(ctx context.Context, c ctrlclient.WithWatch, obj ctrlclient.Object, opts ...ctrlclient.UpdateOption) error {
+					if _, ok := obj.(*automotivev1alpha1.ImageBuild); ok {
+						updateAttempts++
+						if updateAttempts == 1 {
+							fresh := &automotivev1alpha1.ImageBuild{}
+							if err := c.Get(ctx, ctrlclient.ObjectKeyFromObject(obj), fresh); err != nil {
+								return err
+							}
+							fresh.Status.Message = "reconciled concurrently"
+							if err := c.Status().Update(ctx, fresh); err != nil {
+								return err
+							}
+							return k8serrors.NewConflict(schema.GroupResource{
+								Group: automotivev1alpha1.GroupVersion.Group, Resource: "imagebuilds",
+							}, obj.GetName(), fmt.Errorf("reconciled concurrently"))
+						}
+					}
+					return c.Update(ctx, obj, opts...)
+				},
+			})
+			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+				return fakeClient, nil
+			}
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds/my-build/cancel", nil)
+			c.Set("requester", "alice")
+
+			server.cancelBuild(c, "my-build")
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(updateAttempts).To(Equal(2))
+			updated := &automotivev1alpha1.ImageBuild{}
+			Expect(baseClient.Get(context.Background(), ctrlclient.ObjectKeyFromObject(build), updated)).To(Succeed())
+			Expect(updated.Annotations[terminal.CancellationAnnotation]).To(Equal("true"))
+			Expect(updated.Status.Message).To(Equal("reconciled concurrently"))
 		})
 
 		It("should return 409 when PipelineRun already completed", func() {
@@ -714,8 +759,9 @@ var _ = Describe("APIServer", func() {
 			Expect(fakeClient.Get(context.Background(), types.NamespacedName{
 				Name: "my-build", Namespace: testNamespace,
 			}, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal("Cancelled"))
-			Expect(updated.Status.CompletionTime).NotTo(BeNil())
+			Expect(updated.Status.Phase).To(Equal("Building"))
+			Expect(updated.Annotations["automotive.sdv.cloud.redhat.com/cancel-requested"]).To(Equal("true"))
+			Expect(updated.Status.CompletionTime).To(BeNil())
 		})
 	})
 
