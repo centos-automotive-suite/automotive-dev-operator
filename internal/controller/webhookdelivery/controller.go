@@ -40,8 +40,12 @@ const (
 // Reconciler manages delivery intent and frozen event snapshots.
 type Reconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Log    logr.Logger
+	Scheme    *runtime.Scheme
+	Log       logr.Logger
+	sender    sender
+	now       func() time.Time
+	backoff   func(int32) time.Duration
+	configKey types.NamespacedName
 }
 
 type subjectReconciler struct {
@@ -81,9 +85,11 @@ func deliveryPreparationComplete(delivery *automotivev1alpha1.WebhookDelivery) b
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=webhookdeliveries,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=webhookdeliveries/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagebuilds,verbs=get;list;watch
+// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=operatorconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=taskruns,verbs=get;list;watch
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=taskruns/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=get
 
 func (r *subjectReconciler) Reconcile(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
 	switch r.kind {
@@ -438,9 +444,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	secretPredicate := predicate.NewPredicateFuncs(func(object client.Object) bool {
 		return object.GetLabels()[notifications.LabelCallbackSecret] == labels.ValueTrue
 	})
-	return ctrl.NewControllerManagedBy(mgr).
+	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("callback-secret-recovery").
 		WithOptions(options).
 		For(&corev1.Secret{}, builder.WithPredicates(secretPredicate)).
-		Complete(&callbackSecretReconciler{Reconciler: r})
+		Complete(&callbackSecretReconciler{Reconciler: r}); err != nil {
+		return err
+	}
+	return r.setupDeliverySender(mgr, options)
 }
