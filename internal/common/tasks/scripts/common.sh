@@ -6,15 +6,19 @@ set -e
 
 emit_progress() {
   local stage="$1" done="$2" total="$3"
-  # Run in background to avoid blocking the build on API server round-trip
-  (curl -s --connect-timeout 3 --max-time 5 \
+  # Serialize checkpoints so a delayed update cannot overwrite a newer stage,
+  # and finish the final update before the task exits. Failure must not fail a build.
+  if ! curl --fail --silent --show-error --connect-timeout 2 --max-time 3 \
+    --retry 2 --retry-delay 1 --retry-max-time 10 --retry-connrefused \
     --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
     -X PATCH \
     -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
     -H "Content-Type: application/merge-patch+json" \
     "https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)/pods/${HOSTNAME}" \
     -d "{\"metadata\":{\"annotations\":{\"automotive.sdv.cloud.redhat.com/progress\":\"${stage}|${done}|${total}\"}}}" \
-    > /dev/null 2>&1 || true) &
+    > /dev/null; then
+    echo "Warning: could not report build progress: $stage" >&2
+  fi
 }
 
 write_result() {
