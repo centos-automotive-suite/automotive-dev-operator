@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dlclark/regexp2"
+	"github.com/dlclark/regexp2/v2"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"golang.org/x/text/language"
