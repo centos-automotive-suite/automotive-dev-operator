@@ -158,11 +158,21 @@ rules:
   - images/status
   - operatorconfigs/status
   - scheduledimagebuilds/status
+  - webhookdeliveries/status
   - workspaces/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - webhookdeliveries
+  verbs:
+  - create
+  - get
+  - list
+  - watch
 - apiGroups:
   - image.openshift.io
   resources:
@@ -255,3 +265,9 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - tekton.dev
+  resources:
+  - taskruns/finalizers
+  verbs:
+  - update

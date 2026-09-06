@@ -54,6 +54,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/imagereseal"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/operatorconfig"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/scheduledimagebuild"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/webhookdelivery"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/workspace"
 	// +kubebuilder:scaffold:imports
 )
@@ -268,6 +269,16 @@ func main() {
 
 		if err = imageBuildReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "ImageBuild")
+			os.Exit(1)
+		}
+
+		webhookDeliveryReconciler := &webhookdelivery.Reconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+			Log:    ctrl.Log.WithName("controllers").WithName("WebhookDelivery"),
+		}
+		if err = webhookDeliveryReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "WebhookDelivery")
 			os.Exit(1)
 		}
 
