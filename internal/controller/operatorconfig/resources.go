@@ -512,6 +512,16 @@ func (r *OperatorConfigReconciler) buildBuildControllerClusterRole() *rbacv1.Clu
 				Resources: []string{"imagebuilds/finalizers"},
 				Verbs:     []string{"update"},
 			},
+			{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"webhookdeliveries"},
+				Verbs:     []string{"get", "list", "watch", "create"},
+			},
+			{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"webhookdeliveries/status"},
+				Verbs:     []string{"get", "update", "patch"},
+			},
 			// Image controller RBAC
 			{
 				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
@@ -638,6 +648,11 @@ func (r *OperatorConfigReconciler) buildBuildControllerClusterRole() *rbacv1.Clu
 				APIGroups: []string{"tekton.dev"},
 				Resources: []string{"tasks", "pipelines", "pipelineruns", "taskruns"},
 				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+			},
+			{
+				APIGroups: []string{"tekton.dev"},
+				Resources: []string{"taskruns/finalizers"},
+				Verbs:     []string{"update"},
 			},
 			// ContainerBuild controller RBAC
 			{

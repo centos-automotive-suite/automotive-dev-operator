@@ -278,4 +278,25 @@ var _ = Describe("OperatorConfig Resources", func() {
 			Expect(foundWatchNamespace).To(BeTrue(), "WATCH_NAMESPACE environment variable should be present")
 		})
 	})
+
+	Describe("buildBuildControllerClusterRole", func() {
+		It("should grant webhook delivery controller permissions", func() {
+			role := r.buildBuildControllerClusterRole()
+			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"webhookdeliveries"},
+				Verbs:     []string{"get", "list", "watch", "create"},
+			}))
+			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
+				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
+				Resources: []string{"webhookdeliveries/status"},
+				Verbs:     []string{"get", "update", "patch"},
+			}))
+			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
+				APIGroups: []string{"tekton.dev"},
+				Resources: []string{"taskruns/finalizers"},
+				Verbs:     []string{"update"},
+			}))
+		})
+	})
 })
