@@ -39,6 +39,9 @@ var (
 	version                string
 	compressionAlgo        string
 	authToken              string
+	externalID             string
+	callbackURL            string
+	callbackSecretFile     string
 
 	containerPush    string
 	buildDiskImage   bool

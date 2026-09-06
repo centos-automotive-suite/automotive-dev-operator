@@ -61,7 +61,6 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 				fmt.Errorf("timed out waiting for build %s", name),
 				"caib image show "+name,
 			)
-			h.handleError(timeoutErr)
 			return timeoutErr
 		case <-ticker.C:
 			reqCtx, cancelReq := context.WithTimeout(timeoutCtx, 2*time.Minute)
@@ -141,18 +140,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 			}
 			if st.Phase == phaseFailed {
 				pb.Clear()
-				isFlashFailure := strings.Contains(strings.ToLower(st.Message), errPrefixFlash) ||
-					lastPhase == phaseFlashing
-
-				handleErr := fmt.Errorf("%s", st.Message)
-				hasImage := st.DiskImage != "" || st.ContainerImage != ""
-				if hasImage && isFlashFailure {
-					h.displayBuildResults(ctx, api, name)
-					h.handleFlashError(handleErr, st)
-				} else {
-					h.handleError(handleErr)
-				}
-				return handleErr
+				return fmt.Errorf("%s", st.Message)
 			}
 
 			if !*h.opts.FollowLogs || streamState.Active {
@@ -317,8 +305,5 @@ func (h *Handler) RunLogs(_ *cobra.Command, args []string) {
 	}
 
 	*h.opts.FollowLogs = true
-	if err := h.waitForBuildCompletion(ctx, api, name); err != nil {
-		return
-	}
-	h.displayBuildResults(ctx, api, name)
+	h.finishBuild(ctx, api, name, true)
 }

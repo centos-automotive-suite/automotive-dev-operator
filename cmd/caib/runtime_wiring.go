@@ -37,6 +37,9 @@ type runtimeState struct {
 	FollowLogs             *bool
 	CompressionAlgo        *string
 	AuthToken              *string
+	ExternalID             *string
+	CallbackURL            *string
+	CallbackSecretFile     *string
 
 	ContainerPush    *string
 	BuildDiskImage   *bool
@@ -115,6 +118,9 @@ func newRuntimeState() runtimeState {
 		FollowLogs:             &followLogs,
 		CompressionAlgo:        &compressionAlgo,
 		AuthToken:              &authToken,
+		ExternalID:             &externalID,
+		CallbackURL:            &callbackURL,
+		CallbackSecretFile:     &callbackSecretFile,
 
 		ContainerPush:    &containerPush,
 		BuildDiskImage:   &buildDiskImage,
@@ -204,6 +210,9 @@ func (s runtimeState) newHandlers() handlerSet {
 			FollowLogs:                s.FollowLogs,
 			CompressionAlgo:           s.CompressionAlgo,
 			AuthToken:                 s.AuthToken,
+			ExternalID:                s.ExternalID,
+			CallbackURL:               s.CallbackURL,
+			CallbackSecretFile:        s.CallbackSecretFile,
 			ContainerPush:             s.ContainerPush,
 			BuildDiskImage:            s.BuildDiskImage,
 			DiskFormat:                s.DiskFormat,
@@ -254,21 +263,25 @@ func (s runtimeState) newHandlers() handlerSet {
 			HandleError:     handleError,
 		}),
 		flash: flashcmd.NewHandler(flashcmd.Options{
-			ServerURL:         s.ServerURL,
-			AuthToken:         s.AuthToken,
-			JumpstarterClient: s.JumpstarterClient,
-			FlashName:         s.FlashName,
-			Target:            s.Target,
-			ExporterSelector:  s.ExporterSelector,
-			LeaseDuration:     s.LeaseDuration,
-			LeaseName:         s.LeaseName,
-			FlashCmd:          s.FlashCmd,
-			LeaseTags:         s.LeaseTags,
-			WaitForBuild:      s.WaitForBuild,
-			FollowLogs:        s.FollowLogs,
-			InsecureSkipTLS:   s.InsecureSkipTLS,
-			RegistryAuthFile:  s.RegistryAuthFile,
-			HandleError:       handleError,
+			ServerURL:          s.ServerURL,
+			AuthToken:          s.AuthToken,
+			JumpstarterClient:  s.JumpstarterClient,
+			FlashName:          s.FlashName,
+			Target:             s.Target,
+			ExporterSelector:   s.ExporterSelector,
+			LeaseDuration:      s.LeaseDuration,
+			LeaseName:          s.LeaseName,
+			FlashCmd:           s.FlashCmd,
+			LeaseTags:          s.LeaseTags,
+			WaitForBuild:       s.WaitForBuild,
+			FollowLogs:         s.FollowLogs,
+			InsecureSkipTLS:    s.InsecureSkipTLS,
+			RegistryAuthFile:   s.RegistryAuthFile,
+			OutputFormat:       s.OutputFormat,
+			ExternalID:         s.ExternalID,
+			CallbackURL:        s.CallbackURL,
+			CallbackSecretFile: s.CallbackSecretFile,
+			HandleError:        handleError,
 		}),
 		sealed: sealedcmd.NewHandler(sealedcmd.Options{
 			ServerURL:               s.ServerURL,
@@ -330,6 +343,9 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 
 		ServerURL:              s.ServerURL,
 		AuthToken:              s.AuthToken,
+		ExternalID:             s.ExternalID,
+		CallbackURL:            s.CallbackURL,
+		CallbackSecretFile:     s.CallbackSecretFile,
 		BuildName:              s.BuildName,
 		Distro:                 s.Distro,
 		Target:                 s.Target,

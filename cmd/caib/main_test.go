@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
@@ -260,6 +261,25 @@ func TestOutputFormatFlagRegistered(t *testing.T) {
 	}
 	if flag.DefValue != "table" {
 		t.Errorf("expected default value 'table', got %q", flag.DefValue)
+	}
+}
+
+func TestNotificationFlagsRegistered(t *testing.T) {
+	rootCmd := newRootCmd()
+	for _, path := range [][]string{{"image", "build"}, {"image", "disk"}, {"image", "build-dev"}, {"image", "flash"}} {
+		cmd, _, err := rootCmd.Find(path)
+		if err != nil {
+			t.Fatalf("find %v: %v", path, err)
+		}
+		for _, name := range []string{"external-id", "callback-url", "callback-secret-file"} {
+			if cmd.Flags().Lookup(name) == nil {
+				t.Errorf("%v missing --%s", path, name)
+			}
+		}
+		callbackURL := cmd.Flags().Lookup("callback-url")
+		if callbackURL != nil && !strings.Contains(callbackURL.Usage, "webhookNotifications.allowHTTP") {
+			t.Errorf("%v --callback-url help does not describe the HTTP exception: %q", path, callbackURL.Usage)
+		}
 	}
 }
 

@@ -206,7 +206,7 @@ func buildParametersFromTemplate(tpl *buildapitypes.BuildTemplateResponse) *buil
 func printBuildList(items []buildapitypes.BuildListItem) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
-	if _, err := fmt.Fprintln(w, "NAME\tSTATUS\tAGE\tREQUESTED BY\tARTIFACT"); err != nil {
+	if _, err := fmt.Fprintln(w, "NAME\tSTATUS\tNOTIFICATION\tAGE\tREQUESTED BY\tARTIFACT"); err != nil {
 		return err
 	}
 	for _, it := range items {
@@ -216,9 +216,10 @@ func printBuildList(items []buildapitypes.BuildListItem) error {
 		}
 		if _, err := fmt.Fprintf(
 			w,
-			"%s\t%s\t%s\t%s\t%s\n",
+			"%s\t%s\t%s\t%s\t%s\t%s\n",
 			it.Name,
 			it.Phase,
+			notificationState(it.Notification),
 			common.FormatAge(it.CreatedAt),
 			it.RequestedBy,
 			artifact,
@@ -236,6 +237,7 @@ func printBuildDetails(st *buildapitypes.BuildResponse) error {
 		{"Name", st.Name},
 		{"Phase", st.Phase},
 		{"Message", st.Message},
+		{"External ID", valueOrDash(st.ExternalID)},
 		{"Requested By", valueOrDash(st.RequestedBy)},
 		{"Start Time", valueOrDash(st.StartTime)},
 		{"Completion Time", valueOrDash(st.CompletionTime)},
@@ -243,6 +245,13 @@ func printBuildDetails(st *buildapitypes.BuildResponse) error {
 		{"Disk Image", valueOrDash(st.DiskImage)},
 		{"Warning", valueOrDash(st.Warning)},
 		{"Trace ID", valueOrDash(st.TraceID)},
+	}
+	if st.Notification != nil {
+		rows = append(rows,
+			[2]string{"Notification", string(st.Notification.State)},
+			[2]string{"Notification Attempts", fmt.Sprintf("%d", st.Notification.Attempts)},
+			[2]string{"Notification Error", valueOrDash(st.Notification.LastError)},
+		)
 	}
 
 	if st.Parameters != nil {
@@ -274,6 +283,13 @@ func printBuildDetails(st *buildapitypes.BuildResponse) error {
 		}
 	}
 	return w.Flush()
+}
+
+func notificationState(status *buildapitypes.NotificationStatus) string {
+	if status == nil {
+		return "-"
+	}
+	return string(status.State)
 }
 
 func valueOrDash(v string) string {

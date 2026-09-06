@@ -65,6 +65,9 @@ type Options struct {
 	FollowLogs             *bool
 	CompressionAlgo        *string
 	AuthToken              *string
+	ExternalID             *string
+	CallbackURL            *string
+	CallbackSecretFile     *string
 	ContainerPush          *string
 	BuildDiskImage         *bool
 	DiskFormat             *string
@@ -136,15 +139,17 @@ func (h *Handler) isStructuredOutput() bool {
 
 // BuildResult is the machine-readable output emitted when --output-format is json or yaml.
 type BuildResult struct {
-	Name                    string `json:"name" yaml:"name"`
-	Phase                   string `json:"phase" yaml:"phase"`
-	Message                 string `json:"message,omitempty" yaml:"message,omitempty"`
-	ContainerImage          string `json:"containerImage,omitempty" yaml:"containerImage,omitempty"`
-	DiskImage               string `json:"diskImage,omitempty" yaml:"diskImage,omitempty"`
-	LeaseID                 string `json:"leaseId,omitempty" yaml:"leaseId,omitempty"`
-	RegistryCredentialsFile string `json:"registryCredentialsFile,omitempty" yaml:"registryCredentialsFile,omitempty"`
-	RegistryUsername        string `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty"`
-	RegistryToken           string `json:"registryToken,omitempty" yaml:"registryToken,omitempty"`
+	ExternalID              string                            `json:"externalId,omitempty" yaml:"externalId,omitempty"`
+	Notification            *buildapitypes.NotificationStatus `json:"notification,omitempty" yaml:"notification,omitempty"`
+	Name                    string                            `json:"name" yaml:"name"`
+	Phase                   string                            `json:"phase" yaml:"phase"`
+	Message                 string                            `json:"message,omitempty" yaml:"message,omitempty"`
+	ContainerImage          string                            `json:"containerImage,omitempty" yaml:"containerImage,omitempty"`
+	DiskImage               string                            `json:"diskImage,omitempty" yaml:"diskImage,omitempty"`
+	LeaseID                 string                            `json:"leaseId,omitempty" yaml:"leaseId,omitempty"`
+	RegistryCredentialsFile string                            `json:"registryCredentialsFile,omitempty" yaml:"registryCredentialsFile,omitempty"`
+	RegistryUsername        string                            `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty"`
+	RegistryToken           string                            `json:"registryToken,omitempty" yaml:"registryToken,omitempty"`
 }
 
 func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command, defaultWait bool) {
@@ -394,17 +399,19 @@ func warnIfNotInList(accepted []string, field, value string) {
 // displayBuildResults shows push locations after build completion.
 // It queries the server for actual build status so that messages are only
 // shown for steps that actually succeeded.
-func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.Client, buildName string) {
+func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.Client, buildName string) *buildapitypes.BuildResponse {
 	st, err := api.GetBuild(ctx, buildName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to get build results for %s: %v\n", buildName, err)
-		return
+		return nil
 	}
 
 	if h.isStructuredOutput() {
 		credsFile := h.handleBuildArtifacts(st)
 		format, _ := common.ResolveOutputFormat(h.opts.OutputFormat)
 		result := BuildResult{
+			ExternalID:              st.ExternalID,
+			Notification:            st.Notification,
 			Name:                    st.Name,
 			Phase:                   st.Phase,
 			Message:                 st.Message,
@@ -418,11 +425,28 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 			result.RegistryToken = st.RegistryToken
 		}
 		common.RenderFormatted(format, result, nil, h.handleError)
-		return
+		return st
 	}
 
 	credsFile := h.handleBuildArtifacts(st)
 	h.displayBuildResultsText(st, credsFile)
+	return st
+}
+
+func (h *Handler) finishBuild(ctx context.Context, api *buildapiclient.Client, buildName string, wait bool) {
+	var waitErr error
+	if wait {
+		waitErr = h.waitForBuildCompletion(ctx, api, buildName)
+	}
+	st := h.displayBuildResults(ctx, api, buildName)
+	if waitErr == nil {
+		return
+	}
+	if st != nil && ((st.Flash != nil && st.Flash.State == "Failed") || strings.Contains(strings.ToLower(st.Message), errPrefixFlash)) {
+		h.handleFlashError(waitErr, st)
+		return
+	}
+	h.handleError(waitErr)
 }
 
 // handleBuildArtifacts performs side effects (download, creds file) and returns the creds file path.
@@ -502,6 +526,26 @@ func (h *Handler) displayBuildResultsText(st *buildapitypes.BuildResponse, creds
 	if st.DiskImage != "" && *h.opts.ExportOCI != "" {
 		clilog.Infof("%s %s\n", labelColor("Disk image pushed to:"), valueColor(*h.opts.ExportOCI))
 	}
+}
+
+func (h *Handler) applyNotificationOptions(req *buildapitypes.BuildRequest) error {
+	callbackURL, callbackSecretFile, externalID := "", "", ""
+	if h.opts.CallbackURL != nil {
+		callbackURL = *h.opts.CallbackURL
+	}
+	if h.opts.CallbackSecretFile != nil {
+		callbackSecretFile = *h.opts.CallbackSecretFile
+	}
+	if h.opts.ExternalID != nil {
+		externalID = *h.opts.ExternalID
+	}
+	callback, err := common.LoadBuildCallback(callbackURL, callbackSecretFile)
+	if err != nil {
+		return err
+	}
+	req.ExternalID = externalID
+	req.Callback = callback
+	return nil
 }
 
 func (h *Handler) validateFlashLeaseFlags(cmd *cobra.Command) error {
@@ -925,6 +969,10 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
+	if err := h.applyNotificationOptions(&req); err != nil {
+		h.handleError(err)
+		return
+	}
 
 	localRefs, cleanup, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestPath)
 	if refsErr != nil {
@@ -949,13 +997,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	if *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild {
-		if err := h.waitForBuildCompletion(ctx, api, resp.Name); err != nil {
-			return
-		}
-	}
-
-	h.displayBuildResults(ctx, api, resp.Name)
+	h.finishBuild(ctx, api, resp.Name, *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild)
 }
 
 // RunDisk handles `caib image disk`.
@@ -1049,6 +1091,10 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
+	if err := h.applyNotificationOptions(&req); err != nil {
+		h.handleError(err)
+		return
+	}
 
 	resp, err := api.CreateBuild(ctx, req)
 	if err != nil {
@@ -1058,13 +1104,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 	clilog.Infof("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 	h.displayBuildLogsCommand(resp.Name)
 
-	if *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild {
-		if err := h.waitForBuildCompletion(ctx, api, resp.Name); err != nil {
-			return
-		}
-	}
-
-	h.displayBuildResults(ctx, api, resp.Name)
+	h.finishBuild(ctx, api, resp.Name, *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild)
 }
 
 func (h *Handler) validateDevExportFlags(manifestPath string) error {
@@ -1083,6 +1123,23 @@ func (h *Handler) validateDevExportFlags(manifestPath string) error {
 	return common.ValidateOutputRequiresPush(*h.opts.OutputDir, *h.opts.ExportOCI, "--push")
 }
 
+func (h *Handler) validateBuildDevOptions(manifestPath string) error {
+	if err := common.ValidateManifestSuffix(manifestPath); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*h.opts.ServerURL) == "" {
+		return common.ServerURLRequiredError(fmt.Sprintf("caib image build-dev --server <server-url> %s", manifestPath))
+	}
+	if err := h.validateRegistryFlags("--push",
+		fmt.Sprintf("caib image build-dev --push %s %s", *h.opts.ExportOCI, manifestPath)); err != nil {
+		return err
+	}
+	if err := h.validateDevExportFlags(manifestPath); err != nil {
+		return err
+	}
+	return h.validateReproducibleFlags()
+}
+
 // RunBuildDev handles `caib image build-dev` (traditional ostree/package builds).
 func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	h.applyWaitFollowDefaults(cmd, true)
@@ -1091,28 +1148,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	manifestPath := args[0]
 	*h.opts.Manifest = manifestPath
 
-	if err := common.ValidateManifestSuffix(manifestPath); err != nil {
-		h.handleError(err)
-		return
-	}
-
-	if strings.TrimSpace(*h.opts.ServerURL) == "" {
-		h.handleError(common.ServerURLRequiredError(fmt.Sprintf("caib image build-dev --server <server-url> %s", manifestPath)))
-		return
-	}
-
-	if err := h.validateRegistryFlags("--push",
-		fmt.Sprintf("caib image build-dev --push %s %s", *h.opts.ExportOCI, manifestPath)); err != nil {
-		h.handleError(err)
-		return
-	}
-
-	if err := h.validateDevExportFlags(manifestPath); err != nil {
-		h.handleError(err)
-		return
-	}
-
-	if err := h.validateReproducibleFlags(); err != nil {
+	if err := h.validateBuildDevOptions(manifestPath); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -1225,6 +1261,10 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
+	if err := h.applyNotificationOptions(&req); err != nil {
+		h.handleError(err)
+		return
+	}
 
 	localRefs, cleanup, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestPath)
 	if refsErr != nil {
@@ -1249,13 +1289,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	if *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild {
-		if err := h.waitForBuildCompletion(ctx, api, resp.Name); err != nil {
-			return
-		}
-	}
-
-	h.displayBuildResults(ctx, api, resp.Name)
+	h.finishBuild(ctx, api, resp.Name, *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild)
 }
 
 func nopWorkspaceCleanup() {}

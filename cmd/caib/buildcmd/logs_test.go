@@ -97,11 +97,8 @@ func TestWaitForBuildCompletion_BuildFailedNoDiskImage(t *testing.T) {
 	if strings.Contains(output, "flash manually") {
 		t.Errorf("should not show manual flash guidance when build failed, got: %s", output)
 	}
-	if capturedErr == nil {
-		t.Fatal("expected HandleError to be called")
-	}
-	if !strings.Contains(capturedErr.Error(), "step-build-image") {
-		t.Errorf("error should contain build failure message, got: %v", capturedErr)
+	if capturedErr != nil {
+		t.Fatalf("waiter must return the failure without handling it: %v", capturedErr)
 	}
 }
 
@@ -154,12 +151,12 @@ func TestWaitForBuildCompletion_BuildFailedWithDiskImage_NotFlashFailure(t *test
 	if strings.Contains(output, "Flash failed") {
 		t.Errorf("should not show flash instructions for build failure (not flash failure), got: %s", output)
 	}
-	if capturedErr == nil {
-		t.Fatal("expected HandleError to be called")
+	if capturedErr != nil {
+		t.Fatalf("waiter must return the failure without handling it: %v", capturedErr)
 	}
 }
 
-func TestWaitForBuildCompletion_FlashFailure_ShowsFlashInstructions(t *testing.T) {
+func TestFinishBuild_FlashFailure_ShowsFlashInstructions(t *testing.T) {
 	responses := []buildapitypes.BuildResponse{
 		{
 			Name:      "test-build",
@@ -195,15 +192,11 @@ func TestWaitForBuildCompletion_FlashFailure_ShowsFlashInstructions(t *testing.T
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	waitErr := h.waitForBuildCompletion(t.Context(), api, "test-build")
+	h.finishBuild(t.Context(), api, "test-build", true)
 
 	_ = w.Close()
 	out, _ := io.ReadAll(r)
 	os.Stdout = old
-
-	if waitErr == nil {
-		t.Fatal("expected error from waitForBuildCompletion")
-	}
 
 	output := string(out)
 	if !strings.Contains(output, "Flash failed") {
@@ -223,7 +216,7 @@ func TestWaitForBuildCompletion_FlashFailure_ShowsFlashInstructions(t *testing.T
 	}
 }
 
-func TestWaitForBuildCompletion_FlashFailure_NoJumpstarter(t *testing.T) {
+func TestFinishBuild_FlashFailure_NoJumpstarter(t *testing.T) {
 	// Flash failure detected but no Jumpstarter info — should still call
 	// handleFlashError (which calls handleError) but not print flash instructions.
 	responses := []buildapitypes.BuildResponse{
@@ -256,15 +249,11 @@ func TestWaitForBuildCompletion_FlashFailure_NoJumpstarter(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	waitErr := h.waitForBuildCompletion(t.Context(), api, "test-build")
+	h.finishBuild(t.Context(), api, "test-build", true)
 
 	_ = w.Close()
 	out, _ := io.ReadAll(r)
 	os.Stdout = old
-
-	if waitErr == nil {
-		t.Fatal("expected error from waitForBuildCompletion")
-	}
 
 	output := string(out)
 	// No Jumpstarter info, so no "flash manually" instructions should appear
