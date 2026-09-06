@@ -24,6 +24,7 @@ import (
 )
 
 const (
+	phaseCancelled = "Cancelled"
 	phaseCompleted = "Completed"
 	phaseFailed    = "Failed"
 	phasePending   = "Pending"
@@ -33,20 +34,24 @@ const (
 
 // Options wires flash command handlers to caller-owned state and dependencies.
 type Options struct {
-	ServerURL         *string
-	AuthToken         *string
-	JumpstarterClient *string
-	FlashName         *string
-	Target            *string
-	ExporterSelector  *string
-	LeaseDuration     *string
-	LeaseName         *string
-	FlashCmd          *string
-	LeaseTags         *[]string
-	WaitForBuild      *bool
-	FollowLogs        *bool
-	InsecureSkipTLS   *bool
-	RegistryAuthFile  *string
+	ServerURL          *string
+	AuthToken          *string
+	JumpstarterClient  *string
+	FlashName          *string
+	Target             *string
+	ExporterSelector   *string
+	LeaseDuration      *string
+	LeaseName          *string
+	FlashCmd           *string
+	LeaseTags          *[]string
+	WaitForBuild       *bool
+	FollowLogs         *bool
+	InsecureSkipTLS    *bool
+	RegistryAuthFile   *string
+	OutputFormat       *string
+	ExternalID         *string
+	CallbackURL        *string
+	CallbackSecretFile *string
 
 	HandleError      func(error)
 	AnnotationReader func(imageRef string) (map[string]string, error)
@@ -96,6 +101,9 @@ func (h *Handler) resolveTargetFromAnnotations(imageRef string) string {
 }
 
 func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command, defaultWait, defaultFollow bool) {
+	if caibcommon.IsStructuredFormat(h.opts.OutputFormat) {
+		clilog.SetQuiet(true)
+	}
 	if !cmd.Flags().Changed("wait") {
 		*h.opts.WaitForBuild = defaultWait
 	}
@@ -123,13 +131,30 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	externalID, callbackURL, callbackSecretFile := "", "", ""
+	if h.opts.ExternalID != nil {
+		externalID = *h.opts.ExternalID
+	}
+	if h.opts.CallbackURL != nil {
+		callbackURL = *h.opts.CallbackURL
+	}
+	if h.opts.CallbackSecretFile != nil {
+		callbackSecretFile = *h.opts.CallbackSecretFile
+	}
 	req := buildapitypes.FlashRequest{
+		ExternalID:       externalID,
 		Name:             *h.opts.FlashName,
 		Target:           *h.opts.Target,
 		ExporterSelector: *h.opts.ExporterSelector,
 		LeaseName:        *h.opts.LeaseName,
 		FlashCmd:         *h.opts.FlashCmd,
 	}
+	callback, err := caibcommon.LoadBuildCallback(callbackURL, callbackSecretFile)
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+	req.Callback = callback
 
 	imageRef := arg
 	if isCatalogName(arg) {
@@ -216,8 +241,21 @@ func (h *Handler) RunFlash(cmd *cobra.Command, args []string) {
 	clilog.Infof("Flash job %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 
 	if *h.opts.WaitForBuild || *h.opts.FollowLogs {
-		h.waitForFlashCompletion(ctx, api, resp.Name)
+		resp = h.waitForFlashCompletion(ctx, api, resp.Name)
+		if resp == nil {
+			return
+		}
 	}
+	if caibcommon.IsStructuredFormat(h.opts.OutputFormat) {
+		format, formatErr := caibcommon.ResolveOutputFormat(h.opts.OutputFormat)
+		if formatErr != nil {
+			h.handleError(formatErr)
+			return
+		}
+		caibcommon.RenderFormatted(format, resp, nil, h.handleError)
+		return
+	}
+	reportNotificationFailure(resp.Notification)
 }
 
 // isCatalogName reports whether ref is a CatalogImage name rather than an OCI
@@ -255,7 +293,7 @@ func parseLeaseDuration(duration string) (time.Duration, error) {
 }
 
 // waitForFlashCompletion waits for a flash job to complete, optionally streaming logs.
-func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.Client, name string) {
+func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.Client, name string) *buildapitypes.FlashResponse {
 	clilog.Infoln("Waiting for flash to complete...")
 
 	var timeoutDuration time.Duration
@@ -266,7 +304,7 @@ func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.
 		leaseDuration, err := parseLeaseDuration(*h.opts.LeaseDuration)
 		if err != nil {
 			h.handleError(fmt.Errorf("invalid lease duration: %w", err))
-			return
+			return nil
 		}
 		timeoutDuration = leaseDuration + 10*time.Minute
 	}
@@ -295,7 +333,7 @@ func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.
 		select {
 		case <-timeoutCtx.Done():
 			h.handleError(fmt.Errorf("timed out waiting for flash"))
-			return
+			return nil
 		case <-ticker.C:
 			reqCtx, cancelReq := context.WithTimeout(timeoutCtx, 2*time.Minute)
 			var st *buildapitypes.FlashResponse
@@ -323,11 +361,15 @@ func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.
 				} else {
 					clilog.Infoln("Flash completed successfully!")
 				}
-				return
+				return st
 			}
 			if st.Phase == phaseFailed {
 				h.handleError(fmt.Errorf("flash failed: %s", st.Message))
-				return
+				return nil
+			}
+			if st.Phase == phaseCancelled {
+				h.handleError(fmt.Errorf("flash cancelled: %s", st.Message))
+				return nil
 			}
 
 			if !*h.opts.FollowLogs || streamState.Active || !streamState.CanRetry(maxLogRetries) {
@@ -354,6 +396,13 @@ func (h *Handler) waitForFlashCompletion(ctx context.Context, _ *buildapiclient.
 			}
 		}
 	}
+}
+
+func reportNotificationFailure(status *buildapitypes.NotificationStatus) {
+	if status == nil || status.State != "Failed" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Warning: webhook notification failed after %d attempt(s): %s\n", status.Attempts, status.LastError)
 }
 
 func (h *Handler) tryFlashLogStreaming(ctx context.Context, logClient *http.Client, name string, state *logstream.State) error {

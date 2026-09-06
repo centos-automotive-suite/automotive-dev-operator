@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	"gopkg.in/yaml.v3"
 )
@@ -22,6 +23,7 @@ func sampleItems() []buildapitypes.BuildListItem {
 		{
 			Name:           "build-1",
 			Phase:          "Succeeded",
+			Notification:   &buildapitypes.NotificationStatus{State: api.DeliveryDelivered, Attempts: 1},
 			RequestedBy:    "alice",
 			CreatedAt:      "2025-01-01T00:00:00Z",
 			ContainerImage: "quay.io/org/img:v1",
@@ -68,6 +70,9 @@ func TestPrintBuildList_Table(t *testing.T) {
 	}
 	if !strings.Contains(out, "alice") {
 		t.Errorf("expected requestedBy in output, got: %s", out)
+	}
+	if !strings.Contains(out, "NOTIFICATION") || !strings.Contains(out, "Delivered") {
+		t.Errorf("expected notification state in output, got: %s", out)
 	}
 }
 
@@ -283,6 +288,19 @@ func TestPrintBuildDetails_TraceID(t *testing.T) {
 	}
 	if !strings.Contains(out, "a39035cd440a23aaf86986f35d468674") {
 		t.Errorf("expected trace ID value in output, got: %s", out)
+	}
+}
+
+func TestPrintBuildDetails_NotificationFailure(t *testing.T) {
+	resp := &buildapitypes.BuildResponse{
+		Name: "test-build", Phase: "Completed", ExternalID: "pipeline-42",
+		Notification: &buildapitypes.NotificationStatus{State: api.DeliveryFailed, Attempts: 3, LastError: "receiver rejected request"},
+	}
+	out := captureStdout(t, func() { _ = printBuildDetails(resp) })
+	for _, want := range []string{"External ID", "pipeline-42", "Notification", "Failed", "Notification Attempts", "3", "Notification Error", "receiver rejected request"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output: %s", want, out)
+		}
 	}
 }
 

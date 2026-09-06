@@ -1541,11 +1541,13 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	}
 
 	writeJSON(c, http.StatusAccepted, BuildResponse{
-		Name:        req.Name,
-		Phase:       phasePending,
-		Message:     "Build accepted",
-		RequestedBy: requestedBy,
-		TraceID:     traceID,
+		ExternalID:   req.ExternalID,
+		Notification: pendingNotification(req.Callback != nil),
+		Name:         req.Name,
+		Phase:        phasePending,
+		Message:      "Build accepted",
+		RequestedBy:  requestedBy,
+		TraceID:      traceID,
 	})
 }
 
@@ -1572,6 +1574,18 @@ func listBuilds(c *gin.Context) {
 
 	// Paginate before doing per-item work (external route lookup, etc.)
 	page := applyPagination(list.Items, limit, offset)
+	needsNotifications := false
+	for i := range page {
+		if page[i].Spec.CallbackSecretRef != "" {
+			needsNotifications = true
+			break
+		}
+	}
+	notificationStatuses, err := listNotificationStatuses(ctx, k8sClient, namespace, needsNotifications)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "error loading build notifications"})
+		return
+	}
 
 	// Resolve external route once for translating internal registry URLs
 	externalRoute, _ := getExternalRegistryRoute(ctx, k8sClient, namespace)
@@ -1605,6 +1619,7 @@ func listBuilds(c *gin.Context) {
 
 		resp = append(resp, BuildListItem{
 			ExternalID: b.Spec.ExternalID, Artifacts: storedArtifacts(&b), Flash: storedFlash(&b),
+			Notification:   projectedNotification(notificationStatuses, b.UID, b.Spec.CallbackSecretRef != ""),
 			Name:           b.Name,
 			Phase:          b.Status.Phase,
 			Message:        b.Status.Message,
@@ -1629,6 +1644,11 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 	ctx := c.Request.Context()
 	build := &automotivev1alpha1.ImageBuild{}
 	if err := getResourceOrFail(ctx, c, k8sClient, name, namespace, build, "build"); err != nil {
+		return
+	}
+	notificationStatus, err := getNotificationStatus(ctx, k8sClient, namespace, build.UID, build.Spec.CallbackSecretRef != "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "error loading build notification"})
 		return
 	}
 
@@ -1720,11 +1740,12 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 
 	writeJSON(c, http.StatusOK, BuildResponse{
 		ExternalID: build.Spec.ExternalID, Artifacts: storedArtifacts(build), Flash: storedFlash(build),
-		Name:        build.Name,
-		Phase:       build.Status.Phase,
-		Message:     build.Status.Message,
-		RequestedBy: build.Annotations[labels.RequestedBy],
-		TraceID:     build.Annotations[automotivev1alpha1.AnnotationTraceID],
+		Notification: notificationStatus,
+		Name:         build.Name,
+		Phase:        build.Status.Phase,
+		Message:      build.Status.Message,
+		RequestedBy:  build.Annotations[labels.RequestedBy],
+		TraceID:      build.Annotations[automotivev1alpha1.AnnotationTraceID],
 		StartTime: func() string {
 			if build.Status.StartTime != nil {
 				return build.Status.StartTime.Format(time.RFC3339)

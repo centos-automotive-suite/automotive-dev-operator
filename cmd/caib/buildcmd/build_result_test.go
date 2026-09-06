@@ -17,6 +17,8 @@ import (
 
 func TestBuildResultJSONMarshal(t *testing.T) {
 	result := BuildResult{
+		ExternalID:              "pipeline-42",
+		Notification:            &buildapi.NotificationStatus{State: "Failed", Attempts: 2, LastError: "receiver rejected request"},
 		Name:                    "my-build-abc12",
 		Phase:                   "Completed",
 		Message:                 "Build completed",
@@ -37,6 +39,7 @@ func TestBuildResultJSONMarshal(t *testing.T) {
 	}
 
 	checks := map[string]string{
+		"externalId":              "pipeline-42",
 		"name":                    "my-build-abc12",
 		"phase":                   "Completed",
 		"message":                 "Build completed",
@@ -44,6 +47,9 @@ func TestBuildResultJSONMarshal(t *testing.T) {
 		"diskImage":               "registry.example.com/disk:v1",
 		"leaseId":                 "lease-123",
 		"registryCredentialsFile": "/tmp/creds.json",
+	}
+	if notification, ok := roundtrip["notification"].(map[string]any); !ok || notification["state"] != "Failed" || notification["attempts"] != float64(2) {
+		t.Fatalf("unexpected notification output: %#v", roundtrip["notification"])
 	}
 	for key, want := range checks {
 		got, ok := roundtrip[key]
@@ -73,7 +79,7 @@ func TestBuildResultOmitEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	omitKeys := []string{"message", "containerImage", "diskImage", "leaseId", "registryCredentialsFile", "registryUsername", "registryToken"}
+	omitKeys := []string{"externalId", "notification", "message", "containerImage", "diskImage", "leaseId", "registryCredentialsFile", "registryUsername", "registryToken"}
 	for _, key := range omitKeys {
 		if _, ok := roundtrip[key]; ok {
 			t.Errorf("expected omitempty to exclude empty field %q", key)

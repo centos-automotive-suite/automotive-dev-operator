@@ -7,6 +7,7 @@ import (
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	tekton "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
@@ -27,15 +28,23 @@ func TestStoredTerminalAPIProjection(t *testing.T) {
 		}
 	}
 	now := metav1.Now()
-	build := &api.ImageBuild{ObjectMeta: metav1.ObjectMeta{Name: "build", Namespace: "test-ns"}, Spec: api.ImageBuildSpec{ExternalID: "correlation"}, Status: api.ImageBuildStatus{
+	build := &api.ImageBuild{ObjectMeta: metav1.ObjectMeta{Name: "build", Namespace: "test-ns", UID: "build-uid"}, Spec: api.ImageBuildSpec{ExternalID: "correlation", CallbackSecretRef: "build-callback"}, Status: api.ImageBuildStatus{
 		Phase: "Expired", Message: "expired", CompletionTime: &now,
 		TerminalResult: &api.BuildTerminalResult{Phase: "Failed", Message: "flash failed", CompletedAt: now, Artifacts: []api.ArtifactStatus{{Kind: "disk", URL: "registry/published"}}, Flash: &api.FlashOutcomeStatus{Enabled: true, State: "Failed", LeaseID: "lease"}},
 	}}
-	flash := &tekton.TaskRun{ObjectMeta: metav1.ObjectMeta{Name: "flash", Namespace: "test-ns", Labels: map[string]string{labels.FlashTaskRun: "flash"}}}
+	flash := &tekton.TaskRun{ObjectMeta: metav1.ObjectMeta{Name: "flash", Namespace: "test-ns", UID: "flash-uid", Labels: map[string]string{labels.FlashTaskRun: "flash"}, Annotations: map[string]string{
+		notifications.AnnotationExternalID: "flash-correlation", notifications.AnnotationCallbackSecretRef: "flash-callback",
+	}}}
 	flash.Status.CompletionTime = &now
 	flash.Status.Conditions = knative.Conditions{{Type: "Succeeded", Status: corev1.ConditionFalse, Reason: string(tekton.TaskRunReasonCancelled), Message: "cancelled"}}
 	flash.Status.Results = []tekton.TaskRunResult{{Name: "lease-id", Value: tekton.ParamValue{Type: tekton.ParamTypeString, StringVal: "flash-lease"}}}
-	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(build, flash).Build()
+	buildDelivery := &api.WebhookDelivery{ObjectMeta: metav1.ObjectMeta{Name: notifications.DeliveryName("build-uid"), Namespace: "test-ns"}, Spec: api.WebhookDeliverySpec{
+		Subject: api.DeliverySubject{UID: build.UID},
+	}, Status: api.WebhookDeliveryStatus{NotificationStatus: api.NotificationStatus{State: api.DeliveryDelivered, Attempts: 1}}}
+	flashDelivery := &api.WebhookDelivery{ObjectMeta: metav1.ObjectMeta{Name: notifications.DeliveryName("flash-uid"), Namespace: "test-ns"}, Spec: api.WebhookDeliverySpec{
+		Subject: api.DeliverySubject{UID: flash.UID},
+	}, Status: api.WebhookDeliveryStatus{NotificationStatus: api.NotificationStatus{State: api.DeliveryFailed, Attempts: 2, LastError: "receiver rejected request"}}}
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(build, flash, buildDelivery, flashDelivery).Build()
 	original := getClientFromRequestFn
 	getClientFromRequestFn = func(*gin.Context) (client.Client, error) { return k8s, nil }
 	t.Cleanup(func() { getClientFromRequestFn = original })
@@ -72,10 +81,10 @@ func TestStoredTerminalAPIProjection(t *testing.T) {
 				t.Fatal(err)
 			}
 			if path == "build" || path == "builds" {
-				if body["externalId"] != "correlation" || body["diskImage"] != "registry/published" || body["phase"] != "Expired" || body["artifacts"] == nil || body["flash"] == nil {
+				if body["externalId"] != "correlation" || body["diskImage"] != "registry/published" || body["phase"] != "Expired" || body["artifacts"] == nil || body["flash"] == nil || body["notification"].(map[string]any)["state"] != "Delivered" {
 					t.Fatal(body)
 				}
-			} else if body["phase"] != "Cancelled" {
+			} else if body["phase"] != "Cancelled" || body["externalId"] != "flash-correlation" || body["notification"].(map[string]any)["state"] != "Failed" {
 				t.Fatal(body)
 			}
 			if path == "flash" && body["leaseId"] != "flash-lease" {
