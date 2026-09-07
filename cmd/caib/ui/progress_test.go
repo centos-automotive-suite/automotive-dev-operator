@@ -2,7 +2,6 @@ package ui
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
@@ -33,7 +32,7 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(buf[:n])
 }
 
-func TestComplete_RendersFullBar(t *testing.T) {
+func TestComplete_RendersCompleted(t *testing.T) {
 	// Use a non-TTY progress bar (isTTY=false) so output goes through renderPlain
 	pb := &ProgressBar{isTTY: false}
 
@@ -44,16 +43,12 @@ func TestComplete_RendersFullBar(t *testing.T) {
 		Total: 8,
 	})
 
-	// Call Complete — this should render a final fully-filled state
 	out := captureStdout(t, func() {
 		pb.Complete()
 	})
 
-	if !strings.Contains(out, "8/8") {
-		t.Errorf("Complete() should render full progress (8/8), got: %q", out)
-	}
-	if !strings.Contains(out, "Complete") {
-		t.Errorf("Complete() should show 'Complete' stage, got: %q", out)
+	if out != "Completed\n" {
+		t.Errorf("Complete() should render completion, got: %q", out)
 	}
 }
 
@@ -71,8 +66,8 @@ func TestComplete_UsesHighStepTotal(t *testing.T) {
 		pb.Complete()
 	})
 
-	if !strings.Contains(out, "6/6") {
-		t.Errorf("Complete() should use the tracked total (6/6), got: %q", out)
+	if out != "Completed\n" || pb.highStep.Done != 6 || pb.highStep.Total != 6 {
+		t.Errorf("Complete() should use the tracked total and render completion, got: %q step=%+v", out, pb.highStep)
 	}
 }
 
@@ -206,7 +201,7 @@ func TestRenderCompletionAcceptsCorrectedTotal(t *testing.T) {
 	out := captureStdout(t, func() {
 		pb.Render("Completed", &buildapitypes.BuildStep{Stage: "Complete", Done: 4, Total: 4})
 	})
-	if !strings.Contains(out, "[4/4] Complete") {
-		t.Fatalf("completion retained the old estimate: %q", out)
+	if out != "Completed\n" || pb.highStep.Done != 4 || pb.highStep.Total != 4 {
+		t.Fatalf("completion retained the old estimate: %q step=%+v", out, pb.highStep)
 	}
 }

@@ -63,10 +63,14 @@ func (pb *ProgressBar) Render(phase string, step *buildapitypes.BuildStep) {
 		pb.highStep = &s
 	}
 
+	renderStep := pb.highStep
+	if phase == completedPhase {
+		renderStep = nil
+	}
 	if pb.isTTY {
-		pb.renderTTY(phase, pb.highStep)
+		pb.renderTTY(phase, renderStep)
 	} else {
-		pb.renderPlain(phase, pb.highStep)
+		pb.renderPlain(phase, renderStep)
 	}
 }
 
