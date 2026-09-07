@@ -24,6 +24,9 @@ const (
 	progressCacheTTL        = 10 * time.Second
 	progressCacheMaxEntries = 256
 	buildImageTask          = "build-image"
+	flashImageTask          = "flash-image"
+	pushDiskArtifactTask    = "push-disk-artifact"
+	pushDiskArtifactS3Task  = "push-disk-artifact-s3"
 )
 
 type progressCacheEntry struct {
@@ -105,11 +108,11 @@ func stageForPipelineTask(taskName string) string {
 	switch taskName {
 	case buildImageTask:
 		return "Starting build"
-	case "push-disk-artifact":
+	case pushDiskArtifactTask:
 		return "Pushing artifact"
-	case "push-disk-artifact-s3":
+	case pushDiskArtifactS3Task:
 		return "Pushing to S3"
-	case "flash-image":
+	case flashImageTask:
 		return "Flashing device"
 	default:
 		return taskName
@@ -262,7 +265,7 @@ func buildProgressStep(
 	var pushReported, s3Reported, flashReported bool
 	for _, tp := range tasks {
 		total := tp.marker.Total
-		if tp.taskName == "build-image" {
+		if tp.taskName == buildImageTask {
 			total = buildTotal
 		} else {
 			combinedTotal += total
