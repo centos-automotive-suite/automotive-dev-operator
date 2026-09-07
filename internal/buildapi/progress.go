@@ -23,6 +23,10 @@ import (
 const (
 	progressCacheTTL        = 10 * time.Second
 	progressCacheMaxEntries = 256
+	buildImageTask          = "build-image"
+	flashImageTask          = "flash-image"
+	pushDiskArtifactTask    = "push-disk-artifact"
+	pushDiskArtifactS3Task  = "push-disk-artifact-s3"
 )
 
 type progressCacheEntry struct {
@@ -75,8 +79,9 @@ type BuildStep struct {
 
 // taskProgress holds the latest marker from a single pipeline task pod.
 type taskProgress struct {
-	taskName string
-	marker   BuildStep
+	taskName  string
+	marker    BuildStep
+	completed bool
 }
 
 // parseProgressAnnotation parses a pod annotation value with the format
@@ -87,11 +92,11 @@ func parseProgressAnnotation(value string) (*BuildStep, bool) {
 		return nil, false
 	}
 	done, err := strconv.Atoi(parts[1])
-	if err != nil {
+	if err != nil || done < 0 {
 		return nil, false
 	}
 	total, err := strconv.Atoi(parts[2])
-	if err != nil {
+	if err != nil || total <= 0 || done > total || strings.TrimSpace(parts[0]) == "" {
 		return nil, false
 	}
 	return &BuildStep{Stage: parts[0], Done: done, Total: total}, true
@@ -101,9 +106,13 @@ func parseProgressAnnotation(value string) (*BuildStep, bool) {
 // that may not have a progress annotation yet.
 func stageForPipelineTask(taskName string) string {
 	switch taskName {
-	case "push-disk-artifact":
+	case buildImageTask:
+		return "Starting build"
+	case pushDiskArtifactTask:
 		return "Pushing artifact"
-	case "flash-image":
+	case pushDiskArtifactS3Task:
+		return "Pushing to S3"
+	case flashImageTask:
 		return "Flashing device"
 	default:
 		return taskName
@@ -157,22 +166,29 @@ func readTaskProgressFromPods(ctx context.Context, cs *kubernetes.Clientset, pip
 
 		if ann, ok := pod.Annotations[labels.Progress]; ok {
 			if step, parsed := parseProgressAnnotation(ann); parsed {
-				results = append(results, taskProgress{taskName: taskName, marker: *step})
+				results = append(results, taskProgress{taskName: taskName, marker: *step, completed: pod.Status.Phase == corev1.PodSucceeded})
 				continue
 			}
 		}
 
 		// Synthesize a marker for pods that don't have the annotation
 		// yet so the progress bar advances when tasks start running.
+		total := 1
+		if taskName == buildImageTask {
+			// The build contains several checkpoints; use the spec estimate
+			// until its first annotation supplies the actual total.
+			total = 0
+		}
 		switch pod.Status.Phase {
 		case corev1.PodRunning, corev1.PodSucceeded:
 			done := 0
 			if pod.Status.Phase == corev1.PodSucceeded {
-				done = 1
+				done = total
 			}
 			results = append(results, taskProgress{
-				taskName: taskName,
-				marker:   BuildStep{Stage: stageForPipelineTask(taskName), Done: done, Total: 1},
+				taskName:  taskName,
+				marker:    BuildStep{Stage: stageForPipelineTask(taskName), Done: done, Total: total},
+				completed: pod.Status.Phase == corev1.PodSucceeded,
 			})
 		case corev1.PodPending:
 			// Surface image-pull or container-creating status so the
@@ -180,7 +196,7 @@ func readTaskProgressFromPods(ctx context.Context, cs *kubernetes.Clientset, pip
 			if stage := pendingPodStage(&pod); stage != "" {
 				results = append(results, taskProgress{
 					taskName: taskName,
-					marker:   BuildStep{Stage: stage, Done: 0, Total: 1},
+					marker:   BuildStep{Stage: stage, Done: 0, Total: total},
 				})
 			}
 		}
@@ -235,29 +251,44 @@ func buildProgressStep(
 	hasClusterRegistryRoute bool,
 ) *BuildStep {
 	hasPushTask := strings.TrimSpace(build.Spec.GetExportOCI()) != "" && strings.TrimSpace(build.Spec.SecretRef) != ""
+	hasS3Task := strings.TrimSpace(build.Spec.GetS3Bucket()) != ""
 	hasFlashTask := build.Spec.IsFlashEnabled()
 
-	// Sum up totals from all task markers and find the active task.
-	// Also track whether push/flash tasks already reported markers
-	// so we don't double-count them in the pipeline total.
-	var combinedTotal, combinedDone int
-	var activeStage string
-	var pushReported, flashReported bool
+	buildTotal := estimateBuildSteps(build, hasClusterRegistryRoute)
 	for _, tp := range tasks {
-		combinedTotal += tp.marker.Total
-		combinedDone += tp.marker.Done
-		activeStage = tp.marker.Stage
+		if tp.taskName == buildImageTask && tp.marker.Total > 0 {
+			buildTotal = tp.marker.Total
+		}
+	}
+	combinedTotal, combinedDone := buildTotal, 0
+	var activeStage string
+	var pushReported, s3Reported, flashReported bool
+	for _, tp := range tasks {
+		total := tp.marker.Total
+		if tp.taskName == buildImageTask {
+			total = buildTotal
+		} else {
+			combinedTotal += total
+		}
+		if tp.completed {
+			combinedDone += total
+		} else {
+			combinedDone += clampDone(tp.marker.Done, total)
+			activeStage = tp.marker.Stage
+		}
 		if tp.taskName == "push-disk-artifact" {
 			pushReported = true
+		}
+		if tp.taskName == "push-disk-artifact-s3" {
+			s3Reported = true
 		}
 		if tp.taskName == "flash-image" {
 			flashReported = true
 		}
 	}
 
-	// Use spec-based estimate when no markers have arrived yet
-	if combinedTotal == 0 {
-		combinedTotal = estimateBuildSteps(build, hasClusterRegistryRoute)
+	if activeStage == "" && len(tasks) > 0 {
+		activeStage = "Finalizing build"
 	}
 
 	// Pipeline total = build task steps + push + flash.
@@ -265,6 +296,9 @@ func buildProgressStep(
 	// their own markers yet (avoids double-counting).
 	pipelineTotal := combinedTotal
 	if hasPushTask && !pushReported {
+		pipelineTotal++
+	}
+	if hasS3Task && !s3Reported {
 		pipelineTotal++
 	}
 	if hasFlashTask && !flashReported {
@@ -369,8 +403,16 @@ func (a *APIServer) handleGetProgress(c *gin.Context) {
 		a.progressCacheMu.Unlock()
 	}
 
-	// Estimate builder-prepare steps only when no task markers exist yet.
-	if len(tasks) == 0 {
+	// Synthetic pod markers have no build total, so they still need the
+	// registry-aware estimate used before the build pod exists.
+	hasBuildTotal := false
+	for _, tp := range tasks {
+		if tp.taskName == "build-image" && tp.marker.Total > 0 {
+			hasBuildTotal = true
+			break
+		}
+	}
+	if !hasBuildTotal {
 		mode := Mode(build.Spec.GetMode())
 		if build.Spec.GetBuilderImage() == "" && (mode == ModeBootc || mode == ModeDisk) {
 			if route, err := getExternalRegistryRoute(ctx, k8sClient, namespace); err == nil && strings.TrimSpace(route) != "" {

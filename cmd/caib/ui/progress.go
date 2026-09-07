@@ -28,6 +28,8 @@ import (
 	"golang.org/x/term"
 )
 
+const completedPhase = "Completed"
+
 // ProgressBar renders build progress. In a TTY it uses \r overwrite with a
 // visual bar; in non-TTY mode it prints one line per status change.
 // Progress is monotonic: once a higher done count is rendered, lower values
@@ -48,23 +50,23 @@ func (pb *ProgressBar) Render(phase string, step *buildapitypes.BuildStep) {
 	if clilog.IsQuiet() {
 		return
 	}
-	// Work on a local copy to avoid mutating the caller's BuildStep
-	var renderStep *buildapitypes.BuildStep
-	if step != nil {
+	// Keep the label and counts together when a request returns stale data.
+	if step != nil && step.Total > 0 {
 		s := *step
-		// Enforce monotonic progress: never go backwards in Done or Total
-		if pb.highStep != nil {
+		s.Done = max(0, min(s.Done, s.Total))
+		if pb.highStep != nil && phase != completedPhase {
+			s.Total = max(s.Total, pb.highStep.Total)
 			if s.Done < pb.highStep.Done {
-				s.Done = pb.highStep.Done
-			}
-			if s.Total < pb.highStep.Total {
-				s.Total = pb.highStep.Total
+				s = *pb.highStep
 			}
 		}
 		pb.highStep = &s
-		renderStep = &s
 	}
 
+	renderStep := pb.highStep
+	if phase == completedPhase {
+		renderStep = nil
+	}
 	if pb.isTTY {
 		pb.renderTTY(phase, renderStep)
 	} else {
@@ -77,6 +79,9 @@ func (pb *ProgressBar) renderTTY(phase string, step *buildapitypes.BuildStep) {
 	var line string
 	if step == nil {
 		line = fmt.Sprintf("\r%-10s ⦿ waiting for progress...", phase)
+		if phase == completedPhase {
+			line = "\r" + completedPhase
+		}
 	} else {
 		barWidth := 30
 		filled := 0
@@ -89,6 +94,7 @@ func (pb *ProgressBar) renderTTY(phase string, step *buildapitypes.BuildStep) {
 	if line == pb.lastLine {
 		return
 	}
+	pb.lastLine = line
 	width, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || width <= 0 {
 		width = 80
@@ -100,7 +106,6 @@ func (pb *ProgressBar) renderTTY(phase string, step *buildapitypes.BuildStep) {
 		line += strings.Repeat(" ", width-displayWidth)
 	}
 	_, _ = fmt.Fprint(os.Stdout, line)
-	pb.lastLine = line
 }
 
 // renderPlain renders progress as plain text for non-TTY output
@@ -108,6 +113,9 @@ func (pb *ProgressBar) renderPlain(phase string, step *buildapitypes.BuildStep) 
 	var line string
 	if step == nil {
 		line = fmt.Sprintf("%s: waiting for progress...", phase)
+		if phase == completedPhase {
+			line = completedPhase
+		}
 	} else {
 		line = fmt.Sprintf("%s: [%d/%d] %s", phase, step.Done, step.Total, step.Stage)
 	}
@@ -124,16 +132,18 @@ func (pb *ProgressBar) Complete() {
 	if clilog.IsQuiet() || pb.lastLine == "" {
 		return
 	}
-	total := 8
-	if pb.highStep != nil && pb.highStep.Total > 0 {
-		total = pb.highStep.Total
+	var step *buildapitypes.BuildStep
+	if pb.highStep != nil {
+		step = &buildapitypes.BuildStep{
+			Stage: "Complete",
+			Done:  pb.highStep.Total,
+			Total: pb.highStep.Total,
+		}
 	}
-	pb.Render("Completed", &buildapitypes.BuildStep{
-		Stage: "Complete",
-		Done:  total,
-		Total: total,
-	})
-	_, _ = fmt.Fprintln(os.Stdout)
+	pb.Render(completedPhase, step)
+	if pb.isTTY {
+		_, _ = fmt.Fprintln(os.Stdout)
+	}
 	pb.lastLine = ""
 }
 
