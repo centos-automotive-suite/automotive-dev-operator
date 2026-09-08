@@ -141,6 +141,7 @@ spec:
                           manifest:
                             description: Manifest holds the inline AIB manifest YAML
                               content
+                            maxLength: 921600
                             type: string
                           manifestFileName:
                             description: |-
@@ -192,6 +193,11 @@ spec:
                           BuildCachePVC is the name of a PVC to mount as the osbuild build cache directory.
                           When set, the build pod mounts this PVC and passes --build-dir to AIB,
                           enabling osbuild checkpoint reuse and dnf cache persistence across builds.
+                        type: string
+                      callbackSecretRef:
+                        description: CallbackSecretRef holds the endpoint and HMAC
+                          key outside this resource.
+                        maxLength: 253
                         type: string
                       export:
                         description: Export contains configuration for exporting build
@@ -271,6 +277,9 @@ spec:
                               using a service account token instead of explicit credentials
                             type: boolean
                         type: object
+                      externalId:
+                        maxLength: 512
+                        type: string
                       flash:
                         description: Flash contains configuration for flashing the
                           built image to hardware via Jumpstarter

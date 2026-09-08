@@ -1,0 +1,16 @@
+{
+  "apiVersion": "notifications.caib.dev/v1alpha1",
+  "id": "event-flash-1",
+  "type": "flash.terminal",
+  "time": "2026-09-03T10:00:00Z",
+  "flash": {
+    "name": "standalone-flash",
+    "externalId": "pipeline-43",
+    "phase": "Failed",
+    "message": "Device flash failed",
+    "imageRef": "quay.io/example/os:build-42",
+    "leaseId": "lease-43",
+    "startedAt": "2026-09-03T09:30:00Z",
+    "completedAt": "2026-09-03T10:00:00Z"
+  }
+}

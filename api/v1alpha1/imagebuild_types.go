@@ -51,6 +51,13 @@ func IsTerminalBuildPhase(phase string) bool {
 // +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.disk) && has(self.export.disk.oci) && size(self.export.disk.oci) > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)",message="secretRef is required when export.disk.oci is set (unless useServiceAccountAuth is true)"
 // +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.container) && size(self.export.container) > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)",message="secretRef is required when export.container is set (unless useServiceAccountAuth is true)"
 type ImageBuildSpec struct {
+	// +kubebuilder:validation:MaxLength=512
+	// +optional
+	ExternalID string `json:"externalId,omitempty"`
+	// CallbackSecretRef holds the endpoint and HMAC key outside this resource.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	CallbackSecretRef string `json:"callbackSecretRef,omitempty"`
 	// ─── Common fields ───
 
 	// Architecture specifies the target architecture (e.g., "amd64", "arm64")
@@ -175,6 +182,7 @@ type AIBSpec struct {
 	Mode string `json:"mode,omitempty"`
 
 	// Manifest holds the inline AIB manifest YAML content
+	// +kubebuilder:validation:MaxLength=921600
 	Manifest string `json:"manifest,omitempty" yaml:"manifest,omitempty"`
 
 	// ManifestFileName is the original filename of the manifest, used for naming the file
@@ -293,7 +301,15 @@ type S3Export struct {
 }
 
 // ImageBuildStatus defines the observed state of ImageBuild
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.terminalResult) || has(self.terminalResult)",message="terminal result cannot be removed"
 type ImageBuildStatus struct {
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	Artifacts []ArtifactStatus `json:"artifacts,omitempty"`
+	// +optional
+	Flash *FlashOutcomeStatus `json:"flash,omitempty"`
+	// +optional
+	TerminalResult *BuildTerminalResult `json:"terminalResult,omitempty"`
 	// ObservedGeneration is the most recent generation observed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`

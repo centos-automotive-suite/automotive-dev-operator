@@ -922,6 +922,58 @@ spec:
                 required:
                 - enabled
                 type: object
+              webhookNotifications:
+                description: WebhookNotificationsConfig configures outbound terminal
+                  event delivery.
+                properties:
+                  allowHTTP:
+                    description: AllowHTTP is only intended for development receivers.
+                    type: boolean
+                  deliveryWindowSeconds:
+                    default: 86400
+                    format: int32
+                    maximum: 604800
+                    minimum: 60
+                    type: integer
+                  maxAttempts:
+                    default: 8
+                    format: int32
+                    maximum: 1000
+                    minimum: 1
+                    type: integer
+                  outboundPolicy:
+                    description: OutboundPolicyConfig allows administrators to grant
+                      access to intentional internal destinations.
+                    properties:
+                      allowedCIDRs:
+                        items:
+                          format: cidr
+                          maxLength: 64
+                          type: string
+                        maxItems: 128
+                        type: array
+                      allowedHostnames:
+                        description: AllowedHostnames are exact hostnames, not URL
+                          prefixes or wildcard patterns.
+                        items:
+                          maxLength: 253
+                          pattern: ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*\.?$
+                          type: string
+                        maxItems: 128
+                        type: array
+                      trustedCAConfigMap:
+                        description: TrustedCAConfigMap names a same-namespace ConfigMap
+                          containing ca-bundle.crt.
+                        maxLength: 253
+                        type: string
+                    type: object
+                  timeoutSeconds:
+                    default: 10
+                    format: int32
+                    maximum: 120
+                    minimum: 1
+                    type: integer
+                type: object
               workspaces:
                 description: Workspaces defines configuration for developer workspaces
                 properties:

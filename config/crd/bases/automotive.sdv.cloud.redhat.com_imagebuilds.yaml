@@ -79,6 +79,7 @@ spec:
                     type: boolean
                   manifest:
                     description: Manifest holds the inline AIB manifest YAML content
+                    maxLength: 921600
                     type: string
                   manifestFileName:
                     description: |-
@@ -129,6 +130,11 @@ spec:
                   BuildCachePVC is the name of a PVC to mount as the osbuild build cache directory.
                   When set, the build pod mounts this PVC and passes --build-dir to AIB,
                   enabling osbuild checkpoint reuse and dnf cache persistence across builds.
+                type: string
+              callbackSecretRef:
+                description: CallbackSecretRef holds the endpoint and HMAC key outside
+                  this resource.
+                maxLength: 253
                 type: string
               export:
                 description: Export contains configuration for exporting build artifacts
@@ -206,6 +212,9 @@ spec:
                       using a service account token instead of explicit credentials
                     type: boolean
                 type: object
+              externalId:
+                maxLength: 512
+                type: string
               flash:
                 description: Flash contains configuration for flashing the built image
                   to hardware via Jumpstarter
@@ -318,6 +327,32 @@ spec:
                 description: AIBImageUsed is the automotive-image-builder container
                   image that was used for the build
                 type: string
+              artifacts:
+                items:
+                  description: ArtifactStatus describes an output actually published
+                    by a build stage.
+                  properties:
+                    digest:
+                      description: Digest is the OCI digest or a checksum of uploaded
+                        bytes, never an S3 ETag.
+                      pattern: ^sha256:[a-f0-9]{64}$
+                      type: string
+                    kind:
+                      enum:
+                      - container
+                      - disk
+                      - s3
+                      type: string
+                    url:
+                      maxLength: 2048
+                      minLength: 1
+                      type: string
+                  required:
+                  - kind
+                  - url
+                  type: object
+                maxItems: 64
+                type: array
               builderImageUsed:
                 description: |-
                   BuilderImageUsed is the osbuild builder container image that was used for the build
@@ -393,6 +428,30 @@ spec:
                   or workspace build).
                 format: date-time
                 type: string
+              flash:
+                description: FlashOutcomeStatus excludes device credentials and command
+                  configuration.
+                properties:
+                  enabled:
+                    type: boolean
+                  leaseId:
+                    maxLength: 253
+                    type: string
+                  message:
+                    maxLength: 1024
+                    type: string
+                  state:
+                    enum:
+                    - NotStarted
+                    - Running
+                    - Succeeded
+                    - Failed
+                    - Cancelled
+                    type: string
+                required:
+                - enabled
+                - state
+                type: object
               flashTaskRunName:
                 description: FlashTaskRunName is the name of the TaskRun for flashing
                   to hardware
@@ -448,7 +507,87 @@ spec:
                 description: StartTime is when the build started
                 format: date-time
                 type: string
+              terminalResult:
+                description: BuildTerminalResult remains unchanged when the display
+                  phase later becomes Expired.
+                properties:
+                  artifacts:
+                    items:
+                      description: ArtifactStatus describes an output actually published
+                        by a build stage.
+                      properties:
+                        digest:
+                          description: Digest is the OCI digest or a checksum of uploaded
+                            bytes, never an S3 ETag.
+                          pattern: ^sha256:[a-f0-9]{64}$
+                          type: string
+                        kind:
+                          enum:
+                          - container
+                          - disk
+                          - s3
+                          type: string
+                        url:
+                          maxLength: 2048
+                          minLength: 1
+                          type: string
+                      required:
+                      - kind
+                      - url
+                      type: object
+                    maxItems: 64
+                    type: array
+                  completedAt:
+                    format: date-time
+                    type: string
+                  flash:
+                    description: FlashOutcomeStatus excludes device credentials and
+                      command configuration.
+                    properties:
+                      enabled:
+                        type: boolean
+                      leaseId:
+                        maxLength: 253
+                        type: string
+                      message:
+                        maxLength: 1024
+                        type: string
+                      state:
+                        enum:
+                        - NotStarted
+                        - Running
+                        - Succeeded
+                        - Failed
+                        - Cancelled
+                        type: string
+                    required:
+                    - enabled
+                    - state
+                    type: object
+                  message:
+                    maxLength: 1024
+                    type: string
+                  phase:
+                    enum:
+                    - Completed
+                    - Failed
+                    - Cancelled
+                    type: string
+                  startedAt:
+                    format: date-time
+                    type: string
+                required:
+                - completedAt
+                - message
+                - phase
+                type: object
+                x-kubernetes-validations:
+                - message: terminal result is immutable
+                  rule: self == oldSelf
             type: object
+            x-kubernetes-validations:
+            - message: terminal result cannot be removed
+              rule: '!has(oldSelf.terminalResult) || has(self.terminalResult)'
         type: object
     served: true
     storage: true

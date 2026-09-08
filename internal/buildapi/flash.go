@@ -22,37 +22,16 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 )
 
 func (a *APIServer) createFlash(c *gin.Context) {
 	var req FlashRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+	if !bindOperationRequest(c, &req) {
 		return
 	}
-
-	// Validate required fields
-	if req.ClientConfig == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "clientConfig is required"})
-		return
-	}
-
-	// Auto-generate name if not provided
-	if req.Name == "" {
-		req.Name = fmt.Sprintf("flash-%s", uuid.New().String()[:5])
-	}
-
-	// Validate and sanitize name for Kubernetes compatibility
-	if err := validateBuildName(req.Name); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	req.Name = sanitizeBuildNameForValidation(req.Name)
-
-	// Validate mutual exclusivity of lease-name and lease-duration
-	if req.LeaseName != "" && req.LeaseDuration != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "lease-name and lease-duration are mutually exclusive"})
+	if !validateAndNormalizeFlashRequest(c, &req) {
 		return
 	}
 
@@ -63,9 +42,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	namespace := resolveNamespace()
-
-	if httpErr := a.applyFlashImageSource(ctx, k8sClient, namespace, &req); httpErr != nil {
-		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
+	if !a.prepareFlashRequest(ctx, c, k8sClient, namespace, &req) {
 		return
 	}
 
@@ -165,7 +142,27 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		})
 	}
 
+	callbackSecret, callbackErr := createCallbackSecret(
+		ctx,
+		k8sClient,
+		namespace,
+		notifications.CallbackSecretName(notifications.SubjectTaskRun, req.Name, uuid.NewString()),
+		notifications.SubjectTaskRun,
+		req.Name,
+		"",
+		req.Callback,
+	)
+	if callbackErr != nil {
+		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+		if flashOCIAuthSecretName != "" {
+			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, flashOCIAuthSecretName, metav1.DeleteOptions{})
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist callback configuration"})
+		return
+	}
+
 	// Create the flash TaskRun
+	taskAnnotations := flashTaskAnnotations(ctx, req, requestedBy, callbackSecret)
 	taskRun := &tektonv1.TaskRun{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      req.Name,
@@ -176,10 +173,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 				labels.Name:         "flash-taskrun",
 				labels.FlashTaskRun: req.Name,
 			},
-			Annotations: map[string]string{
-				labels.RequestedBy: requestedBy,
-				labels.ImageRef:    req.ImageRef,
-			},
+			Annotations: taskAnnotations,
 		},
 		Spec: tektonv1.TaskRunSpec{
 			ServiceAccountName: automotivev1alpha1.BuildServiceAccountName,
@@ -202,7 +196,16 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		if flashOCIAuthSecretName != "" {
 			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, flashOCIAuthSecretName, metav1.DeleteOptions{})
 		}
+		deleteCallbackSecret(ctx, k8sClient, callbackSecret)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create flash TaskRun: %v", err)})
+		return
+	}
+	if err := a.finalizeFlashCallback(ctx, k8sClient, taskRun, callbackSecret); err != nil {
+		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+		if flashOCIAuthSecretName != "" {
+			_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, flashOCIAuthSecretName, metav1.DeleteOptions{})
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist callback ownership"})
 		return
 	}
 
@@ -235,6 +238,99 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		RequestedBy: requestedBy,
 		TaskRunName: taskRun.Name,
 	})
+}
+
+func validateAndNormalizeFlashRequest(c *gin.Context, req *FlashRequest) bool {
+	if err := validateOperationMetadata(req.ExternalID, req.Callback); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "InvalidRequest"})
+		return false
+	}
+
+	// Validate required fields
+	if req.ClientConfig == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "clientConfig is required"})
+		return false
+	}
+
+	// Auto-generate name if not provided
+	if req.Name == "" {
+		req.Name = fmt.Sprintf("flash-%s", uuid.New().String()[:5])
+	}
+
+	// Validate and sanitize name for Kubernetes compatibility
+	if err := validateBuildName(req.Name); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return false
+	}
+	req.Name = sanitizeBuildNameForValidation(req.Name)
+
+	// Validate mutual exclusivity of lease-name and lease-duration
+	if req.LeaseName != "" && req.LeaseDuration != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lease-name and lease-duration are mutually exclusive"})
+		return false
+	}
+	return true
+}
+
+func (a *APIServer) prepareFlashRequest(
+	ctx context.Context,
+	c *gin.Context,
+	k8sClient client.Client,
+	namespace string,
+	req *FlashRequest,
+) bool {
+	if httpErr := validateCallbackAdmission(ctx, k8sClient, namespace, req.Callback); httpErr != nil {
+		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
+		return false
+	}
+	if httpErr := a.applyFlashImageSource(ctx, k8sClient, namespace, req); httpErr != nil {
+		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
+		return false
+	}
+	return true
+}
+
+func flashTaskAnnotations(ctx context.Context, req FlashRequest, requestedBy string, callbackSecret *corev1.Secret) map[string]string {
+	annotations := map[string]string{
+		labels.RequestedBy: requestedBy,
+		labels.ImageRef:    req.ImageRef,
+	}
+	if traceID := extractTraceID(ctx); traceID != "" {
+		annotations[automotivev1alpha1.AnnotationTraceID] = traceID
+	}
+	if req.ExternalID != "" {
+		annotations[notifications.AnnotationExternalID] = req.ExternalID
+	}
+	if callbackSecret != nil {
+		annotations[notifications.AnnotationCallbackSecretRef] = callbackSecret.Name
+	}
+	return annotations
+}
+
+func (a *APIServer) finalizeFlashCallback(
+	ctx context.Context,
+	k8sClient client.Client,
+	taskRun *tektonv1.TaskRun,
+	callbackSecret *corev1.Secret,
+) error {
+	if callbackSecret == nil {
+		return nil
+	}
+	if err := adoptCallbackSecret(
+		ctx,
+		k8sClient,
+		callbackSecret,
+		notifications.SubjectTaskRun,
+		taskRun.Name,
+		taskRun.UID,
+	); err != nil {
+		a.log.Error(err, "failed to adopt callback secret", "flash", taskRun.Name)
+		if rollbackErr := rollbackCallbackSubject(ctx, k8sClient, taskRun, callbackSecret); rollbackErr != nil {
+			a.log.Error(rollbackErr, "failed to roll back flash after callback adoption failure", "flash", taskRun.Name)
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *APIServer) applyFlashImageSource(ctx context.Context, k8sClient client.Client, namespace string, req *FlashRequest) *httpError {

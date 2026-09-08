@@ -19,6 +19,9 @@ import (
 var digestPinnedRef = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
 
 func validateBuildRequest(req *BuildRequest) error {
+	if err := validateOperationMetadata(req.ExternalID, req.Callback); err != nil {
+		return err
+	}
 	if err := validateBuildName(req.Name); err != nil {
 		return err
 	}

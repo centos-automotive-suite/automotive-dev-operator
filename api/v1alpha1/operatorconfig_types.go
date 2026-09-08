@@ -677,6 +677,8 @@ func (c *TracingConfig) GetEndpoint() string {
 
 // OperatorConfigSpec defines the desired state of OperatorConfig
 type OperatorConfigSpec struct {
+	// +optional
+	WebhookNotifications *WebhookNotificationsConfig `json:"webhookNotifications,omitempty"`
 	// OSBuilds defines the configuration for OS build operations
 	// +optional
 	OSBuilds *OSBuildsConfig `json:"osBuilds,omitempty"`
