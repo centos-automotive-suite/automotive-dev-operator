@@ -107,7 +107,7 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.29 // indirect
-	github.com/mattn/go-sqlite3 v1.14.50 // indirect
+	github.com/mattn/go-sqlite3 v1.14.51 // indirect
 	github.com/miekg/pkcs11 v1.1.2 // indirect
 	github.com/moby/spdystream v0.5.1 // indirect
 	github.com/moby/sys/capability v0.4.0 // indirect
