@@ -32,7 +32,17 @@ func validateBuildRequest(req *BuildRequest) error {
 			len(req.Manifest), maxManifestSize)
 	}
 
+	if err := automotivev1alpha1.ValidateAIBLockfile(req.Lockfile); err != nil {
+		return err
+	}
+	if len(req.Manifest)+len(req.Lockfile) > maxManifestSize {
+		return fmt.Errorf("manifest and lockfile exceed %d byte limit", maxManifestSize)
+	}
+
 	if req.Mode == ModeDisk {
+		if req.Lockfile != "" {
+			return fmt.Errorf("lockfile is not supported for disk mode")
+		}
 		if req.ContainerRef == "" {
 			return fmt.Errorf("container-ref is required for disk mode")
 		}

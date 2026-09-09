@@ -77,6 +77,11 @@ spec:
                       InputFilesServer indicates if an upload server should be created for local file references
                       When true, the build waits in "Uploading" phase until files are uploaded
                     type: boolean
+                  lockfile:
+                    description: Lockfile holds the JSON dependency lock generated
+                      by AIB resolve.
+                    maxLength: 921600
+                    type: string
                   manifest:
                     description: Manifest holds the inline AIB manifest YAML content
                     maxLength: 921600

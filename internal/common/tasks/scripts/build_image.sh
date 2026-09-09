@@ -262,6 +262,11 @@ if ! load_args_from_file "$MANIFEST_CONFIG_PATH/aib-extra-args.txt" "AIB extra a
   echo "No AIB extra args file found"
 fi
 
+declare -a LOCKFILE_ARGS=()
+if [ -f "$MANIFEST_CONFIG_PATH/aib.lock" ]; then
+  LOCKFILE_ARGS=(--lockfile "$MANIFEST_CONFIG_PATH/aib.lock")
+fi
+
 declare -a ROOT_PASSWORD_ARGS=()
 ROOT_PASSWORD_FILE="$MANIFEST_CONFIG_PATH/root-password.txt"
 if [ -s "$ROOT_PASSWORD_FILE" ]; then
@@ -611,6 +616,7 @@ run_bootc() {
     "${BUILD_CONTAINER_ARGS[@]}"
     "${CUSTOM_DEFS_ARGS[@]}"
     "${AIB_EXTRA_ARGS[@]}"
+    "${LOCKFILE_ARGS[@]}"
     "${ROOT_PASSWORD_ARGS[@]}"
     "$MANIFEST_FILE"
     "$BOOTC_CONTAINER_NAME"
@@ -643,6 +649,7 @@ run_traditional() {
     "${FORMAT_ARGS[@]}"
     "${COMMON_BUILD_ARGS[@]}"
     "${AIB_EXTRA_ARGS[@]}"
+    "${LOCKFILE_ARGS[@]}"
     "${ROOT_PASSWORD_ARGS[@]}"
     "$MANIFEST_FILE"
     "/output/${EXPORT_FILE}"

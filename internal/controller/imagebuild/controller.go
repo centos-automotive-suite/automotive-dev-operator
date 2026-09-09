@@ -1797,6 +1797,16 @@ func (r *ImageBuildReconciler) createOrUpdateManifestConfigMap(
 ) (string, error) {
 	configMapName := safeDerivedName(imageBuild.Name, "-manifest")
 	manifestContent := imageBuild.Spec.GetManifest()
+	lockfile := imageBuild.Spec.GetLockfile()
+	if err := automotivev1alpha1.ValidateAIBLockfile(lockfile); err != nil {
+		return "", err
+	}
+	if lockfile != "" && imageBuild.Spec.GetMode() == "disk" {
+		return "", fmt.Errorf("lockfile is not supported for disk mode")
+	}
+	if len(manifestContent)+len(lockfile) > automotivev1alpha1.MaxAIBLockfileSize {
+		return "", fmt.Errorf("manifest and lockfile exceed %d byte limit", automotivev1alpha1.MaxAIBLockfileSize)
+	}
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1818,6 +1828,10 @@ func (r *ImageBuildReconciler) createOrUpdateManifestConfigMap(
 		}
 		cm.Data = map[string]string{
 			manifestKey: manifestContent,
+		}
+
+		if lockfile != "" {
+			cm.Data["aib.lock"] = lockfile
 		}
 
 		if customDefs := imageBuild.Spec.GetCustomDefs(); len(customDefs) > 0 {
