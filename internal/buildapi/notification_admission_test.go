@@ -2,7 +2,9 @@ package buildapi
 
 import (
 	"context"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,7 +111,10 @@ func TestNotificationAdmission(t *testing.T) {
 	}
 	now := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
 	build.Status.Phase = automotivev1alpha1.ImageBuildPhaseCompleted
-	build.Status.TerminalResult = &automotivev1alpha1.BuildTerminalResult{Phase: "Completed", Message: "done", CompletedAt: now}
+	build.Status.CompletionTime = &now
+	build.Status.Flash = &automotivev1alpha1.FlashOutcomeStatus{Enabled: true, State: "Succeeded", Message: strings.Repeat("é", 1100), LeaseID: strings.Repeat("l", 300)}
+	build.Status.Artifacts = []automotivev1alpha1.ArtifactStatus{{Kind: "disk", URL: "registry/image", Digest: "unavailable"}}
+	terminal.Finalize(&build.Status, "Completed", strings.Repeat("界", 1200))
 	if err := k8s.Status().Update(ctx, build); err != nil {
 		t.Fatal(err)
 	}

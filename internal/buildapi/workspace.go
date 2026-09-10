@@ -527,7 +527,7 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 	}
 
 	destDir := "/workspace/src/"
-	clean := c.Query("clean") == "true"
+	clean := c.Query("clean") == labels.ValueTrue
 	if clean {
 		// Extract into a sidecar directory first so a failed upload leaves
 		// the existing /workspace/src tree intact.

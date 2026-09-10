@@ -22,6 +22,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 )
@@ -429,7 +430,7 @@ func (a *APIServer) getFlash(c *gin.Context, name string) {
 		StartTime:      startStr,
 		CompletionTime: compStr,
 		TaskRunName:    taskRun.Name,
-		LeaseID:        extractTaskRunResult(taskRun, "lease-id"),
+		LeaseID:        terminal.Bound(extractTaskRunResult(taskRun, "lease-id"), 253),
 	})
 }
 
@@ -443,26 +444,10 @@ func extractTaskRunResult(tr *tektonv1.TaskRun, name string) string {
 }
 
 func getTaskRunStatus(tr *tektonv1.TaskRun) (phase, message string) {
-	if tr.Status.CompletionTime != nil {
-		for _, cond := range tr.Status.Conditions {
-			if cond.Type == "Succeeded" {
-				if cond.Status == corev1.ConditionTrue {
-					return phaseCompleted, "Flash completed successfully"
-				}
-				if cond.Message == "" {
-					return phaseFailed, "Flash failed"
-				}
-				return phaseFailed, cond.Message
-			}
-		}
-		return phaseFailed, "Flash failed"
+	if result := terminal.FlashResult(tr); result != nil {
+		return result.Phase, result.Message
 	}
-
-	if tr.Status.StartTime != nil {
-		return phaseRunning, "Flash in progress"
-	}
-
-	return phasePending, "Waiting to start"
+	return terminal.TaskPhase(tr)
 }
 
 func (a *APIServer) streamFlashLogs(c *gin.Context, name string) {

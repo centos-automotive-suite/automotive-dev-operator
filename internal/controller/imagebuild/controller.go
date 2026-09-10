@@ -22,6 +22,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 	"github.com/go-logr/logr"
 	routev1 "github.com/openshift/api/route/v1"
@@ -271,6 +272,10 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return initializationResult, initializationErr
 	}
 
+	if imageBuild.Annotations[terminal.CancellationAnnotation] == "true" && !isTerminalPhase(imageBuild.Status.Phase) {
+		return r.handleCancellation(ctx, imageBuild)
+	}
+
 	expiryResult, expired, expiryErr := r.checkExpiry(ctx, imageBuild)
 	if expired || expiryErr != nil {
 		return expiryResult, expiryErr
@@ -279,7 +284,7 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var phaseResult ctrl.Result
 	var phaseErr error
 	switch imageBuild.Status.Phase {
-	case "":
+	case "", "Pending":
 		phaseResult, phaseErr = r.handleInitialState(ctx, imageBuild)
 	case phaseUploading:
 		phaseResult, phaseErr = r.handleUploadingState(ctx, imageBuild)
@@ -309,6 +314,9 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if phaseErr != nil {
+		if stderrors.Is(phaseErr, errTerminalResultsPending) {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
 		return phaseResult, phaseErr
 	}
 
@@ -1001,7 +1009,7 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 
 	cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
 
-	if pipelineRun.Spec.Status == tektonv1.PipelineRunSpecStatusCancelled {
+	if pipelineRun.IsCancelled() || pipelineRun.IsGracefullyCancelled() || pipelineCancelled(pipelineRun) {
 		if imageBuild.Status.Phase == phaseCancelled {
 			if cleanupErr != nil {
 				return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
@@ -2116,7 +2124,8 @@ func (r *ImageBuildReconciler) handlePushingState(
 			return ctrl.Result{}, err
 		}
 	} else {
-		if err := r.updateStatus(ctx, imageBuild, phaseFailed, "Push to registry failed"); err != nil {
+		phase, message := settledTaskStatus(taskRun, "Push to registry failed", "Push to registry cancelled")
+		if err := r.updateStatus(ctx, imageBuild, phase, message); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -2183,7 +2192,8 @@ func (r *ImageBuildReconciler) handleFlashingState(
 		}
 		recordFlashMetrics(imageBuild, taskRun, buildStatusSuccess)
 	} else {
-		if err := r.updateStatus(ctx, imageBuild, phaseFailed, taskRunFailureMessage(taskRun, "Flash to device failed")); err != nil {
+		phase, message := settledTaskStatus(taskRun, taskRunFailureMessage(taskRun, "Flash to device failed"), "Flash to device cancelled")
+		if err := r.updateStatus(ctx, imageBuild, phase, message); err != nil {
 			return ctrl.Result{}, err
 		}
 		recordFlashMetrics(imageBuild, taskRun, buildStatusFailure)
@@ -2439,11 +2449,11 @@ func (r *ImageBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func isTaskRunCompleted(taskRun *tektonv1.TaskRun) bool {
-	return taskRun.Status.CompletionTime != nil
+	return taskRun.Status.CompletionTime != nil && !taskRun.Status.CompletionTime.IsZero()
 }
 
 func isPipelineRunCompleted(pipelineRun *tektonv1.PipelineRun) bool {
-	return pipelineRun.Status.CompletionTime != nil
+	return pipelineRun.Status.CompletionTime != nil && !pipelineRun.Status.CompletionTime.IsZero()
 }
 
 func isPipelineRunSuccessful(pipelineRun *tektonv1.PipelineRun) bool {
@@ -2915,19 +2925,34 @@ func (r *ImageBuildReconciler) updateStatus(
 		return err
 	}
 
-	if fresh.Status.Phase == phaseCancelled && phase != phaseCancelled {
+	if fresh.Status.TerminalResult != nil && phase != automotivev1alpha1.ImageBuildPhaseExpired {
+		return nil
+	}
+	if fresh.Status.Phase == phaseCancelled && phase != phaseCancelled && phase != automotivev1alpha1.ImageBuildPhaseExpired {
 		return nil
 	}
 	if fresh.Status.Phase == automotivev1alpha1.ImageBuildPhaseExpired && phase != automotivev1alpha1.ImageBuildPhaseExpired {
 		return nil
 	}
 
-	patch := client.MergeFrom(fresh.DeepCopy())
+	patch := client.MergeFromWithOptions(fresh.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	oldPhase := fresh.Status.Phase
 	oldMessage := fresh.Status.Message
 
 	for _, fn := range mutations {
 		fn(fresh)
+	}
+
+	phaseChanged := fresh.Status.Phase != phase
+	if phase != automotivev1alpha1.ImageBuildPhaseExpired &&
+		(isTerminalPhase(phase) || (phaseChanged && (fresh.Status.PipelineRunName != "" || phase == "Pushing" || phase == "Flashing"))) {
+		if err := r.collectResults(ctx, fresh, isTerminalPhase(phase)); err != nil {
+			return err
+		}
+		if !isTerminalPhase(phase) {
+			fresh.Status.CompletionTime = nil
+		}
+		terminal.Finalize(&fresh.Status, phase, message)
 	}
 
 	if phase == automotivev1alpha1.ImageBuildPhaseExpired {
