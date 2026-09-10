@@ -41,6 +41,17 @@ func makeExpiredTestJWT(iss string) string {
 	})
 }
 
+// makeAudienceTestJWT builds an unexpired token with an aud claim. aud is passed
+// through untouched so tests can cover both the string and array encodings.
+func makeAudienceTestJWT(iss string, aud any) string {
+	return makeTestJWT(map[string]any{
+		"sub": "test-user",
+		"iss": iss,
+		"aud": aud,
+		"exp": float64(time.Now().Add(1 * time.Hour).Unix()),
+	})
+}
+
 var _ = Describe("IsTokenValid", func() {
 	var oidcAuth *OIDCAuth
 
@@ -66,12 +77,188 @@ var _ = Describe("IsTokenValid", func() {
 		Expect(oidcAuth.IsTokenValid("")).To(BeFalse())
 	})
 
-	It("should return true for a token without exp claim", func() {
+	It("should return false for a token without exp claim", func() {
 		token := makeTestJWT(map[string]any{
 			"sub": "user1",
 			"iss": "https://issuer.example.com",
 		})
-		Expect(oidcAuth.IsTokenValid(token)).To(BeTrue())
+		Expect(oidcAuth.IsTokenValid(token)).To(BeFalse())
+	})
+})
+
+var _ = Describe("CanReuseToken", func() {
+	const issuer = "https://issuer.example.com"
+
+	newAuth := func(audiences ...string) *OIDCAuth {
+		return &OIDCAuth{config: OIDCConfig{
+			IssuerURL: issuer,
+			ClientID:  "test-client",
+			Audiences: audiences,
+		}}
+	}
+
+	It("accepts an unexpired token from the configured issuer", func() {
+		Expect(newAuth().CanReuseToken(makeValidTestJWT(issuer, 1*time.Hour))).To(BeTrue())
+	})
+
+	// The configured issuer is the string the Build API advertises and then
+	// exact-matches against, so a near miss here is a token the server refuses.
+	It("rejects a token whose issuer differs only by a trailing slash", func() {
+		auth := &OIDCAuth{config: OIDCConfig{IssuerURL: issuer + "/", ClientID: "test-client"}}
+		Expect(auth.CanReuseToken(makeValidTestJWT(issuer, 1*time.Hour))).To(BeFalse())
+		Expect(newAuth().CanReuseToken(makeValidTestJWT(issuer+"/", 1*time.Hour))).To(BeFalse())
+	})
+
+	It("rejects a token from a different issuer", func() {
+		Expect(newAuth().CanReuseToken(makeValidTestJWT("https://other.example.com", 1*time.Hour))).To(BeFalse())
+	})
+
+	It("rejects a token with no iss claim", func() {
+		token := makeTestJWT(map[string]any{
+			"sub": "test-user",
+			"exp": float64(time.Now().Add(1 * time.Hour).Unix()),
+		})
+		Expect(newAuth().CanReuseToken(token)).To(BeFalse())
+	})
+
+	It("rejects an expired token", func() {
+		Expect(newAuth().CanReuseToken(makeExpiredTestJWT(issuer))).To(BeFalse())
+	})
+
+	// The Build API's verifier requires exp, so a token that lacks a usable one
+	// comes back as a 401. Adopting it would park a rejected token in the cache.
+	It("rejects a token with no exp claim", func() {
+		Expect(newAuth().CanReuseToken(makeTestJWT(map[string]any{
+			"sub": "test-user",
+			"iss": issuer,
+		}))).To(BeFalse())
+	})
+
+	It("rejects a token whose exp claim is not a number", func() {
+		Expect(newAuth().CanReuseToken(makeTestJWT(map[string]any{
+			"sub": "test-user",
+			"iss": issuer,
+			"exp": "tomorrow",
+		}))).To(BeFalse())
+	})
+
+	It("rejects a malformed or empty token", func() {
+		Expect(newAuth().CanReuseToken("not-a-jwt")).To(BeFalse())
+		Expect(newAuth().CanReuseToken("")).To(BeFalse())
+	})
+
+	It("accepts any audience when the server advertises none", func() {
+		Expect(newAuth().CanReuseToken(makeAudienceTestJWT(issuer, "jumpstarter-cli"))).To(BeTrue())
+	})
+
+	It("accepts a token carrying one of the accepted audiences", func() {
+		auth := newAuth("caib-cli", "other-cli")
+		Expect(auth.CanReuseToken(makeAudienceTestJWT(issuer, "caib-cli"))).To(BeTrue())
+		Expect(auth.CanReuseToken(makeAudienceTestJWT(issuer, []string{"jumpstarter-cli", "other-cli"}))).To(BeTrue())
+	})
+
+	It("rejects a token whose audience the server does not accept", func() {
+		auth := newAuth("caib-cli")
+		Expect(auth.CanReuseToken(makeAudienceTestJWT(issuer, "jumpstarter-cli"))).To(BeFalse())
+		Expect(auth.CanReuseToken(makeAudienceTestJWT(issuer, []string{"jumpstarter-cli"}))).To(BeFalse())
+	})
+
+	It("rejects a token with no aud claim when the server requires one", func() {
+		Expect(newAuth("caib-cli").CanReuseToken(makeValidTestJWT(issuer, 1*time.Hour))).To(BeFalse())
+	})
+})
+
+var _ = Describe("AdoptToken", func() {
+	const issuer = "https://issuer.example.com"
+
+	var tempDir string
+	var originalHome, originalXDGCache string
+	var oidcAuth *OIDCAuth
+
+	BeforeEach(func() {
+		var err error
+		tempDir, err = os.MkdirTemp("", "caib-adopt-token-test-*")
+		Expect(err).NotTo(HaveOccurred())
+
+		originalHome = os.Getenv("HOME")
+		originalXDGCache = os.Getenv("XDG_CACHE_HOME")
+		Expect(os.Setenv("HOME", tempDir)).To(Succeed())
+		Expect(os.Unsetenv("XDG_CACHE_HOME")).To(Succeed())
+
+		oidcAuth = &OIDCAuth{
+			config:    OIDCConfig{IssuerURL: issuer, ClientID: "test-client"},
+			cachePath: filepath.Join(tempDir, ".cache", "caib", tokenCacheFile),
+		}
+	})
+
+	AfterEach(func() {
+		if originalHome != "" {
+			_ = os.Setenv("HOME", originalHome)
+		}
+		if originalXDGCache != "" {
+			_ = os.Setenv("XDG_CACHE_HOME", originalXDGCache)
+		} else {
+			_ = os.Unsetenv("XDG_CACHE_HOME")
+		}
+		_ = os.RemoveAll(tempDir)
+	})
+
+	readCache := func() *TokenCache {
+		data, err := os.ReadFile(oidcAuth.cachePath)
+		if err != nil {
+			return nil
+		}
+		var cache TokenCache
+		Expect(json.Unmarshal(data, &cache)).To(Succeed())
+		return &cache
+	}
+
+	It("caches the token when no cache exists, deriving expiry from the exp claim", func() {
+		token := makeValidTestJWT(issuer, 30*time.Minute)
+		Expect(oidcAuth.AdoptToken(token)).To(BeTrue())
+
+		cache := readCache()
+		Expect(cache).NotTo(BeNil())
+		Expect(cache.Token).To(Equal(token))
+		Expect(cache.Issuer).To(Equal(issuer))
+		Expect(cache.RefreshToken).To(BeEmpty())
+		Expect(cache.ExpiresAt).To(BeTemporally("~", time.Now().Add(30*time.Minute), time.Minute))
+	})
+
+	It("replaces a cached token that has no refresh token", func() {
+		Expect(oidcAuth.saveTokenCache(makeValidTestJWT(issuer, 1*time.Hour), "", 3600)).To(Succeed())
+
+		adopted := makeValidTestJWT(issuer, 2*time.Hour)
+		Expect(oidcAuth.AdoptToken(adopted)).To(BeTrue())
+		Expect(readCache().Token).To(Equal(adopted))
+	})
+
+	// A cached refresh token can silently mint new access tokens; an adopted token
+	// cannot, so overwriting the entry would downgrade the user to a browser login.
+	It("leaves a cached login that still holds a refresh token untouched", func() {
+		existing := makeValidTestJWT(issuer, 1*time.Hour)
+		Expect(oidcAuth.saveTokenCache(existing, "my-refresh-token", 3600)).To(Succeed())
+
+		Expect(oidcAuth.AdoptToken(makeValidTestJWT(issuer, 2*time.Hour))).To(BeFalse())
+
+		cache := readCache()
+		Expect(cache.Token).To(Equal(existing))
+		Expect(cache.RefreshToken).To(Equal("my-refresh-token"))
+	})
+
+	It("replaces a cached entry belonging to a different issuer", func() {
+		oidcAuth.config.IssuerURL = "https://other.example.com"
+		Expect(oidcAuth.saveTokenCache(makeValidTestJWT("https://other.example.com", 1*time.Hour), "stale-refresh", 3600)).To(Succeed())
+		oidcAuth.config.IssuerURL = issuer
+		oidcAuth.tokenCache = nil
+
+		adopted := makeValidTestJWT(issuer, 1*time.Hour)
+		Expect(oidcAuth.AdoptToken(adopted)).To(BeTrue())
+
+		cache := readCache()
+		Expect(cache.Token).To(Equal(adopted))
+		Expect(cache.Issuer).To(Equal(issuer))
+		Expect(cache.RefreshToken).To(BeEmpty())
 	})
 })
 

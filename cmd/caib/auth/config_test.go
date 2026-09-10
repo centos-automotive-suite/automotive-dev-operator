@@ -49,6 +49,29 @@ var _ = Describe("GetOIDCConfigFromAPI", func() {
 		Expect(config.IssuerURL).To(Equal("https://issuer.example.com"))
 		Expect(config.ClientID).To(Equal("test-client"))
 		Expect(config.Scopes).To(Equal([]string{"openid", "profile", "email", "offline_access"}))
+		Expect(config.Audiences).To(Equal([]string{"audience1"}))
+	})
+
+	It("should leave audiences empty when the server advertises none", func() {
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"clientId": "test-client",
+				"jwt": []map[string]any{
+					{
+						"issuer": map[string]any{"url": "https://issuer.example.com"},
+						"claimMappings": map[string]any{
+							"username": map[string]any{"claim": "preferred_username"},
+						},
+					},
+				},
+			})
+		}))
+
+		config, err := GetOIDCConfigFromAPI(server.URL, false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(config).NotTo(BeNil())
+		Expect(config.Audiences).To(BeEmpty())
 	})
 
 	It("should return nil config without error when API returns 404", func() {
