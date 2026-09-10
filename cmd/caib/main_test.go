@@ -263,6 +263,21 @@ func TestOutputFormatFlagRegistered(t *testing.T) {
 	}
 }
 
+func TestNotificationFlagsRegistered(t *testing.T) {
+	rootCmd := newRootCmd()
+	for _, path := range [][]string{{"image", "build"}, {"image", "disk"}, {"image", "build-dev"}, {"image", "flash"}} {
+		cmd, _, err := rootCmd.Find(path)
+		if err != nil {
+			t.Fatalf("find %v: %v", path, err)
+		}
+		for _, name := range []string{"external-id", "callback-url", "callback-secret-file"} {
+			if cmd.Flags().Lookup(name) == nil {
+				t.Errorf("%v missing --%s", path, name)
+			}
+		}
+	}
+}
+
 func TestOutputFormatFlagPropagates(t *testing.T) {
 	rootCmd := newRootCmd()
 

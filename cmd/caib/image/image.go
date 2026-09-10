@@ -33,6 +33,9 @@ type Options struct {
 
 	ServerURL              *string
 	AuthToken              *string
+	ExternalID             *string
+	CallbackURL            *string
+	CallbackSecretFile     *string
 	BuildName              *string
 	Distro                 *string
 	Target                 *string
@@ -135,6 +138,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// build command flags (bootc - the default)
 	buildCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	buildCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	addNotificationFlags(buildCmd, opts)
 	buildCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the ImageBuild (auto-generated if omitted)")
 	buildCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution to build")
 	buildCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
@@ -209,6 +213,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// disk command flags (create disk from existing container)
 	diskCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	diskCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	addNotificationFlags(diskCmd, opts)
 	diskCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the build job (auto-generated if omitted)")
 	diskCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "download disk image to file from registry (uses --internal-registry when no --push given)")
 	diskCmd.Flags().StringVar(
@@ -254,6 +259,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// build-dev command flags (traditional ostree/package builds)
 	buildDevCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	buildDevCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	addNotificationFlags(buildDevCmd, opts)
 	buildDevCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the ImageBuild")
 	buildDevCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution to build")
 	buildDevCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
@@ -329,6 +335,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	// flash command flags
 	flashCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
 	flashCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	addNotificationFlags(flashCmd, opts)
 	flashCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
 	flashCmd.Flags().StringVarP(opts.FlashName, "name", "n", "", "name for the flash job (auto-generated if omitted)")
 	flashCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform for exporter lookup")
@@ -381,6 +388,12 @@ func NewImageCmd(opts Options) *cobra.Command {
 	)
 
 	return cmd
+}
+
+func addNotificationFlags(cmd *cobra.Command, opts Options) {
+	cmd.Flags().StringVar(opts.ExternalID, "external-id", "", "external correlation value included in operation status and webhook events")
+	cmd.Flags().StringVar(opts.CallbackURL, "callback-url", "", "HTTPS URL for the signed terminal webhook")
+	cmd.Flags().StringVar(opts.CallbackSecretFile, "callback-secret-file", "", "file containing the 32 to 4096 byte webhook HMAC secret")
 }
 
 func newBuildCmd(opts Options) *cobra.Command {

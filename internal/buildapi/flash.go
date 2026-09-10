@@ -233,11 +233,13 @@ func (a *APIServer) createFlash(c *gin.Context) {
 	FlashCreatedTotal.Inc()
 
 	writeJSON(c, http.StatusAccepted, FlashResponse{
-		Name:        req.Name,
-		Phase:       phasePending,
-		Message:     "Flash TaskRun created",
-		RequestedBy: requestedBy,
-		TaskRunName: taskRun.Name,
+		ExternalID:   req.ExternalID,
+		Notification: pendingNotification(req.Callback != nil),
+		Name:         req.Name,
+		Phase:        phasePending,
+		Message:      "Flash TaskRun created",
+		RequestedBy:  requestedBy,
+		TaskRunName:  taskRun.Name,
 	})
 }
 
@@ -373,6 +375,18 @@ func (a *APIServer) listFlash(c *gin.Context) {
 	})
 
 	page := applyPagination(taskRunList.Items, limit, offset)
+	needsNotifications := false
+	for i := range page {
+		if page[i].Annotations[notifications.AnnotationCallbackSecretRef] != "" {
+			needsNotifications = true
+			break
+		}
+	}
+	notificationStatuses, err := listNotificationStatuses(ctx, k8sClient, namespace, needsNotifications)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load flash notifications"})
+		return
+	}
 
 	resp := make([]FlashListItem, 0, len(page))
 	for _, tr := range page {
@@ -382,6 +396,8 @@ func (a *APIServer) listFlash(c *gin.Context) {
 			compStr = tr.Status.CompletionTime.Format(time.RFC3339)
 		}
 		resp = append(resp, FlashListItem{
+			ExternalID:     tr.Annotations[notifications.AnnotationExternalID],
+			Notification:   projectedNotification(notificationStatuses, tr.UID, tr.Annotations[notifications.AnnotationCallbackSecretRef] != ""),
 			Name:           tr.Name,
 			Phase:          phase,
 			Message:        message,
@@ -414,6 +430,17 @@ func (a *APIServer) getFlash(c *gin.Context, name string) {
 	}
 
 	phase, message := getTaskRunStatus(taskRun)
+	notificationStatus, err := getNotificationStatus(
+		ctx,
+		k8sClient,
+		namespace,
+		taskRun.UID,
+		taskRun.Annotations[notifications.AnnotationCallbackSecretRef] != "",
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load flash notification"})
+		return
+	}
 	var startStr, compStr string
 	if taskRun.Status.StartTime != nil {
 		startStr = taskRun.Status.StartTime.Format(time.RFC3339)
@@ -423,6 +450,8 @@ func (a *APIServer) getFlash(c *gin.Context, name string) {
 	}
 
 	writeJSON(c, http.StatusOK, FlashResponse{
+		ExternalID:     taskRun.Annotations[notifications.AnnotationExternalID],
+		Notification:   notificationStatus,
 		Name:           taskRun.Name,
 		Phase:          phase,
 		Message:        message,
