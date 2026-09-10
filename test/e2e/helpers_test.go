@@ -61,6 +61,16 @@ const (
 	caibLogFileName = "caib.log"
 
 	healthzPath = "/v1/healthz"
+
+	// Dex, as deployed by hack/e2e/setup-dex.sh. The issuer is the in-cluster
+	// service URL because that is what the Build API validates tokens against,
+	// and so what Dex must stamp into their iss claim.
+	dexIssuerURL = "https://dex.dex.svc.cluster.local:5556"
+	dexClientID  = "caib-cli"
+
+	// tokenCacheFileName is where caib caches its OIDC token, under the caib
+	// directory of the active cache home.
+	tokenCacheFileName = "token.json"
 )
 
 // Shared state populated lazily via sync.Once and consumed by test lanes.
@@ -649,8 +659,8 @@ func validateDexEndpoint() {
 func patchOperatorConfigWithDex() {
 	escapedCA := strings.ReplaceAll(dexCACert, "\n", "\\n")
 	oidcPatch := fmt.Sprintf(
-		`{"spec":{"buildAPI":{"authentication":{"clientId":"caib-cli","jwt":[{"issuer":{"url":"https://dex.dex.svc.cluster.local:5556","audiences":["caib-cli"],"certificateAuthority":"%s"},"claimMappings":{"username":{"claim":"name","prefix":"dex:"}}}]}}}}`,
-		escapedCA,
+		`{"spec":{"buildAPI":{"authentication":{"clientId":%q,"jwt":[{"issuer":{"url":%q,"audiences":[%q],"certificateAuthority":"%s"},"claimMappings":{"username":{"claim":"name","prefix":"dex:"}}}]}}}}`,
+		dexClientID, dexIssuerURL, dexClientID, escapedCA,
 	)
 	cmd := exec.Command("kubectl", "patch", "operatorconfig", "config",
 		"-n", testNamespace, "--type=merge", "-p", oidcPatch)

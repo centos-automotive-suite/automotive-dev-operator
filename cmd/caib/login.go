@@ -97,14 +97,31 @@ func runLogin(_ *cobra.Command, args []string) {
 	clilog.Infof("Server saved: %s\n", server)
 
 	ctx := context.Background()
-	token, didAuth, err := auth.GetTokenWithReauth(ctx, server, "", insecureSkipTLS)
+
+	// An existing `jmp login` session may already hold a token this server accepts;
+	// offering it here avoids a second browser round trip.
+	jmpToken := config.JumpstarterToken()
+	token, didAuth, err := auth.GetTokenWithReauth(ctx, server, jmpToken, insecureSkipTLS)
 	if err != nil {
 		clilog.Warnf("authentication failed (you may need --token or kubeconfig for API calls): %v\n", err)
 		return
 	}
-	if token != "" && didAuth {
-		clilog.Infoln("OIDC authentication successful. Token cached for subsequent commands.")
-	} else if token != "" {
-		clilog.Infoln("Using existing or kubeconfig token. You can run build/list/disk commands without --server.")
+	if msg := loginResultMessage(token, jmpToken, didAuth); msg != "" {
+		clilog.Infoln(msg)
+	}
+}
+
+// loginResultMessage describes where the token came from. jmpToken is the token
+// found in the Jumpstarter client config, if any.
+func loginResultMessage(token, jmpToken string, didAuth bool) string {
+	switch {
+	case token == "":
+		return ""
+	case didAuth:
+		return "OIDC authentication successful. Token cached for subsequent commands."
+	case jmpToken != "" && token == jmpToken:
+		return "Reusing the token from your Jumpstarter client config. You can run build/list/disk commands without --server."
+	default:
+		return "Using existing or kubeconfig token. You can run build/list/disk commands without --server."
 	}
 }

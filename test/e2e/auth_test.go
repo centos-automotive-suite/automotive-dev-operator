@@ -17,17 +17,37 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 
+	"github.com/golang-jwt/jwt/v5"
+
+	caibauth "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/auth"
 	utils "github.com/centos-automotive-suite/automotive-dev-operator/test/utils"
+)
+
+const (
+	// Refresh tokens seeded into a caib cache. Neither is ever redeemed
+	// successfully; they only stand for "this session can renew itself" and
+	// "this session cannot".
+	liveRefreshToken = "e2e-live-refresh-token"
+	deadRefreshToken = "e2e-dead-refresh-token"
+
+	// caibLoginTimeout bounds a `caib login`. Every login these specs drive
+	// should return in seconds; the only thing that takes longer is the browser
+	// flow, whose own timeout is 5 minutes.
+	caibLoginTimeout = 90 * time.Second
 )
 
 var _ = Describe("OIDC Authentication", Label("auth"), Ordered, func() {
@@ -171,6 +191,83 @@ var _ = Describe("OIDC Authentication", Label("auth"), Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			defer func() { _ = resp.Body.Close() }()
 			Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
+		})
+	})
+
+	// -----------------------------------------------------------------
+	// Reuse of a token minted by `jmp login`, read from the Jumpstarter
+	// client config. Requires Dex: the token has to be one this Build API
+	// actually accepts, or caib would rightly refuse to reuse it.
+	// -----------------------------------------------------------------
+	Context("Jumpstarter Token Reuse", func() {
+		BeforeAll(func() {
+			if !dexAvailable {
+				Skip("Jumpstarter token reuse tests require Dex; run hack/e2e/setup-dex.sh")
+			}
+			ensureDexOIDC()
+			// Re-assert the Dex issuer rather than trust whatever the previous
+			// context left behind: these specs need a server that accepts Dex
+			// tokens, and a sibling context may have pointed it elsewhere.
+			patchOperatorConfigWithDex()
+			waitForOIDCConfig()
+		})
+
+		It("should adopt the Jumpstarter token when no caib session is cached", func() {
+			jmpToken := getDexToken()
+			session := newJumpstarterSession(jmpToken)
+
+			output := session.mustRunCaib("login", caibServer)
+			Expect(string(output)).To(ContainSubstring("Reusing the token from your Jumpstarter client config"))
+
+			cache := session.tokenCache()
+			Expect(cache.Token).To(Equal(jmpToken))
+			Expect(cache.Issuer).To(Equal(dexIssuerURL))
+			Expect(cache.RefreshToken).To(BeEmpty(),
+				"an adopted token is stored without a refresh token; caib cannot renew it")
+
+			By("running an authenticated command with nothing but the adopted token")
+			out, err := session.runCaib("image", "list")
+			Expect(err).NotTo(HaveOccurred(), string(out))
+		})
+
+		It("should keep a cached session that can still refresh itself", func() {
+			jmpToken := getDexToken()
+			session := newJumpstarterSession(jmpToken)
+
+			By("seeding a live caib session holding a refresh token")
+			cachedToken := craftCachedSessionToken(time.Now().Add(1 * time.Hour))
+			session.seedTokenCache(cachedToken, liveRefreshToken, time.Now().Add(1*time.Hour))
+
+			output := session.mustRunCaib("login", caibServer)
+			Expect(string(output)).NotTo(ContainSubstring("Reusing the token from your Jumpstarter client config"),
+				"a session that can mint new access tokens outranks the Jumpstarter token")
+
+			cache := session.tokenCache()
+			Expect(cache.Token).To(Equal(cachedToken))
+			Expect(cache.RefreshToken).To(Equal(liveRefreshToken))
+		})
+
+		It("should fall back to the Jumpstarter token when the cached session can no longer refresh", func() {
+			jmpToken := getDexToken()
+			session := newJumpstarterSession(jmpToken)
+
+			By("seeding an expired caib session whose refresh token no longer works")
+			session.seedTokenCache(
+				craftCachedSessionToken(time.Now().Add(-1*time.Hour)),
+				deadRefreshToken,
+				time.Now().Add(-1*time.Hour),
+			)
+
+			// mustRunCaib caps the run well below caib's own 5-minute browser-login
+			// timeout, so a regression that reaches for a browser here fails the
+			// spec instead of stalling the lane.
+			output := session.mustRunCaib("login", caibServer)
+			Expect(string(output)).To(ContainSubstring("Reusing the token from your Jumpstarter client config"))
+
+			cache := session.tokenCache()
+			Expect(cache.Token).To(Equal(jmpToken))
+			Expect(cache.RefreshToken).To(BeEmpty(),
+				"the dead session should have been replaced by the adopted token")
 		})
 	})
 
@@ -355,3 +452,136 @@ var _ = Describe("OIDC Authentication", Label("auth"), Ordered, func() {
 		})
 	})
 })
+
+// jumpstarterSession is an isolated home for one `caib login`: caib's config
+// directory, its token cache, and the Jumpstarter client config all live under a
+// per-spec temp dir. Specs can seed a cache and read back what caib wrote without
+// touching the real ~/.config of whoever runs the suite.
+type jumpstarterSession struct {
+	cachePath string
+	env       []string
+}
+
+// newJumpstarterSession lays out that home, storing jmpToken where
+// `jmp login` would have left it.
+func newJumpstarterSession(jmpToken string) *jumpstarterSession {
+	root := GinkgoT().TempDir()
+	configHome := filepath.Join(root, "config")
+	cacheHome := filepath.Join(root, "cache")
+	jmpHome := filepath.Join(root, "jumpstarter")
+	stubBin := filepath.Join(root, "bin")
+
+	ExpectWithOffset(1, os.MkdirAll(filepath.Join(jmpHome, "clients"), 0o700)).To(Succeed())
+	ExpectWithOffset(1, os.MkdirAll(stubBin, 0o700)).To(Succeed())
+
+	writeSessionFile(filepath.Join(jmpHome, "config.yaml"),
+		"config:\n  current-client: e2e\n", 0o600)
+	writeSessionFile(filepath.Join(jmpHome, "clients", "e2e.yaml"),
+		fmt.Sprintf("endpoint: grpc.jumpstarter.example.com:443\ntoken: %s\n", jmpToken), 0o600)
+
+	// caib reaches for a browser via xdg-open when it falls through to a full
+	// login. Shadow it with a stub that fails, so a regression cannot open a real
+	// window on the machine running the suite.
+	writeSessionFile(filepath.Join(stubBin, "xdg-open"), "#!/bin/sh\nexit 1\n", 0o700)
+
+	env := envWithout(os.Environ(),
+		"CAIB_TOKEN", "CAIB_SERVER", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+		"JMP_CLIENT_CONFIG_HOME", "PATH")
+	env = append(env,
+		"XDG_CONFIG_HOME="+configHome,
+		"XDG_CACHE_HOME="+cacheHome,
+		"JMP_CLIENT_CONFIG_HOME="+jmpHome,
+		"CAIB_SERVER="+caibServer,
+		"PATH="+stubBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	if openShiftCluster {
+		env = append(env, "CAIB_INSECURE="+statusTrue)
+	}
+
+	return &jumpstarterSession{
+		cachePath: filepath.Join(cacheHome, "caib", tokenCacheFileName),
+		env:       env,
+	}
+}
+
+// seedTokenCache writes the token cache a previous caib login would have left.
+func (s *jumpstarterSession) seedTokenCache(token, refreshToken string, expiresAt time.Time) {
+	ExpectWithOffset(1, os.MkdirAll(filepath.Dir(s.cachePath), 0o700)).To(Succeed())
+	data, err := json.Marshal(caibauth.TokenCache{
+		Token:        token,
+		RefreshToken: refreshToken,
+		ExpiresAt:    expiresAt,
+		Issuer:       dexIssuerURL,
+	})
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	ExpectWithOffset(1, os.WriteFile(s.cachePath, data, 0o600)).To(Succeed())
+}
+
+// tokenCache reads back the cache caib left behind.
+func (s *jumpstarterSession) tokenCache() caibauth.TokenCache {
+	data, err := os.ReadFile(s.cachePath)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "caib wrote no token cache at "+s.cachePath)
+	var cache caibauth.TokenCache
+	ExpectWithOffset(1, json.Unmarshal(data, &cache)).To(Succeed())
+	return cache
+}
+
+// runCaib invokes the CLI against this session's isolated home.
+func (s *jumpstarterSession) runCaib(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), caibLoginTimeout)
+	defer cancel()
+
+	output, err := utils.RunSafe(utils.NewCaibCommand(ctx, s.env, args...))
+	appendCaibCommandLog(args, output, err)
+	if ctx.Err() != nil {
+		return output, fmt.Errorf("caib %s did not finish within %s, which is what a fallback to the "+
+			"browser login flow looks like: %w", strings.Join(args, " "), caibLoginTimeout, ctx.Err())
+	}
+	return output, err
+}
+
+// mustRunCaib is runCaib with the command required to succeed.
+func (s *jumpstarterSession) mustRunCaib(args ...string) []byte {
+	output, err := s.runCaib(args...)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), string(output))
+	return output
+}
+
+// craftCachedSessionToken builds the access token of a previously cached caib
+// session. caib only reads its claims to decide whether the session is still
+// usable — the token is never sent to the Build API on the paths these specs
+// exercise — so it needs no signature Dex would recognise.
+func craftCachedSessionToken(expiry time.Time) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"iss": dexIssuerURL,
+		"aud": dexClientID,
+		"sub": "e2e-cached-session",
+		"iat": time.Now().Unix(),
+		"exp": expiry.Unix(),
+	})
+	signed, err := token.SignedString([]byte("e2e-cached-session"))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	return signed
+}
+
+// envWithout returns env with every assignment of the named variables dropped.
+func envWithout(env []string, names ...string) []string {
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		drop := false
+		for _, name := range names {
+			if strings.HasPrefix(entry, name+"=") {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
+}
+
+func writeSessionFile(path, content string, mode os.FileMode) {
+	ExpectWithOffset(2, os.WriteFile(path, []byte(content), mode)).To(Succeed())
+}
