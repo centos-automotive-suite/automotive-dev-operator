@@ -378,3 +378,22 @@ func TestQuietFlagWorksOnImageSubcommand(t *testing.T) {
 		t.Error("expected clilog.IsQuiet() == true for 'image noop -q' (child PersistentPreRunE must not override quiet)")
 	}
 }
+
+func TestLockfileFlag(t *testing.T) {
+	for _, subcommand := range []string{"build", "build-dev"} {
+		t.Run(subcommand, func(t *testing.T) {
+			root := newRootCmd()
+			cmd, _, err := root.Find([]string{"image", subcommand})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.ParseFlags([]string{"--lockfile", "path with spaces/input.lock"}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := cmd.Flags().GetString("lockfile")
+			if err != nil || got != "path with spaces/input.lock" {
+				t.Fatalf("got %q, %v", got, err)
+			}
+		})
+	}
+}

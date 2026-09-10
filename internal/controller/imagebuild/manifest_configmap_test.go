@@ -289,3 +289,45 @@ func TestCreateOrUpdateManifestConfigMap_Update(t *testing.T) {
 			cm.Data["m.aib.yml"], "name: updated\n")
 	}
 }
+
+func TestManifestConfigMapLockfile(t *testing.T) {
+	scheme := newTestScheme()
+	build := &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "locked-build", Namespace: "default", UID: "locked-uid"},
+		Spec:       automotivev1alpha1.ImageBuildSpec{AIB: &automotivev1alpha1.AIBSpec{Manifest: "name: test", Lockfile: `{"version":1}`, Mode: "bootc"}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(build).Build()
+	r := &ImageBuildReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+	for _, content := range []string{`{"version":1}`, `{"version":1,"depsolves":{}}`, ""} {
+		build.Spec.AIB.Lockfile = content
+		name, err := r.createOrUpdateManifestConfigMap(ctx, build)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cm := &corev1.ConfigMap{}
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: build.Namespace}, cm); err != nil {
+			t.Fatal(err)
+		}
+		value, present := cm.Data["aib.lock"]
+		if value != content || present != (content != "") {
+			t.Fatalf("lockfile contents/presence mismatch: %q, %v", value, present)
+		}
+		if cm.Data["manifest.aib.yml"] != "name: test" {
+			t.Fatal("manifest changed")
+		}
+	}
+	for _, tt := range []struct{ name, mode, filename, content string }{
+		{"invalid", "bootc", "", `{"version":2}`},
+		{"disk", "disk", "", `{"version":1}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			build.Spec.AIB.Mode = tt.mode
+			build.Spec.AIB.ManifestFileName = tt.filename
+			build.Spec.AIB.Lockfile = tt.content
+			if _, err := r.createOrUpdateManifestConfigMap(ctx, build); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}

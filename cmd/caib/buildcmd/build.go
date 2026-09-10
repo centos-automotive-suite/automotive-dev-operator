@@ -57,6 +57,7 @@ type Options struct {
 	CustomDefs             *[]string
 	DefineFiles            *[]string
 	AIBExtraArgs           *[]string
+	Lockfile               *string
 	RootPassword           *string
 	ExtraRepos             *[]string
 	LocalRepo              *string
@@ -771,6 +772,19 @@ func parseDevMode(mode string) (buildapitypes.Mode, error) {
 	}
 }
 
+func (h *Handler) resolveManifestBuildName(manifestPath string) error {
+	if *h.opts.BuildName != "" {
+		return common.ValidateBuildName(*h.opts.BuildName)
+	}
+
+	base := filepath.Base(manifestPath)
+	base = strings.TrimSuffix(base, ".aib.yml")
+	base = strings.TrimSuffix(base, ".mpp.yml")
+	*h.opts.BuildName = common.SanitizeBuildName(base)
+	clilog.Infof("Auto-generated build name: %s\n", *h.opts.BuildName)
+	return nil
+}
+
 // Entries with the "oci:" prefix are OCI image references (stripped of the prefix);
 // all other entries are workspace repos passed through unchanged.
 func splitExtraRepos(repos []string) (workspaceRepos []string, ociImages []string, err error) {
@@ -809,14 +823,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if *h.opts.BuildName == "" {
-		base := filepath.Base(manifestPath)
-		base = strings.TrimSuffix(base, ".aib.yml")
-		base = strings.TrimSuffix(base, ".mpp.yml")
-		sanitized := common.SanitizeBuildName(base)
-		*h.opts.BuildName = sanitized
-		clilog.Infof("Auto-generated build name: %s\n", *h.opts.BuildName)
-	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
+	if err := h.resolveManifestBuildName(manifestPath); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -852,6 +859,12 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	lockfile, err := h.readLockfile()
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
 	rootPassword, err := h.resolveRootPassword()
 	if err != nil {
 		h.handleError(err)
@@ -877,6 +890,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		StorageClass:           *h.opts.StorageClass,
 		CustomDefs:             customDefs,
 		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		Lockfile:               lockfile,
 		RootPassword:           rootPassword,
 		ExtraRepos:             workspaceRepos,
 		OCIRepoImages:          ociRepoImages,
@@ -1103,14 +1117,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if *h.opts.BuildName == "" {
-		base := filepath.Base(manifestPath)
-		base = strings.TrimSuffix(base, ".aib.yml")
-		base = strings.TrimSuffix(base, ".mpp.yml")
-		sanitized := common.SanitizeBuildName(base)
-		*h.opts.BuildName = sanitized
-		clilog.Infof("Auto-generated build name: %s\n", *h.opts.BuildName)
-	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
+	if err := h.resolveManifestBuildName(manifestPath); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -1150,6 +1157,12 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	lockfile, err := h.readLockfile()
+	if err != nil {
+		h.handleError(err)
+		return
+	}
+
 	rootPassword, err := h.resolveRootPassword()
 	if err != nil {
 		h.handleError(err)
@@ -1181,6 +1194,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		StorageClass:           *h.opts.StorageClass,
 		CustomDefs:             customDefs,
 		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		Lockfile:               lockfile,
 		RootPassword:           rootPassword,
 		ExtraRepos:             workspaceRepos,
 		OCIRepoImages:          ociRepoImages,

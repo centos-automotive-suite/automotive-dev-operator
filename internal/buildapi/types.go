@@ -155,6 +155,7 @@ type BuildRequest struct {
 	Callback         *BuildCallback `json:"callback,omitempty"`
 	Name             string         `json:"name"`
 	Manifest         string         `json:"manifest,omitempty"`
+	Lockfile         string         `json:"lockfile,omitempty"`
 	ManifestFileName string         `json:"manifestFileName,omitempty"`
 	// ContainerRef is for disk mode: existing container to convert
 	ContainerRef           string               `json:"containerRef,omitempty"`
