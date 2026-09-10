@@ -21,7 +21,12 @@ func IsAuthError(err error) bool {
 // Returns empty string if no OIDC config is available (auth is optional).
 // The boolean return indicates whether a fresh auth flow was performed.
 // Returns an error if OIDC is configured but config fetch fails (network/server errors).
-func GetTokenWithReauth(ctx context.Context, serverURL string, currentToken string, insecureSkipTLS bool) (string, bool, error) {
+//
+// externalToken is an optional token minted outside caib — currently the one
+// `jmp login` stores in the Jumpstarter client config. It is reused only when the
+// server would accept it. Never pass a token the server has already rejected: it
+// would be cached and handed straight back.
+func GetTokenWithReauth(ctx context.Context, serverURL string, externalToken string, insecureSkipTLS bool) (string, bool, error) {
 	// Prefer API config over local: server is source of truth (OperatorConfig).
 	// When server has OIDC disabled or init failed, API returns empty JWT and we should not use local OIDC.
 	config, err := GetOIDCConfigFromAPI(serverURL, insecureSkipTLS)
@@ -34,15 +39,25 @@ func GetTokenWithReauth(ctx context.Context, serverURL string, currentToken stri
 		return "", false, nil
 	}
 
-	oidcAuth := NewOIDCAuth(config.IssuerURL, config.ClientID, config.Scopes, insecureSkipTLS)
+	oidcAuth := NewOIDCAuthFromConfig(config, insecureSkipTLS)
 	if oidcAuth == nil {
 		return "", false, fmt.Errorf("failed to initialize OIDC authenticator")
 	}
 
-	// If we have a current token, check if it's valid
-	if currentToken != "" {
-		if oidcAuth.IsTokenValid(currentToken) {
-			return currentToken, false, nil
+	// Reuse the external token when this server would accept it, and cache it so
+	// later commands skip the login flow. A cached session that can refresh itself
+	// outranks it — in that case fall through and report that session's token, so
+	// the caller sees the token later commands will actually send.
+	if externalToken != "" && oidcAuth.CanReuseToken(externalToken) {
+		adopted, err := oidcAuth.AdoptToken(externalToken)
+		switch {
+		case err != nil:
+			// The token is good even though we could not cache it; a failed write
+			// is no reason to send the user through a browser login.
+			clilog.Warnf("Failed to cache token: %v\n", err)
+			return externalToken, false, nil
+		case adopted:
+			return externalToken, false, nil
 		}
 	}
 
@@ -65,7 +80,7 @@ func RefreshCachedToken(ctx context.Context, serverURL string, insecureSkipTLS b
 		return "", fmt.Errorf("OIDC is not configured on the server")
 	}
 
-	oidcAuth := NewOIDCAuth(config.IssuerURL, config.ClientID, config.Scopes, insecureSkipTLS)
+	oidcAuth := NewOIDCAuthFromConfig(config, insecureSkipTLS)
 	if oidcAuth == nil {
 		return "", fmt.Errorf("failed to initialize OIDC authenticator")
 	}

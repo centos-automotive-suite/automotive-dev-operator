@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
@@ -61,6 +62,56 @@ func TestNormalizeServerURL(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("normalizeServerURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoginResultMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		token    string
+		jmpToken string
+		didAuth  bool
+		want     string
+	}{
+		{name: "no token yields no message"},
+		{
+			name:    "fresh OIDC login",
+			token:   "oidc-token",
+			didAuth: true,
+			want:    "OIDC authentication successful",
+		},
+		{
+			name:     "reused Jumpstarter token",
+			token:    "jmp-token",
+			jmpToken: "jmp-token",
+			want:     "Jumpstarter client config",
+		},
+		{
+			name:     "cached token wins over an unused Jumpstarter token",
+			token:    "cached-token",
+			jmpToken: "jmp-token",
+			want:     "Using existing or kubeconfig token",
+		},
+		{
+			name:  "cached token with no Jumpstarter config",
+			token: "cached-token",
+			want:  "Using existing or kubeconfig token",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := loginResultMessage(tt.token, tt.jmpToken, tt.didAuth)
+			if tt.want == "" {
+				if got != "" {
+					t.Errorf("loginResultMessage() = %q, want empty", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("loginResultMessage() = %q, want it to contain %q", got, tt.want)
 			}
 		})
 	}

@@ -19,20 +19,24 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { re
 
 // writeJumpstarterConfig creates ~/.config/jumpstarter/{config.yaml,clients/mycluster.yaml} under homeDir.
 func writeJumpstarterConfig(baseDir, endpoint string) {
+	writeJumpstarterConfigIn(filepath.Join(baseDir, ".config", "jumpstarter"), "endpoint: "+endpoint+"\n")
+}
+
+// writeJumpstarterConfigIn creates {config.yaml,clients/mycluster.yaml} in jmpDir,
+// with the given raw client config contents.
+func writeJumpstarterConfigIn(jmpDir, clientYAML string) {
 	const alias = "mycluster"
-	jmpDir := filepath.Join(baseDir, ".config", "jumpstarter")
 	ExpectWithOffset(1, os.MkdirAll(filepath.Join(jmpDir, "clients"), 0700)).To(Succeed())
 
 	configYAML := "config:\n  current-client: " + alias + "\n"
 	ExpectWithOffset(1, os.WriteFile(filepath.Join(jmpDir, "config.yaml"), []byte(configYAML), 0600)).To(Succeed())
 
-	clientYAML := "endpoint: " + endpoint + "\n"
 	ExpectWithOffset(1, os.WriteFile(filepath.Join(jmpDir, "clients", alias+".yaml"), []byte(clientYAML), 0600)).To(Succeed())
 }
 
 var _ = Describe("DeriveServerFromJumpstarter", func() {
 	var tempDir string
-	var origHome, origXDG string
+	var origHome, origXDG, origJMP string
 
 	var origBuildNS string
 
@@ -43,9 +47,11 @@ var _ = Describe("DeriveServerFromJumpstarter", func() {
 
 		origHome = os.Getenv("HOME")
 		origXDG = os.Getenv("XDG_CONFIG_HOME")
+		origJMP = os.Getenv("JMP_CLIENT_CONFIG_HOME")
 		origBuildNS = os.Getenv("CAIB_BUILD_API_NAMESPACE")
 		Expect(os.Setenv("HOME", tempDir)).To(Succeed())
 		Expect(os.Unsetenv("XDG_CONFIG_HOME")).To(Succeed())
+		Expect(os.Unsetenv("JMP_CLIENT_CONFIG_HOME")).To(Succeed())
 		Expect(os.Unsetenv("CAIB_BUILD_API_NAMESPACE")).To(Succeed())
 	})
 
@@ -56,6 +62,11 @@ var _ = Describe("DeriveServerFromJumpstarter", func() {
 			_ = os.Setenv("XDG_CONFIG_HOME", origXDG)
 		} else {
 			_ = os.Unsetenv("XDG_CONFIG_HOME")
+		}
+		if origJMP != "" {
+			_ = os.Setenv("JMP_CLIENT_CONFIG_HOME", origJMP)
+		} else {
+			_ = os.Unsetenv("JMP_CLIENT_CONFIG_HOME")
 		}
 		if origBuildNS != "" {
 			_ = os.Setenv("CAIB_BUILD_API_NAMESPACE", origBuildNS)
@@ -200,7 +211,7 @@ var _ = Describe("DeriveServerFromJumpstarter", func() {
 
 var _ = Describe("DefaultServerWithDerive", func() {
 	var tempDir string
-	var origHome, origXDG, origCAIBServer, origBuildNS string
+	var origHome, origXDG, origJMP, origCAIBServer, origBuildNS string
 
 	BeforeEach(func() {
 		var err error
@@ -209,10 +220,12 @@ var _ = Describe("DefaultServerWithDerive", func() {
 
 		origHome = os.Getenv("HOME")
 		origXDG = os.Getenv("XDG_CONFIG_HOME")
+		origJMP = os.Getenv("JMP_CLIENT_CONFIG_HOME")
 		origCAIBServer = os.Getenv("CAIB_SERVER")
 		origBuildNS = os.Getenv("CAIB_BUILD_API_NAMESPACE")
 		Expect(os.Setenv("HOME", tempDir)).To(Succeed())
 		Expect(os.Unsetenv("XDG_CONFIG_HOME")).To(Succeed())
+		Expect(os.Unsetenv("JMP_CLIENT_CONFIG_HOME")).To(Succeed())
 		Expect(os.Unsetenv("CAIB_SERVER")).To(Succeed())
 		Expect(os.Unsetenv("CAIB_BUILD_API_NAMESPACE")).To(Succeed())
 	})
@@ -224,6 +237,11 @@ var _ = Describe("DefaultServerWithDerive", func() {
 			_ = os.Setenv("XDG_CONFIG_HOME", origXDG)
 		} else {
 			_ = os.Unsetenv("XDG_CONFIG_HOME")
+		}
+		if origJMP != "" {
+			_ = os.Setenv("JMP_CLIENT_CONFIG_HOME", origJMP)
+		} else {
+			_ = os.Unsetenv("JMP_CLIENT_CONFIG_HOME")
 		}
 		if origBuildNS != "" {
 			_ = os.Setenv("CAIB_BUILD_API_NAMESPACE", origBuildNS)
@@ -597,6 +615,118 @@ var _ = Describe("SaveServerURL with invalid config file", func() {
 		after, err := os.ReadFile(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(after).To(Equal(original))
+	})
+})
+
+var _ = Describe("JumpstarterToken", func() {
+	// A Jumpstarter client config holds the SSO token issued by `jmp login`.
+	const jmpToken = "header.payload.signature"
+
+	var tempDir string
+	var origHome, origXDG, origJMP string
+
+	BeforeEach(func() {
+		var err error
+		tempDir, err = os.MkdirTemp("", "caib-jmp-token-test-*")
+		Expect(err).NotTo(HaveOccurred())
+
+		origHome = os.Getenv("HOME")
+		origXDG = os.Getenv("XDG_CONFIG_HOME")
+		origJMP = os.Getenv("JMP_CLIENT_CONFIG_HOME")
+		Expect(os.Setenv("HOME", tempDir)).To(Succeed())
+		Expect(os.Unsetenv("XDG_CONFIG_HOME")).To(Succeed())
+		Expect(os.Unsetenv("JMP_CLIENT_CONFIG_HOME")).To(Succeed())
+	})
+
+	AfterEach(func() {
+		_ = os.Setenv("HOME", origHome)
+		for env, value := range map[string]string{
+			"XDG_CONFIG_HOME":        origXDG,
+			"JMP_CLIENT_CONFIG_HOME": origJMP,
+		} {
+			if value != "" {
+				_ = os.Setenv(env, value)
+			} else {
+				_ = os.Unsetenv(env)
+			}
+		}
+		_ = os.RemoveAll(tempDir)
+	})
+
+	It("returns the token from the current client config", func() {
+		writeJumpstarterConfigIn(filepath.Join(tempDir, ".config", "jumpstarter"),
+			"endpoint: grpc.lab.apps.example.com:443\ntoken: "+jmpToken+"\n")
+
+		Expect(JumpstarterToken()).To(Equal(jmpToken))
+	})
+
+	It("trims surrounding whitespace from the token", func() {
+		writeJumpstarterConfigIn(filepath.Join(tempDir, ".config", "jumpstarter"),
+			"endpoint: grpc.lab.apps.example.com:443\ntoken: \"  "+jmpToken+"  \"\n")
+
+		Expect(JumpstarterToken()).To(Equal(jmpToken))
+	})
+
+	It("reads the client config from JMP_CLIENT_CONFIG_HOME when set", func() {
+		jmpDir := filepath.Join(tempDir, "custom-jmp")
+		writeJumpstarterConfigIn(jmpDir,
+			"endpoint: grpc.lab.apps.example.com:443\ntoken: "+jmpToken+"\n")
+		Expect(os.Setenv("JMP_CLIENT_CONFIG_HOME", jmpDir)).To(Succeed())
+
+		Expect(JumpstarterToken()).To(Equal(jmpToken))
+	})
+
+	It("reads the client config from XDG_CONFIG_HOME when set", func() {
+		xdgDir := filepath.Join(tempDir, "xdg")
+		writeJumpstarterConfigIn(filepath.Join(xdgDir, "jumpstarter"),
+			"endpoint: grpc.lab.apps.example.com:443\ntoken: "+jmpToken+"\n")
+		Expect(os.Setenv("XDG_CONFIG_HOME", xdgDir)).To(Succeed())
+
+		Expect(JumpstarterToken()).To(Equal(jmpToken))
+	})
+
+	It("returns empty when the client config has no token", func() {
+		writeJumpstarterConfig(tempDir, "grpc.lab.apps.example.com:443")
+
+		Expect(JumpstarterToken()).To(BeEmpty())
+	})
+
+	It("returns empty when no Jumpstarter config exists", func() {
+		Expect(JumpstarterToken()).To(BeEmpty())
+	})
+
+	It("returns empty when current-client is not set", func() {
+		jmpDir := filepath.Join(tempDir, ".config", "jumpstarter")
+		Expect(os.MkdirAll(jmpDir, 0700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(jmpDir, "config.yaml"),
+			[]byte("config:\n  current-client: \"\"\n"), 0600)).To(Succeed())
+
+		Expect(JumpstarterToken()).To(BeEmpty())
+	})
+
+	It("returns empty when the referenced client config is missing", func() {
+		jmpDir := filepath.Join(tempDir, ".config", "jumpstarter")
+		Expect(os.MkdirAll(jmpDir, 0700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(jmpDir, "config.yaml"),
+			[]byte("config:\n  current-client: gone\n"), 0600)).To(Succeed())
+
+		Expect(JumpstarterToken()).To(BeEmpty())
+	})
+
+	It("rejects a current-client alias that escapes the clients directory", func() {
+		jmpDir := filepath.Join(tempDir, ".config", "jumpstarter")
+		Expect(os.MkdirAll(jmpDir, 0700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(jmpDir, "config.yaml"),
+			[]byte("config:\n  current-client: ../../../etc/passwd\n"), 0600)).To(Succeed())
+
+		Expect(JumpstarterToken()).To(BeEmpty())
+	})
+
+	It("returns empty when the client config is not valid YAML", func() {
+		writeJumpstarterConfigIn(filepath.Join(tempDir, ".config", "jumpstarter"),
+			"endpoint: [unterminated\n")
+
+		Expect(JumpstarterToken()).To(BeEmpty())
 	})
 })
 
