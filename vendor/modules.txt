@@ -235,8 +235,8 @@ github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer
 # github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 ## explicit
 github.com/davecgh/go-spew/spew
-# github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c
-## explicit; go 1.19
+# github.com/digitorus/pkcs7 v0.0.0-20260821105541-05f79448fa77
+## explicit; go 1.27
 github.com/digitorus/pkcs7
 # github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea
 ## explicit; go 1.16
