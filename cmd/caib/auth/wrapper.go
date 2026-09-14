@@ -50,13 +50,13 @@ func GetTokenWithReauth(ctx context.Context, serverURL string, externalToken str
 	// the caller sees the token later commands will actually send.
 	if externalToken != "" && oidcAuth.CanReuseToken(externalToken) {
 		adopted, err := oidcAuth.AdoptToken(externalToken)
-		switch {
-		case err != nil:
+		if err != nil {
 			// The token is good even though we could not cache it; a failed write
 			// is no reason to send the user through a browser login.
 			clilog.Warnf("Failed to cache token: %v\n", err)
 			return externalToken, false, nil
-		case adopted:
+		}
+		if adopted {
 			return externalToken, false, nil
 		}
 	}
