@@ -93,16 +93,23 @@ func IsDerivedAndStale(cfg *CLIConfig) bool {
 	return JumpstarterEndpoint() != cfg.DerivedFromEndpoint
 }
 
-// JumpstarterEndpoint reads the default Jumpstarter client config files and returns
-// the gRPC endpoint, or "" if the config is absent or incomplete.
-func JumpstarterEndpoint() string {
+// jumpstarterClientConfig is the subset of a Jumpstarter client config file
+// (`clients/<alias>.yaml`) that caib consumes.
+type jumpstarterClientConfig struct {
+	Endpoint string `yaml:"endpoint"`
+	Token    string `yaml:"token"`
+}
+
+// currentClientConfig resolves the Jumpstarter client selected by `current-client`
+// and returns its config, or nil if the config is absent, unreadable or malformed.
+func currentClientConfig() *jumpstarterClientConfig {
 	jmpDir := os.Getenv("JMP_CLIENT_CONFIG_HOME")
 	if jmpDir == "" {
 		xdgBase := os.Getenv("XDG_CONFIG_HOME")
 		if xdgBase == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				return ""
+				return nil
 			}
 			xdgBase = filepath.Join(home, ".config")
 		}
@@ -111,7 +118,7 @@ func JumpstarterEndpoint() string {
 
 	data, err := os.ReadFile(filepath.Join(jmpDir, "config.yaml"))
 	if err != nil {
-		return ""
+		return nil
 	}
 	var userCfg struct {
 		Config struct {
@@ -119,24 +126,43 @@ func JumpstarterEndpoint() string {
 		} `yaml:"config"`
 	}
 	if err := yaml.Unmarshal(data, &userCfg); err != nil {
-		return ""
+		return nil
 	}
 	alias := strings.TrimSpace(userCfg.Config.CurrentClient)
 	if alias == "" || alias != filepath.Base(alias) {
-		return ""
+		return nil
 	}
 
 	data, err = os.ReadFile(filepath.Join(jmpDir, "clients", alias+".yaml"))
 	if err != nil {
+		return nil
+	}
+	var cfg jumpstarterClientConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+
+	return &cfg
+}
+
+// JumpstarterToken reads the default Jumpstarter client config files and returns
+// the SSO token stored by `jmp login`, or "" if the config is absent or incomplete.
+func JumpstarterToken() string {
+	cfg := currentClientConfig()
+	if cfg == nil {
 		return ""
 	}
-	var clientCfg struct {
-		Endpoint string `yaml:"endpoint"`
-	}
-	if err := yaml.Unmarshal(data, &clientCfg); err != nil {
+	return strings.TrimSpace(cfg.Token)
+}
+
+// JumpstarterEndpoint reads the default Jumpstarter client config files and returns
+// the gRPC endpoint, or "" if the config is absent or incomplete.
+func JumpstarterEndpoint() string {
+	cfg := currentClientConfig()
+	if cfg == nil {
 		return ""
 	}
-	return strings.TrimSpace(clientCfg.Endpoint)
+	return strings.TrimSpace(cfg.Endpoint)
 }
 
 // buildAPINamespaceCandidates returns the namespace candidates to probe when

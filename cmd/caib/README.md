@@ -28,6 +28,9 @@ caib login https://build-api.my-cluster.example.com
 caib login
 ```
 
+If you already ran `jmp login`, `caib login` reuses that token when the Build API
+accepts it, so no browser flow is needed. See [Authentication](#authentication).
+
 Check server connectivity:
 
 ```bash
@@ -82,7 +85,7 @@ Many flags are automatically inferred from context:
 | Flag | Inferred from |
 |------|---------------|
 | `--server` | `CAIB_SERVER` env → saved config (`caib login`) → Jumpstarter client config |
-| `--token` | `CAIB_TOKEN` env → kubeconfig (`oc login`) → `oc whoami -t` |
+| `--token` | `CAIB_TOKEN` env → cached OIDC token (`caib login`) → kubeconfig (`oc login`) → `oc whoami -t` |
 | `--arch` | `--target` lookup in OperatorConfig target defaults → host architecture |
 | `--format` | `--target` lookup in OperatorConfig target defaults → `-o` filename extension |
 | `--disk` | Implied by `-o`, `--push-disk`, or `--flash` |
@@ -638,8 +641,22 @@ The CLI automatically detects authentication in this order:
 
 1. `--token` flag
 2. `CAIB_TOKEN` environment variable
-3. Bearer token from kubeconfig (OpenShift `oc login`, exec plugins)
-4. `oc whoami -t` command (if `oc` is available)
+3. OIDC token cached by `caib login` (silently refreshed when it expires, if the provider issued a refresh token)
+4. Bearer token from kubeconfig (OpenShift `oc login`, exec plugins)
+5. `oc whoami -t` command (if `oc` is available)
+
+### Reusing a `jmp login` session
+
+When the Build API has OIDC enabled, `caib login` first looks at the token stored in
+your current Jumpstarter client config (`~/.config/jumpstarter/clients/<alias>.yaml`,
+written by `jmp login`). It is reused — and cached for later commands — only when the
+Build API would accept it, meaning it is an unexpired JWT whose `iss` matches the
+server's configured issuer and whose `aud` is one the server accepts. Otherwise
+`caib login` falls back to its own browser-based OIDC flow.
+
+A cached token from a previous `caib login` that still holds a refresh token takes
+precedence and is never replaced by an adopted Jumpstarter token, since only the
+former can renew itself without a browser.
 
 For registry authentication (`--push`, `--push-disk`, sealed operations):
 

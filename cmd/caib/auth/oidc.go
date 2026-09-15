@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,6 +44,9 @@ type OIDCConfig struct {
 	IssuerURL string
 	ClientID  string
 	Scopes    []string
+	// Audiences the Build API accepts, as advertised by /v1/auth/config.
+	// Empty means the server does not restrict the aud claim.
+	Audiences []string
 }
 
 // OIDCAuth handles OIDC authentication flow and token management.
@@ -55,12 +59,24 @@ type OIDCAuth struct {
 
 // NewOIDCAuth creates a new OIDC authenticator instance.
 func NewOIDCAuth(issuerURL, clientID string, scopes []string, insecureSkipTLS bool) *OIDCAuth {
-	if issuerURL == "" || clientID == "" {
+	return NewOIDCAuthFromConfig(&OIDCConfig{
+		IssuerURL: issuerURL,
+		ClientID:  clientID,
+		Scopes:    scopes,
+	}, insecureSkipTLS)
+}
+
+// NewOIDCAuthFromConfig creates an authenticator from a provider configuration.
+// Prefer it over NewOIDCAuth when the configuration came from the Build API, so
+// that fields the positional form cannot carry (such as Audiences) survive.
+func NewOIDCAuthFromConfig(config *OIDCConfig, insecureSkipTLS bool) *OIDCAuth {
+	if config == nil || config.IssuerURL == "" || config.ClientID == "" {
 		return nil
 	}
 
-	if len(scopes) == 0 {
-		scopes = []string{"openid", "profile", "email", "offline_access"}
+	cfg := *config
+	if len(cfg.Scopes) == 0 {
+		cfg.Scopes = []string{"openid", "profile", "email", "offline_access"}
 	}
 
 	cachePath, err := tokenCachePath()
@@ -69,11 +85,7 @@ func NewOIDCAuth(issuerURL, clientID string, scopes []string, insecureSkipTLS bo
 	}
 
 	return &OIDCAuth{
-		config: OIDCConfig{
-			IssuerURL: issuerURL,
-			ClientID:  clientID,
-			Scopes:    scopes,
-		},
+		config:          cfg,
 		cachePath:       cachePath,
 		insecureSkipTLS: insecureSkipTLS,
 	}
@@ -142,24 +154,105 @@ func (a *OIDCAuth) tryRefreshToken(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-// IsTokenValid checks if a token is valid and not expired.
-func (a *OIDCAuth) IsTokenValid(token string) bool {
-	parser := jwt.NewParser()
-	claims := jwt.MapClaims{}
-	_, _, err := parser.ParseUnverified(token, claims)
+// CanReuseToken reports whether a token minted outside caib's own login flow —
+// for example the one `jmp login` stores in the Jumpstarter client config — is
+// worth sending to this server. The token must be an unexpired JWT whose iss and
+// aud claims match what the Build API accepts; anything else comes back as a 401,
+// so reusing it would cost a round trip and hide the real login flow.
+func (a *OIDCAuth) CanReuseToken(token string) bool {
+	claims, err := parseUnverifiedClaims(token)
+	if err != nil || isExpired(claims) {
+		return false
+	}
+	return a.matchesIssuer(claims) && a.matchesAudience(claims)
+}
+
+// matchesIssuer compares iss against the issuer the Build API advertises, which
+// is the string its verifier exact-matches against. Matching any less strictly
+// here would only accept tokens that come back as a 401.
+func (a *OIDCAuth) matchesIssuer(claims jwt.MapClaims) bool {
+	issuer, err := claims.GetIssuer()
+	if err != nil || issuer == "" {
+		return false
+	}
+	return issuer == a.config.IssuerURL
+}
+
+// matchesAudience mirrors the Build API's MatchAny audience policy: a token is
+// acceptable when it carries at least one of the configured audiences. A server
+// that advertises no audiences does not constrain the claim.
+func (a *OIDCAuth) matchesAudience(claims jwt.MapClaims) bool {
+	if len(a.config.Audiences) == 0 {
+		return true
+	}
+	audiences, err := claims.GetAudience()
 	if err != nil {
 		return false
 	}
+	return slices.ContainsFunc(audiences, func(aud string) bool {
+		return slices.Contains(a.config.Audiences, aud)
+	})
+}
 
-	// Check expiration
-	if exp, ok := claims["exp"].(float64); ok {
-		expTime := time.Unix(int64(exp), 0)
-		if time.Now().After(expTime) {
-			return false
+// AdoptToken caches a token obtained outside of caib's own login flow so later
+// commands reuse it instead of opening a browser. A cached entry that already
+// holds a refresh token is left alone: it can silently mint new access tokens,
+// which an adopted token — stored without one — cannot.
+//
+// The bool reports whether the token was adopted. When it is false the cached
+// session stands, and the caller should use that rather than the offered token.
+//
+// The check and the write happen under one lock: another caib finishing a login
+// between them would otherwise have its refresh token overwritten by this token,
+// which has none.
+func (a *OIDCAuth) AdoptToken(token string) (bool, error) {
+	adopted := false
+	err := withCacheLock(a.cachePath, func() error {
+		if err := a.loadTokenCache(); err == nil && a.tokenCache != nil && a.tokenCache.RefreshToken != "" {
+			return nil
 		}
+		if err := a.saveTokenCacheLocked(token, "", 0); err != nil {
+			return err
+		}
+		adopted = true
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
+	return adopted, nil
+}
 
-	return true
+// IsTokenValid checks if a token is valid and not expired.
+func (a *OIDCAuth) IsTokenValid(token string) bool {
+	claims, err := parseUnverifiedClaims(token)
+	if err != nil {
+		return false
+	}
+	return !isExpired(claims)
+}
+
+// parseUnverifiedClaims decodes a JWT's claims without checking its signature.
+// The Build API verifies signatures; the CLI only inspects claims to decide
+// whether a token is worth sending.
+func parseUnverifiedClaims(token string) (jwt.MapClaims, error) {
+	claims := jwt.MapClaims{}
+	if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
+		return nil, err
+	}
+	return claims, nil
+}
+
+// isExpired reports whether the exp claim is in the past. A missing or
+// malformed exp counts as expired: the Build API's verifier requires the claim,
+// so such a token is refused there, and treating it as valid would only park a
+// rejected token in the cache.
+func isExpired(claims jwt.MapClaims) bool {
+	exp, err := claims.GetExpirationTime()
+	if err != nil || exp == nil {
+		return true
+	}
+	return time.Now().After(exp.Time)
 }
 
 func (a *OIDCAuth) authenticate(ctx context.Context) (string, error) {
@@ -480,7 +573,16 @@ func tokenCachePath() (string, error) {
 	return filepath.Join(dir, tokenCacheFile), nil
 }
 
+// saveTokenCache writes the cache under the cache lock. Callers already holding
+// it — AdoptToken, whose check and write must not be split — use
+// saveTokenCacheLocked instead.
 func (a *OIDCAuth) saveTokenCache(token, refreshToken string, expiresIn int) error {
+	return withCacheLock(a.cachePath, func() error {
+		return a.saveTokenCacheLocked(token, refreshToken, expiresIn)
+	})
+}
+
+func (a *OIDCAuth) saveTokenCacheLocked(token, refreshToken string, expiresIn int) error {
 	var expiresAt time.Time
 	if expiresIn > 0 {
 		expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
@@ -510,11 +612,30 @@ func (a *OIDCAuth) saveTokenCache(token, refreshToken string, expiresIn int) err
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(a.cachePath), 0700); err != nil {
+	dir := filepath.Dir(a.cachePath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 
-	return os.WriteFile(a.cachePath, data, 0600)
+	// Write and rename so a reader that does not take the lock — LoadTokenCache,
+	// or an older caib — sees either the previous cache or the new one, never a
+	// half-written file.
+	tmp, err := os.CreateTemp(dir, tokenCacheFile+".*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = os.Remove(tmp.Name())
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), a.cachePath)
 }
 
 func generateRandomString(length int) (string, error) {
