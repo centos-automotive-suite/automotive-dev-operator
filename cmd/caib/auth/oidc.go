@@ -201,14 +201,26 @@ func (a *OIDCAuth) matchesAudience(claims jwt.MapClaims) bool {
 //
 // The bool reports whether the token was adopted. When it is false the cached
 // session stands, and the caller should use that rather than the offered token.
+//
+// The check and the write happen under one lock: another caib finishing a login
+// between them would otherwise have its refresh token overwritten by this token,
+// which has none.
 func (a *OIDCAuth) AdoptToken(token string) (bool, error) {
-	if err := a.loadTokenCache(); err == nil && a.tokenCache != nil && a.tokenCache.RefreshToken != "" {
-		return false, nil
-	}
-	if err := a.saveTokenCache(token, "", 0); err != nil {
+	adopted := false
+	err := withCacheLock(a.cachePath, func() error {
+		if err := a.loadTokenCache(); err == nil && a.tokenCache != nil && a.tokenCache.RefreshToken != "" {
+			return nil
+		}
+		if err := a.saveTokenCacheLocked(token, "", 0); err != nil {
+			return err
+		}
+		adopted = true
+		return nil
+	})
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return adopted, nil
 }
 
 // IsTokenValid checks if a token is valid and not expired.
@@ -561,7 +573,16 @@ func tokenCachePath() (string, error) {
 	return filepath.Join(dir, tokenCacheFile), nil
 }
 
+// saveTokenCache writes the cache under the cache lock. Callers already holding
+// it — AdoptToken, whose check and write must not be split — use
+// saveTokenCacheLocked instead.
 func (a *OIDCAuth) saveTokenCache(token, refreshToken string, expiresIn int) error {
+	return withCacheLock(a.cachePath, func() error {
+		return a.saveTokenCacheLocked(token, refreshToken, expiresIn)
+	})
+}
+
+func (a *OIDCAuth) saveTokenCacheLocked(token, refreshToken string, expiresIn int) error {
 	var expiresAt time.Time
 	if expiresIn > 0 {
 		expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
@@ -591,11 +612,30 @@ func (a *OIDCAuth) saveTokenCache(token, refreshToken string, expiresIn int) err
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(a.cachePath), 0700); err != nil {
+	dir := filepath.Dir(a.cachePath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 
-	return os.WriteFile(a.cachePath, data, 0600)
+	// Write and rename so a reader that does not take the lock — LoadTokenCache,
+	// or an older caib — sees either the previous cache or the new one, never a
+	// half-written file.
+	tmp, err := os.CreateTemp(dir, tokenCacheFile+".*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = os.Remove(tmp.Name())
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), a.cachePath)
 }
 
 func generateRandomString(length int) (string, error) {

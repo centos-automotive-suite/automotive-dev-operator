@@ -246,6 +246,33 @@ var _ = Describe("AdoptToken", func() {
 		Expect(cache.RefreshToken).To(Equal("my-refresh-token"))
 	})
 
+	// Two caib processes can overlap: one finishing a browser login while another
+	// adopts a jmp token. Unless the lock is held across the whole read-check-write,
+	// the adopted token — which carries no refresh token — clobbers the login.
+	It("waits for a concurrent writer instead of clobbering its refresh token", func() {
+		existing := makeValidTestJWT(issuer, 1*time.Hour)
+		held := make(chan struct{})
+		done := make(chan error, 1)
+
+		go func() {
+			done <- withCacheLock(oidcAuth.cachePath, func() error {
+				close(held)
+				time.Sleep(200 * time.Millisecond)
+				return oidcAuth.saveTokenCacheLocked(existing, "concurrent-refresh", 3600)
+			})
+		}()
+
+		<-held
+		adopted, err := oidcAuth.AdoptToken(makeValidTestJWT(issuer, 2*time.Hour))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(adopted).To(BeFalse())
+		Expect(<-done).To(Succeed())
+
+		cache := readCache()
+		Expect(cache.Token).To(Equal(existing))
+		Expect(cache.RefreshToken).To(Equal("concurrent-refresh"))
+	})
+
 	It("replaces a cached entry belonging to a different issuer", func() {
 		oidcAuth.config.IssuerURL = "https://other.example.com"
 		Expect(oidcAuth.saveTokenCache(makeValidTestJWT("https://other.example.com", 1*time.Hour), "stale-refresh", 3600)).To(Succeed())
