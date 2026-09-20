@@ -815,7 +815,7 @@ github.com/secure-systems-lab/go-securesystemslib/signerverifier
 # github.com/shibumi/go-pathspec v1.3.0
 ## explicit; go 1.17
 github.com/shibumi/go-pathspec
-# github.com/shipwright-io/build v0.21.3
+# github.com/shipwright-io/build v0.21.4
 ## explicit; go 1.26.4
 github.com/shipwright-io/build/pkg/apis/build/v1alpha1
 github.com/shipwright-io/build/pkg/apis/build/v1beta1
