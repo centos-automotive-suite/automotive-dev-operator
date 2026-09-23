@@ -698,7 +698,7 @@ github.com/onsi/ginkgo/v2/internal/reporters
 github.com/onsi/ginkgo/v2/internal/testingtproxy
 github.com/onsi/ginkgo/v2/reporters
 github.com/onsi/ginkgo/v2/types
-# github.com/onsi/gomega v1.43.0
+# github.com/onsi/gomega v1.43.1
 ## explicit; go 1.25.0
 github.com/onsi/gomega
 github.com/onsi/gomega/format
@@ -1028,7 +1028,7 @@ github.com/twitchyliquid64/golang-asm/unsafeheader
 # github.com/ugorji/go/codec v1.3.2
 ## explicit; go 1.21
 github.com/ugorji/go/codec
-# github.com/ulikunitz/xz v0.5.16
+# github.com/ulikunitz/xz v0.5.17
 ## explicit; go 1.20
 github.com/ulikunitz/xz
 github.com/ulikunitz/xz/internal/hash
@@ -1039,8 +1039,8 @@ github.com/ulikunitz/xz/lzma
 github.com/vbatts/tar-split/archive/tar
 github.com/vbatts/tar-split/tar/asm
 github.com/vbatts/tar-split/tar/storage
-# github.com/vbauerster/cupwriter v0.0.4
-## explicit; go 1.25.0
+# github.com/vbauerster/cupwriter v0.0.5
+## explicit; go 1.26.0
 github.com/vbauerster/cupwriter
 # github.com/vbauerster/mpb/v8 v8.15.2
 ## explicit; go 1.25.0
@@ -1356,7 +1356,7 @@ google.golang.org/genproto/googleapis/api/httpbody
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/rpc/errdetails
 google.golang.org/genproto/googleapis/rpc/status
-# google.golang.org/grpc v1.83.2
+# google.golang.org/grpc v1.84.0
 ## explicit; go 1.25.0
 google.golang.org/grpc
 google.golang.org/grpc/attributes
@@ -2028,7 +2028,7 @@ k8s.io/utils/ptr
 k8s.io/utils/strings/slices
 k8s.io/utils/third_party/forked/golang/btree
 k8s.io/utils/trace
-# knative.dev/pkg v0.0.0-20260825072334-d2a153acc00c
+# knative.dev/pkg v0.0.0-20260918182429-5dc1978f0042
 ## explicit; go 1.25.0
 knative.dev/pkg/apis
 knative.dev/pkg/apis/duck
