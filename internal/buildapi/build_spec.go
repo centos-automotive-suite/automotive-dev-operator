@@ -10,6 +10,7 @@ func buildAIBSpec(req *BuildRequest, manifest, manifestFileName string, inputFil
 		Target:           string(req.Target),
 		Mode:             string(req.Mode),
 		Manifest:         manifest,
+		ResolveOnly:      req.ResolveOnly,
 		Lockfile:         req.Lockfile,
 		ManifestFileName: manifestFileName,
 		Image:            req.AutomotiveImageBuilder,

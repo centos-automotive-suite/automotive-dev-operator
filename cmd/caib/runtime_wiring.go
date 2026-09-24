@@ -324,6 +324,7 @@ func (s runtimeState) newHandlers() handlerSet {
 func (s runtimeState) imageOptions(h handlerSet) image.Options {
 	return image.Options{
 		RunBuild:             h.build.RunBuild,
+		RunResolve:           h.build.RunResolve,
 		RunDisk:              h.build.RunDisk,
 		RunBuildDev:          h.build.RunBuildDev,
 		RunList:              h.query.RunList,

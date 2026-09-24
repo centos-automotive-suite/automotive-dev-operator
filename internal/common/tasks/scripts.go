@@ -18,6 +18,9 @@ var FindManifestScript string
 //go:embed scripts/build_image.sh
 var buildImageScript string
 
+//go:embed scripts/hermeto.sh
+var hermetoScript string
+
 // BuildImageScript contains the embedded shell script for building images.
 // It is the concatenation of common.sh and build_image.sh.
 var BuildImageScript = ""
@@ -48,7 +51,7 @@ var FlashImageScript = ""
 
 func init() {
 	ociVars := oci.Get().ShellVars()
-	BuildImageScript = commonScript + "\n" + ociVars + "\n" + buildImageScript
+	BuildImageScript = commonScript + "\n" + ociVars + "\n" + hermetoScript + "\n" + buildImageScript
 	BuildBuilderScript = commonScript + "\n" + buildBuilderScript
 	PushArtifactScript = commonScript + "\n" + ociVars + "\n" + pushArtifactScript
 	PushArtifactS3Script = commonScript + "\n" + pushArtifactS3Script

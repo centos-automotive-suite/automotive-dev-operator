@@ -176,6 +176,10 @@ spec:
                               builder image even if a cached version exists in the
                               registry.
                             type: boolean
+                          resolveOnly:
+                            description: ResolveOnly generates a dependency lockfile
+                              without assembling an image.
+                            type: boolean
                           rootPassword:
                             description: |-
                               RootPassword is a hashed root password passed to AIB's --root-password flag.

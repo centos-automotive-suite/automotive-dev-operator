@@ -22,6 +22,11 @@ import (
 
 // PullOCIArtifact pulls and extracts an OCI artifact to local destination.
 func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTLS bool, authFilePaths ...string) error {
+	return PullOCIArtifactWithContext(context.Background(), ociRef, destPath, username, password, insecureSkipTLS, authFilePaths...)
+}
+
+// PullOCIArtifactWithContext allows callers to cancel an artifact download.
+func PullOCIArtifactWithContext(ctx context.Context, ociRef, destPath, username, password string, insecureSkipTLS bool, authFilePaths ...string) error {
 	clilog.Infof("Pulling OCI artifact %s to %s\n", ociRef, destPath)
 
 	destDir := filepath.Dir(destPath)
@@ -31,7 +36,6 @@ func PullOCIArtifact(ociRef, destPath, username, password string, insecureSkipTL
 		}
 	}
 
-	ctx := context.Background()
 	systemCtx := &types.SystemContext{}
 	if len(authFilePaths) > 0 && authFilePaths[0] != "" {
 		systemCtx.AuthFilePath = authFilePaths[0]

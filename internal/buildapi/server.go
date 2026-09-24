@@ -1814,6 +1814,7 @@ func getBuildTemplate(c *gin.Context, name string) {
 		BuildRequest: BuildRequest{
 			Name:                   build.Name,
 			Manifest:               manifest,
+			ResolveOnly:            build.Spec.GetResolveOnly(),
 			Lockfile:               build.Spec.GetLockfile(),
 			ManifestFileName:       manifestFileName,
 			Distro:                 Distro(build.Spec.GetDistro()),

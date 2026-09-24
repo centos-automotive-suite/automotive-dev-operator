@@ -1099,6 +1099,8 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			RuntimeClassName:            operatorConfig.Spec.OSBuilds.RuntimeClassName,
 			AutomotiveImageBuilderImage: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
 			YQHelperImage:               operatorConfig.Spec.GetImages().GetYQHelperImage(),
+			HermetoImage:                operatorConfig.Spec.GetImages().GetHermetoImage(),
+			HermetoPrefetch:             operatorConfig.Spec.OSBuilds.HermetoPrefetch,
 			BuildTimeoutMinutes:         operatorConfig.Spec.OSBuilds.GetBuildTimeoutMinutes(),
 			FlashTimeoutMinutes:         operatorConfig.Spec.OSBuilds.GetFlashTimeoutMinutes(),
 			DefaultLeaseDuration:        operatorConfig.Spec.Jumpstarter.GetDefaultLeaseDuration(),
@@ -1205,6 +1207,24 @@ func (r *ImageBuildReconciler) createBuildTaskRun(
 			Value: tektonv1.ParamValue{
 				Type:      tektonv1.ParamTypeString,
 				StringVal: imageBuild.Spec.GetAIBImage(),
+			},
+		},
+		{
+			Name:  "resolve-only",
+			Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: fmt.Sprintf("%t", imageBuild.Spec.GetResolveOnly())},
+		},
+		{
+			Name: "hermeto-prefetch",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: fmt.Sprintf("%t", imageBuild.Spec.SecureBuild || imageBuild.Spec.Reproducible || (buildConfig != nil && buildConfig.HermetoPrefetch)),
+			},
+		},
+		{
+			Name: "hermeto-image",
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: operatorConfig.Spec.GetImages().GetHermetoImage(),
 			},
 		},
 		{
@@ -2843,9 +2863,11 @@ func (r *ImageBuildReconciler) resolveBuildConfig(ctx context.Context) *tasks.Bu
 	bc := &tasks.BuildConfig{
 		AutomotiveImageBuilderImage: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
 		YQHelperImage:               operatorConfig.Spec.GetImages().GetYQHelperImage(),
+		HermetoImage:                operatorConfig.Spec.GetImages().GetHermetoImage(),
 		DefaultLeaseDuration:        operatorConfig.Spec.Jumpstarter.GetDefaultLeaseDuration(),
 	}
 	if operatorConfig.Spec.OSBuilds != nil {
+		bc.HermetoPrefetch = operatorConfig.Spec.OSBuilds.HermetoPrefetch
 		bc.UseMemoryVolumes = operatorConfig.Spec.OSBuilds.UseMemoryVolumes
 		bc.MemoryVolumeSize = operatorConfig.Spec.OSBuilds.MemoryVolumeSize
 		bc.PVCSize = operatorConfig.Spec.OSBuilds.PVCSize

@@ -13,6 +13,7 @@ import (
 // Options wires the image command tree to caller-owned state and handlers.
 type Options struct {
 	RunBuild             func(*cobra.Command, []string)
+	RunResolve           func(*cobra.Command, []string)
 	RunDisk              func(*cobra.Command, []string)
 	RunBuildDev          func(*cobra.Command, []string)
 	RunList              func(*cobra.Command, []string)
@@ -119,6 +120,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	}
 
 	buildCmd := newBuildCmd(opts)
+	resolveCmd := newResolveCmd(opts)
 	diskCmd := newDiskCmd(opts)
 	buildDevCmd := newBuildDevCmd(opts)
 	listCmd := newListCmd(opts)
@@ -196,6 +198,23 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
 	buildCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: bootc)")
 	addS3Flags(buildCmd, opts)
+
+	resolveCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
+	resolveCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	resolveCmd.Flags().StringVar(opts.BuildName, "name", "", "cluster operation name (default: manifest name)")
+	resolveCmd.Flags().IntVar(opts.Timeout, "timeout", 30, "resolution timeout in minutes")
+	resolveCmd.Flags().StringVar(opts.TTL, "ttl", "", "retention after completion (0 keeps the operation)")
+	resolveCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution to resolve")
+	resolveCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
+	resolveCmd.Flags().StringVarP(opts.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
+	resolveCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "output lockfile path (default: <manifest>.lock)")
+	resolveCmd.Flags().StringVar(
+		opts.AutomotiveImageBuilder, "aib-image",
+		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
+	)
+	resolveCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
+	resolveCmd.Flags().StringArrayVar(opts.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
+	resolveCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra argument passed to AIB (can be repeated)")
 
 	listCmd.Flags().StringVar(
 		opts.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
@@ -373,6 +392,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 
 	cmd.AddCommand(
 		buildCmd,
+		resolveCmd,
 		diskCmd,
 		buildDevCmd,
 		listCmd,
@@ -391,6 +411,21 @@ func NewImageCmd(opts Options) *cobra.Command {
 	)
 
 	return cmd
+}
+
+func newResolveCmd(opts Options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "resolve <manifest.aib.yml>",
+		Short: "Resolve manifest dependencies into an AIB lockfile",
+		Long: `Resolve manifest dependencies on the cluster with the selected AIB container image.
+
+The generated lockfile records exact RPM URLs and checksums and can be passed
+to caib image build-dev with --lockfile. The CLI downloads the resulting lockfile.`,
+		Example: `  caib image resolve manifest.aib.yml --arch arm64 -o manifest.aib.lock
+  caib image build-dev manifest.aib.yml --arch arm64 --lockfile manifest.aib.lock`,
+		Args: cobra.ExactArgs(1),
+		Run:  opts.RunResolve,
+	}
 }
 
 func addNotificationFlags(cmd *cobra.Command, opts Options) {

@@ -67,7 +67,7 @@ pull_registry_image() { :; }
 log_elapsed() { :; }
 `
 					cmd := exec.Command("bash", "-c", body+"\ndeclare -a LOCKFILE_ARGS=()"+setup+"\nrun_bootc() {"+functions+"\nrun_"+mode)
-					cmd.Env = append(os.Environ(), "MANIFEST_CONFIG_PATH="+dir)
+					cmd.Env = append(os.Environ(), "AIB_LOCKFILE="+filepath.Join(dir, "aib.lock"))
 					out, err := cmd.CombinedOutput()
 					if err != nil {
 						t.Fatalf("script failed: %v\n%s", err, out)
@@ -103,8 +103,8 @@ func TestLockfileReproducibilityArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`rm -f "$WORKSPACE_PATH/aib.lock"`,
-		`cp "$MANIFEST_CONFIG_PATH/aib.lock" "$WORKSPACE_PATH/aib.lock"`,
+		`rm -f "$AIB_LOCKFILE"`,
+		`cp "$MANIFEST_CONFIG_PATH/aib.lock" "$AIB_LOCKFILE"`,
 	} {
 		if !strings.Contains(string(buildScript), want) {
 			t.Fatalf("build script missing %q", want)
@@ -116,7 +116,7 @@ func TestLockfileReproducibilityArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`if [ -f "./aib.lock" ]; then`,
+		`if [ "$SECURE_BUILD" = "true" ] || [ "$REPRODUCIBLE" = "true" ]; then`,
 		`"$OCI_REFERRER_TYPE_AIB_LOCKFILE" "AIB lockfile"`,
 	} {
 		if !strings.Contains(string(pushScript), want) {
@@ -133,7 +133,7 @@ func TestLockfileReproducibilityArtifacts(t *testing.T) {
 	}
 }
 
-func TestPackageReproducibleInputsReplacesStaleLockfile(t *testing.T) {
+func TestPackageReproducibleInputsPreservesBuildLockfile(t *testing.T) {
 	data, err := os.ReadFile("scripts/build_image.sh")
 	if err != nil {
 		t.Fatal(err)
@@ -165,16 +165,20 @@ func TestPackageReproducibleInputsReplacesStaleLockfile(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if err := os.WriteFile(
+				filepath.Join(buildDir, "osbuild_store", "hermeto-rpm-bom.json"),
+				[]byte(`{"bomFormat":"CycloneDX"}`),
+				0600,
+			); err != nil {
+				t.Fatal(err)
+			}
 			manifestPath := filepath.Join(root, "manifest.aib.yml")
 			if err := os.WriteFile(manifestPath, []byte("name: test\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			lockfilePath := filepath.Join(workspaceDir, "aib.lock")
-			if err := os.WriteFile(lockfilePath, []byte("stale"), 0600); err != nil {
-				t.Fatal(err)
-			}
 			if tt.lockfile != "" {
-				if err := os.WriteFile(filepath.Join(configDir, "aib.lock"), []byte(tt.lockfile), 0600); err != nil {
+				if err := os.WriteFile(lockfilePath, []byte(tt.lockfile), 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -190,6 +194,15 @@ func TestPackageReproducibleInputsReplacesStaleLockfile(t *testing.T) {
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("script failed: %v\n%s", err, out)
 			}
+			archive := filepath.Join(workspaceDir, "build-sources.tar.gz")
+			list := exec.Command("tar", "-tzf", archive)
+			contents, err := list.CombinedOutput()
+			if err != nil {
+				t.Fatalf("listing sources archive: %v\n%s", err, contents)
+			}
+			if !strings.Contains(string(contents), "hermeto-rpm-bom.json") {
+				t.Fatalf("Hermeto SBOM missing from sources archive:\n%s", contents)
+			}
 
 			got, err := os.ReadFile(lockfilePath)
 			if tt.lockfile == "" {
@@ -203,6 +216,111 @@ func TestPackageReproducibleInputsReplacesStaleLockfile(t *testing.T) {
 			}
 			if string(got) != tt.lockfile {
 				t.Fatalf("lockfile = %q, want %q", got, tt.lockfile)
+			}
+		})
+	}
+}
+
+func TestRequiredLockfilePublication(t *testing.T) {
+	data, err := os.ReadFile("scripts/push_artifact.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(data), "attach_referrer() {")
+	if !ok {
+		t.Fatal("attachment helper missing")
+	}
+	for _, tc := range []struct {
+		name, secure, repro    string
+		missing, attachFailure bool
+	}{
+		{name: "ordinary"},
+		{name: "secure", secure: "true"},
+		{name: "reproducible", repro: "true"},
+		{name: "missing lock", secure: "true", missing: true},
+		{name: "attachment fails", secure: "true", attachFailure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, f := range []string{"aib.lock", "aib-manifest.yml", "build-sources.tar.gz"} {
+				if f == "aib.lock" && tc.missing {
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(dir, f), []byte("fixture"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stub := `set -e
+cd() { builtin cd "$WORKSPACE"; }
+oras() {
+ printf 'ATTACH'; printf ' <%s>' "$@"; printf '\n'
+ [ "$ATTACH_FAILURE" != true ]
+}
+ORAS_BIN=oras
+ORAS_EXTRA_ARGS=()
+`
+			cmd := exec.Command("bash", "-c", stub+"attach_referrer() {"+rest+"\necho PUBLISHED")
+			cmd.Dir = dir
+			fail := "false"
+			if tc.attachFailure {
+				fail = "true"
+			}
+			cmd.Env = append(os.Environ(), "SECURE_BUILD="+tc.secure, "REPRODUCIBLE="+tc.repro, "WORKSPACE="+dir, "ATTACH_FAILURE="+fail, "DISK_DIGEST=sha256:abc", "repo_url=registry.example/output", "OCI_REFERRER_TYPE_AIB_LOCKFILE=lock-type", "OCI_REFERRER_TYPE_AIB_MANIFEST=manifest-type", "OCI_REFERRER_TYPE_BUILD_SOURCES=sources-type")
+			output, err := cmd.CombinedOutput()
+			wantFailure := tc.missing || tc.attachFailure
+			if (err != nil) != wantFailure {
+				t.Fatalf("err=%v output=%s", err, output)
+			}
+			if wantFailure && strings.Contains(string(output), "PUBLISHED") {
+				t.Fatalf("continued after failed publication: %s", output)
+			}
+			if !wantFailure && tc.name != "ordinary" && strings.Count(string(output), "<./aib.lock:lock-type>") != 1 {
+				t.Fatalf("lock not published exactly once: %s", output)
+			}
+		})
+	}
+}
+
+func TestSecureContainerLockfilePublication(t *testing.T) {
+	data, err := os.ReadFile("scripts/build_image.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(data), "write_container_results() {")
+	if !ok {
+		t.Fatal("container results function missing")
+	}
+	body, _, ok := strings.Cut(rest, "\nwait_for_container_push\n")
+	if !ok {
+		t.Fatal("container results boundary missing")
+	}
+	for _, scenario := range []string{"success", "missing lock", "attach failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			lock := filepath.Join(dir, "aib.lock")
+			if scenario != "missing lock" {
+				if err := os.WriteFile(lock, []byte("recorded"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			script := `set -e
+fail() { echo "ERROR: $*"; exit 1; }
+cat() { echo sha256:example; }
+install_oras() { :; }
+oras() { printf 'ATTACH'; printf ' <%s>' "$@"; printf '\n'; [ "$SCENARIO" != 'attach failure' ]; }
+write_result() { echo "RESULT $1"; }
+` + "write_container_results() {" + body + "\nwrite_container_results"
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Env = append(os.Environ(), "SCENARIO="+scenario, "NEEDS_PUSH=true", "SECURE_BUILD=true", "REPRODUCIBLE=false", "AIB_LOCKFILE="+lock, "WORKSPACE_PATH="+dir, "CONTAINER_PUSH=registry.example/image:latest", "REGISTRY_AUTH_FILE=", "OCI_REFERRER_TYPE_AIB_LOCKFILE=lock-type")
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != (scenario == "success") {
+				t.Fatalf("err=%v output=%s", err, out)
+			}
+			if strings.Contains(string(out), "RESULT IMAGE_DIGEST") != (scenario == "success") {
+				t.Fatalf("published results before lock attachment: %s", out)
+			}
+			if scenario == "success" && !strings.Contains(string(out), "<"+lock+":lock-type>") {
+				t.Fatalf("lock attachment missing: %s", out)
 			}
 		})
 	}

@@ -476,6 +476,8 @@ func TestBuildScript_ReceivesParamsThroughEnvironment(t *testing.T) {
 		"USE_PERSISTENT_CACHE":   "$(params.use-persistent-cache)",
 		"REPRODUCIBLE":           "$(params.reproducible)",
 		"RESTORE_SOURCES_REF":    "$(params.restore-sources-ref)",
+		"HERMETO_IMAGE":          "$(params.hermeto-image)",
+		"HERMETO_PREFETCH":       "$(params.hermeto-prefetch)",
 		"INSECURE_REGISTRY":      "$(params.insecure-registry)",
 	}
 
@@ -501,6 +503,27 @@ func TestBuildScript_ReceivesParamsThroughEnvironment(t *testing.T) {
 	}
 	if strings.Contains(script, "$(params.") {
 		t.Error("build script must not interpolate Tekton parameters into shell source")
+	}
+}
+
+func TestHermetoImageIsReplaceable(t *testing.T) {
+	const image = "registry.example/hermeto@sha256:test"
+	config := &BuildConfig{HermetoImage: image}
+	task := GenerateBuildAutomotiveImageTask("test-ns", config, "")
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", config)
+
+	if got, ok := paramDefault(task.Spec.Params, "hermeto-image"); !ok || got != image {
+		t.Fatalf("task Hermeto image = %q, %t; want %q", got, ok, image)
+	}
+	if got, ok := paramDefault(pipeline.Spec.Params, "hermeto-image"); !ok || got != image {
+		t.Fatalf("pipeline Hermeto image = %q, %t; want %q", got, ok, image)
+	}
+	buildTask := findPipelineTask(pipeline.Spec.Tasks, PipelineTaskBuildImage)
+	if buildTask == nil {
+		t.Fatal("pipeline missing build-image task")
+	}
+	if got, ok := taskParamBinding(buildTask, "hermeto-image"); !ok || got != "$(params.hermeto-image)" {
+		t.Fatalf("Hermeto image binding = %q, %t", got, ok)
 	}
 }
 
@@ -820,5 +843,34 @@ func TestImagesResultFormat(t *testing.T) {
 		if !strings.HasPrefix(parts[1], "sha256:") {
 			t.Errorf("digest %q should start with sha256:", parts[1])
 		}
+	}
+}
+
+func TestHermetoPrefetchDefaultsAndBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config *BuildConfig
+		want   string
+	}{
+		{"bundle defaults", nil, "false"},
+		{"disabled", &BuildConfig{}, "false"},
+		{"enabled", &BuildConfig{HermetoPrefetch: true}, "true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := GenerateBuildAutomotiveImageTask("test-ns", tc.config, "")
+			pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", tc.config)
+			for _, params := range [][]tektonv1.ParamSpec{task.Spec.Params, pipeline.Spec.Params} {
+				if got, ok := paramDefault(params, "hermeto-prefetch"); !ok || got != tc.want {
+					t.Fatalf("prefetch default = %q, present=%t; want %q", got, ok, tc.want)
+				}
+			}
+			buildTask := findPipelineTask(pipeline.Spec.Tasks, PipelineTaskBuildImage)
+			if buildTask == nil {
+				t.Fatal("build task missing")
+			}
+			if got, ok := taskParamBinding(buildTask, "hermeto-prefetch"); !ok || got != "$(params.hermeto-prefetch)" {
+				t.Fatalf("prefetch binding = %q, present=%t", got, ok)
+			}
+		})
 	}
 }

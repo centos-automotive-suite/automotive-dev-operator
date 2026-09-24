@@ -6,6 +6,7 @@ install_oras || exit 1
 # Get media type based on file format and compression
 get_media_type() {
   case "$1" in
+    aib.lock) echo "$OCI_REFERRER_TYPE_AIB_LOCKFILE" ;;
     *.tar.gz)         echo "$OCI_MEDIA_LAYER_GZIP" ;;
     *.tar.xz)         echo "$OCI_MEDIA_LAYER_XZ" ;;
     *.tar)            echo "$OCI_MEDIA_LAYER_BASE" ;;
@@ -35,6 +36,7 @@ json_escape() {
 
 get_artifact_type() {
   case "$1" in
+    aib.lock) echo "$OCI_REFERRER_TYPE_AIB_LOCKFILE" ;;
     *.simg.gz|*.simg.xz|*.simg) echo "$OCI_MEDIA_DISK_SIMG" ;;
     *.qcow2.gz|*.qcow2.xz|*.qcow2) echo "$OCI_MEDIA_DISK_QCOW2" ;;
     *.raw.gz|*.raw.xz|*.raw|*.img.gz|*.img.xz|*.img) echo "$OCI_MEDIA_DISK_RAW" ;;
@@ -415,7 +417,7 @@ fi
 attach_referrer() {
   local file="$1" artifact_type="$2" label="$3"
   if [ ! -f "$file" ]; then
-    echo "ERROR: $label not found at $file (required for reproducible build)"
+    echo "ERROR: $label not found at $file (required for locked build)"
     exit 1
   fi
   echo "Attaching $label ($(du -sh "$file" | cut -f1)) to ${repo_url}@${DISK_DIGEST}"
@@ -423,7 +425,7 @@ attach_referrer() {
     --artifact-type "$artifact_type" \
     "${repo_url}@${DISK_DIGEST}" \
     "${file}:${artifact_type}"; then
-    echo "ERROR: Failed to attach $label (fatal in reproducible mode)"
+    echo "ERROR: Failed to attach $label (fatal in locked build mode)"
     exit 1
   fi
 }
@@ -433,11 +435,14 @@ if [ "$REPRODUCIBLE" = "true" ] && [ -n "$DISK_DIGEST" ]; then
   echo "=== Attaching reproducibility artifacts ==="
   attach_referrer "./aib-manifest.yml" \
     "$OCI_REFERRER_TYPE_AIB_MANIFEST" "AIB input manifest"
-  if [ -f "./aib.lock" ]; then
-    attach_referrer "./aib.lock" \
-      "$OCI_REFERRER_TYPE_AIB_LOCKFILE" "AIB lockfile"
-  fi
   attach_referrer "./build-sources.tar.gz" \
     "$OCI_REFERRER_TYPE_BUILD_SOURCES" "osbuild sources archive"
   echo "=== Reproducibility artifacts attached ==="
+fi
+
+if [ "$SECURE_BUILD" = "true" ] || [ "$REPRODUCIBLE" = "true" ]; then
+  [ -n "$DISK_DIGEST" ] || { echo "ERROR: lockfile publication requires an artifact digest"; exit 1; }
+  cd /workspace/shared || exit 1
+  attach_referrer "./aib.lock" \
+    "$OCI_REFERRER_TYPE_AIB_LOCKFILE" "AIB lockfile"
 fi

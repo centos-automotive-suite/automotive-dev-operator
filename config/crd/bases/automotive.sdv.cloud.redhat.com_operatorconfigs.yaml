@@ -593,6 +593,10 @@ spec:
                     description: AutomotiveImageBuilder is the container image for
                       automotive-image-builder
                     type: string
+                  hermeto:
+                    description: Hermeto is the RPM fetcher image used when osBuilds.hermetoPrefetch
+                      is enabled.
+                    type: string
                   operator:
                     description: Operator is the operator container image (overridden
                       by OPERATOR_IMAGE env var when set)
@@ -727,6 +731,11 @@ spec:
                       Default: 240 (4 hours)
                     format: int32
                     type: integer
+                  hermetoPrefetch:
+                    description: |-
+                      HermetoPrefetch opts locked builds into experimental HTTP(S) RPM prefetch.
+                      RPM-only lockfiles also run AIB without network access. Disabled by default.
+                    type: boolean
                   insecureRegistry:
                     description: |-
                       InsecureRegistry skips TLS certificate verification for OCI registry operations

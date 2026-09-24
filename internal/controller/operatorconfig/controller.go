@@ -577,6 +577,8 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 			RuntimeClassName:            config.Spec.OSBuilds.RuntimeClassName,
 			AutomotiveImageBuilderImage: config.Spec.GetImages().GetAutomotiveImageBuilderImage(),
 			YQHelperImage:               config.Spec.GetImages().GetYQHelperImage(),
+			HermetoImage:                config.Spec.GetImages().GetHermetoImage(),
+			HermetoPrefetch:             config.Spec.OSBuilds.HermetoPrefetch,
 			BuildTimeoutMinutes:         config.Spec.OSBuilds.GetBuildTimeoutMinutes(),
 			FlashTimeoutMinutes:         config.Spec.OSBuilds.GetFlashTimeoutMinutes(),
 			DefaultLeaseDuration:        config.Spec.Jumpstarter.GetDefaultLeaseDuration(),

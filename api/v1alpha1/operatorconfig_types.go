@@ -33,6 +33,9 @@ const (
 	// DefaultYQHelperImage is the default yq helper image used in Tekton task steps
 	DefaultYQHelperImage = "quay.io/konflux-ci/yq:latest"
 
+	// DefaultHermetoImage pins the optional RPM fetcher to a multi-architecture image.
+	DefaultHermetoImage = "ghcr.io/hermetoproject/hermeto@sha256:8dc7d791fb7d874d208e145934e812e51736eea495fd2f11ad3a3acd5e831eff"
+
 	// DefaultOperatorImage is the default operator container image
 	DefaultOperatorImage = "quay.io/rh-sdv-cloud/automotive-dev-operator:latest"
 
@@ -90,6 +93,10 @@ type ImagesConfig struct {
 	// +optional
 	YQHelper string `json:"yqHelper,omitempty"`
 
+	// Hermeto is the RPM fetcher image used when osBuilds.hermetoPrefetch is enabled.
+	// +optional
+	Hermeto string `json:"hermeto,omitempty"`
+
 	// Operator is the operator container image (overridden by OPERATOR_IMAGE env var when set)
 	// +optional
 	Operator string `json:"operator,omitempty"`
@@ -114,6 +121,13 @@ func (c *ImagesConfig) GetYQHelperImage() string {
 		return c.YQHelper
 	}
 	return DefaultYQHelperImage
+}
+
+func (c *ImagesConfig) GetHermetoImage() string {
+	if c != nil && c.Hermeto != "" {
+		return c.Hermeto
+	}
+	return DefaultHermetoImage
 }
 
 // GetOperatorImage returns the operator image, falling back to the default
@@ -722,6 +736,11 @@ type OperatorConfigSpec struct {
 // OSBuildsConfig defines configuration for OS build operations
 // +kubebuilder:validation:XValidation:rule="!has(self.taskBundleVerify) || !self.taskBundleVerify || has(self.taskBundleCosignKeyRef)",message="taskBundleCosignKeyRef is required when taskBundleVerify is true"
 type OSBuildsConfig struct {
+	// HermetoPrefetch opts locked builds into experimental HTTP(S) RPM prefetch.
+	// RPM-only lockfiles also run AIB without network access. Disabled by default.
+	// +optional
+	HermetoPrefetch bool `json:"hermetoPrefetch,omitempty"`
+
 	// Enabled determines if Tekton tasks for OS builds should be deployed
 	// +kubebuilder:default=true
 	Enabled bool `json:"enabled"`
