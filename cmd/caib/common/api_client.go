@@ -115,7 +115,9 @@ func ExecuteWithReauth(
 	}
 
 	clilog.Statusln("Authentication failed (401), re-authenticating...")
-	newToken, _, err := auth.GetTokenWithReauth(ctx, serverURL, currentToken, insecureSkipTLS)
+	// Offer no external token: the current one was just rejected, so handing it
+	// back would only cache it and return it unchanged.
+	newToken, _, err := auth.GetTokenWithReauth(ctx, serverURL, "", insecureSkipTLS)
 	if err != nil {
 		return fmt.Errorf("re-authentication failed: %w", err)
 	}

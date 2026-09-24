@@ -99,6 +99,7 @@ func GetOIDCConfigFromAPI(serverURL string, insecureSkipTLS bool) (*OIDCConfig, 
 		IssuerURL: issuerURL,
 		ClientID:  clientID,
 		Scopes:    []string{"openid", "profile", "email", "offline_access"},
+		Audiences: jwtConfig.Issuer.Audiences,
 	}, nil
 }
 
