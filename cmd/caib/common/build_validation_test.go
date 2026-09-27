@@ -144,3 +144,35 @@ func TestValidateAndJoinLeaseTags(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeBuildName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"simple", "simple"},
+		{"simple_hello", "simple-hello"},
+		{"UPPERCASE", "uppercase"},
+		{"Mixed_Case_Name", "mixed-case-name"},
+		{"multiple___underscores", "multiple-underscores"},
+		{"dots.in.name", "dots-in-name"},
+		{"spaces in name", "spaces-in-name"},
+		{"special!@#chars", "special-chars"},
+		{"-leading-hyphen", "leading-hyphen"},
+		{"trailing-hyphen-", "trailing-hyphen"},
+		{"-both-sides-", "both-sides"},
+		{"123numeric", "123numeric"},
+		{"a", "a"},
+		{"already-valid-name", "already-valid-name"},
+		{"under_score.and.dots", "under-score-and-dots"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := SanitizeBuildName(tt.input)
+			if got != tt.want {
+				t.Errorf("SanitizeBuildName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
