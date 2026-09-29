@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,18 +26,18 @@ func TestGitCredentialsOwnership(t *testing.T) {
 func TestGitSourceRequest(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		mutate  func(*BuildRequest)
+		mutate  func(*buildcontract.BuildRequest)
 		invalid bool
 	}{
-		{"git", func(r *BuildRequest) {}, false},
-		{"inline manifest", func(r *BuildRequest) { r.Manifest = "name: demo" }, true},
-		{"local lockfile", func(r *BuildRequest) { r.Lockfile = `{"version":1}` }, true},
-		{"upload", func(r *BuildRequest) { r.HasLocalFiles = true }, true},
-		{"workspace", func(r *BuildRequest) { r.Workspace = "dev" }, true},
-		{"disk", func(r *BuildRequest) { r.Mode = ModeDisk }, true},
+		{"git", func(r *buildcontract.BuildRequest) {}, false},
+		{"inline manifest", func(r *buildcontract.BuildRequest) { r.Manifest = "name: demo" }, true},
+		{"local lockfile", func(r *buildcontract.BuildRequest) { r.Lockfile = `{"version":1}` }, true},
+		{"upload", func(r *buildcontract.BuildRequest) { r.HasLocalFiles = true }, true},
+		{"workspace", func(r *buildcontract.BuildRequest) { r.Workspace = "dev" }, true},
+		{"disk", func(r *buildcontract.BuildRequest) { r.Mode = buildcontract.ModeDisk }, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			r := BuildRequest{Name: "git-build", GitSource: &api.GitSource{URL: "https://git.example.com/os.git", ManifestPath: "images/demo.aib.yml"}}
+			r := buildcontract.BuildRequest{Name: "git-build", GitSource: &api.GitSource{URL: "https://git.example.com/os.git", ManifestPath: "images/demo.aib.yml"}}
 			tt.mutate(&r)
 			if err := validateBuildRequest(&r); (err != nil) != tt.invalid {
 				t.Fatalf("error = %v", err)
@@ -46,7 +47,7 @@ func TestGitSourceRequest(t *testing.T) {
 }
 
 func TestGitSourceDefaultsDeferred(t *testing.T) {
-	r := BuildRequest{GitSource: &api.GitSource{URL: "https://git.example.com/os.git", ManifestPath: "demo.aib.yml"}, ArchitectureFallback: "x86_64"}
+	r := buildcontract.BuildRequest{GitSource: &api.GitSource{URL: "https://git.example.com/os.git", ManifestPath: "demo.aib.yml"}, ArchitectureFallback: "x86_64"}
 	if err := applyBuildDefaults(&r); err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +64,8 @@ func TestGitArchitectureFallbackValidation(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		git      bool
-		arch     Architecture
-		fallback Architecture
+		arch     buildcontract.Architecture
+		fallback buildcontract.Architecture
 		invalid  bool
 	}{
 		{name: "git fallback", git: true, fallback: "amd64"},
@@ -73,7 +74,7 @@ func TestGitArchitectureFallbackValidation(t *testing.T) {
 		{name: "invalid fallback", git: true, fallback: "ppc64le", invalid: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			req := BuildRequest{Name: "test", Manifest: "name: test", Architecture: tt.arch, ArchitectureFallback: tt.fallback}
+			req := buildcontract.BuildRequest{Name: "test", Manifest: "name: test", Architecture: tt.arch, ArchitectureFallback: tt.fallback}
 			if tt.git {
 				req.GitSource = &api.GitSource{URL: "https://git.example.com/os.git", ManifestPath: "demo.aib.yml"}
 				req.Manifest = ""

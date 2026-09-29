@@ -12,6 +12,10 @@ import (
 	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
+	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 	"github.com/containers/image/v5/types"
 	"github.com/fatih/color"
 	godigest "github.com/opencontainers/go-digest"
@@ -21,10 +25,6 @@ import (
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/credentials"
-
-	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
-	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 )
 
 var ociSpec = oci.Get()
@@ -48,11 +48,9 @@ var annotationDisplayLabels = map[string]string{
 
 // Options wires inspect handler dependencies.
 type Options struct {
-	RegistryAuthFile *string
-	OutputDir        *string
-	OutputFormat     *string
-	InsecureSkipTLS  *bool
-
+	Connection  *commandopts.Connection
+	Output      *commandopts.Output
+	Registry    *commandopts.Registry
 	HandleError func(error)
 }
 
@@ -70,8 +68,21 @@ type Handler struct {
 }
 
 // NewHandler creates an inspect handler.
+func (o Options) withDefaults() Options {
+	if o.Connection == nil {
+		o.Connection = &commandopts.Connection{}
+	}
+	if o.Output == nil {
+		o.Output = &commandopts.Output{}
+	}
+	if o.Registry == nil {
+		o.Registry = &commandopts.Registry{}
+	}
+	return o
+}
+
 func NewHandler(opts Options) *Handler {
-	return &Handler{opts: opts}
+	return &Handler{opts: opts.withDefaults()}
 }
 
 func (h *Handler) handleError(err error) {
@@ -91,10 +102,10 @@ func (h *Handler) supportsColor() bool {
 func (h *Handler) RunInspect(_ *cobra.Command, args []string) {
 	ociRef := args[0]
 
-	insecure := h.opts.InsecureSkipTLS != nil && *h.opts.InsecureSkipTLS
+	insecure := h.opts.Connection.InsecureSkipTLS
 	authFile := ""
-	if h.opts.RegistryAuthFile != nil {
-		authFile = *h.opts.RegistryAuthFile
+	if h.opts.Registry.AuthFile != "" {
+		authFile = h.opts.Registry.AuthFile
 	}
 	sysCtx := caibcommon.NewRegistrySystemContext(ociRef, insecure, authFile)
 
@@ -115,8 +126,8 @@ func (h *Handler) RunInspect(_ *cobra.Command, args []string) {
 	}
 
 	format := ""
-	if h.opts.OutputFormat != nil {
-		format = strings.ToLower(strings.TrimSpace(*h.opts.OutputFormat))
+	if h.opts.Output.Format != "" {
+		format = strings.ToLower(strings.TrimSpace(h.opts.Output.Format))
 	}
 
 	switch format {
@@ -126,9 +137,9 @@ func (h *Handler) RunInspect(_ *cobra.Command, args []string) {
 		h.printProvenance(ociRef, digest, annotations, referrers, referrerTypes)
 	}
 
-	if h.opts.OutputDir != nil && *h.opts.OutputDir != "" {
+	if h.opts.Output.Dir != "" {
 		_, dlUsername, dlPassword := registryauth.ExtractRegistryCredentials(ociRef, "")
-		h.downloadReferrers(ociRef, digest, referrers, *h.opts.OutputDir, dlUsername, dlPassword, authFile)
+		h.downloadReferrers(ociRef, digest, referrers, h.opts.Output.Dir, dlUsername, dlPassword, authFile)
 	}
 }
 
@@ -394,7 +405,7 @@ func (h *Handler) downloadReferrers(ociRef, _ string, referrers []referrerInfo, 
 	}
 
 	repo := splitReference(ociRef)
-	insecure := h.opts.InsecureSkipTLS != nil && *h.opts.InsecureSkipTLS
+	insecure := h.opts.Connection.InsecureSkipTLS
 
 	fileMap := ociSpec.ReferrerFileMap()
 

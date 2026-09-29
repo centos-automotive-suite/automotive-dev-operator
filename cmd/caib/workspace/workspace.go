@@ -21,15 +21,14 @@ import (
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/gorilla/websocket"
-	"github.com/spf13/cobra"
-	"golang.org/x/term"
-
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/gorilla/websocket"
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -312,7 +311,7 @@ func runCreate(_ *cobra.Command, args []string) {
 		clientConfigB64 = base64.StdEncoding.EncodeToString(clientInfo.Data)
 	}
 
-	req := buildapitypes.WorkspaceRequest{
+	req := buildcontract.WorkspaceRequest{
 		Name:          name,
 		FromBuild:     fromBuild,
 		Lease:         leaseID,
@@ -331,7 +330,7 @@ func runCreate(_ *cobra.Command, args []string) {
 		req.AutoPauseTimeoutMinutes = &v
 	}
 
-	var resp *buildapitypes.WorkspaceResponse
+	var resp *buildcontract.WorkspaceResponse
 	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		r, cerr := client.CreateWorkspace(context.Background(), req)
 		if cerr != nil {
@@ -365,7 +364,7 @@ func runList(_ *cobra.Command, _ []string) {
 		handleError(err)
 	}
 
-	var workspaces []buildapitypes.WorkspaceResponse
+	var workspaces []buildcontract.WorkspaceResponse
 	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		ws, cerr := client.ListWorkspaces(context.Background())
 		if cerr != nil {
@@ -379,7 +378,7 @@ func runList(_ *cobra.Command, _ []string) {
 	}
 
 	if workspaces == nil {
-		workspaces = []buildapitypes.WorkspaceResponse{}
+		workspaces = []buildcontract.WorkspaceResponse{}
 	}
 
 	caibcommon.RenderFormatted(format, workspaces, func() error {
@@ -391,7 +390,7 @@ func runList(_ *cobra.Command, _ []string) {
 	}, handleError)
 }
 
-func printWorkspaceList(workspaces []buildapitypes.WorkspaceResponse) error {
+func printWorkspaceList(workspaces []buildcontract.WorkspaceResponse) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(w, "NAME\tARCH\tPHASE\tLEASE\tAGE"); err != nil {
 		return err
@@ -421,7 +420,7 @@ func runShow(_ *cobra.Command, args []string) {
 		handleError(err)
 	}
 
-	var ws *buildapitypes.WorkspaceResponse
+	var ws *buildcontract.WorkspaceResponse
 	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		r, cerr := client.GetWorkspace(context.Background(), name)
 		if cerr != nil {
@@ -439,7 +438,7 @@ func runShow(_ *cobra.Command, args []string) {
 	}, handleError)
 }
 
-func printWorkspaceDetails(ws *buildapitypes.WorkspaceResponse) error {
+func printWorkspaceDetails(ws *buildcontract.WorkspaceResponse) error {
 	fmt.Printf("Name:         %s\n", ws.Name)
 	fmt.Printf("Architecture: %s\n", ws.Arch)
 	fmt.Printf("Phase:        %s\n", ws.Phase)
@@ -481,7 +480,7 @@ func runStart(_ *cobra.Command, args []string) {
 	requireServer()
 	name := args[0]
 
-	var resp *buildapitypes.WorkspaceResponse
+	var resp *buildcontract.WorkspaceResponse
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		r, cerr := client.StartWorkspace(context.Background(), name)
 		if cerr != nil {
@@ -506,7 +505,7 @@ func runStop(_ *cobra.Command, args []string) {
 	requireServer()
 	name := args[0]
 
-	var resp *buildapitypes.WorkspaceResponse
+	var resp *buildcontract.WorkspaceResponse
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		r, cerr := client.StopWorkspace(context.Background(), name)
 		if cerr != nil {
@@ -557,12 +556,12 @@ func runSync(_ *cobra.Command, args []string) {
 			handleError(err)
 		}
 	}
-	planReq := buildapitypes.SyncPlanRequest{
+	planReq := buildcontract.SyncPlanRequest{
 		Files:          manifest,
 		IncludeDeleted: syncDelete,
 	}
 
-	var plan *buildapitypes.SyncPlanResponse
+	var plan *buildcontract.SyncPlanResponse
 	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		p, cerr := client.SyncPlan(context.Background(), name, planReq)
 		if cerr != nil {
@@ -605,7 +604,7 @@ func runSync(_ *cobra.Command, args []string) {
 			fmt.Fprintf(os.Stderr, "  delete: %s\n", f)
 		}
 		clilog.Infof("Removing %d stale file(s) from workspace %q...\n", len(plan.Deleted), name)
-		deleteReq := buildapitypes.SyncDeleteRequest{Files: plan.Deleted}
+		deleteReq := buildcontract.SyncDeleteRequest{Files: plan.Deleted}
 		err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 			return client.SyncDelete(context.Background(), name, deleteReq)
 		})
@@ -780,7 +779,7 @@ func runExec(_ *cobra.Command, args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	req := buildapitypes.WorkspaceExecRequest{Command: command}
+	req := buildcontract.WorkspaceExecRequest{Command: command}
 
 	var body io.ReadCloser
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
@@ -878,16 +877,16 @@ func runDeploy(_ *cobra.Command, args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	artifacts := make([]buildapitypes.ArtifactMapping, 0, len(artifactMappings))
+	artifacts := make([]buildcontract.ArtifactMapping, 0, len(artifactMappings))
 	for _, m := range artifactMappings {
 		parts := strings.SplitN(m, ":", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			handleError(fmt.Errorf("invalid artifact mapping %q: expected src:dest", m))
 		}
-		artifacts = append(artifacts, buildapitypes.ArtifactMapping{Src: parts[0], Dest: parts[1]})
+		artifacts = append(artifacts, buildcontract.ArtifactMapping{Src: parts[0], Dest: parts[1]})
 	}
 
-	req := buildapitypes.WorkspaceDeployRequest{
+	req := buildcontract.WorkspaceDeployRequest{
 		Artifacts: artifacts,
 	}
 
@@ -939,7 +938,7 @@ func waitForRunning(name string) {
 			}
 			handleError(workspaceStatusError(err, lastReason))
 		case <-ticker.C:
-			var ws *buildapitypes.WorkspaceResponse
+			var ws *buildcontract.WorkspaceResponse
 			err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 				r, cerr := client.GetWorkspace(ctx, name)
 				if cerr != nil {
@@ -996,7 +995,7 @@ func waitForRunning(name string) {
 	}
 }
 
-func workspaceFailureError(name string, ws *buildapitypes.WorkspaceResponse) error {
+func workspaceFailureError(name string, ws *buildcontract.WorkspaceResponse) error {
 	err := fmt.Errorf("workspace %q failed", name)
 	if ws.Reason != "" {
 		err = fmt.Errorf("workspace %q failed (%s)", name, ws.Reason)

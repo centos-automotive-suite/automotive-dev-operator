@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"strings"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 )
 
 // sealedSecretRefs holds the resolved secret references for a sealed operation.
@@ -23,7 +23,7 @@ type sealedSecretRefs struct {
 }
 
 // createSealedSecrets creates any transient secrets needed for a sealed operation (registry auth, seal key, key password).
-func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, req *SealedRequest) (*sealedSecretRefs, error) {
+func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, req *buildcontract.SealedRequest) (*sealedSecretRefs, error) {
 	refs := &sealedSecretRefs{
 		keySecretRef:         req.KeySecretRef,
 		keyPasswordSecretRef: req.KeyPasswordSecretRef,
@@ -104,7 +104,7 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 	return refs, nil
 }
 
-func buildSealedRegistrySecretData(creds *RegistryCredentials) (map[string][]byte, error) {
+func buildSealedRegistrySecretData(creds *buildcontract.RegistryCredentials) (map[string][]byte, error) {
 	secretData := make(map[string][]byte)
 
 	switch creds.AuthType {
@@ -148,7 +148,7 @@ func buildSealedRegistrySecretData(creds *RegistryCredentials) (map[string][]byt
 }
 
 // cleanupSealedSecrets removes transient secrets that were created for a sealed operation.
-func cleanupSealedSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, req *SealedRequest, refs *sealedSecretRefs) {
+func cleanupSealedSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, req *buildcontract.SealedRequest, refs *sealedSecretRefs) {
 	if refs.secretRef != "" {
 		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, refs.secretRef, metav1.DeleteOptions{})
 	}
@@ -160,7 +160,7 @@ func cleanupSealedSecrets(ctx context.Context, clientset kubernetes.Interface, n
 	}
 }
 
-func transientSealedSecretRefs(req *SealedRequest, refs *sealedSecretRefs) []string {
+func transientSealedSecretRefs(req *buildcontract.SealedRequest, refs *sealedSecretRefs) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	add := func(name string) {

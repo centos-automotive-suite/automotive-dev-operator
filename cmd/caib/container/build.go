@@ -30,17 +30,16 @@ import (
 	"syscall"
 	"time"
 
-	containersarchive "github.com/containers/storage/pkg/archive"
-	"github.com/google/uuid"
-	"github.com/spf13/cobra"
-
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/ui"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	containersarchive "github.com/containers/storage/pkg/archive"
+	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 )
 
 // Container build command flags
@@ -168,7 +167,7 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 
 	buildArgs := parseContainerBuildArgs(containerBuildArgs)
 
-	var registryCreds *buildapitypes.RegistryCredentials
+	var registryCreds *buildcontract.RegistryCredentials
 	if !useInternalRegistry {
 		effectiveRegistryURL, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(containerBuildPush, "")
 		var err error
@@ -188,9 +187,9 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 		clilog.Infoln("Using OpenShift internal registry")
 	}
 	clilog.Infoln("Creating container build...")
-	var createResp *buildapitypes.ContainerBuildResponse
+	var createResp *buildcontract.ContainerBuildResponse
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
-		resp, cerr := client.CreateContainerBuild(ctx, buildapitypes.ContainerBuildRequest{
+		resp, cerr := client.CreateContainerBuild(ctx, buildcontract.ContainerBuildRequest{
 			Name:                buildName,
 			Output:              containerBuildPush,
 			Containerfile:       containerfile,
@@ -239,15 +238,15 @@ func runBuildContainer(_ *cobra.Command, args []string) {
 	}()
 
 	pb := ui.NewProgressBar()
-	pb.Render(phasePending, &buildapitypes.BuildStep{Done: 0, Total: 3, Stage: "Waiting for build pod"})
+	pb.Render(phasePending, &buildcontract.BuildStep{Done: 0, Total: 3, Stage: "Waiting for build pod"})
 
 	waitForContainerBuildUploadReady(ctx, createResp.Name)
 
-	pb.Render(phaseUploading, &buildapitypes.BuildStep{Done: 1, Total: 3, Stage: "Uploading build context"})
+	pb.Render(phaseUploading, &buildcontract.BuildStep{Done: 1, Total: 3, Stage: "Uploading build context"})
 
 	uploadContainerBuildContext(ctx, createResp.Name, tarballPath)
 
-	pb.Render("Building", &buildapitypes.BuildStep{Done: 2, Total: 3, Stage: "Building image"})
+	pb.Render("Building", &buildcontract.BuildStep{Done: 2, Total: 3, Stage: "Building image"})
 
 	// Poll until terminal
 	finalStatus := waitForContainerBuildCompletion(ctx, createResp.Name, pb)
@@ -317,7 +316,7 @@ func waitForContainerBuildUploadReady(ctx context.Context, name string) {
 		case <-uploadTimeout:
 			handleError(fmt.Errorf("timed out waiting for build to reach Uploading phase"))
 		case <-ticker.C:
-			var status *buildapitypes.ContainerBuildResponse
+			var status *buildcontract.ContainerBuildResponse
 			err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 				s, serr := client.GetContainerBuild(ctx, name)
 				if serr != nil {
@@ -390,8 +389,8 @@ func isContainerBuildTerminal(phase string) bool {
 }
 
 // getContainerBuildStatus retrieves the current build status.
-func getContainerBuildStatus(ctx context.Context, name string) (*buildapitypes.ContainerBuildResponse, error) {
-	var status *buildapitypes.ContainerBuildResponse
+func getContainerBuildStatus(ctx context.Context, name string) (*buildcontract.ContainerBuildResponse, error) {
+	var status *buildcontract.ContainerBuildResponse
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		s, serr := client.GetContainerBuild(ctx, name)
 		if serr != nil {
@@ -407,7 +406,7 @@ func getContainerBuildStatus(ctx context.Context, name string) (*buildapitypes.C
 }
 
 // waitForContainerBuildCompletion polls until the build reaches a terminal state.
-func waitForContainerBuildCompletion(ctx context.Context, name string, pb *ui.ProgressBar) *buildapitypes.ContainerBuildResponse {
+func waitForContainerBuildCompletion(ctx context.Context, name string, pb *ui.ProgressBar) *buildcontract.ContainerBuildResponse {
 	// Add extra headroom for queueing and status propagation beyond task timeout.
 	waitTimeout := max(time.Duration(containerBuildTimeout+10)*time.Minute, 15*time.Minute)
 
@@ -424,7 +423,7 @@ func waitForContainerBuildCompletion(ctx context.Context, name string, pb *ui.Pr
 		case <-ticker.C:
 			status, err := getContainerBuildStatus(ctx, name)
 			if err != nil {
-				pb.Render("Building", &buildapitypes.BuildStep{
+				pb.Render("Building", &buildcontract.BuildStep{
 					Done:  2,
 					Total: containerBuildTotalSteps,
 					Stage: fmt.Sprintf("Status check failed: %v", err),
@@ -433,7 +432,7 @@ func waitForContainerBuildCompletion(ctx context.Context, name string, pb *ui.Pr
 			}
 
 			done := containerBuildPhaseStep(status.Phase)
-			pb.Render(status.Phase, &buildapitypes.BuildStep{
+			pb.Render(status.Phase, &buildcontract.BuildStep{
 				Done:  done,
 				Total: containerBuildTotalSteps,
 				Stage: status.Message,
@@ -446,7 +445,7 @@ func waitForContainerBuildCompletion(ctx context.Context, name string, pb *ui.Pr
 	}
 }
 
-func displayContainerBuildResult(finalStatus *buildapitypes.ContainerBuildResponse) {
+func displayContainerBuildResult(finalStatus *buildcontract.ContainerBuildResponse) {
 	if clilog.IsQuiet() {
 		if finalStatus.Phase == phaseFailed {
 			handleError(fmt.Errorf("build failed"))

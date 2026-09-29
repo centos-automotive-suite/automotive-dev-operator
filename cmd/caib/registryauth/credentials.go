@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 // ExtractRegistryCredentials gets registry URL from image references and credentials from env vars.
@@ -46,7 +46,7 @@ func ValidateRegistryCredentials(registryURL, username, password string) error {
 // ResolveRegistryCredentials resolves env or auth-file credentials into API payload format.
 func ResolveRegistryCredentials(
 	registryURL, username, password, explicitAuthFile string,
-) (*buildapitypes.RegistryCredentials, error) {
+) (*buildcontract.RegistryCredentials, error) {
 	explicitAuthFile = strings.TrimSpace(explicitAuthFile)
 	if explicitAuthFile != "" {
 		authFileContent, sourcePath, err := LoadAuthFileForRegistry(registryURL, explicitAuthFile)
@@ -54,7 +54,7 @@ func ResolveRegistryCredentials(
 			return nil, err
 		}
 		clilog.Infof("Using registry credentials from auth file: %s\n", sourcePath)
-		return &buildapitypes.RegistryCredentials{
+		return &buildcontract.RegistryCredentials{
 			Enabled:      true,
 			AuthType:     "docker-config",
 			RegistryURL:  registryURL,
@@ -73,7 +73,7 @@ func ResolveRegistryCredentials(
 		return nil, err
 	}
 	if username != "" && password != "" {
-		return &buildapitypes.RegistryCredentials{
+		return &buildcontract.RegistryCredentials{
 			Enabled:     true,
 			AuthType:    "username-password",
 			RegistryURL: registryURL,
@@ -91,7 +91,7 @@ func ResolveRegistryCredentials(
 	}
 
 	clilog.Infof("Using registry credentials from auth file: %s\n", sourcePath)
-	return &buildapitypes.RegistryCredentials{
+	return &buildcontract.RegistryCredentials{
 		Enabled:      true,
 		AuthType:     "docker-config",
 		RegistryURL:  registryURL,

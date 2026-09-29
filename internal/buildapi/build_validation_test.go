@@ -3,25 +3,26 @@ package buildapi
 import (
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 )
 
 var _ = Describe("validateBuildRequest", func() {
 	It("accepts a valid bootc build request", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:     "my-build",
 			Manifest: "name: test\n",
-			Mode:     ModeBootc,
+			Mode:     buildcontract.ModeBootc,
 		}
 		Expect(validateBuildRequest(req)).To(Succeed())
 	})
 
 	It("rejects empty manifest for non-disk mode", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:     "my-build",
 			Manifest: "",
-			Mode:     ModeBootc,
+			Mode:     buildcontract.ModeBootc,
 		}
 		err := validateBuildRequest(req)
 		Expect(err).To(HaveOccurred())
@@ -29,10 +30,10 @@ var _ = Describe("validateBuildRequest", func() {
 	})
 
 	It("rejects disk mode without container ref", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:     "my-build",
 			Manifest: "name: test\n",
-			Mode:     ModeDisk,
+			Mode:     buildcontract.ModeDisk,
 		}
 		err := validateBuildRequest(req)
 		Expect(err).To(HaveOccurred())
@@ -40,20 +41,20 @@ var _ = Describe("validateBuildRequest", func() {
 	})
 
 	It("accepts disk mode with valid container ref", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:         "my-build",
 			Manifest:     "name: test\n",
-			Mode:         ModeDisk,
+			Mode:         buildcontract.ModeDisk,
 			ContainerRef: "quay.io/org/image:latest",
 		}
 		Expect(validateBuildRequest(req)).To(Succeed())
 	})
 
 	It("rejects manifest exceeding size limit", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:     "my-build",
 			Manifest: strings.Repeat("x", maxManifestSize+1),
-			Mode:     ModeBootc,
+			Mode:     buildcontract.ModeBootc,
 		}
 		err := validateBuildRequest(req)
 		Expect(err).To(HaveOccurred())
@@ -61,10 +62,10 @@ var _ = Describe("validateBuildRequest", func() {
 	})
 
 	It("rejects reproducible without secureBuild", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:         "my-build",
 			Manifest:     "name: test\n",
-			Mode:         ModeBootc,
+			Mode:         buildcontract.ModeBootc,
 			Reproducible: true,
 			SecureBuild:  false,
 		}
@@ -74,10 +75,10 @@ var _ = Describe("validateBuildRequest", func() {
 	})
 
 	It("accepts reproducible with secureBuild", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:         "my-build",
 			Manifest:     "name: test\n",
-			Mode:         ModeBootc,
+			Mode:         buildcontract.ModeBootc,
 			Reproducible: true,
 			SecureBuild:  true,
 		}
@@ -85,10 +86,10 @@ var _ = Describe("validateBuildRequest", func() {
 	})
 
 	It("rejects secure builds using the internal registry", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:                "my-build",
 			Manifest:            "name: test\n",
-			Mode:                ModeBootc,
+			Mode:                buildcontract.ModeBootc,
 			SecureBuild:         true,
 			UseInternalRegistry: true,
 		}
@@ -98,20 +99,20 @@ var _ = Describe("validateBuildRequest", func() {
 	})
 
 	It("accepts plain builds using the internal registry", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:                "my-build",
 			Manifest:            "name: test\n",
-			Mode:                ModeBootc,
+			Mode:                buildcontract.ModeBootc,
 			UseInternalRegistry: true,
 		}
 		Expect(validateBuildRequest(req)).To(Succeed())
 	})
 
 	It("rejects container-push ref with shell metacharacters", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:          "my-build",
 			Manifest:      "name: test\n",
-			Mode:          ModeBootc,
+			Mode:          buildcontract.ModeBootc,
 			ContainerPush: "quay.io/org/image;rm -rf /",
 		}
 		err := validateBuildRequest(req)
@@ -120,10 +121,10 @@ var _ = Describe("validateBuildRequest", func() {
 	})
 
 	It("rejects export-oci ref with shell metacharacters", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Name:      "my-build",
 			Manifest:  "name: test\n",
-			Mode:      ModeBootc,
+			Mode:      buildcontract.ModeBootc,
 			ExportOCI: "quay.io/org/image$(whoami)",
 		}
 		err := validateBuildRequest(req)
@@ -134,7 +135,7 @@ var _ = Describe("validateBuildRequest", func() {
 
 var _ = Describe("applyBuildDefaults", func() {
 	It("applies all defaults to empty request", func() {
-		req := &BuildRequest{}
+		req := &buildcontract.BuildRequest{}
 		Expect(applyBuildDefaults(req)).To(Succeed())
 		Expect(string(req.Distro)).To(Equal("autosd"))
 		Expect(string(req.Target)).To(Equal("qemu"))
@@ -146,12 +147,12 @@ var _ = Describe("applyBuildDefaults", func() {
 	})
 
 	It("preserves explicitly set values", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			Distro:       "cs9",
 			Target:       "aws",
 			Architecture: "amd64",
-			Mode:         ModeDisk,
-			Compression:  CompressionXZ,
+			Mode:         buildcontract.ModeDisk,
+			Compression:  buildcontract.CompressionXZ,
 		}
 		Expect(applyBuildDefaults(req)).To(Succeed())
 		Expect(string(req.Distro)).To(Equal("cs9"))
@@ -162,26 +163,26 @@ var _ = Describe("applyBuildDefaults", func() {
 	})
 
 	It("normalizes x86_64 to amd64", func() {
-		req := &BuildRequest{Architecture: "x86_64"}
+		req := &buildcontract.BuildRequest{Architecture: "x86_64"}
 		Expect(applyBuildDefaults(req)).To(Succeed())
 		Expect(string(req.Architecture)).To(Equal("amd64"))
 	})
 
 	It("normalizes aarch64 to arm64", func() {
-		req := &BuildRequest{Architecture: "aarch64"}
+		req := &buildcontract.BuildRequest{Architecture: "aarch64"}
 		Expect(applyBuildDefaults(req)).To(Succeed())
 		Expect(string(req.Architecture)).To(Equal("arm64"))
 	})
 
 	It("rejects invalid compression", func() {
-		req := &BuildRequest{Compression: "brotli"}
+		req := &buildcontract.BuildRequest{Compression: "brotli"}
 		err := applyBuildDefaults(req)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("invalid compression"))
 	})
 
 	It("rejects invalid architecture", func() {
-		req := &BuildRequest{Architecture: "mips"}
+		req := &buildcontract.BuildRequest{Architecture: "mips"}
 		err := applyBuildDefaults(req)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("invalid architecture"))
@@ -190,19 +191,19 @@ var _ = Describe("applyBuildDefaults", func() {
 
 var _ = Describe("validateRestoreSourcesRef", func() {
 	It("accepts empty ref", func() {
-		req := &BuildRequest{}
+		req := &buildcontract.BuildRequest{}
 		Expect(validateRestoreSourcesRef(req)).To(Succeed())
 	})
 
 	It("accepts valid digest-pinned ref", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			RestoreSourcesRef: "quay.io/org/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		}
 		Expect(validateRestoreSourcesRef(req)).To(Succeed())
 	})
 
 	It("rejects tag-based ref", func() {
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			RestoreSourcesRef: "quay.io/org/image:latest",
 		}
 		err := validateRestoreSourcesRef(req)
@@ -212,7 +213,7 @@ var _ = Describe("validateRestoreSourcesRef", func() {
 
 	It("trims whitespace from ref", func() {
 		ref := "  quay.io/org/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  "
-		req := &BuildRequest{RestoreSourcesRef: ref}
+		req := &buildcontract.BuildRequest{RestoreSourcesRef: ref}
 		Expect(validateRestoreSourcesRef(req)).To(Succeed())
 		Expect(req.RestoreSourcesRef).ToNot(HavePrefix(" "))
 	})
@@ -224,14 +225,14 @@ var _ = Describe("validateTargetDefaults", func() {
 	})
 
 	It("passes when no accepted lists are set", func() {
-		targets := map[string]TargetDefaults{
+		targets := map[string]buildcontract.TargetDefaults{
 			"qemu": {Architecture: "arm64", DefaultFormat: "raw"},
 		}
 		Expect(validateTargetDefaults(targets)).To(Succeed())
 	})
 
 	It("passes when defaults match accepted values", func() {
-		targets := map[string]TargetDefaults{
+		targets := map[string]buildcontract.TargetDefaults{
 			"qemu": {
 				DefaultFormat:         "raw",
 				AcceptedFormats:       []string{"qcow2", "raw"},
@@ -248,7 +249,7 @@ var _ = Describe("validateTargetDefaults", func() {
 	})
 
 	It("rejects architecture not in target's accepted list", func() {
-		targets := map[string]TargetDefaults{
+		targets := map[string]buildcontract.TargetDefaults{
 			"bad-board": {
 				Architecture:          "mips64",
 				AcceptedArchitectures: []string{"amd64", "arm64"},
@@ -262,7 +263,7 @@ var _ = Describe("validateTargetDefaults", func() {
 	})
 
 	It("rejects defaultFormat not in target's accepted list", func() {
-		targets := map[string]TargetDefaults{
+		targets := map[string]buildcontract.TargetDefaults{
 			"my-target": {
 				DefaultFormat:   "vdi",
 				AcceptedFormats: []string{"qcow2", "raw", "simg"},
@@ -275,7 +276,7 @@ var _ = Describe("validateTargetDefaults", func() {
 	})
 
 	It("skips validation when default field is empty", func() {
-		targets := map[string]TargetDefaults{
+		targets := map[string]buildcontract.TargetDefaults{
 			"qemu": {
 				DefaultFormat:         "raw",
 				AcceptedFormats:       []string{"qcow2", "raw"},
@@ -286,7 +287,7 @@ var _ = Describe("validateTargetDefaults", func() {
 	})
 
 	It("skips validation when accepted list is empty", func() {
-		targets := map[string]TargetDefaults{
+		targets := map[string]buildcontract.TargetDefaults{
 			"qemu": {
 				Architecture:          "anything",
 				DefaultFormat:         "whatever",
@@ -298,7 +299,7 @@ var _ = Describe("validateTargetDefaults", func() {
 	})
 
 	It("reports errors from multiple targets", func() {
-		targets := map[string]TargetDefaults{
+		targets := map[string]buildcontract.TargetDefaults{
 			"a": {
 				Architecture:          "bad-arch",
 				AcceptedArchitectures: []string{"amd64", "arm64"},

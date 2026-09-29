@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 )
 
 func TestReadLockfile(t *testing.T) {
@@ -20,7 +22,7 @@ func TestReadLockfile(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tt.content), 0600); err != nil {
 				t.Fatal(err)
 			}
-			got, err := NewHandler(Options{Lockfile: &path}).readLockfile()
+			got, err := NewHandler(Options{Build: &commandopts.Build{Lockfile: path}}).readLockfile()
 			if (err == nil) != tt.valid {
 				t.Fatalf("error = %v, valid = %v", err, tt.valid)
 			}
@@ -31,7 +33,7 @@ func TestReadLockfile(t *testing.T) {
 	}
 	t.Run("missing", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "missing.lock")
-		if _, err := NewHandler(Options{Lockfile: &path}).readLockfile(); err == nil {
+		if _, err := NewHandler(Options{Build: &commandopts.Build{Lockfile: path}}).readLockfile(); err == nil {
 			t.Fatal("expected read error")
 		}
 	})

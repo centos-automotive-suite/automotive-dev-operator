@@ -14,7 +14,9 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,7 +41,7 @@ func TestHydrateWorkspaceForImageBuild(t *testing.T) {
 		relFile   = "src/hydrate-bin"
 	)
 
-	refs := []WorkspaceHydrateRef{{
+	refs := []workspacemanifest.WorkspaceHydrateRef{{
 		Kind:    hydrateKindPath,
 		AbsPath: srcFile,
 		RelPath: relFile,
@@ -307,7 +309,7 @@ func TestListWorkspaceHydrateFiles_EscapeIsPermanent(t *testing.T) {
 	}
 	_, err := listWorkspaceHydrateFiles(
 		context.Background(), &rest.Config{}, testNamespace, "workspace-dev-ws",
-		[]WorkspaceHydrateRef{{Kind: hydrateKindPath, AbsPath: "/workspace/evil"}},
+		[]workspacemanifest.WorkspaceHydrateRef{{Kind: hydrateKindPath, AbsPath: "/workspace/evil"}},
 	)
 	if err == nil {
 		t.Fatal("expected error for escaped workspace file")
@@ -335,7 +337,7 @@ func TestWorkspaceListPython_RejectsSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	refs, _ := json.Marshal([]WorkspaceHydrateRef{{Kind: hydrateKindPath, AbsPath: evil, RelPath: "evil"}})
+	refs, _ := json.Marshal([]workspacemanifest.WorkspaceHydrateRef{{Kind: hydrateKindPath, AbsPath: evil, RelPath: "evil"}})
 	stdout, stderr, err := runWorkspaceLister(t, root, refs)
 	if err == nil {
 		t.Fatalf("expected non-zero exit, stdout=%s", stdout)
@@ -361,7 +363,7 @@ func TestWorkspaceListPython_AllowsInternalSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	refs, _ := json.Marshal([]WorkspaceHydrateRef{{Kind: hydrateKindPath, AbsPath: link, RelPath: "link"}})
+	refs, _ := json.Marshal([]workspacemanifest.WorkspaceHydrateRef{{Kind: hydrateKindPath, AbsPath: link, RelPath: "link"}})
 	stdout, stderr, err := runWorkspaceLister(t, root, refs)
 	if err != nil {
 		t.Fatalf("lister failed: %v (stderr=%s)", err, stderr)
@@ -390,17 +392,17 @@ func runWorkspaceLister(t *testing.T, root string, refs []byte) (stdout, stderr 
 // hydrate plan cannot be written into an annotation that would exceed
 // Kubernetes' 256 KiB metadata limit and fail ImageBuild creation with a 500.
 func TestSetWorkspaceUploadAnnotations_RejectsOversizedPlan(t *testing.T) {
-	refs := make([]WorkspaceHydrateRef, 0, 6000)
+	refs := make([]workspacemanifest.WorkspaceHydrateRef, 0, 6000)
 	for i := range 6000 {
 		p := fmt.Sprintf("src/some/deeply/nested/path/file-%06d.bin", i)
-		refs = append(refs, WorkspaceHydrateRef{
+		refs = append(refs, workspacemanifest.WorkspaceHydrateRef{
 			Kind:    hydrateKindPath,
 			AbsPath: "/workspace/" + p,
 			RelPath: p,
 		})
 	}
 	ann := map[string]string{}
-	err := setWorkspaceUploadAnnotations(ann, refs, &BuildRequest{Workspace: "dev-ws"})
+	err := setWorkspaceUploadAnnotations(ann, refs, &buildcontract.BuildRequest{Workspace: "dev-ws"})
 	if !errors.Is(err, ErrWorkspaceHydratePlanTooLarge) {
 		t.Fatalf("error = %v, want ErrWorkspaceHydratePlanTooLarge", err)
 	}
@@ -410,13 +412,13 @@ func TestSetWorkspaceUploadAnnotations_RejectsOversizedPlan(t *testing.T) {
 }
 
 func TestSetWorkspaceUploadAnnotations_AllowsNormalPlan(t *testing.T) {
-	refs := []WorkspaceHydrateRef{{
+	refs := []workspacemanifest.WorkspaceHydrateRef{{
 		Kind:    hydrateKindPath,
 		AbsPath: "/workspace/src/app",
 		RelPath: "src/app",
 	}}
 	ann := map[string]string{}
-	if err := setWorkspaceUploadAnnotations(ann, refs, &BuildRequest{Workspace: "dev-ws"}); err != nil {
+	if err := setWorkspaceUploadAnnotations(ann, refs, &buildcontract.BuildRequest{Workspace: "dev-ws"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if ann[labels.WorkspaceHydrate] == "" {

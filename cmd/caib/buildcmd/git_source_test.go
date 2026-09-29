@@ -7,14 +7,15 @@ import (
 	"testing"
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
 func TestReadGitBuildSource(t *testing.T) {
 	url := "https://git.example.com/os.git"
 	ref := "release"
-	h := NewHandler(Options{GitURL: &url, GitRef: &ref})
+	h := NewHandler(Options{Build: &commandopts.Build{GitURL: url, GitRef: ref}})
 	data, source, err := h.readBuildSource("does-not-exist/demo.aib.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -23,12 +24,12 @@ func TestReadGitBuildSource(t *testing.T) {
 		t.Fatalf("unexpected source: %+v", source)
 	}
 	gitLockfile := "./locks/release.json"
-	h.opts.GitLockfile = &gitLockfile
+	h.opts.Build.GitLockfile = gitLockfile
 	if _, source, err := h.readBuildSource("demo.aib.yml"); err != nil || source.LockfilePath != "locks/release.json" {
 		t.Fatalf("Git lockfile selection: %+v, %v", source, err)
 	}
 	lock := "local.lock"
-	h.opts.Lockfile = &lock
+	h.opts.Build.Lockfile = lock
 	if _, _, err := h.readBuildSource("demo.aib.yml"); err == nil || !strings.Contains(err.Error(), "commit demo.aib.lock beside the manifest") {
 		t.Fatalf("local lockfile override: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestReadGitBuildSource(t *testing.T) {
 
 func TestGitLockfileRequiresGitURL(t *testing.T) {
 	lockfile := "locks/release.json"
-	_, _, err := NewHandler(Options{GitLockfile: &lockfile}).readBuildSource("demo.aib.yml")
+	_, _, err := NewHandler(Options{Build: &commandopts.Build{GitLockfile: lockfile}}).readBuildSource("demo.aib.yml")
 	if err == nil || !strings.Contains(err.Error(), "--git-lockfile require --git-url") {
 		t.Fatalf("missing Git URL: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestDeferGitDefaults(t *testing.T) {
 	if err := cmd.Flags().Set("arch", "amd64"); err != nil {
 		t.Fatal(err)
 	}
-	req := buildapi.BuildRequest{GitSource: &api.GitSource{}, Target: "qemu", Architecture: "amd64", ExportFormat: "qcow2"}
+	req := buildcontract.BuildRequest{GitSource: &api.GitSource{}, Target: "qemu", Architecture: "amd64", ExportFormat: "qcow2"}
 	deferGitDefaults(cmd, &req)
 	if req.Target != "" || req.Architecture != "amd64" || req.ExportFormat != "" {
 		t.Fatalf("defaults: %+v", req)
@@ -74,7 +75,7 @@ func TestDeferGitDefaults(t *testing.T) {
 	cmd2.Flags().String("arch", "amd64", "")
 	cmd2.Flags().String("format", "qcow2", "")
 	cmd2.Flags().String("disk-format", "qcow2", "")
-	req2 := buildapi.BuildRequest{GitSource: &api.GitSource{}, Target: "qemu", Architecture: "amd64", ExportFormat: "qcow2"}
+	req2 := buildcontract.BuildRequest{GitSource: &api.GitSource{}, Target: "qemu", Architecture: "amd64", ExportFormat: "qcow2"}
 	deferGitDefaults(cmd2, &req2)
 	if req2.Target != "" || req2.Architecture != "" || req2.ArchitectureFallback != "amd64" || req2.ExportFormat != "" {
 		t.Fatalf("host fallback was not deferred: %+v", req2)

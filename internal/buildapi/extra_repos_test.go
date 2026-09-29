@@ -3,10 +3,12 @@ package buildapi
 import (
 	"reflect"
 	"testing"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 func TestAppendWorkspaceRepoCustomDefs(t *testing.T) {
-	req := &BuildRequest{CustomDefs: []string{"existing=value"}}
+	req := &buildcontract.BuildRequest{CustomDefs: []string{"existing=value"}}
 	reposJSON := []byte(`[{"id":"workspace-kernel-build","baseurl":"http://10.0.0.1:8080"}]`)
 
 	appendWorkspaceRepoCustomDefs(req, reposJSON)

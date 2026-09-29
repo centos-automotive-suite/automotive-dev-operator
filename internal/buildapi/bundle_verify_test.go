@@ -4,10 +4,10 @@ import (
 	"context"
 	"net/http"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -198,7 +198,7 @@ var _ = Describe("verifyWorkspaceImage", func() {
 
 var _ = Describe("resolveTaskBundleRef", func() {
 	It("should return empty when secureBuild is false", func() {
-		req := &BuildRequest{SecureBuild: false}
+		req := &buildcontract.BuildRequest{SecureBuild: false}
 		k8sClient := newFakeClient()
 		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).ToNot(HaveOccurred())
@@ -213,7 +213,7 @@ var _ = Describe("resolveTaskBundleRef", func() {
 			return &automotivev1alpha1.OperatorConfig{}, nil
 		}
 
-		req := &BuildRequest{
+		req := &buildcontract.BuildRequest{
 			SecureBuild:   true,
 			TaskBundleRef: "quay.io/example/bundle:latest",
 		}
@@ -239,7 +239,7 @@ var _ = Describe("resolveTaskBundleRef", func() {
 			}, nil
 		}
 
-		req := &BuildRequest{SecureBuild: true}
+		req := &buildcontract.BuildRequest{SecureBuild: true}
 		k8sClient := newFakeClient()
 		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).ToNot(HaveOccurred())
@@ -258,7 +258,7 @@ var _ = Describe("resolveTaskBundleRef", func() {
 			}, nil
 		}
 
-		req := &BuildRequest{SecureBuild: true}
+		req := &buildcontract.BuildRequest{SecureBuild: true}
 		k8sClient := newFakeClient()
 		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).To(HaveOccurred())
@@ -274,7 +274,7 @@ var _ = Describe("resolveTaskBundleRef", func() {
 			return nil, nil
 		}
 
-		req := &BuildRequest{SecureBuild: true}
+		req := &buildcontract.BuildRequest{SecureBuild: true}
 		k8sClient := newFakeClient()
 		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).To(HaveOccurred())
@@ -290,7 +290,7 @@ var _ = Describe("resolveTaskBundleRef", func() {
 			return nil, context.DeadlineExceeded
 		}
 
-		req := &BuildRequest{SecureBuild: true}
+		req := &buildcontract.BuildRequest{SecureBuild: true}
 		k8sClient := newFakeClient()
 		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).To(HaveOccurred())

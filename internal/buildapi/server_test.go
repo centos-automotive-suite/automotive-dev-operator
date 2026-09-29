@@ -10,6 +10,14 @@ import (
 	"strings"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
+	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
+	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
+	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -21,14 +29,6 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
-	"github.com/gin-gonic/gin"
-	"github.com/go-logr/logr"
-	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
-	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 )
 
 var _ = Describe("APIServer", func() {
@@ -197,7 +197,7 @@ var _ = Describe("APIServer", func() {
 			server.createBuild(c)
 
 			Expect(w.Code).To(Equal(http.StatusAccepted))
-			var response BuildResponse
+			var response buildcontract.BuildResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.Phase).To(Equal(phasePending))
 		})
@@ -216,7 +216,7 @@ var _ = Describe("APIServer", func() {
 			server.createBuild(c)
 
 			Expect(w.Code).To(Equal(http.StatusAccepted), w.Body.String())
-			var response BuildResponse
+			var response buildcontract.BuildResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			build := &automotivev1alpha1.ImageBuild{}
 			Expect(fakeClient.Get(context.Background(), types.NamespacedName{Name: response.Name, Namespace: resolveNamespace()}, build)).To(Succeed())
@@ -230,7 +230,7 @@ var _ = Describe("APIServer", func() {
 			showContext.Request, _ = http.NewRequest(http.MethodGet, "/v1/builds/"+response.Name, nil)
 			server.getBuild(showContext, response.Name)
 			Expect(show.Code).To(Equal(http.StatusOK), show.Body.String())
-			var shown BuildResponse
+			var shown buildcontract.BuildResponse
 			Expect(json.Unmarshal(show.Body.Bytes(), &shown)).To(Succeed())
 			Expect(shown.ArchitectureSource).To(Equal("client-fallback"))
 		})
@@ -802,7 +802,7 @@ var _ = Describe("APIServer", func() {
 		var (
 			originalGetClientFromRequestFn func(*gin.Context) (ctrlclient.Client, error)
 			originalLoadOperatorConfigFn   func(context.Context, ctrlclient.Client, string) (*automotivev1alpha1.OperatorConfig, error)
-			originalLoadTargetDefaultsFn   func(context.Context, ctrlclient.Client, string) (map[string]TargetDefaults, error)
+			originalLoadTargetDefaultsFn   func(context.Context, ctrlclient.Client, string) (map[string]buildcontract.TargetDefaults, error)
 			originalNamespace              string
 			hasOriginalNamespace           bool
 		)
@@ -850,7 +850,7 @@ var _ = Describe("APIServer", func() {
 			server.handleGetOperatorConfig(c)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			var response OperatorConfigResponse
+			var response buildcontract.OperatorConfigResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.AutomotiveImageBuilder).To(Equal(automotivev1alpha1.DefaultAutomotiveImageBuilderImage))
 			Expect(response.JumpstarterTargets).To(BeNil())
@@ -880,8 +880,8 @@ var _ = Describe("APIServer", func() {
 			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return config, nil
 			}
-			loadTargetDefaultsFn = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]TargetDefaults, error) {
-				return map[string]TargetDefaults{
+			loadTargetDefaultsFn = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]buildcontract.TargetDefaults, error) {
+				return map[string]buildcontract.TargetDefaults{
 					"ebbr": {Architecture: "arm64", ExtraArgs: []string{"--separate-partitions"}},
 				}, nil
 			}
@@ -896,16 +896,16 @@ var _ = Describe("APIServer", func() {
 			server.handleGetOperatorConfig(c)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			var response OperatorConfigResponse
+			var response buildcontract.OperatorConfigResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.JumpstarterTargets).To(HaveLen(2))
-			Expect(response.JumpstarterTargets["qemu"]).To(Equal(JumpstarterTarget{Selector: "board-type=qemu"}))
-			Expect(response.JumpstarterTargets["ebbr"]).To(Equal(JumpstarterTarget{
+			Expect(response.JumpstarterTargets["qemu"]).To(Equal(buildcontract.JumpstarterTarget{Selector: "board-type=qemu"}))
+			Expect(response.JumpstarterTargets["ebbr"]).To(Equal(buildcontract.JumpstarterTarget{
 				Selector: "board-type=ebbr",
 				FlashCmd: "j storage flash ${IMAGE}",
 			}))
 			Expect(response.TargetDefaults).To(HaveLen(1))
-			Expect(response.TargetDefaults["ebbr"]).To(Equal(TargetDefaults{
+			Expect(response.TargetDefaults["ebbr"]).To(Equal(buildcontract.TargetDefaults{
 				Architecture: "arm64",
 				ExtraArgs:    []string{"--separate-partitions"},
 			}))
@@ -921,8 +921,8 @@ var _ = Describe("APIServer", func() {
 			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return config, nil
 			}
-			loadTargetDefaultsFn = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]TargetDefaults, error) {
-				return map[string]TargetDefaults{
+			loadTargetDefaultsFn = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]buildcontract.TargetDefaults, error) {
+				return map[string]buildcontract.TargetDefaults{
 					"qemu": {
 						DefaultFormat:         "raw",
 						AcceptedFormats:       []string{"qcow2", "raw"},
@@ -941,7 +941,7 @@ var _ = Describe("APIServer", func() {
 			server.handleGetOperatorConfig(c)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			var response OperatorConfigResponse
+			var response buildcontract.OperatorConfigResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.TargetDefaults).To(HaveLen(1))
 			Expect(response.TargetDefaults["qemu"].AcceptedFormats).To(ConsistOf("qcow2", "raw"))

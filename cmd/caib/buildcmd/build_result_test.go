@@ -9,8 +9,9 @@ import (
 	"testing"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
-	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -18,7 +19,7 @@ import (
 func TestBuildResultJSONMarshal(t *testing.T) {
 	result := BuildResult{
 		ExternalID:              "pipeline-42",
-		Notification:            &buildapi.NotificationStatus{State: "Failed", Attempts: 2, LastError: "receiver rejected request"},
+		Notification:            &buildcontract.NotificationStatus{State: "Failed", Attempts: 2, LastError: "receiver rejected request"},
 		Name:                    "my-build-abc12",
 		Phase:                   "Completed",
 		Message:                 "Build completed",
@@ -97,17 +98,17 @@ func TestBuildResultOmitEmpty(t *testing.T) {
 func TestIsStructuredOutput(t *testing.T) {
 	tests := []struct {
 		name   string
-		format *string
+		format string
 		want   bool
 	}{
-		{"nil", nil, false},
-		{"table", new("table"), false},
-		{"json", new("json"), true},
-		{"yaml", new("yaml"), true},
+		{"empty", "", false},
+		{"table", "table", false},
+		{"json", "json", true},
+		{"yaml", "yaml", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := &Handler{opts: Options{OutputFormat: tt.format}}
+			h := &Handler{opts: Options{Output: &commandopts.Output{Format: tt.format}}}
 			if got := h.isStructuredOutput(); got != tt.want {
 				t.Errorf("isStructuredOutput() = %v, want %v", got, tt.want)
 			}
@@ -120,11 +121,7 @@ func TestApplyWaitFollowDefaultsStructuredOutput(t *testing.T) {
 	wait := false
 	follow := true
 
-	h := &Handler{opts: Options{
-		OutputFormat: &format,
-		WaitForBuild: &wait,
-		FollowLogs:   &follow,
-	}}
+	h := &Handler{opts: Options{Output: &commandopts.Output{Format: format, Wait: wait, FollowLogs: follow}}}
 
 	cmd := &cobra.Command{}
 	cmd.Flags().Bool("wait", false, "")
@@ -136,10 +133,10 @@ func TestApplyWaitFollowDefaultsStructuredOutput(t *testing.T) {
 	if !clilog.IsQuiet() {
 		t.Error("structured output should enable quiet mode")
 	}
-	if *h.opts.WaitForBuild != true {
+	if h.opts.Output.Wait != true {
 		t.Error("wait should default to true when flag not changed")
 	}
-	if *h.opts.FollowLogs != false {
+	if h.opts.Output.FollowLogs != false {
 		t.Error("follow should default to false")
 	}
 
@@ -194,12 +191,9 @@ func captureStdout(t *testing.T, fn func()) string {
 func TestDisplayBuildResultsTextTokenFallback(t *testing.T) {
 	useInternal := true
 	outputDir := ""
-	h := &Handler{opts: Options{
-		UseInternalRegistry: &useInternal,
-		OutputDir:           &outputDir,
-	}}
+	h := &Handler{opts: Options{Output: &commandopts.Output{Dir: outputDir}, Registry: &commandopts.Registry{UseInternalRegistry: useInternal}}}
 
-	st := &buildapi.BuildResponse{
+	st := &buildcontract.BuildResponse{
 		Name:          "test-build",
 		Phase:         "Completed",
 		RegistryToken: "secret-token-xyz",
@@ -220,12 +214,9 @@ func TestDisplayBuildResultsTextTokenFallback(t *testing.T) {
 func TestDisplayBuildResultsTextCredsFileSuccess(t *testing.T) {
 	useInternal := true
 	outputDir := ""
-	h := &Handler{opts: Options{
-		UseInternalRegistry: &useInternal,
-		OutputDir:           &outputDir,
-	}}
+	h := &Handler{opts: Options{Output: &commandopts.Output{Dir: outputDir}, Registry: &commandopts.Registry{UseInternalRegistry: useInternal}}}
 
-	st := &buildapi.BuildResponse{
+	st := &buildcontract.BuildResponse{
 		Name:          "test-build",
 		Phase:         "Completed",
 		RegistryToken: "secret-token-xyz",
@@ -294,14 +285,9 @@ func TestDisplayBuildResultsTextQuietSuppressesOutput(t *testing.T) {
 	outputDir := ""
 	containerPush := "registry.example.com/img:v1"
 	exportOCI := "registry.example.com/disk:v1"
-	h := &Handler{opts: Options{
-		UseInternalRegistry: &useInternal,
-		OutputDir:           &outputDir,
-		ContainerPush:       &containerPush,
-		ExportOCI:           &exportOCI,
-	}}
+	h := &Handler{opts: Options{Output: &commandopts.Output{Dir: outputDir}, Registry: &commandopts.Registry{UseInternalRegistry: useInternal, ContainerPush: containerPush, ExportOCI: exportOCI}}}
 
-	st := &buildapi.BuildResponse{
+	st := &buildcontract.BuildResponse{
 		Name:           "test-build",
 		Phase:          "Completed",
 		ContainerImage: "registry.example.com/img:v1",
@@ -323,12 +309,9 @@ func TestDisplayBuildResultsTextInternalRegistryQuiet(t *testing.T) {
 
 	useInternal := true
 	outputDir := ""
-	h := &Handler{opts: Options{
-		UseInternalRegistry: &useInternal,
-		OutputDir:           &outputDir,
-	}}
+	h := &Handler{opts: Options{Output: &commandopts.Output{Dir: outputDir}, Registry: &commandopts.Registry{UseInternalRegistry: useInternal}}}
 
-	st := &buildapi.BuildResponse{
+	st := &buildcontract.BuildResponse{
 		Name:           "test-build",
 		Phase:          "Completed",
 		ContainerImage: "image-registry.example.com/img:v1",

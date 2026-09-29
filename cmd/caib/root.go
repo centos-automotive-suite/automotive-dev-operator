@@ -38,14 +38,15 @@ func fullVersion() string {
 }
 
 func newRootCmd() *cobra.Command {
+	state := newRuntimeState()
 	rootCmd := &cobra.Command{
 		Use:     "caib",
 		Short:   "Cloud Automotive Image Builder",
 		Version: fullVersion(),
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
-			f := strings.ToLower(strings.TrimSpace(outputFormat))
+			f := strings.ToLower(strings.TrimSpace(state.Output.Format))
 			if !validOutputFormats[f] {
-				return fmt.Errorf("invalid output format %q (supported: table, json, yaml)", outputFormat)
+				return fmt.Errorf("invalid output format %q (supported: table, json, yaml)", state.Output.Format)
 			}
 			return nil
 		},
@@ -55,19 +56,19 @@ func newRootCmd() *cobra.Command {
 	rootCmd.SetVersionTemplate("caib version: {{.Version}}\n")
 
 	rootCmd.PersistentFlags().BoolVar(
-		&insecureSkipTLS,
+		&state.Connection.InsecureSkipTLS,
 		"insecure",
 		envBool("CAIB_INSECURE"),
 		"skip TLS certificate verification (insecure, for testing only; env: CAIB_INSECURE)",
 	)
 	rootCmd.PersistentFlags().StringVar(
-		&outputFormat,
+		&state.Output.Format,
 		"output-format",
 		"table",
 		"output format: table, json, yaml",
 	)
 	rootCmd.PersistentFlags().BoolVarP(
-		&quiet,
+		&state.Quiet,
 		"quiet",
 		"q",
 		false,
@@ -75,26 +76,25 @@ func newRootCmd() *cobra.Command {
 	)
 
 	cobra.OnInitialize(func() {
-		clilog.SetQuiet(quiet)
+		clilog.SetQuiet(state.Quiet)
 	})
 
-	state := newRuntimeState()
 	handlers := state.newHandlers()
 
 	rootCmd.AddCommand(
 		image.NewImageCmd(state.imageOptions(handlers)),
-		newLoginCmd(),
-		newStatusCmd(),
+		newLoginCmd(&state.Connection.InsecureSkipTLS),
+		newStatusCmd(&state.Connection.InsecureSkipTLS),
 		container.NewContainerCmd(),
 		catalog.NewCatalogCmd(),
 		authcmd.NewAuthCmd(),
-		workspace.NewWorkspaceCmd(&outputFormat),
+		workspace.NewWorkspaceCmd(&state.Output.Format),
 	)
 
 	return rootCmd
 }
 
-func newLoginCmd() *cobra.Command {
+func newLoginCmd(insecure *bool) *cobra.Command {
 	return &cobra.Command{
 		Use:   "login [server-url]",
 		Short: "Save server endpoint and authenticate for subsequent commands",
@@ -109,6 +109,6 @@ Examples:
   caib login https://build-api.my-cluster.example.com
   caib login # attempt to derive endpoint from Jumpstarter config (if available)`,
 		Args: cobra.MaximumNArgs(1),
-		Run:  runLogin,
+		Run:  func(cmd *cobra.Command, args []string) { runLogin(cmd, args, *insecure) },
 	}
 }

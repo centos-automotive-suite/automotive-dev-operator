@@ -55,17 +55,15 @@ func TestOutputFormatFlagPropagates(t *testing.T) {
 }
 
 func TestOutputFormatFlagSetFromArgs(t *testing.T) {
-	originalFormat := outputFormat
-	t.Cleanup(func() { outputFormat = originalFormat })
-
 	rootCmd := newRootCmd()
 
 	// Parse --output-format json at root level
 	rootCmd.SetArgs([]string{"--output-format", "json", "--help"})
 	_ = rootCmd.Execute()
 
-	if outputFormat != "json" {
-		t.Errorf("expected outputFormat to be 'json' after parsing, got %q", outputFormat)
+	format, err := rootCmd.PersistentFlags().GetString("output-format")
+	if err != nil || format != "json" {
+		t.Errorf("expected output format to be json after parsing, got %q (%v)", format, err)
 	}
 }
 

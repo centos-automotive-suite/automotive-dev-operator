@@ -14,7 +14,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,7 +68,7 @@ func TestNewWorkspaceCmdDerivesServerURL(t *testing.T) {
 }
 
 func TestRenderFormattedWorkspaceList(t *testing.T) {
-	workspaces := []buildapitypes.WorkspaceResponse{
+	workspaces := []buildcontract.WorkspaceResponse{
 		{Name: "ws-1", Arch: "amd64", Phase: "Running", Lease: "lease-abc", Age: "5m"},
 		{Name: "ws-2", Arch: "arm64", Phase: "Stopped", Age: "1h"},
 	}
@@ -94,7 +94,7 @@ func TestRenderFormattedWorkspaceList(t *testing.T) {
 			t.Fatalf("unexpected error: %v", gotErr)
 		}
 
-		var parsed []buildapitypes.WorkspaceResponse
+		var parsed []buildcontract.WorkspaceResponse
 		if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
 			t.Fatalf("failed to parse JSON output: %v\noutput: %s", err, buf.String())
 		}
@@ -135,7 +135,7 @@ func TestRenderFormattedWorkspaceList(t *testing.T) {
 
 	t.Run("empty list renders as empty JSON array", func(t *testing.T) {
 		gotErr = nil
-		empty := []buildapitypes.WorkspaceResponse{}
+		empty := []buildcontract.WorkspaceResponse{}
 		old := os.Stdout
 		r, w, _ := os.Pipe()
 		os.Stdout = w
@@ -162,7 +162,7 @@ func TestRenderFormattedWorkspaceList(t *testing.T) {
 }
 
 func TestRenderFormattedWorkspaceShow(t *testing.T) {
-	ws := &buildapitypes.WorkspaceResponse{
+	ws := &buildcontract.WorkspaceResponse{
 		Name:             "test-ws",
 		Arch:             "amd64",
 		Phase:            "Failed",
@@ -219,7 +219,7 @@ func TestRenderFormattedWorkspaceShow(t *testing.T) {
 }
 
 func TestPrintWorkspaceList(t *testing.T) {
-	workspaces := []buildapitypes.WorkspaceResponse{
+	workspaces := []buildcontract.WorkspaceResponse{
 		{Name: "ws-1", Arch: "amd64", Phase: "Running", Lease: "lease-abc", Age: "5m"},
 		{Name: "ws-2", Arch: "arm64", Phase: "Stopped", Age: "1h"},
 	}
@@ -261,7 +261,7 @@ func TestPrintWorkspaceList(t *testing.T) {
 }
 
 func TestPrintWorkspaceDetails(t *testing.T) {
-	ws := &buildapitypes.WorkspaceResponse{
+	ws := &buildcontract.WorkspaceResponse{
 		Name:             "test-ws",
 		Arch:             "amd64",
 		Phase:            "Failed",
@@ -314,7 +314,7 @@ func TestPrintWorkspaceDetails(t *testing.T) {
 
 func TestWorkspaceFailureError(t *testing.T) {
 	t.Run("container exit carries support details", func(t *testing.T) {
-		err := workspaceFailureError("test-ws", &buildapitypes.WorkspaceResponse{
+		err := workspaceFailureError("test-ws", &buildcontract.WorkspaceResponse{
 			Reason:  "ContainerExited",
 			Message: "container toolchain: OOMKilled",
 		})
@@ -328,7 +328,7 @@ func TestWorkspaceFailureError(t *testing.T) {
 	})
 
 	t.Run("service failure carries support details", func(t *testing.T) {
-		err := workspaceFailureError("test-ws", &buildapitypes.WorkspaceResponse{
+		err := workspaceFailureError("test-ws", &buildcontract.WorkspaceResponse{
 			Reason:  "ContainerConfigurationError",
 			Message: "container toolchain: CreateContainerConfigError: secret not found",
 		})
@@ -654,14 +654,14 @@ func TestSyncPlanRequestIncludeDeleted(t *testing.T) {
 	manifest := map[string]string{"a.go": "abc123"}
 
 	t.Run("IncludeDeleted false by default", func(t *testing.T) {
-		req := buildapitypes.SyncPlanRequest{Files: manifest}
+		req := buildcontract.SyncPlanRequest{Files: manifest}
 		if req.IncludeDeleted {
 			t.Error("expected IncludeDeleted to be false by default")
 		}
 	})
 
 	t.Run("IncludeDeleted true when set", func(t *testing.T) {
-		req := buildapitypes.SyncPlanRequest{Files: manifest, IncludeDeleted: true}
+		req := buildcontract.SyncPlanRequest{Files: manifest, IncludeDeleted: true}
 		if !req.IncludeDeleted {
 			t.Error("expected IncludeDeleted to be true")
 		}
@@ -670,7 +670,7 @@ func TestSyncPlanRequestIncludeDeleted(t *testing.T) {
 
 func TestSyncPlanResponseDeletedField(t *testing.T) {
 	t.Run("Deleted field present in response", func(t *testing.T) {
-		resp := buildapitypes.SyncPlanResponse{
+		resp := buildcontract.SyncPlanResponse{
 			Changed:   []string{"new.go"},
 			Unchanged: 2,
 			Deleted:   []string{"old.go", "removed.go"},
@@ -684,7 +684,7 @@ func TestSyncPlanResponseDeletedField(t *testing.T) {
 	})
 
 	t.Run("Deleted field nil when omitted", func(t *testing.T) {
-		resp := buildapitypes.SyncPlanResponse{
+		resp := buildcontract.SyncPlanResponse{
 			Changed:   []string{"a.go"},
 			Unchanged: 1,
 		}
@@ -696,7 +696,7 @@ func TestSyncPlanResponseDeletedField(t *testing.T) {
 
 func TestSyncDeleteRequestValidation(t *testing.T) {
 	t.Run("valid relative paths", func(t *testing.T) {
-		req := buildapitypes.SyncDeleteRequest{
+		req := buildcontract.SyncDeleteRequest{
 			Files: []string{"src/main.go", "pkg/util.go"},
 		}
 		if len(req.Files) != 2 {
@@ -705,14 +705,14 @@ func TestSyncDeleteRequestValidation(t *testing.T) {
 	})
 
 	t.Run("JSON round-trip preserves fields", func(t *testing.T) {
-		req := buildapitypes.SyncDeleteRequest{
+		req := buildcontract.SyncDeleteRequest{
 			Files: []string{"a.go", "b/c.go"},
 		}
 		data, err := json.Marshal(req)
 		if err != nil {
 			t.Fatalf("marshal failed: %v", err)
 		}
-		var decoded buildapitypes.SyncDeleteRequest
+		var decoded buildcontract.SyncDeleteRequest
 		if err := json.Unmarshal(data, &decoded); err != nil {
 			t.Fatalf("unmarshal failed: %v", err)
 		}
@@ -724,7 +724,7 @@ func TestSyncDeleteRequestValidation(t *testing.T) {
 
 func TestSyncPlanRequestJSONIncludeDeleted(t *testing.T) {
 	t.Run("IncludeDeleted omitted when false", func(t *testing.T) {
-		req := buildapitypes.SyncPlanRequest{
+		req := buildcontract.SyncPlanRequest{
 			Files: map[string]string{"a.go": "hash1"},
 		}
 		data, err := json.Marshal(req)
@@ -737,7 +737,7 @@ func TestSyncPlanRequestJSONIncludeDeleted(t *testing.T) {
 	})
 
 	t.Run("IncludeDeleted present when true", func(t *testing.T) {
-		req := buildapitypes.SyncPlanRequest{
+		req := buildcontract.SyncPlanRequest{
 			Files:          map[string]string{"a.go": "hash1"},
 			IncludeDeleted: true,
 		}
@@ -823,7 +823,7 @@ func TestFilterDeletedMissingLocal(t *testing.T) {
 }
 
 func TestSyncPlanResponseEchoesIncludeDeleted(t *testing.T) {
-	resp := buildapitypes.SyncPlanResponse{IncludeDeleted: true}
+	resp := buildcontract.SyncPlanResponse{IncludeDeleted: true}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		t.Fatal(err)
@@ -832,7 +832,7 @@ func TestSyncPlanResponseEchoesIncludeDeleted(t *testing.T) {
 		t.Errorf("expected includeDeleted echo in JSON, got %s", data)
 	}
 
-	var decoded buildapitypes.SyncPlanResponse
+	var decoded buildcontract.SyncPlanResponse
 	if err := json.Unmarshal([]byte(`{"changed":[],"unchanged":0}`), &decoded); err != nil {
 		t.Fatal(err)
 	}

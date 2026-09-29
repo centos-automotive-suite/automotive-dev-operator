@@ -4,14 +4,14 @@ import (
 	"context"
 	"net/http"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 )
 
 var _ = Describe("S3 Integration", func() {
@@ -21,7 +21,7 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			creds := &S3Credentials{
+			creds := &buildcontract.S3Credentials{
 				AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 				SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 			}
@@ -62,7 +62,7 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			creds := &S3Credentials{
+			creds := &buildcontract.S3Credentials{
 				AccessKeyID:     "",
 				SecretAccessKey: "secret",
 			}
@@ -76,7 +76,7 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			creds := &S3Credentials{
+			creds := &buildcontract.S3Credentials{
 				AccessKeyID:     "AKIA...",
 				SecretAccessKey: "",
 			}
@@ -93,7 +93,7 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			req := &BuildRequest{}
+			req := &buildcontract.BuildRequest{}
 
 			status, err := resolveS3Credentials(context.Background(), k8sClient, req, "ns")
 			Expect(err).NotTo(HaveOccurred())
@@ -104,10 +104,10 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3CredentialsSecretName: "existing-secret",
-				S3Credentials: &S3Credentials{
+				S3Credentials: &buildcontract.S3Credentials{
 					AccessKeyID:     "AKIA...",
 					SecretAccessKey: "secret",
 				},
@@ -123,10 +123,10 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				Name:     "my-build",
 				S3Bucket: "my-bucket",
-				S3Credentials: &S3Credentials{
+				S3Credentials: &buildcontract.S3Credentials{
 					AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 					SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 				},
@@ -142,10 +142,10 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				Name:     "my-build",
 				S3Bucket: "my-bucket",
-				S3Credentials: &S3Credentials{
+				S3Credentials: &buildcontract.S3Credentials{
 					AccessKeyID:     "",
 					SecretAccessKey: "",
 				},
@@ -166,7 +166,7 @@ var _ = Describe("S3 Integration", func() {
 			}
 			k8sClient := newRegistryTestClient(scheme, existingSecret)
 
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3CredentialsSecretName: "shared-s3-creds",
 			}
@@ -180,7 +180,7 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3CredentialsSecretName: "nonexistent-secret",
 			}
@@ -195,7 +195,7 @@ var _ = Describe("S3 Integration", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket: "my-bucket",
 			}
 
@@ -209,7 +209,7 @@ var _ = Describe("S3 Integration", func() {
 	Describe("buildExportSpec", func() {
 
 		It("creates S3 export with all fields", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3Prefix:                "builds/test",
 				S3Endpoint:              "https://s3.example.com",
@@ -231,7 +231,7 @@ var _ = Describe("S3 Integration", func() {
 		})
 
 		It("creates S3 export with shared secret", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3CredentialsSecretName: "shared-s3-creds",
 			}
@@ -245,7 +245,7 @@ var _ = Describe("S3 Integration", func() {
 		})
 
 		It("defaults region to us-east-1 when not specified", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3CredentialsSecretName: "my-secret",
 			}
@@ -256,7 +256,7 @@ var _ = Describe("S3 Integration", func() {
 		})
 
 		It("creates S3 export without credentials secret for IAM role", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket: "my-bucket",
 				// No credentials or secret name - uses IAM role
 			}
@@ -270,7 +270,7 @@ var _ = Describe("S3 Integration", func() {
 		})
 
 		It("does not create S3 export when bucket not specified", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				ExportOCI: "registry.io/image:tag",
 			}
 
@@ -281,7 +281,7 @@ var _ = Describe("S3 Integration", func() {
 		})
 
 		It("creates both OCI and S3 exports", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				ExportOCI:               "registry.io/image:tag",
 				S3Bucket:                "my-bucket",
 				S3CredentialsSecretName: "my-secret",
@@ -296,7 +296,7 @@ var _ = Describe("S3 Integration", func() {
 		})
 
 		It("handles empty string region as default", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3Region:                "", // Empty string
 				S3CredentialsSecretName: "my-secret",
@@ -308,7 +308,7 @@ var _ = Describe("S3 Integration", func() {
 		})
 
 		It("passes through InsecureSkipTLSVerify when true", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3CredentialsSecretName: "my-secret",
 				S3InsecureSkipTLSVerify: true,
@@ -320,7 +320,7 @@ var _ = Describe("S3 Integration", func() {
 		})
 
 		It("defaults InsecureSkipTLSVerify to false", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				S3Bucket:                "my-bucket",
 				S3CredentialsSecretName: "my-secret",
 			}

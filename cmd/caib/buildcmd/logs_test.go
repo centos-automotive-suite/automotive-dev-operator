@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 func newTestOpts() Options {
@@ -21,17 +21,17 @@ func newTestOpts() Options {
 		flashCmd         string
 		exporterSelector string
 	)
-	opts.Workspace = &workspace
-	opts.ExtraRepos = &extraRepos
-	opts.FlashCmd = &flashCmd
-	opts.ExporterSelector = &exporterSelector
+	opts.Build.Workspace = workspace
+	opts.Build.ExtraRepos = extraRepos
+	opts.Flash.Cmd = flashCmd
+	opts.Flash.ExporterSelector = exporterSelector
 	return opts
 }
 
 // fakeBuildServer creates an httptest.Server that responds to /v1/builds/<name>
 // with the given BuildResponse sequence. Each call to GetBuild returns the next
 // response; once exhausted it repeats the last one. Progress endpoint returns 404.
-func fakeBuildServer(t *testing.T, responses []buildapitypes.BuildResponse) *httptest.Server {
+func fakeBuildServer(t *testing.T, responses []buildcontract.BuildResponse) *httptest.Server {
 	t.Helper()
 	callIdx := 0
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +51,7 @@ func fakeBuildServer(t *testing.T, responses []buildapitypes.BuildResponse) *htt
 }
 
 func TestWaitForBuildCompletion_BuildFailedNoDiskImage(t *testing.T) {
-	responses := []buildapitypes.BuildResponse{
+	responses := []buildcontract.BuildResponse{
 		{
 			Name:    "test-build",
 			Phase:   "Failed",
@@ -62,9 +62,9 @@ func TestWaitForBuildCompletion_BuildFailedNoDiskImage(t *testing.T) {
 	defer srv.Close()
 
 	opts := newTestOpts()
-	*opts.ServerURL = srv.URL
+	opts.Connection.ServerURL = srv.URL
 	timeout := 1
-	opts.Timeout = &timeout
+	opts.Output.Timeout = timeout
 
 	var capturedErr error
 	opts.HandleError = func(err error) { capturedErr = err }
@@ -105,7 +105,7 @@ func TestWaitForBuildCompletion_BuildFailedNoDiskImage(t *testing.T) {
 func TestWaitForBuildCompletion_BuildFailedWithDiskImage_NotFlashFailure(t *testing.T) {
 	// Edge case: server returns DiskImage on a build failure (shouldn't happen
 	// with server fix, but tests client-side defense-in-depth).
-	responses := []buildapitypes.BuildResponse{
+	responses := []buildcontract.BuildResponse{
 		{
 			Name:      "test-build",
 			Phase:     "Failed",
@@ -117,10 +117,10 @@ func TestWaitForBuildCompletion_BuildFailedWithDiskImage_NotFlashFailure(t *test
 	defer srv.Close()
 
 	opts := newTestOpts()
-	*opts.ServerURL = srv.URL
-	*opts.FlashAfterBuild = true
+	opts.Connection.ServerURL = srv.URL
+	opts.Flash.AfterBuild = true
 	timeout := 1
-	opts.Timeout = &timeout
+	opts.Output.Timeout = timeout
 
 	var capturedErr error
 	opts.HandleError = func(err error) { capturedErr = err }
@@ -157,13 +157,13 @@ func TestWaitForBuildCompletion_BuildFailedWithDiskImage_NotFlashFailure(t *test
 }
 
 func TestFinishBuild_FlashFailure_ShowsFlashInstructions(t *testing.T) {
-	responses := []buildapitypes.BuildResponse{
+	responses := []buildcontract.BuildResponse{
 		{
 			Name:      "test-build",
 			Phase:     "Failed",
 			Message:   "Flash to device failed: timeout waiting for device",
 			DiskImage: "registry.example.com/ns/test-build:disk",
-			Jumpstarter: &buildapitypes.JumpstarterInfo{
+			Jumpstarter: &buildcontract.JumpstarterInfo{
 				Available:        true,
 				ExporterSelector: "board-type=renesas-rcar-s4,enabled=true",
 				FlashCmd:         "j storage flash oci://registry.example.com/ns/test-build:disk",
@@ -174,10 +174,10 @@ func TestFinishBuild_FlashFailure_ShowsFlashInstructions(t *testing.T) {
 	defer srv.Close()
 
 	opts := newTestOpts()
-	*opts.ServerURL = srv.URL
-	*opts.FlashAfterBuild = true
+	opts.Connection.ServerURL = srv.URL
+	opts.Flash.AfterBuild = true
 	timeout := 1
-	opts.Timeout = &timeout
+	opts.Output.Timeout = timeout
 
 	var capturedErr error
 	opts.HandleError = func(err error) { capturedErr = err }
@@ -219,7 +219,7 @@ func TestFinishBuild_FlashFailure_ShowsFlashInstructions(t *testing.T) {
 func TestFinishBuild_FlashFailure_NoJumpstarter(t *testing.T) {
 	// Flash failure detected but no Jumpstarter info — should still call
 	// handleFlashError (which calls handleError) but not print flash instructions.
-	responses := []buildapitypes.BuildResponse{
+	responses := []buildcontract.BuildResponse{
 		{
 			Name:      "test-build",
 			Phase:     "Failed",
@@ -231,10 +231,10 @@ func TestFinishBuild_FlashFailure_NoJumpstarter(t *testing.T) {
 	defer srv.Close()
 
 	opts := newTestOpts()
-	*opts.ServerURL = srv.URL
-	*opts.FlashAfterBuild = true
+	opts.Connection.ServerURL = srv.URL
+	opts.Flash.AfterBuild = true
 	timeout := 1
-	opts.Timeout = &timeout
+	opts.Output.Timeout = timeout
 
 	var capturedErr error
 	opts.HandleError = func(err error) { capturedErr = err }

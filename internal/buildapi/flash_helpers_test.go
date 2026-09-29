@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 	"github.com/containers/image/v5/types"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
@@ -15,29 +16,6 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
-
-var _ = Describe("BuildLeaseTags", func() {
-	DescribeTable("merges tags correctly",
-		func(defaults, buildName, userTags, expected string) {
-			Expect(BuildLeaseTags(defaults, buildName, userTags)).To(Equal(expected))
-		},
-		Entry("all parts present",
-			"platform=caib", "my-build", "env=staging,team=platform",
-			"platform=caib,build-name=my-build,env=staging,team=platform"),
-		Entry("no user tags",
-			"platform=caib", "my-build", "",
-			"platform=caib,build-name=my-build"),
-		Entry("no defaults",
-			"", "my-build", "env=staging",
-			"build-name=my-build,env=staging"),
-		Entry("only build name",
-			"", "my-build", "",
-			"build-name=my-build"),
-		Entry("multiple defaults",
-			"platform=caib,cluster=prod", "test-build", "team=eng",
-			"platform=caib,cluster=prod,build-name=test-build,team=eng"),
-	)
-})
 
 var _ = Describe("resolveTargetFromImage", func() {
 	var originalFn func(context.Context, string, *types.SystemContext) (map[string]string, error)
@@ -79,7 +57,7 @@ var _ = Describe("resolveTargetFromImage", func() {
 			receivedSysCtx = sysCtx
 			return map[string]string{}, nil
 		}
-		creds := &RegistryCredentials{
+		creds := &buildcontract.RegistryCredentials{
 			Enabled:  true,
 			AuthType: authTypeUsernamePassword,
 			Username: "user",
@@ -100,18 +78,6 @@ var _ = Describe("resolveTargetFromImage", func() {
 		}
 		Expect(resolveTargetFromImage(ctx, "quay.io/test/image:v1", nil)).To(BeEmpty())
 	})
-})
-
-var _ = Describe("pinFlashDigest", func() {
-	DescribeTable("pins digest onto a registry URL",
-		func(registryURL, digest, expected string) {
-			Expect(PinFlashDigest(registryURL, digest)).To(Equal(expected))
-		},
-		Entry("empty digest", "quay.io/org/img:tag", "", "quay.io/org/img:tag"),
-		Entry("empty url", "", "sha256:abc", ""),
-		Entry("appends digest", "quay.io/org/img:tag", "sha256:abc", "quay.io/org/img:tag@sha256:abc"),
-		Entry("already pinned", "quay.io/org/img@sha256:abc", "sha256:def", "quay.io/org/img@sha256:abc"),
-	)
 })
 
 var _ = Describe("resolveFlashImageFromCatalog", func() {

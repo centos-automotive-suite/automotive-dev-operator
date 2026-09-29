@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"sigs.k8s.io/yaml"
@@ -26,10 +27,10 @@ func TestOpenAPIContract(t *testing.T) {
 	}
 	schemas := document["components"].(map[string]any)["schemas"].(map[string]any)
 	for name, typ := range map[string]reflect.Type{
-		"BuildRequest": reflect.TypeFor[BuildRequest](), "BuildResponse": reflect.TypeFor[BuildResponse](), "BuildListItem": reflect.TypeFor[BuildListItem](),
-		"FlashRequest": reflect.TypeFor[FlashRequest](), "FlashResponse": reflect.TypeFor[FlashResponse](), "FlashListItem": reflect.TypeFor[FlashListItem](),
-		"BuildCallback": reflect.TypeFor[BuildCallback](), "ArtifactStatus": reflect.TypeFor[ArtifactStatus](),
-		"FlashOutcomeStatus": reflect.TypeFor[FlashOutcomeStatus](), "NotificationStatus": reflect.TypeFor[NotificationStatus](),
+		"BuildRequest": reflect.TypeFor[buildcontract.BuildRequest](), "BuildResponse": reflect.TypeFor[buildcontract.BuildResponse](), "BuildListItem": reflect.TypeFor[buildcontract.BuildListItem](),
+		"FlashRequest": reflect.TypeFor[buildcontract.FlashRequest](), "FlashResponse": reflect.TypeFor[buildcontract.FlashResponse](), "FlashListItem": reflect.TypeFor[buildcontract.FlashListItem](),
+		"BuildCallback": reflect.TypeFor[buildcontract.BuildCallback](), "ArtifactStatus": reflect.TypeFor[buildcontract.ArtifactStatus](),
+		"FlashOutcomeStatus": reflect.TypeFor[buildcontract.FlashOutcomeStatus](), "NotificationStatus": reflect.TypeFor[buildcontract.NotificationStatus](),
 		"TerminalEvent": reflect.TypeFor[notifications.TerminalEvent](), "BuildTerminalEvent": reflect.TypeFor[notifications.BuildEvent](), "FlashTerminalEvent": reflect.TypeFor[notifications.FlashEvent](),
 	} {
 		t.Run(name, func(t *testing.T) {

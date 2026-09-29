@@ -15,9 +15,28 @@ import (
 	"sync"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/catalog"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
+	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
+	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,25 +52,6 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
-	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/catalog"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
-	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
 
 var apiTracer = otel.Tracer("build-api")
@@ -154,7 +154,7 @@ var loadTargetDefaultsFn = func(
 	ctx context.Context,
 	k8sClient client.Client,
 	namespace string,
-) (map[string]TargetDefaults, error) {
+) (map[string]buildcontract.TargetDefaults, error) {
 	cm := &corev1.ConfigMap{}
 	if err := k8sClient.Get(ctx, types.NamespacedName{
 		Namespace: namespace,
@@ -181,9 +181,9 @@ var loadTargetDefaultsFn = func(
 		return nil, fmt.Errorf("failed to parse target-defaults.yaml: %w", err)
 	}
 
-	result := make(map[string]TargetDefaults, len(parsed.Targets))
+	result := make(map[string]buildcontract.TargetDefaults, len(parsed.Targets))
 	for name, t := range parsed.Targets {
-		result[name] = TargetDefaults{
+		result[name] = buildcontract.TargetDefaults{
 			Architecture:          t.Architecture,
 			ExtraArgs:             t.ExtraArgs,
 			DefaultFormat:         t.DefaultFormat,
@@ -550,7 +550,7 @@ func (a *APIServer) handleCreateBuildToken(c *gin.Context) {
 		registryHost = strings.SplitN(imageRef, "/", 2)[0]
 	}
 
-	writeJSON(c, http.StatusOK, TokenResponse{
+	writeJSON(c, http.StatusOK, buildcontract.TokenResponse{
 		Registry:  registryHost,
 		Username:  "serviceaccount",
 		Token:     token,
@@ -719,7 +719,7 @@ func (a *APIServer) cancelBuild(c *gin.Context, name string) {
 // It returns envSecretRef, pushSecretName, and an error (non-nil means the response was already written).
 func (a *APIServer) resolveRegistryForBuild(
 	ctx context.Context, c *gin.Context, k8sClient client.Client,
-	namespace string, req *BuildRequest,
+	namespace string, req *buildcontract.BuildRequest,
 ) (string, string, error) {
 	if req.UseInternalRegistry {
 		_, pushSecretName, err := a.setupInternalRegistryBuild(ctx, c, k8sClient, namespace, req)
@@ -759,7 +759,7 @@ func (a *APIServer) resolveRegistryForBuild(
 // returning ("", pushSecretName, nil) on success.
 func (a *APIServer) setupInternalRegistryBuild(
 	ctx context.Context, c *gin.Context, k8sClient client.Client,
-	namespace string, req *BuildRequest,
+	namespace string, req *buildcontract.BuildRequest,
 ) (string, string, error) {
 	// Validate: internal registry handles the disk push, so exportOci must not be set.
 	// containerPush (and registryCredentials) MAY be set for hybrid builds where
@@ -849,7 +849,7 @@ func (a *APIServer) setupInternalRegistryBuild(
 // resolveExtraRepos processes --extra-repo flags (workspace:path pairs), starts HTTP
 // servers in the workspace pods, and injects the repos into the image and build
 // depsolver CustomDefs.
-func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, req *BuildRequest) error {
+func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, req *buildcontract.BuildRequest) error {
 	if len(req.ExtraRepos) == 0 {
 		return nil
 	}
@@ -913,7 +913,7 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 	return nil
 }
 
-func appendWorkspaceRepoCustomDefs(req *BuildRequest, reposJSON []byte) {
+func appendWorkspaceRepoCustomDefs(req *buildcontract.BuildRequest, reposJSON []byte) {
 	repos := string(reposJSON)
 	req.CustomDefs = append(req.CustomDefs,
 		fmt.Sprintf("extra_repos=%s", repos),
@@ -924,7 +924,7 @@ func appendWorkspaceRepoCustomDefs(req *BuildRequest, reposJSON []byte) {
 // resolveOCIRepoImages validates the OCI repo image ref and injects a file:// extra_repos
 // entry into CustomDefs. If workspace extra_repos already exist in CustomDefs, the
 // OCI entry is merged into the same JSON array.
-func resolveOCIRepoImages(req *BuildRequest) error {
+func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
 	if len(req.OCIRepoImages) == 0 {
 		return nil
 	}
@@ -999,7 +999,7 @@ type workspaceBuildResolution struct {
 // - Creates/finds a build-cache PVC for osbuild checkpoint persistence
 // - Forwards the workspace's lease if the build has flash enabled but no explicit lease
 // - Starts an HTTP file server in the workspace pod and injects workspace_url as a custom define
-func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *BuildRequest) (workspaceBuildResolution, error) {
+func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *buildcontract.BuildRequest) (workspaceBuildResolution, error) {
 	var res workspaceBuildResolution
 	operatorConfig, _ := loadOperatorConfigFn(ctx, k8sClient, namespace)
 	var wsConfig *automotivev1alpha1.WorkspacesConfig
@@ -1138,8 +1138,8 @@ func (a *APIServer) bindWorkspaceToBuild(
 	span trace.Span,
 	k8sClient client.Client,
 	namespace, requester string,
-	req *BuildRequest,
-) (string, []WorkspaceHydrateRef, bool) {
+	req *buildcontract.BuildRequest,
+) (string, []workspacemanifest.WorkspaceHydrateRef, bool) {
 	restCfg, restErr := getRESTConfigFromRequest(c)
 	if restErr != nil {
 		spanError(span, restErr)
@@ -1152,7 +1152,7 @@ func (a *APIServer) bindWorkspaceToBuild(
 		c.JSON(http.StatusBadRequest, gin.H{"error": wsErr.Error()})
 		return "", nil, true
 	}
-	rewritten, refs, applyErr := applyWorkspaceManifest(req.Manifest, wsRes.FileURL, wsRes.Running)
+	rewritten, refs, applyErr := workspacemanifest.ApplyWorkspaceManifest(req.Manifest, wsRes.FileURL, wsRes.Running)
 	if applyErr != nil {
 		spanError(span, applyErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": applyErr.Error()})
@@ -1168,9 +1168,9 @@ func (a *APIServer) applyWorkspaceOnCreate(
 	span trace.Span,
 	k8sClient client.Client,
 	namespace, requestedBy string,
-	req *BuildRequest,
+	req *buildcontract.BuildRequest,
 	needsUpload bool,
-) (string, []WorkspaceHydrateRef, bool, bool) {
+) (string, []workspacemanifest.WorkspaceHydrateRef, bool, bool) {
 	if req.Workspace == "" {
 		return "", nil, needsUpload, false
 	}
@@ -1184,7 +1184,7 @@ func (a *APIServer) applyWorkspaceOnCreate(
 	return pvcName, refs, needsUpload || manifestNeedsUpload(req.Manifest), false
 }
 
-func setWorkspaceUploadAnnotations(annotations map[string]string, hydrateRefs []WorkspaceHydrateRef, req *BuildRequest) error {
+func setWorkspaceUploadAnnotations(annotations map[string]string, hydrateRefs []workspacemanifest.WorkspaceHydrateRef, req *buildcontract.BuildRequest) error {
 	if len(hydrateRefs) > 0 {
 		raw, err := json.Marshal(hydrateRefs)
 		if err != nil {
@@ -1209,7 +1209,7 @@ func setWorkspaceUploadAnnotations(annotations map[string]string, hydrateRefs []
 // buildAIBSpec creates AIBSpec configuration from build request
 // resolveTaskBundleRef resolves and optionally verifies the Tekton Bundle reference.
 // Returns the validated ref, an HTTP status code, and error.
-func resolveTaskBundleRef(ctx context.Context, k8sClient client.Client, namespace string, req *BuildRequest) (string, int, error) {
+func resolveTaskBundleRef(ctx context.Context, k8sClient client.Client, namespace string, req *buildcontract.BuildRequest) (string, int, error) {
 	if !req.SecureBuild {
 		return "", 0, nil
 	}
@@ -1285,7 +1285,7 @@ func verifyWorkspaceImage(ctx context.Context, k8sClient client.Client, namespac
 	return 0, nil
 }
 
-func (a *APIServer) validateManifestSchema(c *gin.Context, span trace.Span, req *BuildRequest) bool {
+func (a *APIServer) validateManifestSchema(c *gin.Context, span trace.Span, req *buildcontract.BuildRequest) bool {
 	result, err := manifestschema.ValidateFromImage(req.AutomotiveImageBuilder, []byte(req.Manifest))
 	if err != nil {
 		a.log.Info("Skipping manifest schema validation", "error", err, "reqID", c.GetString("reqID"))
@@ -1299,7 +1299,7 @@ func (a *APIServer) validateManifestSchema(c *gin.Context, span trace.Span, req 
 	return true
 }
 
-func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *BuildRequest) bool {
+func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *buildcontract.BuildRequest) bool {
 	restCfg, err := getRESTConfigFromRequest(c)
 	if err != nil {
 		spanError(span, err)
@@ -1316,7 +1316,7 @@ func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span tr
 
 // applyAllExtraRepos resolves workspace extra repos and OCI RPM repo images,
 // merging both into a single extra_repos CustomDef entry.
-func (a *APIServer) applyAllExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *BuildRequest) bool {
+func (a *APIServer) applyAllExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *buildcontract.BuildRequest) bool {
 	if len(req.ExtraRepos) > 0 {
 		if !a.applyExtraRepos(ctx, c, span, k8sClient, req) {
 			return false
@@ -1330,7 +1330,7 @@ func (a *APIServer) applyAllExtraRepos(ctx context.Context, c *gin.Context, span
 	return true
 }
 
-func (a *APIServer) prepareBuildRequest(c *gin.Context, span trace.Span, req *BuildRequest) (bool, bool) {
+func (a *APIServer) prepareBuildRequest(c *gin.Context, span trace.Span, req *buildcontract.BuildRequest) (bool, bool) {
 	if !bindOperationRequest(c, req) {
 		return false, false
 	}
@@ -1356,7 +1356,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	defer span.End()
 	c.Request = c.Request.WithContext(ctx)
 
-	var req BuildRequest
+	var req buildcontract.BuildRequest
 	needsUpload, ok := a.prepareBuildRequest(c, span, &req)
 	if !ok {
 		return
@@ -1554,7 +1554,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		a.log.Info("callback initialization will be completed by reconciliation", "build", imageBuild.Name)
 	}
 
-	writeJSON(c, http.StatusAccepted, BuildResponse{
+	writeJSON(c, http.StatusAccepted, buildcontract.BuildResponse{
 		ExternalID:   req.ExternalID,
 		Notification: pendingNotification(req.Callback != nil),
 		Name:         req.Name,
@@ -1603,7 +1603,7 @@ func listBuilds(c *gin.Context) {
 	// Resolve external route once for translating internal registry URLs
 	externalRoute, _ := getExternalRegistryRoute(ctx, k8sClient, namespace)
 
-	resp := make([]BuildListItem, 0, len(page))
+	resp := make([]buildcontract.BuildListItem, 0, len(page))
 	for _, b := range page {
 		var startStr, compStr string
 		if b.Status.StartTime != nil {
@@ -1634,7 +1634,7 @@ func listBuilds(c *gin.Context) {
 			}
 		}
 
-		resp = append(resp, BuildListItem{
+		resp = append(resp, buildcontract.BuildListItem{
 			ExternalID: b.Spec.ExternalID, Artifacts: storedArtifacts(&b), Flash: storedFlash(&b),
 			Notification:     projectedNotification(notificationStatuses, b.UID, b.Spec.CallbackSecretRef != ""),
 			Name:             b.Name,
@@ -1703,12 +1703,12 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 
 	// For terminal builds, include Jumpstarter mapping so the CLI can show
 	// manual flash guidance after successful or failed flash attempts.
-	var jumpstarterInfo *JumpstarterInfo
+	var jumpstarterInfo *buildcontract.JumpstarterInfo
 	if isTerminalPhase(build.Status.Phase) {
 		operatorConfig := &automotivev1alpha1.OperatorConfig{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "config", Namespace: namespace}, operatorConfig); err == nil {
 			if operatorConfig.Status.JumpstarterAvailable {
-				jumpstarterInfo = &JumpstarterInfo{Available: true}
+				jumpstarterInfo = &buildcontract.JumpstarterInfo{Available: true}
 				// Include lease ID if flash was executed
 				if build.Status.LeaseID != "" {
 					jumpstarterInfo.LeaseID = build.Status.LeaseID
@@ -1760,7 +1760,7 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 		}
 	}
 
-	writeJSON(c, http.StatusOK, BuildResponse{
+	writeJSON(c, http.StatusOK, buildcontract.BuildResponse{
 		ExternalID: build.Spec.ExternalID, Artifacts: storedArtifacts(build), Flash: storedFlash(build),
 		Notification:       notificationStatus,
 		GitSource:          build.Spec.GetGitSource(),
@@ -1795,7 +1795,7 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 			return ""
 		}(),
 		Jumpstarter: jumpstarterInfo,
-		Parameters: &BuildParameters{
+		Parameters: &buildcontract.BuildParameters{
 			Architecture:           build.Spec.Architecture,
 			Distro:                 build.Spec.GetDistro(),
 			Target:                 build.Spec.GetTarget(),
@@ -1843,23 +1843,23 @@ func getBuildTemplate(c *gin.Context, name string) {
 		gitSource = &resolved
 	}
 
-	writeJSON(c, http.StatusOK, BuildTemplateResponse{
-		BuildRequest: BuildRequest{
+	writeJSON(c, http.StatusOK, buildcontract.BuildTemplateResponse{
+		BuildRequest: buildcontract.BuildRequest{
 			GitSource:              gitSource,
 			Name:                   build.Name,
 			Manifest:               manifest,
 			ResolveOnly:            build.Spec.GetResolveOnly(),
 			Lockfile:               build.Spec.GetLockfile(),
 			ManifestFileName:       manifestFileName,
-			Distro:                 Distro(build.Spec.GetDistro()),
-			Target:                 Target(build.Spec.GetTarget()),
-			Architecture:           Architecture(build.Spec.Architecture),
-			ExportFormat:           ExportFormat(build.Spec.GetExportFormat()),
-			Mode:                   Mode(build.Spec.GetMode()),
+			Distro:                 buildcontract.Distro(build.Spec.GetDistro()),
+			Target:                 buildcontract.Target(build.Spec.GetTarget()),
+			Architecture:           buildcontract.Architecture(build.Spec.Architecture),
+			ExportFormat:           buildcontract.ExportFormat(build.Spec.GetExportFormat()),
+			Mode:                   buildcontract.Mode(build.Spec.GetMode()),
 			AutomotiveImageBuilder: build.Spec.GetAIBImage(),
 			CustomDefs:             build.Spec.GetCustomDefs(),
 			AIBExtraArgs:           build.Spec.GetAIBExtraArgs(),
-			Compression:            Compression(build.Spec.GetCompression()),
+			Compression:            buildcontract.Compression(build.Spec.GetCompression()),
 			SecureBuild:            build.Spec.SecureBuild,
 			Reproducible:           build.Spec.Reproducible,
 			TaskBundleRef:          build.Spec.TaskBundleRef,
@@ -1889,7 +1889,7 @@ func (a *APIServer) handleGetOperatorConfig(c *gin.Context) {
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			a.log.Info("OperatorConfig not found; returning defaults", "reqID", reqID, "namespace", namespace)
-			c.JSON(http.StatusOK, OperatorConfigResponse{
+			c.JSON(http.StatusOK, buildcontract.OperatorConfigResponse{
 				AutomotiveImageBuilder: automotivev1alpha1.DefaultAutomotiveImageBuilderImage,
 			})
 			return
@@ -1900,14 +1900,14 @@ func (a *APIServer) handleGetOperatorConfig(c *gin.Context) {
 	}
 
 	// Build the response with Jumpstarter target mappings (flash-specific, from CRD)
-	response := OperatorConfigResponse{
+	response := buildcontract.OperatorConfigResponse{
 		AutomotiveImageBuilder: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
 	}
 
 	if operatorConfig.Spec.Jumpstarter != nil && len(operatorConfig.Spec.Jumpstarter.TargetMappings) > 0 {
-		response.JumpstarterTargets = make(map[string]JumpstarterTarget)
+		response.JumpstarterTargets = make(map[string]buildcontract.JumpstarterTarget)
 		for target, mapping := range operatorConfig.Spec.Jumpstarter.TargetMappings {
-			response.JumpstarterTargets[target] = JumpstarterTarget{
+			response.JumpstarterTargets[target] = buildcontract.JumpstarterTarget{
 				Selector: mapping.Selector,
 				FlashCmd: mapping.FlashCmd,
 			}

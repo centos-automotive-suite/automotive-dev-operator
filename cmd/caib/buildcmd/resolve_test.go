@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
@@ -70,18 +70,18 @@ func TestResolveOperationBuildName(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := newTestOpts()
-			opts.BuildName = new(tc.configured)
+			opts.Build.Name = tc.configured
 			if err := NewHandler(opts).resolveOperationBuildName("example.aib.yml"); err != nil {
 				t.Fatal(err)
 			}
-			if *opts.BuildName != tc.want {
-				t.Fatalf("resolve name = %q, want %q", *opts.BuildName, tc.want)
+			if opts.Build.Name != tc.want {
+				t.Fatalf("resolve name = %q, want %q", opts.Build.Name, tc.want)
 			}
 		})
 	}
 	t.Run("default name exceeds limit after suffix", func(t *testing.T) {
 		opts := newTestOpts()
-		opts.BuildName = new(string)
+		opts.Build.Name = ""
 		manifest := strings.Repeat("a", 57) + ".aib.yml"
 		if err := NewHandler(opts).resolveOperationBuildName(manifest); err == nil {
 			t.Fatal("expected generated resolve name to be rejected")
@@ -121,7 +121,7 @@ func TestResolveSubmitsClusterOperation(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/v1/config" {
-					if err := json.NewEncoder(w).Encode(buildapi.OperatorConfigResponse{TargetDefaults: map[string]buildapi.TargetDefaults{"qemu": {Architecture: "arm64", ExtraArgs: []string{"--define", "target_default=true"}}}}); err != nil {
+					if err := json.NewEncoder(w).Encode(buildcontract.OperatorConfigResponse{TargetDefaults: map[string]buildcontract.TargetDefaults{"qemu": {Architecture: "arm64", ExtraArgs: []string{"--define", "target_default=true"}}}}); err != nil {
 						t.Error(err)
 					}
 					return
@@ -145,7 +145,7 @@ func TestResolveSubmitsClusterOperation(t *testing.T) {
 					if tc.name == "delayed token" && polls > 1 {
 						token = "registry-token"
 					}
-					if err := json.NewEncoder(w).Encode(buildapi.BuildResponse{Name: "resolve-test", Phase: "Completed", LockfileArtifact: "registry.example/lock:latest", RegistryToken: token}); err != nil {
+					if err := json.NewEncoder(w).Encode(buildcontract.BuildResponse{Name: "resolve-test", Phase: "Completed", LockfileArtifact: "registry.example/lock:latest", RegistryToken: token}); err != nil {
 						t.Error(err)
 					}
 					return
@@ -160,20 +160,20 @@ func TestResolveSubmitsClusterOperation(t *testing.T) {
 			}))
 			defer srv.Close()
 			opts := newTestOpts()
-			opts.ServerURL = new(srv.URL)
-			opts.AuthToken = new("test-token")
-			opts.Architecture = new("amd64")
-			opts.Distro = new("autosd")
-			opts.Target = new("qemu")
-			opts.BuildName = new("resolve-test")
-			opts.AutomotiveImageBuilder = new("quay.io/example/aib:latest")
-			opts.Timeout = new(1)
-			opts.TTL = new("0")
-			opts.DefineFiles = new([]string{})
-			opts.CustomDefs = new([]string{})
-			opts.AIBExtraArgs = new([]string{"--define", "user=true"})
+			opts.Connection.ServerURL = srv.URL
+			opts.Connection.AuthToken = "test-token"
+			opts.Build.Architecture = "amd64"
+			opts.Build.Distro = "autosd"
+			opts.Build.Target = "qemu"
+			opts.Build.Name = "resolve-test"
+			opts.Build.AutomotiveImageBuilder = "quay.io/example/aib:latest"
+			opts.Output.Timeout = 1
+			opts.Build.TTL = "0"
+			opts.Build.DefineFiles = []string{}
+			opts.Build.CustomDefs = []string{}
+			opts.Build.AIBExtraArgs = []string{"--define", "user=true"}
 			cmd := &cobra.Command{}
-			cmd.Flags().StringVar(opts.Architecture, "arch", "amd64", "")
+			cmd.Flags().StringVar(&opts.Build.Architecture, "arch", "amd64", "")
 			if tc.explicitArch {
 				if err := cmd.Flags().Set("arch", "amd64"); err != nil {
 					t.Fatal(err)
@@ -235,11 +235,11 @@ func TestDownloadResolvedLockfilePreservesExistingOutput(t *testing.T) {
 
 func assertResolveRequest(t *testing.T, r *http.Request, wantArch string) {
 	t.Helper()
-	var req buildapi.BuildRequest
+	var req buildcontract.BuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		t.Error(err)
 	}
-	if !req.ResolveOnly || !req.UseInternalRegistry || req.Mode != buildapi.ModePackage || string(req.Architecture) != wantArch || req.Manifest != "name: example\n" {
+	if !req.ResolveOnly || !req.UseInternalRegistry || req.Mode != buildcontract.ModePackage || string(req.Architecture) != wantArch || req.Manifest != "name: example\n" {
 		t.Errorf("unexpected resolution request: %+v", req)
 	}
 	if !reflect.DeepEqual(req.AIBExtraArgs, []string{"--define", "target_default=true", "--define", "user=true"}) {

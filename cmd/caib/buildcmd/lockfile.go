@@ -9,10 +9,10 @@ import (
 )
 
 func (h *Handler) readLockfile() (string, error) {
-	if h.opts.Lockfile == nil || *h.opts.Lockfile == "" {
+	if h.opts.Build.Lockfile == "" {
 		return "", nil
 	}
-	f, err := os.Open(*h.opts.Lockfile)
+	f, err := os.Open(h.opts.Build.Lockfile)
 	if err != nil {
 		return "", fmt.Errorf("reading lockfile: %w", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/featuregates"
 	"github.com/gin-gonic/gin"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,7 +32,7 @@ func validBoundedText(value string, maximum int, allowEmpty bool) bool {
 	return !strings.ContainsFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
 
-func validateOperationMetadata(externalID string, callback *BuildCallback) error {
+func validateOperationMetadata(externalID string, callback *buildcontract.BuildCallback) error {
 	if !validBoundedText(externalID, MaxExternalIDBytes, true) {
 		return errors.New("externalId exceeds its size limit or contains control characters")
 	}
@@ -53,7 +54,7 @@ func validateOperationMetadata(externalID string, callback *BuildCallback) error
 	return nil
 }
 
-func validateCallbackPolicy(config *automotivev1alpha1.OperatorConfig, callback *BuildCallback) error {
+func validateCallbackPolicy(config *automotivev1alpha1.OperatorConfig, callback *buildcontract.BuildCallback) error {
 	if callback == nil {
 		return nil
 	}
@@ -74,7 +75,7 @@ func validateCallbackAdmission(
 	ctx context.Context,
 	k8sClient client.Client,
 	namespace string,
-	callback *BuildCallback,
+	callback *buildcontract.BuildCallback,
 ) *httpError {
 	if callback == nil {
 		return nil

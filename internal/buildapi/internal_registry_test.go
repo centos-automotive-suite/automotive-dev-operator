@@ -3,10 +3,10 @@ package buildapi
 import (
 	"fmt"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 )
 
 const (
@@ -51,10 +51,10 @@ var _ = Describe("Internal Registry", func() {
 
 	Describe("buildExportSpec", func() {
 		It("should set UseServiceAccountAuth when UseInternalRegistry is true", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				UseInternalRegistry: true,
 				ExportFormat:        "qcow2",
-				Compression:         CompressionGzip,
+				Compression:         buildcontract.CompressionGzip,
 				ContainerPush:       "registry/ns/img:tag",
 			}
 			export := buildExportSpec(req)
@@ -63,10 +63,10 @@ var _ = Describe("Internal Registry", func() {
 		})
 
 		It("should not set UseServiceAccountAuth when UseInternalRegistry is false", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				UseInternalRegistry: false,
 				ExportFormat:        "qcow2",
-				Compression:         CompressionGzip,
+				Compression:         buildcontract.CompressionGzip,
 				ContainerPush:       "quay.io/org/img:tag",
 			}
 			export := buildExportSpec(req)
@@ -74,9 +74,9 @@ var _ = Describe("Internal Registry", func() {
 		})
 
 		It("should set Disk.OCI when ExportOCI is provided", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				ExportFormat: "simg",
-				Compression:  CompressionGzip,
+				Compression:  buildcontract.CompressionGzip,
 				ExportOCI:    "registry/ns/disk:tag",
 			}
 			export := buildExportSpec(req)
@@ -85,9 +85,9 @@ var _ = Describe("Internal Registry", func() {
 		})
 
 		It("should not set Disk when ExportOCI is empty", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				ExportFormat: "qcow2",
-				Compression:  CompressionGzip,
+				Compression:  buildcontract.CompressionGzip,
 			}
 			export := buildExportSpec(req)
 			Expect(export.Disk).To(BeNil())
@@ -96,7 +96,7 @@ var _ = Describe("Internal Registry", func() {
 
 	Describe("BuildRequest internal registry fields", func() {
 		It("should support UseInternalRegistry field", func() {
-			req := BuildRequest{
+			req := buildcontract.BuildRequest{
 				UseInternalRegistry:       true,
 				InternalRegistryImageName: "my-image",
 				InternalRegistryTag:       "v1.0",
@@ -135,41 +135,41 @@ var _ = Describe("Internal Registry", func() {
 
 	Describe("Mode helpers", func() {
 		It("should identify bootc mode", func() {
-			Expect(ModeBootc.IsBootc()).To(BeTrue())
-			Expect(ModeImage.IsBootc()).To(BeFalse())
-			Expect(ModePackage.IsBootc()).To(BeFalse())
-			Expect(ModeDisk.IsBootc()).To(BeFalse())
+			Expect(buildcontract.ModeBootc.IsBootc()).To(BeTrue())
+			Expect(buildcontract.ModeImage.IsBootc()).To(BeFalse())
+			Expect(buildcontract.ModePackage.IsBootc()).To(BeFalse())
+			Expect(buildcontract.ModeDisk.IsBootc()).To(BeFalse())
 		})
 
 		It("should identify traditional modes", func() {
-			Expect(ModeImage.IsTraditional()).To(BeTrue())
-			Expect(ModePackage.IsTraditional()).To(BeTrue())
-			Expect(ModeBootc.IsTraditional()).To(BeFalse())
-			Expect(ModeDisk.IsTraditional()).To(BeFalse())
+			Expect(buildcontract.ModeImage.IsTraditional()).To(BeTrue())
+			Expect(buildcontract.ModePackage.IsTraditional()).To(BeTrue())
+			Expect(buildcontract.ModeBootc.IsTraditional()).To(BeFalse())
+			Expect(buildcontract.ModeDisk.IsTraditional()).To(BeFalse())
 		})
 	})
 
 	Describe("Validation", func() {
 		Context("internal registry mutual exclusivity", func() {
 			It("should pass validation when UseInternalRegistry is set without conflicting fields", func() {
-				req := &BuildRequest{
+				req := &buildcontract.BuildRequest{
 					Name:                testBuildName,
 					Manifest:            "content: {}",
 					UseInternalRegistry: true,
-					Mode:                ModeBootc,
+					Mode:                buildcontract.ModeBootc,
 				}
 				err := validateBuildRequest(req)
 				Expect(err).NotTo(HaveOccurred())
 			})
 
 			It("should pass validation with internal registry and image name override", func() {
-				req := &BuildRequest{
+				req := &buildcontract.BuildRequest{
 					Name:                      "test-build",
 					Manifest:                  "content: {}",
 					UseInternalRegistry:       true,
 					InternalRegistryImageName: "custom-name",
 					InternalRegistryTag:       "v2",
-					Mode:                      ModePackage,
+					Mode:                      buildcontract.ModePackage,
 				}
 				err := validateBuildRequest(req)
 				Expect(err).NotTo(HaveOccurred())
@@ -178,34 +178,34 @@ var _ = Describe("Internal Registry", func() {
 
 		Context("compression validation", func() {
 			It("should accept gzip compression", func() {
-				req := &BuildRequest{Compression: CompressionGzip}
+				req := &buildcontract.BuildRequest{Compression: buildcontract.CompressionGzip}
 				err := applyBuildDefaults(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Compression).To(Equal(CompressionGzip))
+				Expect(req.Compression).To(Equal(buildcontract.CompressionGzip))
 			})
 
 			It("should reject lz4 compression", func() {
-				req := &BuildRequest{Compression: "lz4"}
+				req := &buildcontract.BuildRequest{Compression: "lz4"}
 				err := applyBuildDefaults(req)
 				Expect(err).To(HaveOccurred())
 			})
 
 			It("should accept xz compression", func() {
-				req := &BuildRequest{Compression: CompressionXZ}
+				req := &buildcontract.BuildRequest{Compression: buildcontract.CompressionXZ}
 				err := applyBuildDefaults(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Compression).To(Equal(CompressionXZ))
+				Expect(req.Compression).To(Equal(buildcontract.CompressionXZ))
 			})
 
 			It("should default to gzip when compression is empty", func() {
-				req := &BuildRequest{}
+				req := &buildcontract.BuildRequest{}
 				err := applyBuildDefaults(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Compression).To(Equal(CompressionGzip))
+				Expect(req.Compression).To(Equal(buildcontract.CompressionGzip))
 			})
 
 			It("should reject invalid compression", func() {
-				req := &BuildRequest{Compression: "zstd"}
+				req := &buildcontract.BuildRequest{Compression: "zstd"}
 				err := applyBuildDefaults(req)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("invalid compression"))
@@ -214,42 +214,42 @@ var _ = Describe("Internal Registry", func() {
 
 		Context("architecture validation", func() {
 			It("should accept amd64", func() {
-				req := &BuildRequest{Architecture: "amd64"}
+				req := &buildcontract.BuildRequest{Architecture: "amd64"}
 				err := applyBuildDefaults(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Architecture).To(Equal(Architecture("amd64")))
+				Expect(req.Architecture).To(Equal(buildcontract.Architecture("amd64")))
 			})
 
 			It("should accept arm64", func() {
-				req := &BuildRequest{Architecture: "arm64"}
+				req := &buildcontract.BuildRequest{Architecture: "arm64"}
 				err := applyBuildDefaults(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Architecture).To(Equal(Architecture("arm64")))
+				Expect(req.Architecture).To(Equal(buildcontract.Architecture("arm64")))
 			})
 
 			It("should normalize x86_64 to amd64", func() {
-				req := &BuildRequest{Architecture: "x86_64"}
+				req := &buildcontract.BuildRequest{Architecture: "x86_64"}
 				err := applyBuildDefaults(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Architecture).To(Equal(Architecture("amd64")))
+				Expect(req.Architecture).To(Equal(buildcontract.Architecture("amd64")))
 			})
 
 			It("should normalize aarch64 to arm64", func() {
-				req := &BuildRequest{Architecture: "aarch64"}
+				req := &buildcontract.BuildRequest{Architecture: "aarch64"}
 				err := applyBuildDefaults(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Architecture).To(Equal(Architecture("arm64")))
+				Expect(req.Architecture).To(Equal(buildcontract.Architecture("arm64")))
 			})
 
 			It("should default to arm64 when empty", func() {
-				req := &BuildRequest{}
+				req := &buildcontract.BuildRequest{}
 				err := applyBuildDefaults(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(req.Architecture).To(Equal(Architecture("arm64")))
+				Expect(req.Architecture).To(Equal(buildcontract.Architecture("arm64")))
 			})
 
 			It("should reject invalid architecture", func() {
-				req := &BuildRequest{Architecture: "mips64"}
+				req := &buildcontract.BuildRequest{Architecture: "mips64"}
 				err := applyBuildDefaults(req)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("invalid architecture"))
@@ -258,7 +258,7 @@ var _ = Describe("Internal Registry", func() {
 
 		Context("applyBuildDefaults with internal registry", func() {
 			It("should apply defaults without overwriting internal registry fields", func() {
-				req := &BuildRequest{
+				req := &buildcontract.BuildRequest{
 					UseInternalRegistry:       true,
 					InternalRegistryImageName: "custom",
 					InternalRegistryTag:       "v1",
@@ -271,7 +271,7 @@ var _ = Describe("Internal Registry", func() {
 				// Defaults should still be applied
 				Expect(string(req.Distro)).To(Equal("autosd"))
 				Expect(string(req.Target)).To(Equal("qemu"))
-				Expect(string(req.Mode)).To(Equal(string(ModeBootc)))
+				Expect(string(req.Mode)).To(Equal(string(buildcontract.ModeBootc)))
 			})
 		})
 	})
@@ -341,9 +341,9 @@ var _ = Describe("Internal Registry", func() {
 
 	Describe("Internal registry URL generation per mode", func() {
 		It("should set ContainerPush for bootc mode", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				Name:                testBuildName,
-				Mode:                ModeBootc,
+				Mode:                buildcontract.ModeBootc,
 				UseInternalRegistry: true,
 			}
 
@@ -368,9 +368,9 @@ var _ = Describe("Internal Registry", func() {
 		})
 
 		It("should set ExportOCI for traditional mode", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				Name:                testBuildName,
-				Mode:                ModePackage,
+				Mode:                buildcontract.ModePackage,
 				UseInternalRegistry: true,
 			}
 
@@ -391,9 +391,9 @@ var _ = Describe("Internal Registry", func() {
 		})
 
 		It("should set both ContainerPush and ExportOCI for bootc with disk", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				Name:                testBuildName,
-				Mode:                ModeBootc,
+				Mode:                buildcontract.ModeBootc,
 				UseInternalRegistry: true,
 				BuildDiskImage:      true,
 			}
@@ -416,9 +416,9 @@ var _ = Describe("Internal Registry", func() {
 		})
 
 		It("should set ExportOCI for disk mode", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				Name:                testBuildName,
-				Mode:                ModeDisk,
+				Mode:                buildcontract.ModeDisk,
 				UseInternalRegistry: true,
 			}
 
@@ -437,9 +437,9 @@ var _ = Describe("Internal Registry", func() {
 		})
 
 		It("should imply BuildDiskImage for bootc with flash", func() {
-			req := &BuildRequest{
+			req := &buildcontract.BuildRequest{
 				Name:                testBuildName,
-				Mode:                ModeBootc,
+				Mode:                buildcontract.ModeBootc,
 				UseInternalRegistry: true,
 				FlashEnabled:        true,
 			}

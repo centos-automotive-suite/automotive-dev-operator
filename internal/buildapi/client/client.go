@@ -17,7 +17,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/catalog"
 	"github.com/gorilla/websocket"
 )

@@ -9,15 +9,15 @@ import (
 	"strings"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 )
 
 const (
@@ -64,29 +64,16 @@ func pruneProgressCache(cache map[string]progressCacheEntry, now time.Time) {
 	}
 }
 
-// BuildProgress is the response for GET /v1/builds/{name}/progress
-type BuildProgress struct {
-	Phase string     `json:"phase"`
-	Step  *BuildStep `json:"step,omitempty"`
-}
-
-// BuildStep represents a progress checkpoint emitted by the build script.
-type BuildStep struct {
-	Stage string `json:"stage"`
-	Done  int    `json:"done"`
-	Total int    `json:"total"`
-}
-
 // taskProgress holds the latest marker from a single pipeline task pod.
 type taskProgress struct {
 	taskName  string
-	marker    BuildStep
+	marker    buildcontract.BuildStep
 	completed bool
 }
 
 // parseProgressAnnotation parses a pod annotation value with the format
 // "stage|done|total" (pipe-delimited) into a BuildStep.
-func parseProgressAnnotation(value string) (*BuildStep, bool) {
+func parseProgressAnnotation(value string) (*buildcontract.BuildStep, bool) {
 	parts := strings.SplitN(value, "|", 3)
 	if len(parts) != 3 {
 		return nil, false
@@ -99,7 +86,7 @@ func parseProgressAnnotation(value string) (*BuildStep, bool) {
 	if err != nil || total <= 0 || done > total || strings.TrimSpace(parts[0]) == "" {
 		return nil, false
 	}
-	return &BuildStep{Stage: parts[0], Done: done, Total: total}, true
+	return &buildcontract.BuildStep{Stage: parts[0], Done: done, Total: total}, true
 }
 
 // stageForPipelineTask returns a human-readable stage name for pipeline tasks
@@ -187,7 +174,7 @@ func readTaskProgressFromPods(ctx context.Context, cs *kubernetes.Clientset, pip
 			}
 			results = append(results, taskProgress{
 				taskName:  taskName,
-				marker:    BuildStep{Stage: stageForPipelineTask(taskName), Done: done, Total: total},
+				marker:    buildcontract.BuildStep{Stage: stageForPipelineTask(taskName), Done: done, Total: total},
 				completed: pod.Status.Phase == corev1.PodSucceeded,
 			})
 		case corev1.PodPending:
@@ -196,7 +183,7 @@ func readTaskProgressFromPods(ctx context.Context, cs *kubernetes.Clientset, pip
 			if stage := pendingPodStage(&pod); stage != "" {
 				results = append(results, taskProgress{
 					taskName: taskName,
-					marker:   BuildStep{Stage: stage, Done: 0, Total: total},
+					marker:   buildcontract.BuildStep{Stage: stage, Done: 0, Total: total},
 				})
 			}
 		}
@@ -210,23 +197,23 @@ func readTaskProgressFromPods(ctx context.Context, cs *kubernetes.Clientset, pip
 // SYNC: keep in sync with internal/common/tasks/scripts/build_image.sh (PROGRESS_TOTAL calculation).
 // This is used before any markers arrive so the total is stable from the start.
 func estimateBuildSteps(build *automotivev1alpha1.ImageBuild, hasClusterRegistryRoute bool) int {
-	mode := Mode(build.Spec.GetMode())
+	mode := buildcontract.Mode(build.Spec.GetMode())
 	total := 3 // base: preparing, building, finalizing
 
 	// Builder preparation (bootc/disk without explicit builder):
 	// "Preparing builder" (cache check + optional build/push) + "Pulling builder" = 2 steps
 	// Builder image pull only (bootc/disk with explicit builder): 1 step
-	if build.Spec.GetBuilderImage() == "" && (mode == ModeBootc || mode == ModeDisk) && hasClusterRegistryRoute {
+	if build.Spec.GetBuilderImage() == "" && (mode == buildcontract.ModeBootc || mode == buildcontract.ModeDisk) && hasClusterRegistryRoute {
 		total += 2
-	} else if build.Spec.GetBuilderImage() != "" && (mode == ModeBootc || mode == ModeDisk) {
+	} else if build.Spec.GetBuilderImage() != "" && (mode == buildcontract.ModeBootc || mode == buildcontract.ModeDisk) {
 		total++
 	}
 
-	if build.Spec.GetContainerPush() != "" && mode == ModeBootc {
+	if build.Spec.GetContainerPush() != "" && mode == buildcontract.ModeBootc {
 		total++
 	}
 
-	if build.Spec.GetBuildDiskImage() || mode == ModeImage || mode == ModePackage || mode == ModeDisk {
+	if build.Spec.GetBuildDiskImage() || mode == buildcontract.ModeImage || mode == buildcontract.ModePackage || mode == buildcontract.ModeDisk {
 		total++
 	}
 
@@ -249,7 +236,7 @@ func buildProgressStep(
 	build *automotivev1alpha1.ImageBuild,
 	tasks []taskProgress,
 	hasClusterRegistryRoute bool,
-) *BuildStep {
+) *buildcontract.BuildStep {
 	hasPushTask := strings.TrimSpace(build.Spec.GetExportOCI()) != "" && strings.TrimSpace(build.Spec.SecretRef) != ""
 	hasS3Task := strings.TrimSpace(build.Spec.GetS3Bucket()) != ""
 	hasFlashTask := build.Spec.IsFlashEnabled()
@@ -307,35 +294,35 @@ func buildProgressStep(
 
 	switch build.Status.Phase {
 	case "", phasePending, phaseUploading:
-		return &BuildStep{Stage: "Waiting to start", Done: 0, Total: pipelineTotal}
+		return &buildcontract.BuildStep{Stage: "Waiting to start", Done: 0, Total: pipelineTotal}
 
 	case phaseBuilding, phaseRunning:
 		if len(tasks) > 0 {
-			return &BuildStep{Stage: activeStage, Done: clampDone(combinedDone, pipelineTotal), Total: pipelineTotal}
+			return &buildcontract.BuildStep{Stage: activeStage, Done: clampDone(combinedDone, pipelineTotal), Total: pipelineTotal}
 		}
-		return &BuildStep{Stage: "Starting build", Done: 0, Total: pipelineTotal}
+		return &buildcontract.BuildStep{Stage: "Starting build", Done: 0, Total: pipelineTotal}
 
 	case "Pushing":
-		return &BuildStep{Stage: "Pushing artifact", Done: clampDone(combinedDone, pipelineTotal), Total: pipelineTotal}
+		return &buildcontract.BuildStep{Stage: "Pushing artifact", Done: clampDone(combinedDone, pipelineTotal), Total: pipelineTotal}
 
 	case "Flashing":
 		done := combinedDone
 		if hasPushTask && !pushReported {
 			done++
 		}
-		return &BuildStep{Stage: "Flashing device", Done: clampDone(done, pipelineTotal), Total: pipelineTotal}
+		return &buildcontract.BuildStep{Stage: "Flashing device", Done: clampDone(done, pipelineTotal), Total: pipelineTotal}
 
 	case phaseCompleted:
-		return &BuildStep{Stage: "Complete", Done: pipelineTotal, Total: pipelineTotal}
+		return &buildcontract.BuildStep{Stage: "Complete", Done: pipelineTotal, Total: pipelineTotal}
 
 	case phaseFailed:
 		if len(tasks) > 0 {
-			return &BuildStep{Stage: activeStage, Done: clampDone(combinedDone, pipelineTotal), Total: pipelineTotal}
+			return &buildcontract.BuildStep{Stage: activeStage, Done: clampDone(combinedDone, pipelineTotal), Total: pipelineTotal}
 		}
-		return &BuildStep{Stage: "Failed", Done: 0, Total: pipelineTotal}
+		return &buildcontract.BuildStep{Stage: "Failed", Done: 0, Total: pipelineTotal}
 
 	default:
-		return &BuildStep{Stage: build.Status.Phase, Done: 0, Total: pipelineTotal}
+		return &buildcontract.BuildStep{Stage: build.Status.Phase, Done: 0, Total: pipelineTotal}
 	}
 }
 
@@ -413,15 +400,15 @@ func (a *APIServer) handleGetProgress(c *gin.Context) {
 		}
 	}
 	if !hasBuildTotal {
-		mode := Mode(build.Spec.GetMode())
-		if build.Spec.GetBuilderImage() == "" && (mode == ModeBootc || mode == ModeDisk) {
+		mode := buildcontract.Mode(build.Spec.GetMode())
+		if build.Spec.GetBuilderImage() == "" && (mode == buildcontract.ModeBootc || mode == buildcontract.ModeDisk) {
 			if route, err := getExternalRegistryRoute(ctx, k8sClient, namespace); err == nil && strings.TrimSpace(route) != "" {
 				hasClusterRegistryRoute = true
 			}
 		}
 	}
 
-	progress := BuildProgress{
+	progress := buildcontract.BuildProgress{
 		Phase: build.Status.Phase,
 		Step:  buildProgressStep(build, tasks, hasClusterRegistryRoute),
 	}

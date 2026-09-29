@@ -14,8 +14,8 @@ func TestResolveCustomDefs_FileThenInline(t *testing.T) {
 	}
 
 	opts := newTestDiskOpts()
-	*opts.DefineFiles = []string{path}
-	*opts.CustomDefs = []string{"routing=Engine"}
+	opts.Build.DefineFiles = []string{path}
+	opts.Build.CustomDefs = []string{"routing=Engine"}
 
 	h := NewHandler(opts)
 	got, err := h.resolveCustomDefs()

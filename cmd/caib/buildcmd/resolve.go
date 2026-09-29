@@ -13,8 +13,8 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
@@ -43,14 +43,14 @@ func resolveTimeoutMinutes(cmd *cobra.Command, configured int) int {
 }
 
 func (h *Handler) resolveOperationBuildName(manifestPath string) error {
-	explicitName := *h.opts.BuildName != ""
+	explicitName := h.opts.Build.Name != ""
 	if err := h.resolveManifestBuildName(manifestPath); err != nil {
 		return err
 	}
 	if !explicitName {
-		*h.opts.BuildName += "-resolve"
+		h.opts.Build.Name += "-resolve"
 	}
-	return common.ValidateBuildName(*h.opts.BuildName)
+	return common.ValidateBuildName(h.opts.Build.Name)
 }
 
 // RunResolve submits dependency resolution to the cluster and downloads its lockfile.
@@ -76,7 +76,7 @@ func (h *Handler) resolveLockfile(ctx context.Context, cmd *cobra.Command, manif
 	if err := h.resolveOperationBuildName(manifestPath); err != nil {
 		return err
 	}
-	architecture, err := resolveArchitecture(*h.opts.Architecture)
+	architecture, err := resolveArchitecture(h.opts.Build.Architecture)
 	if err != nil {
 		return err
 	}
@@ -84,30 +84,30 @@ func (h *Handler) resolveLockfile(ctx context.Context, cmd *cobra.Command, manif
 	if err != nil {
 		return err
 	}
-	timeoutMinutes := resolveTimeoutMinutes(cmd, *h.opts.Timeout)
+	timeoutMinutes := resolveTimeoutMinutes(cmd, h.opts.Output.Timeout)
 	if timeoutMinutes <= 0 {
 		return fmt.Errorf("--timeout must be positive")
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMinutes)*time.Minute)
 	defer cancel()
-	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
 	if err != nil {
 		return err
 	}
-	req := buildapitypes.BuildRequest{
-		Name:                   *h.opts.BuildName,
+	req := buildcontract.BuildRequest{
+		Name:                   h.opts.Build.Name,
 		Manifest:               string(manifest),
 		ManifestFileName:       filepath.Base(manifestPath),
-		Mode:                   buildapitypes.ModePackage,
+		Mode:                   buildcontract.ModePackage,
 		ResolveOnly:            true,
-		Distro:                 buildapitypes.Distro(*h.opts.Distro),
-		Target:                 buildapitypes.Target(*h.opts.Target),
-		Architecture:           buildapitypes.Architecture(architecture),
-		AutomotiveImageBuilder: *h.opts.AutomotiveImageBuilder,
+		Distro:                 buildcontract.Distro(h.opts.Build.Distro),
+		Target:                 buildcontract.Target(h.opts.Build.Target),
+		Architecture:           buildcontract.Architecture(architecture),
+		AutomotiveImageBuilder: h.opts.Build.AutomotiveImageBuilder,
 		CustomDefs:             definitions,
-		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		AIBExtraArgs:           h.opts.Build.AIBExtraArgs,
 		UseInternalRegistry:    true,
-		TTL:                    *h.opts.TTL,
+		TTL:                    h.opts.Build.TTL,
 	}
 	operatorConfig, err := h.fetchTargetDefaults(ctx, api, string(req.Target), false)
 	if err != nil {
@@ -154,11 +154,11 @@ func (h *Handler) resolveLockfile(ctx context.Context, cmd *cobra.Command, manif
 					clilog.Warnf("Resolution %s completed; waiting for registry credentials\n", resp.Name)
 					break
 				}
-				outputPath := strings.TrimSpace(*h.opts.OutputDir)
+				outputPath := strings.TrimSpace(h.opts.Output.Dir)
 				if outputPath == "" {
 					outputPath = defaultLockfilePath(manifestPath)
 				}
-				return downloadResolvedLockfile(ctx, st.LockfileArtifact, st.RegistryToken, outputPath, *h.opts.InsecureSkipTLS, common.PullOCIArtifactWithContext)
+				return downloadResolvedLockfile(ctx, st.LockfileArtifact, st.RegistryToken, outputPath, h.opts.Connection.InsecureSkipTLS, common.PullOCIArtifactWithContext)
 			case "Failed", "Cancelled", "Expired":
 				return fmt.Errorf("resolution %s %s: %s", resp.Name, st.Phase, st.Message)
 			}

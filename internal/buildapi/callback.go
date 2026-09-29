@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	corev1 "k8s.io/api/core/v1"
@@ -25,7 +26,7 @@ func createCallbackSecret(
 	k8sClient client.Client,
 	namespace, secretName, subjectKind, subjectName string,
 	subjectUID types.UID,
-	callback *BuildCallback,
+	callback *buildcontract.BuildCallback,
 ) (*corev1.Secret, error) {
 	if callback == nil {
 		return nil, nil
@@ -155,7 +156,7 @@ func completeBuildCallbackInitialization(
 	ctx context.Context,
 	k8sClient client.Client,
 	build *automotivev1alpha1.ImageBuild,
-	callback *BuildCallback,
+	callback *buildcontract.BuildCallback,
 ) error {
 	if callback == nil {
 		return nil

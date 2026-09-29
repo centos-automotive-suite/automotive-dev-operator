@@ -24,7 +24,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"golang.org/x/term"
 )
 
@@ -37,7 +37,7 @@ const completedPhase = "Completed"
 type ProgressBar struct {
 	lastLine string
 	isTTY    bool
-	highStep *buildapitypes.BuildStep // highest progress seen so far
+	highStep *buildcontract.BuildStep // highest progress seen so far
 }
 
 // NewProgressBar creates a new progress bar with TTY detection
@@ -46,7 +46,7 @@ func NewProgressBar() *ProgressBar {
 }
 
 // Render displays the progress bar with monotonic progress enforcement
-func (pb *ProgressBar) Render(phase string, step *buildapitypes.BuildStep) {
+func (pb *ProgressBar) Render(phase string, step *buildcontract.BuildStep) {
 	if clilog.IsQuiet() {
 		return
 	}
@@ -75,7 +75,7 @@ func (pb *ProgressBar) Render(phase string, step *buildapitypes.BuildStep) {
 }
 
 // renderTTY renders progress with visual bar for TTY terminals
-func (pb *ProgressBar) renderTTY(phase string, step *buildapitypes.BuildStep) {
+func (pb *ProgressBar) renderTTY(phase string, step *buildcontract.BuildStep) {
 	var line string
 	if step == nil {
 		line = fmt.Sprintf("\r%-10s ⦿ waiting for progress...", phase)
@@ -109,7 +109,7 @@ func (pb *ProgressBar) renderTTY(phase string, step *buildapitypes.BuildStep) {
 }
 
 // renderPlain renders progress as plain text for non-TTY output
-func (pb *ProgressBar) renderPlain(phase string, step *buildapitypes.BuildStep) {
+func (pb *ProgressBar) renderPlain(phase string, step *buildcontract.BuildStep) {
 	var line string
 	if step == nil {
 		line = fmt.Sprintf("%s: waiting for progress...", phase)
@@ -132,9 +132,9 @@ func (pb *ProgressBar) Complete() {
 	if clilog.IsQuiet() || pb.lastLine == "" {
 		return
 	}
-	var step *buildapitypes.BuildStep
+	var step *buildcontract.BuildStep
 	if pb.highStep != nil {
-		step = &buildapitypes.BuildStep{
+		step = &buildcontract.BuildStep{
 			Stage: "Complete",
 			Done:  pb.highStep.Total,
 			Total: pb.highStep.Total,

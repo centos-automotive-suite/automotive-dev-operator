@@ -7,6 +7,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
+	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
+	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,12 +22,6 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
-	"github.com/gin-gonic/gin"
-	"github.com/go-logr/logr"
-	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
-	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 )
 
 var _ = Describe("Flash", func() {
@@ -202,7 +202,7 @@ var _ = Describe("Flash", func() {
 			server.getFlash(c, "my-flash")
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			var resp FlashResponse
+			var resp buildcontract.FlashResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
 			Expect(resp.Name).To(Equal("my-flash"))
 			Expect(resp.Phase).To(Equal(phaseRunning))
@@ -229,7 +229,7 @@ var _ = Describe("Flash", func() {
 			server.getFlash(c, "my-flash")
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			var resp FlashResponse
+			var resp buildcontract.FlashResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
 			Expect(resp.Name).To(Equal("my-flash"))
 			Expect(resp.Phase).To(Equal(phaseCompleted))
@@ -251,7 +251,7 @@ var _ = Describe("Flash", func() {
 			server.listFlash(c)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			var resp []FlashListItem
+			var resp []buildcontract.FlashListItem
 			Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
 			Expect(resp).To(BeEmpty())
 		})
@@ -274,7 +274,7 @@ var _ = Describe("Flash", func() {
 			server.listFlash(c)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			var resp []FlashListItem
+			var resp []buildcontract.FlashListItem
 			Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
 			Expect(resp).To(HaveLen(2))
 			Expect(resp[0].Name).To(Equal("flash-new"))

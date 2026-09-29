@@ -2,9 +2,10 @@ package buildapi
 
 import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
-func buildAIBSpec(req *BuildRequest, manifest, manifestFileName string, inputFilesServer bool) *automotivev1alpha1.AIBSpec {
+func buildAIBSpec(req *buildcontract.BuildRequest, manifest, manifestFileName string, inputFilesServer bool) *automotivev1alpha1.AIBSpec {
 	return &automotivev1alpha1.AIBSpec{
 		GitSource:        req.GitSource,
 		Distro:           string(req.Distro),
@@ -26,7 +27,7 @@ func buildAIBSpec(req *BuildRequest, manifest, manifestFileName string, inputFil
 	}
 }
 
-func buildExportSpec(req *BuildRequest) *automotivev1alpha1.ExportSpec {
+func buildExportSpec(req *buildcontract.BuildRequest) *automotivev1alpha1.ExportSpec {
 	export := &automotivev1alpha1.ExportSpec{
 		Format:                string(req.ExportFormat),
 		Compression:           string(req.Compression),

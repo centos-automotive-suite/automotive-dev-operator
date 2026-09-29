@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 func TestApplyRegistryCredentials_InternalRegistryWithEnvCreds(t *testing.T) {
@@ -14,10 +14,10 @@ func TestApplyRegistryCredentials_InternalRegistryWithEnvCreds(t *testing.T) {
 	t.Setenv("REGISTRY_PASSWORD", "mypass")
 
 	opts := newTestDiskOpts()
-	*opts.UseInternalRegistry = true
+	opts.Registry.UseInternalRegistry = true
 	h := NewHandler(opts)
 
-	req := &buildapitypes.BuildRequest{}
+	req := &buildcontract.BuildRequest{}
 	if err := h.applyRegistryCredentialsToRequest(req); err != nil {
 		t.Fatalf("applyRegistryCredentialsToRequest() error = %v", err)
 	}
@@ -49,11 +49,11 @@ func TestApplyRegistryCredentials_InternalRegistryWithAuthFile(t *testing.T) {
 	writeTestAuthFile(t, authFile)
 
 	opts := newTestDiskOpts()
-	*opts.UseInternalRegistry = true
-	*opts.RegistryAuthFile = authFile
+	opts.Registry.UseInternalRegistry = true
+	opts.Registry.AuthFile = authFile
 	h := NewHandler(opts)
 
-	req := &buildapitypes.BuildRequest{}
+	req := &buildcontract.BuildRequest{}
 	if err := h.applyRegistryCredentialsToRequest(req); err != nil {
 		t.Fatalf("applyRegistryCredentialsToRequest() error = %v", err)
 	}
@@ -75,10 +75,10 @@ func TestApplyRegistryCredentials_InternalRegistryNoCredsReturnsNil(t *testing.T
 	t.Setenv("REGISTRY_PASSWORD", "")
 
 	opts := newTestDiskOpts()
-	*opts.UseInternalRegistry = true
+	opts.Registry.UseInternalRegistry = true
 	h := NewHandler(opts)
 
-	req := &buildapitypes.BuildRequest{}
+	req := &buildcontract.BuildRequest{}
 	if err := h.applyRegistryCredentialsToRequest(req); err != nil {
 		t.Fatalf("applyRegistryCredentialsToRequest() error = %v", err)
 	}

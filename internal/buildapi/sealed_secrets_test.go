@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 )
@@ -11,7 +12,7 @@ import (
 var _ = Describe("Sealed secret helpers", func() {
 	Describe("buildSealedRegistrySecretData", func() {
 		It("builds secret data for username/password auth", func() {
-			creds := &RegistryCredentials{
+			creds := &buildcontract.RegistryCredentials{
 				AuthType:    authTypeUsernamePassword,
 				RegistryURL: "quay.io",
 				Username:    "user",
@@ -31,7 +32,7 @@ var _ = Describe("Sealed secret helpers", func() {
 		})
 
 		It("builds secret data for token auth", func() {
-			creds := &RegistryCredentials{
+			creds := &buildcontract.RegistryCredentials{
 				AuthType:    authTypeToken,
 				RegistryURL: "quay.io",
 				Token:       "token-123",
@@ -44,7 +45,7 @@ var _ = Describe("Sealed secret helpers", func() {
 		})
 
 		It("builds secret data for docker config auth", func() {
-			creds := &RegistryCredentials{
+			creds := &buildcontract.RegistryCredentials{
 				AuthType:     authTypeDockerConfig,
 				DockerConfig: `{"auths":{"quay.io":{"auth":"xxx"}}}`,
 			}
@@ -56,14 +57,14 @@ var _ = Describe("Sealed secret helpers", func() {
 		})
 
 		It("returns error for unsupported auth type", func() {
-			creds := &RegistryCredentials{AuthType: "unknown"}
+			creds := &buildcontract.RegistryCredentials{AuthType: "unknown"}
 			_, err := buildSealedRegistrySecretData(creds)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("unsupported authentication type"))
 		})
 
 		It("returns error when required fields are missing", func() {
-			creds := &RegistryCredentials{
+			creds := &buildcontract.RegistryCredentials{
 				AuthType:    authTypeUsernamePassword,
 				RegistryURL: "quay.io",
 			}
@@ -75,7 +76,7 @@ var _ = Describe("Sealed secret helpers", func() {
 
 	Describe("transientSealedSecretRefs", func() {
 		It("returns only transient refs and excludes external key refs", func() {
-			req := &SealedRequest{
+			req := &buildcontract.SealedRequest{
 				KeySecretRef:         "external-key",
 				KeyPasswordSecretRef: "external-key-password",
 			}

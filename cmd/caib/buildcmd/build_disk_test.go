@@ -5,124 +5,33 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	"github.com/spf13/cobra"
 )
 
-// newTestDiskOpts returns Options with all pointer fields initialised to
-// sensible zero-values so RunDisk can dereference them safely.
+// newTestDiskOpts provides independent value groups for build handler tests.
 func newTestDiskOpts() Options {
-	var (
-		serverURL            = "https://fake-server"
-		manifest             string
-		buildName            string
-		distro               = "autosd"
-		target               = "qemu"
-		arch                 = "amd64"
-		exportFormat         string
-		mode                 string
-		aib                  = automotivev1alpha1.DefaultAutomotiveImageBuilderImage
-		storageClass         string
-		outputDir            string
-		timeout              = 60
-		waitForBuild         bool
-		customDefs           []string
-		rootPassword         string
-		aibExtraArgs         []string
-		followLogs           bool
-		compressionAlgo      = "gzip"
-		authToken            string
-		containerPush        string
-		buildDiskImage       bool
-		diskFormat           string
-		exportOCI            string
-		builderImage         string
-		registryAuthFile     string
-		containerRef         string
-		rebuildBuilder       bool
-		flashAfterBuild      bool
-		jumpstarterClient    string
-		leaseDuration        = "03:00:00"
-		leaseName            string
-		leaseTags            []string
-		useInternalRegistry  bool
-		internalRegImageName string
-		internalRegTag       string
-		secureBuild          bool
-		reproducible         bool
-		taskBundleRef        string
-		restoreSourcesRef    string
-		buildTTL             string
-		insecureSkipTLS      bool
-		s3Bucket             string
-		s3Prefix             string
-		s3Region             string
-		s3Endpoint           string
-		s3AccessKeyID        string
-		s3SecretAccessKey    string
-		s3CredentialsSecret  string
-		s3Insecure           bool
-	)
-	var defineFiles []string
 	return Options{
-		ServerURL:                 &serverURL,
-		Manifest:                  &manifest,
-		BuildName:                 &buildName,
-		Distro:                    &distro,
-		Target:                    &target,
-		Architecture:              &arch,
-		ExportFormat:              &exportFormat,
-		Mode:                      &mode,
-		AutomotiveImageBuilder:    &aib,
-		StorageClass:              &storageClass,
-		OutputDir:                 &outputDir,
-		Timeout:                   &timeout,
-		WaitForBuild:              &waitForBuild,
-		CustomDefs:                &customDefs,
-		DefineFiles:               &defineFiles,
-		RootPassword:              &rootPassword,
-		AIBExtraArgs:              &aibExtraArgs,
-		FollowLogs:                &followLogs,
-		CompressionAlgo:           &compressionAlgo,
-		AuthToken:                 &authToken,
-		ContainerPush:             &containerPush,
-		BuildDiskImage:            &buildDiskImage,
-		DiskFormat:                &diskFormat,
-		ExportOCI:                 &exportOCI,
-		BuilderImage:              &builderImage,
-		RegistryAuthFile:          &registryAuthFile,
-		ContainerRef:              &containerRef,
-		RebuildBuilder:            &rebuildBuilder,
-		FlashAfterBuild:           &flashAfterBuild,
-		JumpstarterClient:         &jumpstarterClient,
-		LeaseDuration:             &leaseDuration,
-		LeaseName:                 &leaseName,
-		LeaseTags:                 &leaseTags,
-		UseInternalRegistry:       &useInternalRegistry,
-		InternalRegistryImageName: &internalRegImageName,
-		InternalRegistryTag:       &internalRegTag,
-		SecureBuild:               &secureBuild,
-		Reproducible:              &reproducible,
-		TaskBundleRef:             &taskBundleRef,
-		RestoreSourcesRef:         &restoreSourcesRef,
-		TTL:                       &buildTTL,
-		InsecureSkipTLS:           &insecureSkipTLS,
-		S3Bucket:                  &s3Bucket,
-		S3Prefix:                  &s3Prefix,
-		S3Region:                  &s3Region,
-		S3Endpoint:                &s3Endpoint,
-		S3AccessKeyID:             &s3AccessKeyID,
-		S3SecretAccessKey:         &s3SecretAccessKey,
-		S3CredentialsSecret:       &s3CredentialsSecret,
-		S3Insecure:                &s3Insecure,
+		Connection: &commandopts.Connection{ServerURL: "https://fake-server"},
+		Output:     &commandopts.Output{Timeout: 60},
+		Callback:   &commandopts.Callback{},
+		Build: &commandopts.Build{
+			Distro: "autosd", Target: "qemu", Architecture: "amd64",
+			AutomotiveImageBuilder: automotivev1alpha1.DefaultAutomotiveImageBuilderImage,
+			CompressionAlgo:        "gzip",
+		},
+		Registry: &commandopts.Registry{},
+		S3:       &commandopts.S3{},
+		Flash:    &commandopts.Flash{LeaseDuration: "03:00:00"},
 	}
 }
 
 func TestRunDiskRejectsLeaseAndLeaseDuration(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.FlashAfterBuild = true
-	*opts.ExportOCI = "quay.io/org/disk:v1"
-	*opts.JumpstarterClient = "nonexistent"
-	*opts.LeaseName = "my-existing-lease"
+	opts.Flash.AfterBuild = true
+	opts.Registry.ExportOCI = "quay.io/org/disk:v1"
+	opts.Flash.JumpstarterClient = "nonexistent"
+	opts.Flash.LeaseName = "my-existing-lease"
 
 	var capturedErr error
 	opts.HandleError = func(err error) { capturedErr = err }
@@ -187,9 +96,9 @@ func TestRunDiskDefaultsToInternalRegistry(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := newTestDiskOpts()
-			*opts.ExportOCI = tc.exportOCI
-			*opts.OutputDir = tc.outputDir
-			*opts.UseInternalRegistry = tc.useInternalRegistry
+			opts.Registry.ExportOCI = tc.exportOCI
+			opts.Output.Dir = tc.outputDir
+			opts.Registry.UseInternalRegistry = tc.useInternalRegistry
 
 			var capturedErr error
 			opts.HandleError = func(err error) { capturedErr = err }
@@ -208,8 +117,8 @@ func TestRunDiskDefaultsToInternalRegistry(t *testing.T) {
 				return
 			}
 
-			if *opts.UseInternalRegistry != tc.wantInternal {
-				t.Errorf("UseInternalRegistry = %v, want %v", *opts.UseInternalRegistry, tc.wantInternal)
+			if opts.Registry.UseInternalRegistry != tc.wantInternal {
+				t.Errorf("UseInternalRegistry = %v, want %v", opts.Registry.UseInternalRegistry, tc.wantInternal)
 			}
 		})
 	}

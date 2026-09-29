@@ -8,21 +8,19 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 func TestFinishFlashRendersTerminalFailureBeforeHandlingError(t *testing.T) {
 	format := "json"
 	var capturedErr error
-	h := NewHandler(Options{
-		OutputFormat: &format,
-		HandleError:  func(err error) { capturedErr = err },
-	})
-	resp := &buildapi.FlashResponse{
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}, HandleError: func(err error) { capturedErr = err }})
+	resp := &buildcontract.FlashResponse{
 		Name:    "flash-test",
 		Phase:   phaseFailed,
 		Message: "device rejected image",
-		Notification: &buildapi.NotificationStatus{
+		Notification: &buildcontract.NotificationStatus{
 			State:     automotivev1alpha1.DeliveryFailed,
 			Attempts:  2,
 			LastError: "receiver unavailable",
@@ -47,7 +45,7 @@ func TestFinishFlashRendersTerminalFailureBeforeHandlingError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var rendered buildapi.FlashResponse
+	var rendered buildcontract.FlashResponse
 	if err := json.Unmarshal(out, &rendered); err != nil {
 		t.Fatalf("invalid structured output %q: %v", out, err)
 	}

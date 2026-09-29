@@ -8,19 +8,17 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
 // Options wires query handlers to caller-owned state and helper callbacks.
 type Options struct {
-	ServerURL       *string
-	AuthToken       *string
-	OutputFormat    *string
-	InsecureSkipTLS *bool
-
+	Connection  *commandopts.Connection
+	Output      *commandopts.Output
 	HandleError func(error)
 }
 
@@ -30,8 +28,18 @@ type Handler struct {
 }
 
 // NewHandler creates a query handler.
+func (o Options) withDefaults() Options {
+	if o.Connection == nil {
+		o.Connection = &commandopts.Connection{}
+	}
+	if o.Output == nil {
+		o.Output = &commandopts.Output{}
+	}
+	return o
+}
+
 func NewHandler(opts Options) *Handler {
-	return &Handler{opts: opts}
+	return &Handler{opts: opts.withDefaults()}
 }
 
 func (h *Handler) handleError(err error) {
@@ -43,7 +51,7 @@ func (h *Handler) handleError(err error) {
 }
 
 func (h *Handler) resolveOutputFormat() (string, error) {
-	return common.ResolveOutputFormat(h.opts.OutputFormat)
+	return common.ResolveOutputFormat(&h.opts.Output.Format)
 }
 
 // RunList handles `caib image list`.
@@ -55,20 +63,16 @@ func (h *Handler) RunList(_ *cobra.Command, _ []string) {
 	}
 
 	ctx := context.Background()
-	if h.opts.ServerURL == nil || strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
 	}
-	if h.opts.InsecureSkipTLS == nil {
-		h.handleError(fmt.Errorf("internal error: --insecure option is not configured"))
-		return
-	}
 
-	serverURL := strings.TrimSpace(*h.opts.ServerURL)
-	insecureSkipTLS := *h.opts.InsecureSkipTLS
+	serverURL := strings.TrimSpace(h.opts.Connection.ServerURL)
+	insecureSkipTLS := h.opts.Connection.InsecureSkipTLS
 
-	var items []buildapitypes.BuildListItem
-	err = common.ExecuteWithReauth(serverURL, h.opts.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
+	var items []buildcontract.BuildListItem
+	err = common.ExecuteWithReauth(serverURL, &h.opts.Connection.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
 		var listErr error
 		items, listErr = api.ListBuilds(ctx)
 		return listErr
@@ -82,9 +86,9 @@ func (h *Handler) RunList(_ *cobra.Command, _ []string) {
 }
 
 // renderList formats and prints a list of builds according to the configured output format.
-func (h *Handler) renderList(format string, items []buildapitypes.BuildListItem) {
+func (h *Handler) renderList(format string, items []buildcontract.BuildListItem) {
 	if items == nil {
-		items = []buildapitypes.BuildListItem{}
+		items = []buildcontract.BuildListItem{}
 	}
 	h.renderFormatted(format, items, func() error {
 		if len(items) == 0 {
@@ -106,19 +110,15 @@ func (h *Handler) RunShow(_ *cobra.Command, args []string) {
 	ctx := context.Background()
 	showBuildName := args[0]
 
-	if h.opts.ServerURL == nil || strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
 	}
-	if h.opts.InsecureSkipTLS == nil {
-		h.handleError(fmt.Errorf("internal error: --insecure option is not configured"))
-		return
-	}
-	serverURL := strings.TrimSpace(*h.opts.ServerURL)
-	insecureSkipTLS := *h.opts.InsecureSkipTLS
+	serverURL := strings.TrimSpace(h.opts.Connection.ServerURL)
+	insecureSkipTLS := h.opts.Connection.InsecureSkipTLS
 
-	var st *buildapitypes.BuildResponse
-	err = common.ExecuteWithReauth(serverURL, h.opts.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
+	var st *buildcontract.BuildResponse
+	err = common.ExecuteWithReauth(serverURL, &h.opts.Connection.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
 		var getErr error
 		st, getErr = api.GetBuild(ctx, showBuildName)
 		return getErr
@@ -130,7 +130,7 @@ func (h *Handler) RunShow(_ *cobra.Command, args []string) {
 
 	// Backward-compatible fallback for older API servers that do not yet include response parameters.
 	if st.Parameters == nil {
-		fallbackErr := common.ExecuteWithReauth(serverURL, h.opts.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
+		fallbackErr := common.ExecuteWithReauth(serverURL, &h.opts.Connection.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
 			tpl, tplErr := api.GetBuildTemplate(ctx, showBuildName)
 			if tplErr != nil {
 				return tplErr
@@ -153,7 +153,7 @@ func (h *Handler) RunShow(_ *cobra.Command, args []string) {
 }
 
 // renderShow formats and prints a single build response according to the configured output format.
-func (h *Handler) renderShow(format string, st *buildapitypes.BuildResponse) {
+func (h *Handler) renderShow(format string, st *buildcontract.BuildResponse) {
 	h.renderFormatted(format, st, func() error { return printBuildDetails(st) })
 }
 
@@ -161,12 +161,12 @@ func (h *Handler) renderFormatted(format string, data any, tablePrinter func() e
 	common.RenderFormatted(format, data, tablePrinter, h.handleError)
 }
 
-func buildParametersFromTemplate(tpl *buildapitypes.BuildTemplateResponse) *buildapitypes.BuildParameters {
+func buildParametersFromTemplate(tpl *buildcontract.BuildTemplateResponse) *buildcontract.BuildParameters {
 	if tpl == nil {
 		return nil
 	}
 
-	params := &buildapitypes.BuildParameters{
+	params := &buildcontract.BuildParameters{
 		Architecture:           string(tpl.Architecture),
 		Distro:                 string(tpl.Distro),
 		Target:                 string(tpl.Target),
@@ -203,7 +203,7 @@ func buildParametersFromTemplate(tpl *buildapitypes.BuildTemplateResponse) *buil
 	return params
 }
 
-func printBuildList(items []buildapitypes.BuildListItem) error {
+func printBuildList(items []buildcontract.BuildListItem) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
 	if _, err := fmt.Fprintln(w, "NAME\tSTATUS\tNOTIFICATION\tAGE\tREQUESTED BY\tARTIFACT"); err != nil {
@@ -230,7 +230,7 @@ func printBuildList(items []buildapitypes.BuildListItem) error {
 	return w.Flush()
 }
 
-func printBuildDetails(st *buildapitypes.BuildResponse) error {
+func printBuildDetails(st *buildcontract.BuildResponse) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
 	rows := [][2]string{
@@ -289,7 +289,7 @@ func printBuildDetails(st *buildapitypes.BuildResponse) error {
 	return w.Flush()
 }
 
-func notificationState(status *buildapitypes.NotificationStatus) string {
+func notificationState(status *buildcontract.NotificationStatus) string {
 	if status == nil {
 		return "-"
 	}

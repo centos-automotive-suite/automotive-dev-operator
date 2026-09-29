@@ -192,7 +192,7 @@ func TestHermetoOperatorConfigReachesPipelineRun(t *testing.T) {
 				if resolved.HermetoPrefetch != tc.enabled || resolved.HermetoImage != config.Spec.GetImages().GetHermetoImage() {
 					t.Fatalf("resolved config lost Hermeto settings: %+v", resolved)
 				}
-				if err := r.createBuildTaskRun(ctx, &ib); err != nil {
+				if err := r.createBuildPipelineRun(ctx, &ib); err != nil {
 					t.Fatal(err)
 				}
 				var runs tektonv1.PipelineRunList

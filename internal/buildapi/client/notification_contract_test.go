@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 type contractTransport func(*http.Request) (*http.Response, error)

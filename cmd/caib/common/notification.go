@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
-func LoadBuildCallback(callbackURL, secretFile string) (*buildapi.BuildCallback, error) {
+func LoadBuildCallback(callbackURL, secretFile string) (*buildcontract.BuildCallback, error) {
 	hasURL := strings.TrimSpace(callbackURL) != ""
 	hasSecret := strings.TrimSpace(secretFile) != ""
 	if hasURL != hasSecret {
@@ -25,7 +25,7 @@ func LoadBuildCallback(callbackURL, secretFile string) (*buildapi.BuildCallback,
 	if len(secret) < 32 || len(secret) > 4096 {
 		return nil, fmt.Errorf("callback secret file must contain 32 to 4096 bytes")
 	}
-	return &buildapi.BuildCallback{
+	return &buildcontract.BuildCallback{
 		URL:    callbackURL,
 		Secret: base64.StdEncoding.EncodeToString(secret),
 	}, nil

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
@@ -70,7 +71,7 @@ var _ = Describe("Workspace API", func() {
 		})
 
 		It("should reject request with missing name", func() {
-			body, _ := json.Marshal(WorkspaceRequest{})
+			body, _ := json.Marshal(buildcontract.WorkspaceRequest{})
 			req, err := http.NewRequest("POST", "/v1/workspaces", bytes.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "application/json")
@@ -132,7 +133,7 @@ var _ = Describe("Workspace API", func() {
 
 	Context("Exec Workspace", func() {
 		It("should reject request with missing command", func() {
-			body, _ := json.Marshal(WorkspaceExecRequest{})
+			body, _ := json.Marshal(buildcontract.WorkspaceExecRequest{})
 			req, err := http.NewRequest("POST", "/v1/workspaces/my-app/exec", bytes.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "application/json")
@@ -146,7 +147,7 @@ var _ = Describe("Workspace API", func() {
 
 	Context("Deploy Workspace", func() {
 		It("should reject request with missing fields", func() {
-			body, _ := json.Marshal(WorkspaceDeployRequest{})
+			body, _ := json.Marshal(buildcontract.WorkspaceDeployRequest{})
 			req, err := http.NewRequest("POST", "/v1/workspaces/my-app/deploy", bytes.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "application/json")

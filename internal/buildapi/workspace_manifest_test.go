@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,9 +27,9 @@ qm:
       - path: /etc/qm.conf
         source_path: //workspace/src/qm.conf
 `
-	got, refs, err := applyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
+	got, refs, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
 	if err != nil {
-		t.Fatalf("applyWorkspaceManifest: %v", err)
+		t.Fatalf("workspacemanifest.ApplyWorkspaceManifest: %v", err)
 	}
 
 	var parsed map[string]any
@@ -62,7 +63,7 @@ qm:
 	if len(refs) != 3 {
 		t.Fatalf("hydrate refs = %d, want 3: %+v", len(refs), refs)
 	}
-	want := map[WorkspaceHydrateRef]bool{
+	want := map[workspacemanifest.WorkspaceHydrateRef]bool{
 		{Kind: hydrateKindPath, AbsPath: "/workspace/src/build/app", RelPath: "src/build/app"}:         true,
 		{Kind: hydrateKindGlob, AbsPath: "/workspace/src/etc/**/*.conf", RelPath: "src/etc/**/*.conf"}: true,
 		{Kind: hydrateKindPath, AbsPath: "/workspace/src/qm.conf", RelPath: "src/qm.conf"}:             true,
@@ -80,9 +81,9 @@ qm:
 
 func TestApplyWorkspaceManifest_NoOpPreservesOriginal(t *testing.T) {
 	manifest := "name: simple\ncontent:\n  add_files:\n    - source_path: local-bin\n      path: /usr/bin/local-bin\n"
-	got, refs, err := applyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
+	got, refs, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
 	if err != nil {
-		t.Fatalf("applyWorkspaceManifest: %v", err)
+		t.Fatalf("workspacemanifest.ApplyWorkspaceManifest: %v", err)
 	}
 	if got != manifest {
 		t.Errorf("expected original YAML to be preserved, got:\n%s", got)
@@ -94,9 +95,9 @@ func TestApplyWorkspaceManifest_NoOpPreservesOriginal(t *testing.T) {
 
 func TestApplyWorkspaceManifest_IgnoresNonWorkspaceFileURLs(t *testing.T) {
 	manifest := "content:\n  repos:\n    - id: oci\n      baseurl: file:///extra-repos/oci-repo\n"
-	got, refs, err := applyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
+	got, refs, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
 	if err != nil {
-		t.Fatalf("applyWorkspaceManifest: %v", err)
+		t.Fatalf("workspacemanifest.ApplyWorkspaceManifest: %v", err)
 	}
 	if got != manifest {
 		t.Errorf("oci file:// URL should be left alone, got:\n%s", got)
@@ -108,7 +109,7 @@ func TestApplyWorkspaceManifest_IgnoresNonWorkspaceFileURLs(t *testing.T) {
 
 func TestApplyWorkspaceManifest_FileURLRequiresHTTP(t *testing.T) {
 	manifest := "content:\n  repos:\n    - baseurl: file:///workspace/src/bin\n"
-	_, _, err := applyWorkspaceManifest(manifest, "", true)
+	_, _, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "", true)
 	if err == nil {
 		t.Fatal("expected error when file:// workspace URL has no HTTP server")
 	}
@@ -119,9 +120,9 @@ func TestApplyWorkspaceManifest_FileURLRequiresHTTP(t *testing.T) {
 
 func TestExtractWorkspaceAddFiles_RepoOnlyLeavesFileURL(t *testing.T) {
 	manifest := "content:\n  repos:\n    - id: local\n      baseurl: file:///workspace/src/bin\n"
-	got, refs, err := ExtractWorkspaceAddFiles(manifest)
+	got, refs, err := workspacemanifest.ExtractWorkspaceAddFiles(manifest)
 	if err != nil {
-		t.Fatalf("ExtractWorkspaceAddFiles: %v", err)
+		t.Fatalf("workspacemanifest.ExtractWorkspaceAddFiles: %v", err)
 	}
 	if got != manifest {
 		t.Errorf("repo-only extract should preserve original YAML, got:\n%s", got)
@@ -141,9 +142,9 @@ content:
     - path: /usr/bin/app
       source_path: /workspace/src/build/app
 `
-	got, refs, err := ExtractWorkspaceAddFiles(manifest)
+	got, refs, err := workspacemanifest.ExtractWorkspaceAddFiles(manifest)
 	if err != nil {
-		t.Fatalf("ExtractWorkspaceAddFiles: %v", err)
+		t.Fatalf("workspacemanifest.ExtractWorkspaceAddFiles: %v", err)
 	}
 	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(got), &parsed); err != nil {
@@ -165,7 +166,7 @@ content:
 
 func TestApplyWorkspaceManifest_AddFilesRequireRunningWorkspace(t *testing.T) {
 	manifest := "content:\n  add_files:\n    - path: /usr/bin/app\n      source_path: /workspace/src/app\n"
-	_, _, err := applyWorkspaceManifest(manifest, "http://10.0.0.5:9090", false)
+	_, _, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", false)
 	if err == nil {
 		t.Fatal("expected error when add_files workspace paths and workspace is not running")
 	}
@@ -176,9 +177,9 @@ func TestApplyWorkspaceManifest_AddFilesRequireRunningWorkspace(t *testing.T) {
 
 func TestApplyWorkspaceManifest_PathTraversalNotRewritten(t *testing.T) {
 	manifest := "content:\n  repos:\n    - baseurl: file:///workspace/../etc/passwd\n"
-	got, refs, err := applyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
+	got, refs, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
 	if err != nil {
-		t.Fatalf("applyWorkspaceManifest: %v", err)
+		t.Fatalf("workspacemanifest.ApplyWorkspaceManifest: %v", err)
 	}
 	if got != manifest {
 		t.Errorf("traversal URL should be left alone, got:\n%s", got)
@@ -190,9 +191,9 @@ func TestApplyWorkspaceManifest_PathTraversalNotRewritten(t *testing.T) {
 
 func TestApplyWorkspaceManifest_WorkspaceRootRepoURL(t *testing.T) {
 	manifest := "content:\n  repos:\n    - baseurl: file:///workspace\n"
-	got, refs, err := applyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
+	got, refs, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
 	if err != nil {
-		t.Fatalf("applyWorkspaceManifest: %v", err)
+		t.Fatalf("workspacemanifest.ApplyWorkspaceManifest: %v", err)
 	}
 	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(got), &parsed); err != nil {
@@ -209,9 +210,9 @@ func TestApplyWorkspaceManifest_WorkspaceRootRepoURL(t *testing.T) {
 
 func TestApplyWorkspaceManifest_AddFilesURL(t *testing.T) {
 	manifest := "content:\n  add_files:\n    - path: /usr/bin/app\n      url: file:///workspace/src/app\n"
-	got, refs, err := applyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
+	got, refs, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
 	if err != nil {
-		t.Fatalf("applyWorkspaceManifest: %v", err)
+		t.Fatalf("workspacemanifest.ApplyWorkspaceManifest: %v", err)
 	}
 	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(got), &parsed); err != nil {
@@ -242,9 +243,9 @@ func TestWorkspaceRelPath(t *testing.T) {
 		{"/workspace/../etc/passwd", "", "", false},
 	}
 	for _, tt := range tests {
-		rel, abs, ok := workspaceRelPath(tt.in)
+		rel, abs, ok := workspacemanifest.WorkspaceRelPath(tt.in)
 		if ok != tt.wantOK || rel != tt.wantRel || abs != tt.wantAbs {
-			t.Errorf("workspaceRelPath(%q) = (%q, %q, %v), want (%q, %q, %v)",
+			t.Errorf("workspacemanifest.WorkspaceRelPath(%q) = (%q, %q, %v), want (%q, %q, %v)",
 				tt.in, rel, abs, ok, tt.wantRel, tt.wantAbs, tt.wantOK)
 		}
 	}
@@ -304,7 +305,7 @@ func TestShouldSelfCompleteUploads(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ShouldSelfCompleteUploads(tt.ann); got != tt.want {
+			if got := workspacemanifest.ShouldSelfCompleteUploads(tt.ann); got != tt.want {
 				t.Errorf("shouldSelfCompleteUploads() = %v, want %v", got, tt.want)
 			}
 		})
