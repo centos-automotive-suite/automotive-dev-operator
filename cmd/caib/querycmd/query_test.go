@@ -8,7 +8,8 @@ import (
 	"testing"
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,12 +19,12 @@ const (
 	testFormatTable = "table"
 )
 
-func sampleItems() []buildapitypes.BuildListItem {
-	return []buildapitypes.BuildListItem{
+func sampleItems() []buildcontract.BuildListItem {
+	return []buildcontract.BuildListItem{
 		{
 			Name:           "build-1",
 			Phase:          "Succeeded",
-			Notification:   &buildapitypes.NotificationStatus{State: api.DeliveryDelivered, Attempts: 1},
+			Notification:   &buildcontract.NotificationStatus{State: api.DeliveryDelivered, Attempts: 1},
 			RequestedBy:    "alice",
 			CreatedAt:      "2025-01-01T00:00:00Z",
 			ContainerImage: "quay.io/org/img:v1",
@@ -93,10 +94,7 @@ func TestFormatOutputJSON_List(t *testing.T) {
 	items := sampleItems()
 
 	var lastErr error
-	h := NewHandler(Options{
-		OutputFormat: &format,
-		HandleError:  func(err error) { lastErr = err },
-	})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}, HandleError: func(err error) { lastErr = err }})
 
 	out := captureStdout(t, func() {
 		h.renderList(format, items)
@@ -106,7 +104,7 @@ func TestFormatOutputJSON_List(t *testing.T) {
 		t.Fatalf("unexpected error: %v", lastErr)
 	}
 
-	var parsed []buildapitypes.BuildListItem
+	var parsed []buildcontract.BuildListItem
 	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("output is not valid JSON: %v\noutput: %s", err, out)
 	}
@@ -123,10 +121,7 @@ func TestFormatOutputYAML_List(t *testing.T) {
 	items := sampleItems()
 
 	var lastErr error
-	h := NewHandler(Options{
-		OutputFormat: &format,
-		HandleError:  func(err error) { lastErr = err },
-	})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}, HandleError: func(err error) { lastErr = err }})
 
 	out := captureStdout(t, func() {
 		h.renderList(format, items)
@@ -150,10 +145,7 @@ func TestFormatOutputTable_List(t *testing.T) {
 	items := sampleItems()
 
 	var lastErr error
-	h := NewHandler(Options{
-		OutputFormat: &format,
-		HandleError:  func(err error) { lastErr = err },
-	})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}, HandleError: func(err error) { lastErr = err }})
 
 	out := captureStdout(t, func() {
 		h.renderList(format, items)
@@ -172,10 +164,7 @@ func TestFormatOutputNil_DefaultsToTable(t *testing.T) {
 	items := sampleItems()
 
 	var lastErr error
-	h := NewHandler(Options{
-		OutputFormat: nil,
-		HandleError:  func(err error) { lastErr = err },
-	})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: ""}, HandleError: func(err error) { lastErr = err }})
 
 	out := captureStdout(t, func() {
 		h.renderList(testFormatTable, items)
@@ -195,10 +184,7 @@ func TestFormatOutputInvalid_ReturnsError(t *testing.T) {
 	items := sampleItems()
 
 	var lastErr error
-	h := NewHandler(Options{
-		OutputFormat: &format,
-		HandleError:  func(err error) { lastErr = err },
-	})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}, HandleError: func(err error) { lastErr = err }})
 
 	captureStdout(t, func() {
 		h.renderList(format, items)
@@ -214,16 +200,13 @@ func TestFormatOutputInvalid_ReturnsError(t *testing.T) {
 
 func TestFormatOutputJSON_Show(t *testing.T) {
 	format := testFormatJSON
-	resp := &buildapitypes.BuildResponse{
+	resp := &buildcontract.BuildResponse{
 		Name:  "test-build",
 		Phase: "Succeeded",
 	}
 
 	var lastErr error
-	h := NewHandler(Options{
-		OutputFormat: &format,
-		HandleError:  func(err error) { lastErr = err },
-	})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}, HandleError: func(err error) { lastErr = err }})
 
 	out := captureStdout(t, func() {
 		h.renderShow(format, resp)
@@ -233,7 +216,7 @@ func TestFormatOutputJSON_Show(t *testing.T) {
 		t.Fatalf("unexpected error: %v", lastErr)
 	}
 
-	var parsed buildapitypes.BuildResponse
+	var parsed buildcontract.BuildResponse
 	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("output is not valid JSON: %v\noutput: %s", err, out)
 	}
@@ -244,16 +227,13 @@ func TestFormatOutputJSON_Show(t *testing.T) {
 
 func TestFormatOutputYAML_Show(t *testing.T) {
 	format := testFormatYAML
-	resp := &buildapitypes.BuildResponse{
+	resp := &buildcontract.BuildResponse{
 		Name:  "test-build",
 		Phase: "Succeeded",
 	}
 
 	var lastErr error
-	h := NewHandler(Options{
-		OutputFormat: &format,
-		HandleError:  func(err error) { lastErr = err },
-	})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}, HandleError: func(err error) { lastErr = err }})
 
 	out := captureStdout(t, func() {
 		h.renderShow(format, resp)
@@ -273,7 +253,7 @@ func TestFormatOutputYAML_Show(t *testing.T) {
 }
 
 func TestPrintBuildDetails_TraceID(t *testing.T) {
-	resp := &buildapitypes.BuildResponse{
+	resp := &buildcontract.BuildResponse{
 		Name:    "test-build",
 		Phase:   "Succeeded",
 		TraceID: "a39035cd440a23aaf86986f35d468674",
@@ -292,9 +272,9 @@ func TestPrintBuildDetails_TraceID(t *testing.T) {
 }
 
 func TestPrintBuildDetails_ArchitectureSource(t *testing.T) {
-	resp := &buildapitypes.BuildResponse{
+	resp := &buildcontract.BuildResponse{
 		Name: "git-build", Phase: "Completed", ArchitectureSource: "client-fallback",
-		Parameters: &buildapitypes.BuildParameters{Architecture: "amd64"},
+		Parameters: &buildcontract.BuildParameters{Architecture: "amd64"},
 	}
 	out := captureStdout(t, func() { _ = printBuildDetails(resp) })
 	for _, want := range []string{"Architecture", "amd64", "Architecture Source", "client-fallback"} {
@@ -305,9 +285,9 @@ func TestPrintBuildDetails_ArchitectureSource(t *testing.T) {
 }
 
 func TestPrintBuildDetails_NotificationFailure(t *testing.T) {
-	resp := &buildapitypes.BuildResponse{
+	resp := &buildcontract.BuildResponse{
 		Name: "test-build", Phase: "Completed", ExternalID: "pipeline-42",
-		Notification: &buildapitypes.NotificationStatus{State: api.DeliveryFailed, Attempts: 3, LastError: "receiver rejected request"},
+		Notification: &buildcontract.NotificationStatus{State: api.DeliveryFailed, Attempts: 3, LastError: "receiver rejected request"},
 	}
 	out := captureStdout(t, func() { _ = printBuildDetails(resp) })
 	for _, want := range []string{"External ID", "pipeline-42", "Notification", "Failed", "Notification Attempts", "3", "Notification Error", "receiver rejected request"} {
@@ -318,7 +298,7 @@ func TestPrintBuildDetails_NotificationFailure(t *testing.T) {
 }
 
 func TestPrintBuildDetails_TraceIDEmpty(t *testing.T) {
-	resp := &buildapitypes.BuildResponse{
+	resp := &buildcontract.BuildResponse{
 		Name:  "test-build",
 		Phase: "Running",
 	}

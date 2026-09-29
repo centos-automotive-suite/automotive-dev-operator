@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +35,7 @@ func TestApplyS3Options_NoBucket(t *testing.T) {
 	opts := newTestDiskOpts()
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	if err := h.applyS3Options(nil, &req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,18 +49,18 @@ func TestApplyS3Options_NoBucket(t *testing.T) {
 
 func TestApplyS3Options_InlineCredentials(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
-	*opts.S3Prefix = "builds/test"
-	*opts.S3Region = "eu-west-1"
-	*opts.S3Endpoint = "https://minio.local"
-	*opts.S3AccessKeyID = testS3AccessKey
-	*opts.S3SecretAccessKey = "SECRET"
-	*opts.S3Insecure = true
+	opts.S3.Bucket = testS3Bucket
+	opts.S3.Prefix = "builds/test"
+	opts.S3.Region = "eu-west-1"
+	opts.S3.Endpoint = "https://minio.local"
+	opts.S3.AccessKeyID = testS3AccessKey
+	opts.S3.SecretAccessKey = "SECRET"
+	opts.S3.Insecure = true
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	if err := h.applyS3Options(nil, &req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,12 +95,12 @@ func TestApplyS3Options_InlineCredentials(t *testing.T) {
 
 func TestApplyS3Options_EnvVarFallback(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
+	opts.S3.Bucket = testS3Bucket
 	t.Setenv("AWS_ACCESS_KEY_ID", "ENV_AKID")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	if err := h.applyS3Options(nil, &req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,14 +117,14 @@ func TestApplyS3Options_EnvVarFallback(t *testing.T) {
 
 func TestApplyS3Options_ConflictingCredentialSourcesError(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
-	*opts.S3AccessKeyID = "FLAG_AKID"
-	*opts.S3SecretAccessKey = "FLAG_SECRET"
+	opts.S3.Bucket = testS3Bucket
+	opts.S3.AccessKeyID = "FLAG_AKID"
+	opts.S3.SecretAccessKey = "FLAG_SECRET"
 	t.Setenv("AWS_ACCESS_KEY_ID", "ENV_AKID")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error when both flags and env vars provide credentials")
@@ -133,13 +133,13 @@ func TestApplyS3Options_ConflictingCredentialSourcesError(t *testing.T) {
 
 func TestApplyS3Options_SecretName(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
-	*opts.S3CredentialsSecret = "shared-s3-creds"
+	opts.S3.Bucket = testS3Bucket
+	opts.S3.CredentialsSecret = "shared-s3-creds"
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	if err := h.applyS3Options(nil, &req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -153,13 +153,13 @@ func TestApplyS3Options_SecretName(t *testing.T) {
 
 func TestApplyS3Options_PartialCredentialsError(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
-	*opts.S3AccessKeyID = "AKID"
+	opts.S3.Bucket = testS3Bucket
+	opts.S3.AccessKeyID = "AKID"
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error for partial credentials")
@@ -168,8 +168,8 @@ func TestApplyS3Options_PartialCredentialsError(t *testing.T) {
 
 func TestValidateDevExportFlags_OutputWithS3Bucket(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.OutputDir = "/tmp/output"
-	*opts.S3Bucket = "my-bucket"
+	opts.Output.Dir = "/tmp/output"
+	opts.S3.Bucket = "my-bucket"
 	h := newS3TestHandler(opts)
 
 	if err := h.validateDevExportFlags("manifest.aib.yml"); err != nil {
@@ -179,7 +179,7 @@ func TestValidateDevExportFlags_OutputWithS3Bucket(t *testing.T) {
 
 func TestValidateDevExportFlags_OutputWithoutPushOrS3(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.OutputDir = "/tmp/output"
+	opts.Output.Dir = "/tmp/output"
 	h := newS3TestHandler(opts)
 
 	if err := h.validateDevExportFlags("manifest.aib.yml"); err == nil {
@@ -189,8 +189,8 @@ func TestValidateDevExportFlags_OutputWithoutPushOrS3(t *testing.T) {
 
 func TestValidateDevExportFlags_InternalRegistryConflictsWithPush(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.UseInternalRegistry = true
-	*opts.ExportOCI = "quay.io/org/image:v1"
+	opts.Registry.UseInternalRegistry = true
+	opts.Registry.ExportOCI = "quay.io/org/image:v1"
 	h := newS3TestHandler(opts)
 
 	if err := h.validateDevExportFlags("manifest.aib.yml"); err == nil {
@@ -200,12 +200,12 @@ func TestValidateDevExportFlags_InternalRegistryConflictsWithPush(t *testing.T) 
 
 func TestApplyS3Options_ExplicitAccessKeyOnlyError(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
-	*opts.S3AccessKeyID = "EXPLICIT_AKID"
+	opts.S3.Bucket = testS3Bucket
+	opts.S3.AccessKeyID = "EXPLICIT_AKID"
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error when only --s3-access-key-id is set (should not combine with env)")
@@ -214,12 +214,12 @@ func TestApplyS3Options_ExplicitAccessKeyOnlyError(t *testing.T) {
 
 func TestApplyS3Options_ExplicitSecretKeyOnlyError(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
-	*opts.S3SecretAccessKey = "EXPLICIT_SECRET"
+	opts.S3.Bucket = testS3Bucket
+	opts.S3.SecretAccessKey = "EXPLICIT_SECRET"
 	t.Setenv("AWS_ACCESS_KEY_ID", "ENV_AKID")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error when only --s3-secret-access-key is set (should not combine with env)")
@@ -228,12 +228,12 @@ func TestApplyS3Options_ExplicitSecretKeyOnlyError(t *testing.T) {
 
 func TestApplyS3Options_AmbientAccessKeyOnlyError(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
+	opts.S3.Bucket = testS3Bucket
 	t.Setenv("AWS_ACCESS_KEY_ID", "ENV_AKID")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error when only AWS_ACCESS_KEY_ID is set in env")
@@ -242,12 +242,12 @@ func TestApplyS3Options_AmbientAccessKeyOnlyError(t *testing.T) {
 
 func TestApplyS3Options_AmbientSecretKeyOnlyError(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
+	opts.S3.Bucket = testS3Bucket
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error when only AWS_SECRET_ACCESS_KEY is set in env")
@@ -256,12 +256,12 @@ func TestApplyS3Options_AmbientSecretKeyOnlyError(t *testing.T) {
 
 func TestApplyS3Options_NoCredentialsAllowed(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
+	opts.S3.Bucket = testS3Bucket
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	if err := h.applyS3Options(nil, &req); err != nil {
 		t.Fatalf("expected no error for IAM-based auth, got: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestApplyS3Options_ConfigFileDefaults(t *testing.T) {
 	}
 
 	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
+		var req buildcontract.BuildRequest
 		if err := h.applyS3Options(nil, &req); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -313,12 +313,12 @@ func TestApplyS3Options_ConfigFileDefaults(t *testing.T) {
 
 func TestApplyS3Options_CLIFlagsOverrideConfig(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3FlagBucket
-	*opts.S3Prefix = "flag-prefix/"
-	*opts.S3Endpoint = "https://flag-minio.local"
-	*opts.S3Region = "ap-southeast-1"
-	*opts.S3CredentialsSecret = "flag-secret"
-	*opts.S3Insecure = true
+	opts.S3.Bucket = testS3FlagBucket
+	opts.S3.Prefix = "flag-prefix/"
+	opts.S3.Endpoint = "https://flag-minio.local"
+	opts.S3.Region = "ap-southeast-1"
+	opts.S3.CredentialsSecret = "flag-secret"
+	opts.S3.Insecure = true
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
@@ -333,7 +333,7 @@ func TestApplyS3Options_CLIFlagsOverrideConfig(t *testing.T) {
 	}
 
 	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
+		var req buildcontract.BuildRequest
 		if err := h.applyS3Options(nil, &req); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -360,14 +360,14 @@ func TestApplyS3Options_CLIFlagsOverrideConfig(t *testing.T) {
 
 func TestApplyS3Options_ExplicitInsecureFalseOverridesConfig(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = "test-bucket"
-	*opts.S3Insecure = false
+	opts.S3.Bucket = "test-bucket"
+	opts.S3.Insecure = false
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	cmd := &cobra.Command{}
-	cmd.Flags().BoolVar(opts.S3Insecure, "s3-insecure", false, "")
+	cmd.Flags().BoolVar(&opts.S3.Insecure, "s3-insecure", false, "")
 	_ = cmd.Flags().Set("s3-insecure", "false")
 
 	cfg := &config.S3Config{
@@ -376,7 +376,7 @@ func TestApplyS3Options_ExplicitInsecureFalseOverridesConfig(t *testing.T) {
 	}
 
 	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
+		var req buildcontract.BuildRequest
 		if err := h.applyS3Options(cmd, &req); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -388,7 +388,7 @@ func TestApplyS3Options_ExplicitInsecureFalseOverridesConfig(t *testing.T) {
 
 func TestApplyS3Options_ConfigBucketWithFlagOverrides(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Region = "us-west-2"
+	opts.S3.Region = "us-west-2"
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
@@ -401,7 +401,7 @@ func TestApplyS3Options_ConfigBucketWithFlagOverrides(t *testing.T) {
 	}
 
 	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
+		var req buildcontract.BuildRequest
 		if err := h.applyS3Options(nil, &req); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -432,7 +432,7 @@ func TestApplyS3Options_EnvVarsOverrideConfigCredentials(t *testing.T) {
 	}
 
 	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
+		var req buildcontract.BuildRequest
 		if err := h.applyS3Options(nil, &req); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -450,7 +450,7 @@ func TestApplyS3Options_EnvVarsOverrideConfigCredentials(t *testing.T) {
 
 func TestApplyS3Options_ConfigReadError(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
+	opts.S3.Bucket = testS3Bucket
 	h := newS3TestHandler(opts)
 
 	orig := s3DefaultsFn
@@ -459,7 +459,7 @@ func TestApplyS3Options_ConfigReadError(t *testing.T) {
 	}
 	defer func() { s3DefaultsFn = orig }()
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error from malformed config")
@@ -474,7 +474,7 @@ func TestApplyS3Options_NoBucketWithConfigNil(t *testing.T) {
 	h := newS3TestHandler(opts)
 
 	withS3Defaults(nil, func() {
-		var req buildapitypes.BuildRequest
+		var req buildcontract.BuildRequest
 		if err := h.applyS3Options(nil, &req); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -486,11 +486,11 @@ func TestApplyS3Options_NoBucketWithConfigNil(t *testing.T) {
 
 func TestApplyS3Options_ExplicitEmptyBucketOverridesConfig(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = ""
+	opts.S3.Bucket = ""
 	h := newS3TestHandler(opts)
 
 	cmd := &cobra.Command{}
-	cmd.Flags().StringVar(opts.S3Bucket, "s3-bucket", "", "")
+	cmd.Flags().StringVar(&opts.S3.Bucket, "s3-bucket", "", "")
 	_ = cmd.Flags().Set("s3-bucket", "")
 
 	cfg := &config.S3Config{
@@ -499,7 +499,7 @@ func TestApplyS3Options_ExplicitEmptyBucketOverridesConfig(t *testing.T) {
 	}
 
 	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
+		var req buildcontract.BuildRequest
 		if err := h.applyS3Options(cmd, &req); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -511,19 +511,19 @@ func TestApplyS3Options_ExplicitEmptyBucketOverridesConfig(t *testing.T) {
 
 func TestApplyS3Options_ExplicitEmptyConnectionParamsOverrideConfig(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3FlagBucket
-	*opts.S3Prefix = ""
-	*opts.S3Endpoint = ""
-	*opts.S3Region = ""
+	opts.S3.Bucket = testS3FlagBucket
+	opts.S3.Prefix = ""
+	opts.S3.Endpoint = ""
+	opts.S3.Region = ""
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
 
 	cmd := &cobra.Command{}
-	cmd.Flags().StringVar(opts.S3Bucket, "s3-bucket", "", "")
-	cmd.Flags().StringVar(opts.S3Prefix, "s3-prefix", "", "")
-	cmd.Flags().StringVar(opts.S3Endpoint, "s3-endpoint", "", "")
-	cmd.Flags().StringVar(opts.S3Region, "s3-region", "", "")
+	cmd.Flags().StringVar(&opts.S3.Bucket, "s3-bucket", "", "")
+	cmd.Flags().StringVar(&opts.S3.Prefix, "s3-prefix", "", "")
+	cmd.Flags().StringVar(&opts.S3.Endpoint, "s3-endpoint", "", "")
+	cmd.Flags().StringVar(&opts.S3.Region, "s3-region", "", "")
 	_ = cmd.Flags().Set("s3-bucket", testS3FlagBucket)
 	_ = cmd.Flags().Set("s3-prefix", "")
 	_ = cmd.Flags().Set("s3-endpoint", "")
@@ -537,7 +537,7 @@ func TestApplyS3Options_ExplicitEmptyConnectionParamsOverrideConfig(t *testing.T
 	}
 
 	withS3Defaults(cfg, func() {
-		var req buildapitypes.BuildRequest
+		var req buildcontract.BuildRequest
 		if err := h.applyS3Options(cmd, &req); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -565,7 +565,7 @@ func TestApplyS3Options_MalformedConfigErrorsWhenNoS3Flags(t *testing.T) {
 	}
 	defer func() { s3DefaultsFn = orig }()
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error from malformed config even when no S3 flags are set")
@@ -577,7 +577,7 @@ func TestApplyS3Options_MalformedConfigErrorsWhenNoS3Flags(t *testing.T) {
 
 func TestApplyS3Options_MalformedConfigErrorsWhenS3FlagSet(t *testing.T) {
 	opts := newTestDiskOpts()
-	*opts.S3Bucket = testS3Bucket
+	opts.S3.Bucket = testS3Bucket
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	h := newS3TestHandler(opts)
@@ -588,7 +588,7 @@ func TestApplyS3Options_MalformedConfigErrorsWhenS3FlagSet(t *testing.T) {
 	}
 	defer func() { s3DefaultsFn = orig }()
 
-	var req buildapitypes.BuildRequest
+	var req buildcontract.BuildRequest
 	err := h.applyS3Options(nil, &req)
 	if err == nil {
 		t.Fatal("expected error from malformed config when --s3-bucket is set")

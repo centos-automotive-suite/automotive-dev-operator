@@ -13,11 +13,12 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -41,75 +42,13 @@ var validateFromImageFn = manifestschema.ValidateFromImage
 
 // Options wires build handlers to caller-owned state and helper functions.
 type Options struct {
-	ServerURL              *string
-	Manifest               *string
-	BuildName              *string
-	Distro                 *string
-	Target                 *string
-	Architecture           *string
-	ExportFormat           *string
-	Mode                   *string
-	AutomotiveImageBuilder *string
-	StorageClass           *string
-	OutputDir              *string
-	Timeout                *int
-	WaitForBuild           *bool
-	CustomDefs             *[]string
-	DefineFiles            *[]string
-	AIBExtraArgs           *[]string
-	GitURL                 *string
-	GitRef                 *string
-	GitSecret              *string
-	GitLockfile            *string
-	Lockfile               *string
-	RootPassword           *string
-	ExtraRepos             *[]string
-	LocalRepo              *string
-	Workspace              *string
-	FollowLogs             *bool
-	CompressionAlgo        *string
-	AuthToken              *string
-	ExternalID             *string
-	CallbackURL            *string
-	CallbackSecretFile     *string
-	ContainerPush          *string
-	BuildDiskImage         *bool
-	DiskFormat             *string
-	ExportOCI              *string
-	BuilderImage           *string
-	RegistryAuthFile       *string
-	ContainerRef           *string
-	RebuildBuilder         *bool
-	FlashAfterBuild        *bool
-	JumpstarterClient      *string
-	LeaseDuration          *string
-	LeaseName              *string
-	FlashCmd               *string
-	ExporterSelector       *string
-	LeaseTags              *[]string
-
-	UseInternalRegistry       *bool
-	InternalRegistryImageName *string
-	InternalRegistryTag       *string
-
-	SecureBuild       *bool
-	Reproducible      *bool
-	TaskBundleRef     *string
-	RestoreSourcesRef *string
-	TTL               *string
-
-	S3Bucket            *string
-	S3Prefix            *string
-	S3Region            *string
-	S3Endpoint          *string
-	S3AccessKeyID       *string
-	S3SecretAccessKey   *string
-	S3CredentialsSecret *string
-	S3Insecure          *bool
-
-	InsecureSkipTLS *bool
-	OutputFormat    *string
-
+	Connection  *commandopts.Connection
+	Output      *commandopts.Output
+	Callback    *commandopts.Callback
+	Registry    *commandopts.Registry
+	S3          *commandopts.S3
+	Flash       *commandopts.Flash
+	Build       *commandopts.Build
 	HandleError func(error)
 }
 
@@ -120,8 +59,33 @@ type Handler struct {
 }
 
 // NewHandler creates a build workflow handler.
+func (o Options) withDefaults() Options {
+	if o.Connection == nil {
+		o.Connection = &commandopts.Connection{}
+	}
+	if o.Output == nil {
+		o.Output = &commandopts.Output{}
+	}
+	if o.Callback == nil {
+		o.Callback = &commandopts.Callback{}
+	}
+	if o.Registry == nil {
+		o.Registry = &commandopts.Registry{}
+	}
+	if o.S3 == nil {
+		o.S3 = &commandopts.S3{}
+	}
+	if o.Flash == nil {
+		o.Flash = &commandopts.Flash{}
+	}
+	if o.Build == nil {
+		o.Build = &commandopts.Build{}
+	}
+	return o
+}
+
 func NewHandler(opts Options) *Handler {
-	return &Handler{opts: opts}
+	return &Handler{opts: opts.withDefaults()}
 }
 
 func (h *Handler) handleError(err error) {
@@ -138,13 +102,13 @@ func (h *Handler) supportsColorOutput() bool {
 }
 
 func (h *Handler) isStructuredOutput() bool {
-	return common.IsStructuredFormat(h.opts.OutputFormat)
+	return common.IsStructuredFormat(&h.opts.Output.Format)
 }
 
 // BuildResult is the machine-readable output emitted when --output-format is json or yaml.
 type BuildResult struct {
 	ExternalID              string                            `json:"externalId,omitempty" yaml:"externalId,omitempty"`
-	Notification            *buildapitypes.NotificationStatus `json:"notification,omitempty" yaml:"notification,omitempty"`
+	Notification            *buildcontract.NotificationStatus `json:"notification,omitempty" yaml:"notification,omitempty"`
 	Name                    string                            `json:"name" yaml:"name"`
 	Phase                   string                            `json:"phase" yaml:"phase"`
 	Message                 string                            `json:"message,omitempty" yaml:"message,omitempty"`
@@ -164,27 +128,27 @@ func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command, defaultWait bool) 
 		clilog.SetQuiet(true)
 	}
 	if !cmd.Flags().Changed("wait") {
-		*h.opts.WaitForBuild = defaultWait
+		h.opts.Output.Wait = defaultWait
 	}
 	if !cmd.Flags().Changed("follow") {
-		*h.opts.FollowLogs = false
+		h.opts.Output.FollowLogs = false
 	}
 }
 
 // validateRegistryFlags auto-enables --internal-registry when --output is specified
 // without a push destination, then validates mutual exclusion and output-requires-push.
 func (h *Handler) validateRegistryFlags(pushFlagName, suggestion string) error {
-	if *h.opts.OutputDir != "" && *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
-		*h.opts.UseInternalRegistry = true
+	if h.opts.Output.Dir != "" && h.opts.Registry.ExportOCI == "" && !h.opts.Registry.UseInternalRegistry {
+		h.opts.Registry.UseInternalRegistry = true
 	}
-	if *h.opts.UseInternalRegistry && *h.opts.ExportOCI != "" {
+	if h.opts.Registry.UseInternalRegistry && h.opts.Registry.ExportOCI != "" {
 		return common.NewActionableError(
 			fmt.Errorf("--internal-registry cannot be used with %s", pushFlagName),
 			suggestion,
 		)
 	}
-	if !*h.opts.UseInternalRegistry {
-		if err := common.ValidateOutputRequiresPush(*h.opts.OutputDir, *h.opts.ExportOCI, pushFlagName); err != nil {
+	if !h.opts.Registry.UseInternalRegistry {
+		if err := common.ValidateOutputRequiresPush(h.opts.Output.Dir, h.opts.Registry.ExportOCI, pushFlagName); err != nil {
 			return err
 		}
 	}
@@ -193,21 +157,21 @@ func (h *Handler) validateRegistryFlags(pushFlagName, suggestion string) error {
 
 // validateBootcBuildFlags validates flag combinations for the build command.
 func (h *Handler) validateBootcBuildFlags() error {
-	if strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		return common.ServerURLRequiredError("caib image build --server <server-url>")
 	}
 
-	if *h.opts.OutputDir != "" && !*h.opts.BuildDiskImage {
-		*h.opts.BuildDiskImage = true
+	if h.opts.Output.Dir != "" && !h.opts.Build.BuildDiskImage {
+		h.opts.Build.BuildDiskImage = true
 	}
-	if *h.opts.ExportOCI != "" && !*h.opts.BuildDiskImage {
-		*h.opts.BuildDiskImage = true
+	if h.opts.Registry.ExportOCI != "" && !h.opts.Build.BuildDiskImage {
+		h.opts.Build.BuildDiskImage = true
 	}
-	if *h.opts.FlashAfterBuild && !*h.opts.BuildDiskImage {
-		*h.opts.BuildDiskImage = true
+	if h.opts.Flash.AfterBuild && !h.opts.Build.BuildDiskImage {
+		h.opts.Build.BuildDiskImage = true
 	}
 	if err := h.validateRegistryFlags("--push-disk",
-		fmt.Sprintf("caib image build -m %s --push-disk %s", *h.opts.Manifest, *h.opts.ExportOCI)); err != nil {
+		fmt.Sprintf("caib image build -m %s --push-disk %s", h.opts.Build.Manifest, h.opts.Registry.ExportOCI)); err != nil {
 		return err
 	}
 
@@ -215,7 +179,7 @@ func (h *Handler) validateBootcBuildFlags() error {
 		return err
 	}
 
-	if *h.opts.ContainerPush == "" && !*h.opts.BuildDiskImage && !*h.opts.UseInternalRegistry {
+	if h.opts.Registry.ContainerPush == "" && !h.opts.Build.BuildDiskImage && !h.opts.Registry.UseInternalRegistry {
 		return fmt.Errorf(
 			"--push is required when not building a disk image " +
 				"(use --disk or --output to create a disk image without pushing the container)",
@@ -226,10 +190,10 @@ func (h *Handler) validateBootcBuildFlags() error {
 }
 
 func (h *Handler) validateSecurityFlags() error {
-	if err := common.ValidateReproducibleRequiresSecure(*h.opts.Reproducible, *h.opts.SecureBuild); err != nil {
+	if err := common.ValidateReproducibleRequiresSecure(h.opts.Build.Reproducible, h.opts.Build.SecureBuild); err != nil {
 		return err
 	}
-	if *h.opts.SecureBuild && *h.opts.UseInternalRegistry {
+	if h.opts.Build.SecureBuild && h.opts.Registry.UseInternalRegistry {
 		return common.NewActionableError(
 			fmt.Errorf("--secure cannot be used with --internal-registry (the internal registry does not support required OCI referrers)"),
 			"push to a registry that supports OCI referrers with --push or --push-disk",
@@ -244,22 +208,22 @@ func (h *Handler) validateSecurityFlags() error {
 // Credentials are also resolved for --internal-registry without --push when the
 // user provides them (env vars or --registry-auth-file), enabling authenticated
 // pulls of private source images during the build.
-func (h *Handler) applyRegistryCredentialsToRequest(req *buildapitypes.BuildRequest) error {
-	if *h.opts.UseInternalRegistry {
+func (h *Handler) applyRegistryCredentialsToRequest(req *buildcontract.BuildRequest) error {
+	if h.opts.Registry.UseInternalRegistry {
 		req.UseInternalRegistry = true
-		req.InternalRegistryImageName = *h.opts.InternalRegistryImageName
-		req.InternalRegistryTag = *h.opts.InternalRegistryTag
-		if *h.opts.ContainerPush == "" && !h.hasRegistryCredentials() {
+		req.InternalRegistryImageName = h.opts.Registry.InternalRegistryImageName
+		req.InternalRegistryTag = h.opts.Registry.InternalRegistryTag
+		if h.opts.Registry.ContainerPush == "" && !h.hasRegistryCredentials() {
 			return nil
 		}
 	}
 
-	effectiveRegistryURL, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(*h.opts.ContainerPush, *h.opts.ExportOCI)
+	effectiveRegistryURL, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(h.opts.Registry.ContainerPush, h.opts.Registry.ExportOCI)
 	registryCreds, err := registryauth.ResolveRegistryCredentials(
 		effectiveRegistryURL,
 		registryUsername,
 		registryPassword,
-		*h.opts.RegistryAuthFile,
+		h.opts.Registry.AuthFile,
 	)
 	if err != nil {
 		return err
@@ -271,7 +235,7 @@ func (h *Handler) applyRegistryCredentialsToRequest(req *buildapitypes.BuildRequ
 // hasRegistryCredentials returns true if the user has provided registry credentials
 // via environment variables or --registry-auth-file.
 func (h *Handler) hasRegistryCredentials() bool {
-	if h.opts.RegistryAuthFile != nil && strings.TrimSpace(*h.opts.RegistryAuthFile) != "" {
+	if strings.TrimSpace(h.opts.Registry.AuthFile) != "" {
 		return true
 	}
 	if os.Getenv("REGISTRY_USERNAME") != "" || os.Getenv("REGISTRY_URL") != "" {
@@ -287,20 +251,20 @@ func (h *Handler) resolveTarget(cmd *cobra.Command, manifestTarget string) {
 	}
 
 	if manifestTarget != "" {
-		*h.opts.Target = manifestTarget
+		h.opts.Build.Target = manifestTarget
 		clilog.Infof("Using target %q from manifest\n", manifestTarget)
 		return
 	}
 
-	*h.opts.Target = "qemu"
+	h.opts.Build.Target = "qemu"
 }
 
-func (h *Handler) validateManifestSchema(config *buildapitypes.OperatorConfigResponse, manifest []byte) bool {
+func (h *Handler) validateManifestSchema(config *buildcontract.OperatorConfigResponse, manifest []byte) bool {
 	if os.Getenv("CAIB_SKIP_MANIFEST_VALIDATION") != "" {
 		return true
 	}
 
-	imageRef := *h.opts.AutomotiveImageBuilder
+	imageRef := h.opts.Build.AutomotiveImageBuilder
 	if imageRef == automotivev1alpha1.DefaultAutomotiveImageBuilderImage && config != nil && config.AutomotiveImageBuilder != "" {
 		imageRef = config.AutomotiveImageBuilder
 	}
@@ -327,7 +291,7 @@ func (h *Handler) fetchTargetDefaults(
 	api *buildapiclient.Client,
 	target string,
 	validateFlash bool,
-) (*buildapitypes.OperatorConfigResponse, error) {
+) (*buildcontract.OperatorConfigResponse, error) {
 	config, err := api.GetOperatorConfig(ctx)
 	if err != nil {
 		// Non-fatal for defaults: if we can't reach the config endpoint, just skip defaults.
@@ -361,7 +325,7 @@ func (h *Handler) fetchTargetDefaults(
 
 // ApplyTargetDefaults applies architecture and extra-args defaults from the operator
 // target defaults. CLI flags override defaults when explicitly set.
-func ApplyTargetDefaults(cmd *cobra.Command, config *buildapitypes.OperatorConfigResponse, req *buildapitypes.BuildRequest) {
+func ApplyTargetDefaults(cmd *cobra.Command, config *buildcontract.OperatorConfigResponse, req *buildcontract.BuildRequest) {
 	if config == nil || len(config.TargetDefaults) == 0 {
 		return
 	}
@@ -372,7 +336,7 @@ func ApplyTargetDefaults(cmd *cobra.Command, config *buildapitypes.OperatorConfi
 	}
 
 	if defaults.Architecture != "" && !cmd.Flags().Changed("arch") {
-		req.Architecture = buildapitypes.Architecture(defaults.Architecture)
+		req.Architecture = buildcontract.Architecture(defaults.Architecture)
 		clilog.Infof("Using architecture %q from target defaults for %q\n", defaults.Architecture, req.Target)
 	}
 
@@ -383,7 +347,7 @@ func ApplyTargetDefaults(cmd *cobra.Command, config *buildapitypes.OperatorConfi
 	}
 
 	if defaults.DefaultFormat != "" && !cmd.Flags().Changed("format") {
-		req.ExportFormat = buildapitypes.ExportFormat(defaults.DefaultFormat)
+		req.ExportFormat = buildcontract.ExportFormat(defaults.DefaultFormat)
 		clilog.Infof("Using format %q from target defaults for %q\n", defaults.DefaultFormat, req.Target)
 	}
 
@@ -403,7 +367,7 @@ func warnIfNotInList(accepted []string, field, value string) {
 // displayBuildResults shows push locations after build completion.
 // It queries the server for actual build status so that messages are only
 // shown for steps that actually succeeded.
-func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.Client, buildName string) *buildapitypes.BuildResponse {
+func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.Client, buildName string) *buildcontract.BuildResponse {
 	st, err := api.GetBuild(ctx, buildName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to get build results for %s: %v\n", buildName, err)
@@ -412,7 +376,7 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 
 	if h.isStructuredOutput() {
 		credsFile := h.handleBuildArtifacts(st)
-		format, _ := common.ResolveOutputFormat(h.opts.OutputFormat)
+		format, _ := common.ResolveOutputFormat(&h.opts.Output.Format)
 		result := BuildResult{
 			ExternalID:              st.ExternalID,
 			Notification:            st.Notification,
@@ -424,7 +388,7 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 			LeaseID:                 h.lastLeaseID,
 			RegistryCredentialsFile: credsFile,
 		}
-		if st.RegistryToken != "" && *h.opts.UseInternalRegistry {
+		if st.RegistryToken != "" && h.opts.Registry.UseInternalRegistry {
 			result.RegistryUsername = "serviceaccount"
 			result.RegistryToken = st.RegistryToken
 		}
@@ -454,16 +418,16 @@ func (h *Handler) finishBuild(ctx context.Context, api *buildapiclient.Client, b
 }
 
 // handleBuildArtifacts performs side effects (download, creds file) and returns the creds file path.
-func (h *Handler) handleBuildArtifacts(st *buildapitypes.BuildResponse) string {
-	if *h.opts.UseInternalRegistry {
+func (h *Handler) handleBuildArtifacts(st *buildcontract.BuildResponse) string {
+	if h.opts.Registry.UseInternalRegistry {
 		if st.RegistryToken != "" {
-			if *h.opts.OutputDir != "" && st.DiskImage != "" {
+			if h.opts.Output.Dir != "" && st.DiskImage != "" {
 				if err := common.PullOCIArtifact(
 					st.DiskImage,
-					*h.opts.OutputDir,
+					h.opts.Output.Dir,
 					"serviceaccount",
 					st.RegistryToken,
-					*h.opts.InsecureSkipTLS,
+					h.opts.Connection.InsecureSkipTLS,
 				); err != nil {
 					h.handleError(fmt.Errorf("failed to download OCI artifact: %w", err))
 					return ""
@@ -480,14 +444,14 @@ func (h *Handler) handleBuildArtifacts(st *buildapitypes.BuildResponse) string {
 		return ""
 	}
 
-	if *h.opts.OutputDir != "" && st.DiskImage != "" {
-		_, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(*h.opts.ContainerPush, *h.opts.ExportOCI)
+	if h.opts.Output.Dir != "" && st.DiskImage != "" {
+		_, registryUsername, registryPassword := registryauth.ExtractRegistryCredentials(h.opts.Registry.ContainerPush, h.opts.Registry.ExportOCI)
 		if err := common.PullOCIArtifact(
-			*h.opts.ExportOCI,
-			*h.opts.OutputDir,
+			h.opts.Registry.ExportOCI,
+			h.opts.Output.Dir,
 			registryUsername,
 			registryPassword,
-			*h.opts.InsecureSkipTLS,
+			h.opts.Connection.InsecureSkipTLS,
 		); err != nil {
 			h.handleError(fmt.Errorf("failed to download OCI artifact: %w", err))
 		}
@@ -496,7 +460,7 @@ func (h *Handler) handleBuildArtifacts(st *buildapitypes.BuildResponse) string {
 }
 
 // displayBuildResultsText prints the human-readable (table) build results.
-func (h *Handler) displayBuildResultsText(st *buildapitypes.BuildResponse, credsFile string) {
+func (h *Handler) displayBuildResultsText(st *buildcontract.BuildResponse, credsFile string) {
 	labelColor := func(a ...any) string { return fmt.Sprint(a...) }
 	valueColor := func(a ...any) string { return fmt.Sprint(a...) }
 	if h.supportsColorOutput() {
@@ -504,7 +468,7 @@ func (h *Handler) displayBuildResultsText(st *buildapitypes.BuildResponse, creds
 		valueColor = color.New(color.FgHiGreen).SprintFunc()
 	}
 
-	if *h.opts.UseInternalRegistry {
+	if h.opts.Registry.UseInternalRegistry {
 		if st.ContainerImage != "" {
 			clilog.Infof("%s %s\n", labelColor("Container image:"), valueColor(st.ContainerImage))
 		}
@@ -516,7 +480,7 @@ func (h *Handler) displayBuildResultsText(st *buildapitypes.BuildResponse, creds
 				labelColor("Registry credentials written to:"),
 				valueColor(credsFile),
 			)
-		} else if st.RegistryToken != "" && *h.opts.OutputDir == "" {
+		} else if st.RegistryToken != "" && h.opts.Output.Dir == "" {
 			clilog.Infof("\n%s\n", labelColor("Registry credentials (valid ~4 hours):"))
 			clilog.Infof("  %s %s\n", labelColor("Username:"), valueColor("serviceaccount"))
 			clilog.Infof("  %s %s\n", labelColor("Token:"), valueColor(st.RegistryToken))
@@ -524,24 +488,24 @@ func (h *Handler) displayBuildResultsText(st *buildapitypes.BuildResponse, creds
 		return
 	}
 
-	if st.ContainerImage != "" && *h.opts.ContainerPush != "" {
-		clilog.Infof("%s %s\n", labelColor("Container image pushed to:"), valueColor(*h.opts.ContainerPush))
+	if st.ContainerImage != "" && h.opts.Registry.ContainerPush != "" {
+		clilog.Infof("%s %s\n", labelColor("Container image pushed to:"), valueColor(h.opts.Registry.ContainerPush))
 	}
-	if st.DiskImage != "" && *h.opts.ExportOCI != "" {
-		clilog.Infof("%s %s\n", labelColor("Disk image pushed to:"), valueColor(*h.opts.ExportOCI))
+	if st.DiskImage != "" && h.opts.Registry.ExportOCI != "" {
+		clilog.Infof("%s %s\n", labelColor("Disk image pushed to:"), valueColor(h.opts.Registry.ExportOCI))
 	}
 }
 
-func (h *Handler) applyNotificationOptions(req *buildapitypes.BuildRequest) error {
+func (h *Handler) applyNotificationOptions(req *buildcontract.BuildRequest) error {
 	callbackURL, callbackSecretFile, externalID := "", "", ""
-	if h.opts.CallbackURL != nil {
-		callbackURL = *h.opts.CallbackURL
+	if h.opts.Callback.URL != "" {
+		callbackURL = h.opts.Callback.URL
 	}
-	if h.opts.CallbackSecretFile != nil {
-		callbackSecretFile = *h.opts.CallbackSecretFile
+	if h.opts.Callback.SecretFile != "" {
+		callbackSecretFile = h.opts.Callback.SecretFile
 	}
-	if h.opts.ExternalID != nil {
-		externalID = *h.opts.ExternalID
+	if h.opts.Callback.ExternalID != "" {
+		externalID = h.opts.Callback.ExternalID
 	}
 	callback, err := common.LoadBuildCallback(callbackURL, callbackSecretFile)
 	if err != nil {
@@ -553,10 +517,10 @@ func (h *Handler) applyNotificationOptions(req *buildapitypes.BuildRequest) erro
 }
 
 func (h *Handler) validateFlashLeaseFlags(cmd *cobra.Command) error {
-	if *h.opts.FlashAfterBuild && *h.opts.LeaseName != "" && cmd.Flags().Changed("lease-duration") {
+	if h.opts.Flash.AfterBuild && h.opts.Flash.LeaseName != "" && cmd.Flags().Changed("lease-duration") {
 		return common.NewActionableError(
 			fmt.Errorf("--lease and --lease-duration are mutually exclusive"),
-			fmt.Sprintf("caib image build --flash --lease %s", *h.opts.LeaseName),
+			fmt.Sprintf("caib image build --flash --lease %s", h.opts.Flash.LeaseName),
 			"caib image build --flash --lease-duration <duration>",
 		)
 	}
@@ -565,30 +529,30 @@ func (h *Handler) validateFlashLeaseFlags(cmd *cobra.Command) error {
 
 // applyFlashOptions validates flash flags and populates flash fields on req.
 // The pushRequiredFlag is the flag name shown in the error message (e.g. "--push-disk" or "--push").
-func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequiredFlag string) error {
-	if !*h.opts.FlashAfterBuild {
+func (h *Handler) applyFlashOptions(req *buildcontract.BuildRequest, pushRequiredFlag string) error {
+	if !h.opts.Flash.AfterBuild {
 		return nil
 	}
-	if *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
+	if h.opts.Registry.ExportOCI == "" && !h.opts.Registry.UseInternalRegistry {
 		return common.NewActionableError(
 			fmt.Errorf("cannot enable --flash without exporting a disk image (%s)", pushRequiredFlag),
 			fmt.Sprintf("caib image build --flash %s <registry>", pushRequiredFlag),
 		)
 	}
-	clientInfo, err := common.ResolveJumpstarterClient(strings.TrimSpace(*h.opts.JumpstarterClient))
+	clientInfo, err := common.ResolveJumpstarterClient(strings.TrimSpace(h.opts.Flash.JumpstarterClient))
 	if err != nil {
 		return fmt.Errorf("--flash: %w", err)
 	}
 	clilog.Infof("Using Jumpstarter client %q (endpoint: %s)\n", clientInfo.Name, clientInfo.Endpoint)
 	req.FlashEnabled = true
 	req.FlashClientConfig = base64.StdEncoding.EncodeToString(clientInfo.Data)
-	req.FlashLeaseName = *h.opts.LeaseName
+	req.FlashLeaseName = h.opts.Flash.LeaseName
 	if req.FlashLeaseName == "" {
-		req.FlashLeaseDuration = *h.opts.LeaseDuration
+		req.FlashLeaseDuration = h.opts.Flash.LeaseDuration
 	}
-	req.FlashCmd = *h.opts.FlashCmd
-	req.FlashExporterSelector = *h.opts.ExporterSelector
-	req.FlashLeaseTags, err = common.ValidateAndJoinLeaseTags(h.opts.LeaseTags)
+	req.FlashCmd = h.opts.Flash.Cmd
+	req.FlashExporterSelector = h.opts.Flash.ExporterSelector
+	req.FlashLeaseTags, err = common.ValidateAndJoinLeaseTags(&h.opts.Flash.LeaseTags)
 	if err != nil {
 		return err
 	}
@@ -599,8 +563,8 @@ func (h *Handler) applyFlashOptions(req *buildapitypes.BuildRequest, pushRequire
 // Overridden in tests.
 var s3DefaultsFn = config.S3Defaults
 
-func (h *Handler) applyS3Options(cmd *cobra.Command, req *buildapitypes.BuildRequest) error {
-	bucket := ptrStr(h.opts.S3Bucket)
+func (h *Handler) applyS3Options(cmd *cobra.Command, req *buildcontract.BuildRequest) error {
+	bucket := h.opts.S3.Bucket
 
 	s3Cfg, err := s3DefaultsFn()
 	if err != nil {
@@ -620,44 +584,44 @@ func (h *Handler) applyS3Options(cmd *cobra.Command, req *buildapitypes.BuildReq
 	return h.applyS3Credentials(req, s3Cfg)
 }
 
-func (h *Handler) applyS3ConnectionParams(cmd *cobra.Command, req *buildapitypes.BuildRequest, s3Cfg *config.S3Config) {
+func (h *Handler) applyS3ConnectionParams(cmd *cobra.Command, req *buildcontract.BuildRequest, s3Cfg *config.S3Config) {
 	if flagChanged(cmd, "s3-prefix") {
-		req.S3Prefix = ptrStr(h.opts.S3Prefix)
-	} else if v := ptrStr(h.opts.S3Prefix); v != "" {
+		req.S3Prefix = h.opts.S3.Prefix
+	} else if v := h.opts.S3.Prefix; v != "" {
 		req.S3Prefix = v
 	} else if s3Cfg != nil {
 		req.S3Prefix = s3Cfg.Prefix
 	}
 
 	if flagChanged(cmd, "s3-endpoint") {
-		req.S3Endpoint = ptrStr(h.opts.S3Endpoint)
-	} else if v := ptrStr(h.opts.S3Endpoint); v != "" {
+		req.S3Endpoint = h.opts.S3.Endpoint
+	} else if v := h.opts.S3.Endpoint; v != "" {
 		req.S3Endpoint = v
 	} else if s3Cfg != nil {
 		req.S3Endpoint = s3Cfg.Endpoint
 	}
 
 	if flagChanged(cmd, "s3-region") {
-		req.S3Region = ptrStr(h.opts.S3Region)
-	} else if v := ptrStr(h.opts.S3Region); v != "" {
+		req.S3Region = h.opts.S3.Region
+	} else if v := h.opts.S3.Region; v != "" {
 		req.S3Region = v
 	} else if s3Cfg != nil {
 		req.S3Region = s3Cfg.Region
 	}
 
 	if flagChanged(cmd, "s3-insecure") {
-		req.S3InsecureSkipTLSVerify = h.opts.S3Insecure != nil && *h.opts.S3Insecure
-	} else if h.opts.S3Insecure != nil && *h.opts.S3Insecure {
+		req.S3InsecureSkipTLSVerify = h.opts.S3.Insecure
+	} else if h.opts.S3.Insecure {
 		req.S3InsecureSkipTLSVerify = true
 	} else if s3Cfg != nil {
 		req.S3InsecureSkipTLSVerify = s3Cfg.InsecureSkipTLSVerify
 	}
 }
 
-func (h *Handler) applyS3Credentials(req *buildapitypes.BuildRequest, s3Cfg *config.S3Config) error {
-	secretProvided := ptrStr(h.opts.S3CredentialsSecret) != ""
-	explicitAccess := ptrStr(h.opts.S3AccessKeyID) != ""
-	explicitSecret := ptrStr(h.opts.S3SecretAccessKey) != ""
+func (h *Handler) applyS3Credentials(req *buildcontract.BuildRequest, s3Cfg *config.S3Config) error {
+	secretProvided := h.opts.S3.CredentialsSecret != ""
+	explicitAccess := h.opts.S3.AccessKeyID != ""
+	explicitSecret := h.opts.S3.SecretAccessKey != ""
 	inlineCredsProvided := explicitAccess || explicitSecret
 	envAccess := os.Getenv("AWS_ACCESS_KEY_ID")
 	envSecret := os.Getenv("AWS_SECRET_ACCESS_KEY")
@@ -678,7 +642,7 @@ func (h *Handler) applyS3Credentials(req *buildapitypes.BuildRequest, s3Cfg *con
 	}
 
 	if secretProvided {
-		req.S3CredentialsSecretName = *h.opts.S3CredentialsSecret
+		req.S3CredentialsSecretName = h.opts.S3.CredentialsSecret
 	} else if inlineCredsProvided {
 		if !explicitAccess {
 			return fmt.Errorf("--s3-secret-access-key is set but --s3-access-key-id is missing")
@@ -686,9 +650,9 @@ func (h *Handler) applyS3Credentials(req *buildapitypes.BuildRequest, s3Cfg *con
 		if !explicitSecret {
 			return fmt.Errorf("--s3-access-key-id is set but --s3-secret-access-key is missing")
 		}
-		req.S3Credentials = &buildapitypes.S3Credentials{
-			AccessKeyID:     *h.opts.S3AccessKeyID,
-			SecretAccessKey: *h.opts.S3SecretAccessKey,
+		req.S3Credentials = &buildcontract.S3Credentials{
+			AccessKeyID:     h.opts.S3.AccessKeyID,
+			SecretAccessKey: h.opts.S3.SecretAccessKey,
 		}
 	} else if envCredsProvided {
 		if envAccess == "" {
@@ -697,7 +661,7 @@ func (h *Handler) applyS3Credentials(req *buildapitypes.BuildRequest, s3Cfg *con
 		if envSecret == "" {
 			return fmt.Errorf("AWS_ACCESS_KEY_ID is set but AWS_SECRET_ACCESS_KEY is missing")
 		}
-		req.S3Credentials = &buildapitypes.S3Credentials{
+		req.S3Credentials = &buildcontract.S3Credentials{
 			AccessKeyID:     envAccess,
 			SecretAccessKey: envSecret,
 		}
@@ -706,13 +670,6 @@ func (h *Handler) applyS3Credentials(req *buildapitypes.BuildRequest, s3Cfg *con
 	}
 
 	return nil
-}
-
-func ptrStr(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
 }
 
 func flagChanged(cmd *cobra.Command, name string) bool {
@@ -735,15 +692,15 @@ func (h *Handler) displayBuildLogsCommand(buildName string) {
 
 func (h *Handler) resolveCustomDefs() ([]string, error) {
 	var defs []string
-	if len(*h.opts.DefineFiles) > 0 {
-		fileDefs, err := common.LoadDefineFiles(*h.opts.DefineFiles)
+	if len(h.opts.Build.DefineFiles) > 0 {
+		fileDefs, err := common.LoadDefineFiles(h.opts.Build.DefineFiles)
 		if err != nil {
 			return nil, err
 		}
 		defs = append(defs, fileDefs...)
 	}
-	if h.opts.CustomDefs != nil {
-		defs = append(defs, *h.opts.CustomDefs...)
+	if len(h.opts.Build.CustomDefs) > 0 {
+		defs = append(defs, h.opts.Build.CustomDefs...)
 	}
 	return defs, nil
 }
@@ -776,10 +733,10 @@ func parseRootPassword(input string) (string, error) {
 }
 
 func (h *Handler) resolveRootPassword() (string, error) {
-	if h.opts.RootPassword == nil || *h.opts.RootPassword == "" {
+	if h.opts.Build.RootPassword == "" {
 		return "", nil
 	}
-	return parseRootPassword(*h.opts.RootPassword)
+	return parseRootPassword(h.opts.Build.RootPassword)
 }
 
 // resolveRepoFlags processes --extra-repo and --local-repo into workspace repos,
@@ -809,27 +766,27 @@ func resolveRepoFlags(extraRepos []string, localRepoFlag string) (workspaceRepos
 	return workspaceRepos, []string{localRef}, true, nil
 }
 
-func parseDevMode(mode string) (buildapitypes.Mode, error) {
+func parseDevMode(mode string) (buildcontract.Mode, error) {
 	switch mode {
 	case "image":
-		return buildapitypes.ModeImage, nil
+		return buildcontract.ModeImage, nil
 	case "package":
-		return buildapitypes.ModePackage, nil
+		return buildcontract.ModePackage, nil
 	default:
-		return "", fmt.Errorf("invalid --mode %q (expected: %q or %q)", mode, buildapitypes.ModeImage, buildapitypes.ModePackage)
+		return "", fmt.Errorf("invalid --mode %q (expected: %q or %q)", mode, buildcontract.ModeImage, buildcontract.ModePackage)
 	}
 }
 
 func (h *Handler) resolveManifestBuildName(manifestPath string) error {
-	if *h.opts.BuildName != "" {
-		return common.ValidateBuildName(*h.opts.BuildName)
+	if h.opts.Build.Name != "" {
+		return common.ValidateBuildName(h.opts.Build.Name)
 	}
 
 	base := filepath.Base(manifestPath)
 	base = strings.TrimSuffix(base, ".aib.yml")
 	base = strings.TrimSuffix(base, ".mpp.yml")
-	*h.opts.BuildName = common.SanitizeBuildName(base)
-	clilog.Infof("Auto-generated build name: %s\n", *h.opts.BuildName)
+	h.opts.Build.Name = common.SanitizeBuildName(base)
+	clilog.Infof("Auto-generated build name: %s\n", h.opts.Build.Name)
 	return nil
 }
 
@@ -856,7 +813,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 
 	ctx := context.Background()
 	manifestPath := args[0]
-	*h.opts.Manifest = manifestPath
+	h.opts.Build.Manifest = manifestPath
 
 	if err := common.ValidateManifestSuffix(manifestPath); err != nil {
 		h.handleError(err)
@@ -876,7 +833,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -890,8 +847,8 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 
 	h.resolveTarget(cmd, common.ManifestTarget(manifestBytes))
 
-	validateFlash := gitSource == nil && *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
+	validateFlash := gitSource == nil && h.opts.Flash.AfterBuild && h.opts.Flash.ExporterSelector == ""
+	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, h.opts.Build.Target, validateFlash)
 	if cfgErr != nil {
 		h.handleError(cfgErr)
 		return
@@ -919,43 +876,43 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(*h.opts.ExtraRepos, *h.opts.LocalRepo)
+	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(h.opts.Build.ExtraRepos, h.opts.Build.LocalRepo)
 	if err != nil {
 		h.handleError(err)
 		return
 	}
 
-	req := buildapitypes.BuildRequest{
-		Name:                   *h.opts.BuildName,
+	req := buildcontract.BuildRequest{
+		Name:                   h.opts.Build.Name,
 		Manifest:               string(manifestBytes),
 		GitSource:              gitSource,
 		ManifestFileName:       filepath.Base(manifestPath),
-		Distro:                 buildapitypes.Distro(*h.opts.Distro),
-		Target:                 buildapitypes.Target(*h.opts.Target),
-		Architecture:           buildapitypes.Architecture(*h.opts.Architecture),
-		ExportFormat:           buildapitypes.ExportFormat(*h.opts.DiskFormat),
-		Mode:                   buildapitypes.ModeBootc,
-		AutomotiveImageBuilder: *h.opts.AutomotiveImageBuilder,
-		StorageClass:           *h.opts.StorageClass,
+		Distro:                 buildcontract.Distro(h.opts.Build.Distro),
+		Target:                 buildcontract.Target(h.opts.Build.Target),
+		Architecture:           buildcontract.Architecture(h.opts.Build.Architecture),
+		ExportFormat:           buildcontract.ExportFormat(h.opts.Build.DiskFormat),
+		Mode:                   buildcontract.ModeBootc,
+		AutomotiveImageBuilder: h.opts.Build.AutomotiveImageBuilder,
+		StorageClass:           h.opts.Build.StorageClass,
 		CustomDefs:             customDefs,
-		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		AIBExtraArgs:           h.opts.Build.AIBExtraArgs,
 		Lockfile:               lockfile,
 		RootPassword:           rootPassword,
 		ExtraRepos:             workspaceRepos,
 		OCIRepoImages:          ociRepoImages,
 		LocalRepo:              localRepo,
-		Workspace:              *h.opts.Workspace,
-		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),
-		ContainerPush:          *h.opts.ContainerPush,
-		BuildDiskImage:         *h.opts.BuildDiskImage,
-		ExportOCI:              *h.opts.ExportOCI,
-		BuilderImage:           *h.opts.BuilderImage,
-		RebuildBuilder:         *h.opts.RebuildBuilder,
-		SecureBuild:            *h.opts.SecureBuild,
-		Reproducible:           *h.opts.Reproducible,
-		TaskBundleRef:          *h.opts.TaskBundleRef,
-		RestoreSourcesRef:      *h.opts.RestoreSourcesRef,
-		TTL:                    *h.opts.TTL,
+		Workspace:              h.opts.Build.Workspace,
+		Compression:            buildcontract.Compression(h.opts.Build.CompressionAlgo),
+		ContainerPush:          h.opts.Registry.ContainerPush,
+		BuildDiskImage:         h.opts.Build.BuildDiskImage,
+		ExportOCI:              h.opts.Registry.ExportOCI,
+		BuilderImage:           h.opts.Build.BuilderImage,
+		RebuildBuilder:         h.opts.Build.RebuildBuilder,
+		SecureBuild:            h.opts.Build.SecureBuild,
+		Reproducible:           h.opts.Build.Reproducible,
+		TaskBundleRef:          h.opts.Build.TaskBundleRef,
+		RestoreSourcesRef:      h.opts.Build.RestoreSourcesRef,
+		TTL:                    h.opts.Build.TTL,
 	}
 
 	if err := h.applyRegistryCredentialsToRequest(&req); err != nil {
@@ -1005,7 +962,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	h.finishBuild(ctx, api, resp.Name, *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild)
+	h.finishBuild(ctx, api, resp.Name, h.opts.Output.Wait || h.opts.Output.FollowLogs || h.opts.Output.Dir != "" || h.opts.Flash.AfterBuild)
 }
 
 // RunDisk handles `caib image disk`.
@@ -1014,34 +971,34 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 
 	ctx := context.Background()
 	containerRef := args[0]
-	*h.opts.ContainerRef = containerRef
+	h.opts.Build.ContainerRef = containerRef
 
-	if strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		h.handleError(common.ServerURLRequiredError(fmt.Sprintf("caib image disk --server <server-url> %s", containerRef)))
 		return
 	}
 
 	// Default to internal registry when no push destination is specified
-	if *h.opts.ExportOCI == "" && !*h.opts.UseInternalRegistry {
-		*h.opts.UseInternalRegistry = true
+	if h.opts.Registry.ExportOCI == "" && !h.opts.Registry.UseInternalRegistry {
+		h.opts.Registry.UseInternalRegistry = true
 	}
 
-	if *h.opts.UseInternalRegistry && *h.opts.ExportOCI != "" {
+	if h.opts.Registry.UseInternalRegistry && h.opts.Registry.ExportOCI != "" {
 		h.handleError(common.NewActionableError(
 			fmt.Errorf("--internal-registry cannot be used with --push"),
-			fmt.Sprintf("caib image disk --push %s %s", *h.opts.ExportOCI, containerRef),
+			fmt.Sprintf("caib image disk --push %s %s", h.opts.Registry.ExportOCI, containerRef),
 		))
 		return
 	}
 
-	if *h.opts.BuildName == "" {
+	if h.opts.Build.Name == "" {
 		parts := strings.Split(containerRef, "/")
 		imagePart := parts[len(parts)-1]
 		imagePart = strings.Split(imagePart, ":")[0]
 		sanitized := common.SanitizeBuildName(imagePart)
-		*h.opts.BuildName = fmt.Sprintf("disk-%s", sanitized)
-		clilog.Infof("Auto-generated build name: %s\n", *h.opts.BuildName)
-	} else if err := common.ValidateBuildName(*h.opts.BuildName); err != nil {
+		h.opts.Build.Name = fmt.Sprintf("disk-%s", sanitized)
+		clilog.Infof("Auto-generated build name: %s\n", h.opts.Build.Name)
+	} else if err := common.ValidateBuildName(h.opts.Build.Name); err != nil {
 		h.handleError(err)
 		return
 	}
@@ -1050,7 +1007,7 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -1058,23 +1015,23 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 
 	h.resolveTarget(cmd, "") // no manifest for disk command
 
-	req := buildapitypes.BuildRequest{
-		Name:                   *h.opts.BuildName,
+	req := buildcontract.BuildRequest{
+		Name:                   h.opts.Build.Name,
 		ContainerRef:           containerRef,
-		Distro:                 buildapitypes.Distro(*h.opts.Distro),
-		Target:                 buildapitypes.Target(*h.opts.Target),
-		Architecture:           buildapitypes.Architecture(*h.opts.Architecture),
-		ExportFormat:           buildapitypes.ExportFormat(*h.opts.DiskFormat),
-		Mode:                   buildapitypes.ModeDisk,
-		AutomotiveImageBuilder: *h.opts.AutomotiveImageBuilder,
-		StorageClass:           *h.opts.StorageClass,
-		AIBExtraArgs:           *h.opts.AIBExtraArgs,
-		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),
-		ExportOCI:              *h.opts.ExportOCI,
-		SecureBuild:            *h.opts.SecureBuild,
-		TaskBundleRef:          *h.opts.TaskBundleRef,
-		RestoreSourcesRef:      *h.opts.RestoreSourcesRef,
-		TTL:                    *h.opts.TTL,
+		Distro:                 buildcontract.Distro(h.opts.Build.Distro),
+		Target:                 buildcontract.Target(h.opts.Build.Target),
+		Architecture:           buildcontract.Architecture(h.opts.Build.Architecture),
+		ExportFormat:           buildcontract.ExportFormat(h.opts.Build.DiskFormat),
+		Mode:                   buildcontract.ModeDisk,
+		AutomotiveImageBuilder: h.opts.Build.AutomotiveImageBuilder,
+		StorageClass:           h.opts.Build.StorageClass,
+		AIBExtraArgs:           h.opts.Build.AIBExtraArgs,
+		Compression:            buildcontract.Compression(h.opts.Build.CompressionAlgo),
+		ExportOCI:              h.opts.Registry.ExportOCI,
+		SecureBuild:            h.opts.Build.SecureBuild,
+		TaskBundleRef:          h.opts.Build.TaskBundleRef,
+		RestoreSourcesRef:      h.opts.Build.RestoreSourcesRef,
+		TTL:                    h.opts.Build.TTL,
 	}
 
 	if err := h.applyRegistryCredentialsToRequest(&req); err != nil {
@@ -1082,8 +1039,8 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	validateFlash := *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
+	validateFlash := h.opts.Flash.AfterBuild && h.opts.Flash.ExporterSelector == ""
+	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, h.opts.Build.Target, validateFlash)
 	if cfgErr != nil {
 		h.handleError(cfgErr)
 		return
@@ -1112,34 +1069,34 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 	clilog.Infof("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 	h.displayBuildLogsCommand(resp.Name)
 
-	h.finishBuild(ctx, api, resp.Name, *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild)
+	h.finishBuild(ctx, api, resp.Name, h.opts.Output.Wait || h.opts.Output.FollowLogs || h.opts.Output.Dir != "" || h.opts.Flash.AfterBuild)
 }
 
 func (h *Handler) validateDevExportFlags(manifestPath string) error {
-	if *h.opts.UseInternalRegistry {
-		if *h.opts.ExportOCI != "" {
+	if h.opts.Registry.UseInternalRegistry {
+		if h.opts.Registry.ExportOCI != "" {
 			return common.NewActionableError(
 				fmt.Errorf("--internal-registry cannot be used with --push"),
-				fmt.Sprintf("caib image build-dev --push %s %s", *h.opts.ExportOCI, manifestPath),
+				fmt.Sprintf("caib image build-dev --push %s %s", h.opts.Registry.ExportOCI, manifestPath),
 			)
 		}
 		return nil
 	}
-	if h.opts.S3Bucket != nil && *h.opts.S3Bucket != "" {
+	if h.opts.S3.Bucket != "" {
 		return nil
 	}
-	return common.ValidateOutputRequiresPush(*h.opts.OutputDir, *h.opts.ExportOCI, "--push")
+	return common.ValidateOutputRequiresPush(h.opts.Output.Dir, h.opts.Registry.ExportOCI, "--push")
 }
 
 func (h *Handler) validateBuildDevOptions(manifestPath string) error {
 	if err := common.ValidateManifestSuffix(manifestPath); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		return common.ServerURLRequiredError(fmt.Sprintf("caib image build-dev --server <server-url> %s", manifestPath))
 	}
 	if err := h.validateRegistryFlags("--push",
-		fmt.Sprintf("caib image build-dev --push %s %s", *h.opts.ExportOCI, manifestPath)); err != nil {
+		fmt.Sprintf("caib image build-dev --push %s %s", h.opts.Registry.ExportOCI, manifestPath)); err != nil {
 		return err
 	}
 	if err := h.validateDevExportFlags(manifestPath); err != nil {
@@ -1154,7 +1111,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 
 	ctx := context.Background()
 	manifestPath := args[0]
-	*h.opts.Manifest = manifestPath
+	h.opts.Build.Manifest = manifestPath
 
 	if err := h.validateBuildDevOptions(manifestPath); err != nil {
 		h.handleError(err)
@@ -1170,7 +1127,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -1184,8 +1141,8 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 
 	h.resolveTarget(cmd, common.ManifestTarget(manifestBytes))
 
-	validateFlash := gitSource == nil && *h.opts.FlashAfterBuild && *h.opts.ExporterSelector == ""
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, *h.opts.Target, validateFlash)
+	validateFlash := gitSource == nil && h.opts.Flash.AfterBuild && h.opts.Flash.ExporterSelector == ""
+	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, h.opts.Build.Target, validateFlash)
 	if cfgErr != nil {
 		h.handleError(cfgErr)
 		return
@@ -1213,45 +1170,45 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	parsedMode, err := parseDevMode(*h.opts.Mode)
+	parsedMode, err := parseDevMode(h.opts.Build.Mode)
 	if err != nil {
 		h.handleError(err)
 		return
 	}
 
-	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(*h.opts.ExtraRepos, *h.opts.LocalRepo)
+	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(h.opts.Build.ExtraRepos, h.opts.Build.LocalRepo)
 	if err != nil {
 		h.handleError(err)
 		return
 	}
 
-	req := buildapitypes.BuildRequest{
-		Name:                   *h.opts.BuildName,
+	req := buildcontract.BuildRequest{
+		Name:                   h.opts.Build.Name,
 		Manifest:               string(manifestBytes),
 		GitSource:              gitSource,
 		ManifestFileName:       filepath.Base(manifestPath),
-		Distro:                 buildapitypes.Distro(*h.opts.Distro),
-		Target:                 buildapitypes.Target(*h.opts.Target),
-		Architecture:           buildapitypes.Architecture(*h.opts.Architecture),
-		ExportFormat:           buildapitypes.ExportFormat(*h.opts.ExportFormat),
+		Distro:                 buildcontract.Distro(h.opts.Build.Distro),
+		Target:                 buildcontract.Target(h.opts.Build.Target),
+		Architecture:           buildcontract.Architecture(h.opts.Build.Architecture),
+		ExportFormat:           buildcontract.ExportFormat(h.opts.Build.ExportFormat),
 		Mode:                   parsedMode,
-		AutomotiveImageBuilder: *h.opts.AutomotiveImageBuilder,
-		StorageClass:           *h.opts.StorageClass,
+		AutomotiveImageBuilder: h.opts.Build.AutomotiveImageBuilder,
+		StorageClass:           h.opts.Build.StorageClass,
 		CustomDefs:             customDefs,
-		AIBExtraArgs:           *h.opts.AIBExtraArgs,
+		AIBExtraArgs:           h.opts.Build.AIBExtraArgs,
 		Lockfile:               lockfile,
 		RootPassword:           rootPassword,
 		ExtraRepos:             workspaceRepos,
 		OCIRepoImages:          ociRepoImages,
 		LocalRepo:              localRepo,
-		Workspace:              *h.opts.Workspace,
-		Compression:            buildapitypes.Compression(*h.opts.CompressionAlgo),
-		ExportOCI:              *h.opts.ExportOCI,
-		SecureBuild:            *h.opts.SecureBuild,
-		Reproducible:           *h.opts.Reproducible,
-		TaskBundleRef:          *h.opts.TaskBundleRef,
-		RestoreSourcesRef:      *h.opts.RestoreSourcesRef,
-		TTL:                    *h.opts.TTL,
+		Workspace:              h.opts.Build.Workspace,
+		Compression:            buildcontract.Compression(h.opts.Build.CompressionAlgo),
+		ExportOCI:              h.opts.Registry.ExportOCI,
+		SecureBuild:            h.opts.Build.SecureBuild,
+		Reproducible:           h.opts.Build.Reproducible,
+		TaskBundleRef:          h.opts.Build.TaskBundleRef,
+		RestoreSourcesRef:      h.opts.Build.RestoreSourcesRef,
+		TTL:                    h.opts.Build.TTL,
 	}
 
 	if err := h.applyRegistryCredentialsToRequest(&req); err != nil {
@@ -1301,7 +1258,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	h.finishBuild(ctx, api, resp.Name, *h.opts.WaitForBuild || *h.opts.FollowLogs || *h.opts.OutputDir != "" || *h.opts.FlashAfterBuild)
+	h.finishBuild(ctx, api, resp.Name, h.opts.Output.Wait || h.opts.Output.FollowLogs || h.opts.Output.Dir != "" || h.opts.Flash.AfterBuild)
 }
 
 func nopWorkspaceCleanup() {}
@@ -1309,13 +1266,13 @@ func nopWorkspaceCleanup() {}
 func (h *Handler) prepareManifestUploads(
 	ctx context.Context,
 	api *buildapiclient.Client,
-	req *buildapitypes.BuildRequest,
+	req *buildcontract.BuildRequest,
 	manifestPath string,
 ) ([]map[string]string, func(), error) {
 	if req.GitSource != nil {
 		return nil, nopWorkspaceCleanup, nil
 	}
-	workspaceBuild := h.opts.Workspace != nil && strings.TrimSpace(*h.opts.Workspace) != ""
+	workspaceBuild := strings.TrimSpace(h.opts.Build.Workspace) != ""
 	rewritten, localRefs, err := common.PrepareLocalFileUploads(req.Manifest, filepath.Dir(manifestPath), workspaceBuild)
 	if err != nil {
 		return nil, nil, err
@@ -1329,7 +1286,7 @@ func (h *Handler) prepareManifestUploads(
 	if os.Getenv("CAIB_CLIENT_WORKSPACE_UPLOAD") == "0" {
 		return localRefs, nopWorkspaceCleanup, nil
 	}
-	rewritten, wsRefs, cleanup, err := h.materializeWorkspaceFiles(ctx, api, strings.TrimSpace(*h.opts.Workspace), req.Manifest)
+	rewritten, wsRefs, cleanup, err := h.materializeWorkspaceFiles(ctx, api, strings.TrimSpace(h.opts.Build.Workspace), req.Manifest)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1435,12 +1392,12 @@ func (h *Handler) RunCancel(_ *cobra.Command, args []string) {
 }
 
 func (h *Handler) runBuildAction(buildName, verb string, action func(context.Context, *buildapiclient.Client, string) error) {
-	if strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		h.handleError(common.ServerURLRequiredError(fmt.Sprintf("caib image %s --server <server-url> %s", verb, buildName)))
 		return
 	}
 
-	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
 		return

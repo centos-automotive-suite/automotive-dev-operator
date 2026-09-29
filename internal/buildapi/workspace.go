@@ -15,6 +15,7 @@ import (
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -71,70 +72,6 @@ func buildSyncDeleteScript(files []string) string {
 	return b.String()
 }
 
-// WorkspaceRequest is the payload to create a workspace.
-type WorkspaceRequest struct {
-	Name                    string `json:"name"`
-	FromBuild               string `json:"fromBuild,omitempty"` // ImageBuild name to extract lease from
-	Lease                   string `json:"lease,omitempty"`     // Direct lease ID
-	Arch                    string `json:"architecture,omitempty"`
-	Image                   string `json:"toolchainImage,omitempty"`
-	ClientConfig            string `json:"clientConfig,omitempty"`            // Base64-encoded Jumpstarter client config
-	CPU                     string `json:"cpu,omitempty"`                     // CPU request (e.g., "1", "500m")
-	Memory                  string `json:"memory,omitempty"`                  // Memory request (e.g., "2Gi", "512Mi")
-	TmpfsBuildDir           bool   `json:"tmpfsBuildDir,omitempty"`           // Mount tmpfs at /tmp/build for fast compilation
-	AutoPauseTimeoutMinutes *int32 `json:"autoPauseTimeoutMinutes,omitempty"` // nil = use global default, 0 = disable
-}
-
-// WorkspaceResponse is returned by workspace operations.
-type WorkspaceResponse struct {
-	Name             string `json:"name"`
-	Phase            string `json:"phase"`
-	Reason           string `json:"reason,omitempty"`
-	Message          string `json:"message,omitempty"`
-	Lease            string `json:"lease,omitempty"`
-	Arch             string `json:"architecture"`
-	PodName          string `json:"podName,omitempty"`
-	Age              string `json:"age,omitempty"`
-	AutoPauseTimeout string `json:"autoPauseTimeout,omitempty"` // e.g., "30m", "disabled"
-	LastActivity     string `json:"lastActivity,omitempty"`     // e.g., "2m ago", "just now"
-}
-
-// WorkspaceExecRequest is the payload to execute a command in a workspace.
-type WorkspaceExecRequest struct {
-	Command string `json:"command"`
-}
-
-// SyncPlanRequest is the manifest sent by the client to compute a sync diff.
-type SyncPlanRequest struct {
-	Files          map[string]string `json:"files"`                    // relative path -> hex-encoded sha256
-	IncludeDeleted bool              `json:"includeDeleted,omitempty"` // when true, report remote-only files in Deleted
-}
-
-// SyncPlanResponse tells the client which files need uploading.
-type SyncPlanResponse struct {
-	Changed        []string `json:"changed"`                  // files to upload (new or modified)
-	Unchanged      int      `json:"unchanged"`                // count of files already up to date
-	Deleted        []string `json:"deleted,omitempty"`        // files on remote not in local manifest (only when IncludeDeleted)
-	IncludeDeleted bool     `json:"includeDeleted,omitempty"` // echoed so clients can detect servers that ignore IncludeDeleted
-}
-
-// SyncDeleteRequest is the payload to delete files from a workspace.
-type SyncDeleteRequest struct {
-	Files []string `json:"files"` // relative paths under /workspace/src/ to remove
-}
-
-// ArtifactMapping maps a source path inside the workspace to a destination on the board.
-type ArtifactMapping struct {
-	Src  string `json:"src"`  // Path inside workspace (file or directory)
-	Dest string `json:"dest"` // Path on the board
-}
-
-// WorkspaceDeployRequest is the payload to deploy artifacts to a board.
-type WorkspaceDeployRequest struct {
-	Artifacts []ArtifactMapping `json:"artifacts"`
-	Password  string            `json:"password,omitempty"` // SSH password for key injection (default: "password")
-}
-
 // registerWorkspaceRoutes registers the workspace API routes on the v1 group.
 func (a *APIServer) registerWorkspaceRoutes(v1 *gin.RouterGroup) {
 	workspaceGroup := v1.Group("/workspaces")
@@ -165,7 +102,7 @@ func (a *APIServer) stopWorkspace(c *gin.Context, name string) {
 }
 
 func (a *APIServer) createWorkspace(c *gin.Context) {
-	var req WorkspaceRequest
+	var req buildcontract.WorkspaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
 		return
@@ -327,7 +264,7 @@ func (a *APIServer) listWorkspaces(c *gin.Context) {
 	})
 
 	// Filter to owner's workspaces, then paginate
-	owned := make([]WorkspaceResponse, 0, len(wsList.Items))
+	owned := make([]buildcontract.WorkspaceResponse, 0, len(wsList.Items))
 	for i := range wsList.Items {
 		ws := &wsList.Items[i]
 		if ws.Spec.Owner != requester {
@@ -560,7 +497,7 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 }
 
 func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
-	var req SyncPlanRequest
+	var req buildcontract.SyncPlanRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
 		return
@@ -643,7 +580,7 @@ func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
 		}
 	}
 
-	c.JSON(http.StatusOK, SyncPlanResponse{
+	c.JSON(http.StatusOK, buildcontract.SyncPlanResponse{
 		Changed:        changed,
 		Unchanged:      unchanged,
 		Deleted:        deleted,
@@ -652,7 +589,7 @@ func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
 }
 
 func (a *APIServer) syncDeleteWorkspace(c *gin.Context, name string) {
-	var req SyncDeleteRequest
+	var req buildcontract.SyncDeleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
 		return
@@ -695,7 +632,7 @@ func (a *APIServer) syncDeleteWorkspace(c *gin.Context, name string) {
 }
 
 func (a *APIServer) execWorkspace(c *gin.Context, name string) {
-	var req WorkspaceExecRequest
+	var req buildcontract.WorkspaceExecRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
 		return
@@ -845,7 +782,7 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 }
 
 func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
-	var req WorkspaceDeployRequest
+	var req buildcontract.WorkspaceDeployRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
 		return
@@ -1030,7 +967,7 @@ func buildWorkspaceResources(cpu, memory string, wsConfig *automotivev1alpha1.Wo
 	return res, nil
 }
 
-func workspaceResponseFromCR(ws *automotivev1alpha1.Workspace) WorkspaceResponse {
+func workspaceResponseFromCR(ws *automotivev1alpha1.Workspace) buildcontract.WorkspaceResponse {
 	phase := ws.Status.Phase
 	reason := ws.Status.Reason
 	message := ws.Status.Message
@@ -1069,7 +1006,7 @@ func workspaceResponseFromCR(ws *automotivev1alpha1.Workspace) WorkspaceResponse
 		}
 	}
 
-	return WorkspaceResponse{
+	return buildcontract.WorkspaceResponse{
 		Name:             ws.Name,
 		Phase:            phase,
 		Reason:           string(reason),

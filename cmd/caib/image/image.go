@@ -2,16 +2,27 @@
 package image
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/spf13/cobra"
 )
 
 // Options wires the image command tree to caller-owned state and handlers.
 type Options struct {
+	Connection *commandopts.Connection
+	Output     *commandopts.Output
+	Callback   *commandopts.Callback
+	Registry   *commandopts.Registry
+	S3         *commandopts.S3
+	Flash      *commandopts.Flash
+	Sealed     *commandopts.Sealed
+	Build      *commandopts.Build
+
 	RunBuild             func(*cobra.Command, []string)
 	RunResolve           func(*cobra.Command, []string)
 	RunDisk              func(*cobra.Command, []string)
@@ -31,81 +42,6 @@ type Options struct {
 	RunInspect           func(*cobra.Command, []string)
 
 	GetDefaultArch func() string
-
-	ServerURL              *string
-	AuthToken              *string
-	ExternalID             *string
-	CallbackURL            *string
-	CallbackSecretFile     *string
-	BuildName              *string
-	Distro                 *string
-	Target                 *string
-	Architecture           *string
-	ExportFormat           *string
-	Mode                   *string
-	AutomotiveImageBuilder *string
-	OutputDir              *string
-	Timeout                *int
-	WaitForBuild           *bool
-	CustomDefs             *[]string
-	DefineFiles            *[]string
-	AIBExtraArgs           *[]string
-	GitURL                 *string
-	GitRef                 *string
-	GitSecret              *string
-	GitLockfile            *string
-	Lockfile               *string
-	RootPassword           *string
-	ExtraRepos             *[]string
-	LocalRepo              *string
-	Workspace              *string
-	FollowLogs             *bool
-	CompressionAlgo        *string
-	ContainerPush          *string
-	BuildDiskImage         *bool
-	DiskFormat             *string
-	ExportOCI              *string
-	BuilderImage           *string
-	RegistryAuthFile       *string
-	RebuildBuilder         *bool
-
-	FlashAfterBuild   *bool
-	JumpstarterClient *string
-	FlashName         *string
-	ExporterSelector  *string
-	LeaseDuration     *string
-	LeaseName         *string
-	FlashCmd          *string
-	LeaseTags         *[]string
-
-	UseInternalRegistry       *bool
-	InternalRegistryImageName *string
-	InternalRegistryTag       *string
-
-	SecureBuild       *bool
-	Reproducible      *bool
-	TaskBundleRef     *string
-	RestoreSourcesRef *string
-	TTL               *string
-
-	S3Bucket            *string
-	S3Prefix            *string
-	S3Region            *string
-	S3Endpoint          *string
-	S3AccessKeyID       *string
-	S3SecretAccessKey   *string
-	S3CredentialsSecret *string
-	S3Insecure          *bool
-
-	SealedBuilderImage      *string
-	SealedArchitecture      *string
-	SealedKeySecret         *string
-	SealedKeyPasswordSecret *string
-	SealedKeyFile           *string
-	SealedKeyPassword       *string
-	SealedInputRef          *string
-	SealedOutputRef         *string
-	SealedSignedRef         *string
 }
 
 // NewImageCmd creates the top-level `caib image` command with all image workflow subcommands.
@@ -115,9 +51,12 @@ func NewImageCmd(opts Options) *cobra.Command {
 		Use:   "image",
 		Short: "Build and manage image workflows",
 		Long:  `Commands for creating, managing, and inspecting image builds.`,
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
-			if opts.ServerURL != nil && strings.TrimSpace(*opts.ServerURL) == "" {
-				*opts.ServerURL = config.DefaultServerWithDerive()
+		PersistentPreRunE: func(runCmd *cobra.Command, _ []string) error {
+			if err := applyCommandOutputDefaults(runCmd); err != nil {
+				return err
+			}
+			if strings.TrimSpace(opts.Connection.ServerURL) == "" {
+				opts.Connection.ServerURL = config.DefaultServerWithDerive()
 			}
 			return nil
 		},
@@ -143,258 +82,258 @@ func NewImageCmd(opts Options) *cobra.Command {
 	injectSignedCmd := newInjectSignedCmd(opts)
 
 	// build command flags (bootc - the default)
-	buildCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	buildCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	buildCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	buildCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	addNotificationFlags(buildCmd, opts)
-	buildCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the ImageBuild (auto-generated if omitted)")
-	buildCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution to build")
-	buildCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
-	buildCmd.Flags().StringVarP(opts.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
-	buildCmd.Flags().StringVar(opts.ContainerPush, "push", "", "push bootc container to registry (optional if --disk is used)")
-	buildCmd.Flags().BoolVar(opts.BuildDiskImage, "disk", false, "also build disk image from container")
-	buildCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "download disk image to file from registry (uses --disk and --internal-registry when no --push-disk given)")
+	buildCmd.Flags().StringVarP(&opts.Build.Name, "name", "n", "", "name for the ImageBuild (auto-generated if omitted)")
+	buildCmd.Flags().StringVarP(&opts.Build.Distro, "distro", "d", "autosd", "distribution to build")
+	buildCmd.Flags().StringVarP(&opts.Build.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
+	buildCmd.Flags().StringVarP(&opts.Build.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
+	buildCmd.Flags().StringVar(&opts.Registry.ContainerPush, "push", "", "push bootc container to registry (optional if --disk is used)")
+	buildCmd.Flags().BoolVar(&opts.Build.BuildDiskImage, "disk", false, "also build disk image from container")
+	buildCmd.Flags().StringVarP(&opts.Output.Dir, "output", "o", "", "download disk image to file from registry (uses --disk and --internal-registry when no --push-disk given)")
 	buildCmd.Flags().StringVar(
-		opts.DiskFormat, "format", "", "disk image format (qcow2, raw, simg); inferred from output filename if not set",
+		&opts.Build.DiskFormat, "format", "", "disk image format (qcow2, raw, simg); inferred from output filename if not set",
 	)
-	buildCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
-	buildCmd.Flags().StringVar(opts.ExportOCI, "push-disk", "", "push disk image as OCI artifact to registry (implies --disk)")
+	buildCmd.Flags().StringVar(&opts.Build.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
+	buildCmd.Flags().StringVar(&opts.Registry.ExportOCI, "push-disk", "", "push disk image as OCI artifact to registry (implies --disk)")
 	buildCmd.Flags().StringVar(
-		opts.RegistryAuthFile,
+		&opts.Registry.AuthFile,
 		"registry-auth-file",
 		"",
 		"path to Docker/Podman auth file for push authentication (takes precedence over env vars and auto-discovery)",
 	)
 	buildCmd.Flags().StringVar(
-		opts.AutomotiveImageBuilder, "aib-image",
+		&opts.Build.AutomotiveImageBuilder, "aib-image",
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
-	buildCmd.Flags().StringVar(opts.BuilderImage, "builder-image", "", "custom builder container")
-	buildCmd.Flags().BoolVar(opts.RebuildBuilder, "rebuild-builder", false, "force rebuild of the bootc builder image")
-	buildCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
-	buildCmd.Flags().StringArrayVar(opts.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
-	buildCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
-	buildCmd.Flags().StringVar(opts.Lockfile, "lockfile", "", "Path to an AIB JSON lockfile generated by resolve")
+	buildCmd.Flags().StringVar(&opts.Build.BuilderImage, "builder-image", "", "custom builder container")
+	buildCmd.Flags().BoolVar(&opts.Build.RebuildBuilder, "rebuild-builder", false, "force rebuild of the bootc builder image")
+	buildCmd.Flags().StringArrayVarP(&opts.Build.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
+	buildCmd.Flags().StringArrayVar(&opts.Build.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
+	buildCmd.Flags().StringArrayVar(&opts.Build.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
+	buildCmd.Flags().StringVar(&opts.Build.Lockfile, "lockfile", "", "Path to an AIB JSON lockfile generated by resolve")
 	addGitSourceFlags(buildCmd, opts)
-	buildCmd.Flags().StringVar(opts.RootPassword, "root-password", "", "set hashed root password (env:VAR or file:PATH)")
-	buildCmd.Flags().StringArrayVar(opts.ExtraRepos, "extra-repo", []string{}, "extra RPM repo (workspace:path or oci:image-ref, can be repeated)")
-	buildCmd.Flags().StringVar(opts.LocalRepo, "local-repo", "", "OCI image with RPM repo to use as primary package source (preferred over network repos)")
-	buildCmd.Flags().StringVar(opts.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
-	buildCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
-	buildCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", true, "wait for build to complete")
-	buildCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
+	buildCmd.Flags().StringVar(&opts.Build.RootPassword, "root-password", "", "set hashed root password (env:VAR or file:PATH)")
+	buildCmd.Flags().StringArrayVar(&opts.Build.ExtraRepos, "extra-repo", []string{}, "extra RPM repo (workspace:path or oci:image-ref, can be repeated)")
+	buildCmd.Flags().StringVar(&opts.Build.LocalRepo, "local-repo", "", "OCI image with RPM repo to use as primary package source (preferred over network repos)")
+	buildCmd.Flags().StringVar(&opts.Build.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
+	buildCmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 60, "timeout in minutes")
+	buildCmd.Flags().BoolVarP(&opts.Output.Wait, "wait", "w", true, "wait for build to complete")
+	buildCmd.Flags().BoolVarP(&opts.Output.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
 	// Note: --push is optional when --disk is used (disk image becomes the output)
 	// Jumpstarter flash options
-	buildCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
-	buildCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
-	buildCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
-	buildCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
-	buildCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
-	buildCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
-	buildCmd.Flags().StringArrayVar(opts.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
+	buildCmd.Flags().BoolVar(&opts.Flash.AfterBuild, "flash", false, "flash the image to device after build completes")
+	buildCmd.Flags().StringVar(&opts.Flash.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
+	buildCmd.Flags().StringVar(&opts.Flash.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	buildCmd.Flags().StringVar(&opts.Flash.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
+	buildCmd.Flags().StringVar(&opts.Flash.Cmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	buildCmd.Flags().StringVar(&opts.Flash.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	buildCmd.Flags().StringArrayVar(&opts.Flash.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
 	// Secure build
-	buildCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "use digest-pinned tasks and locked inputs for network-isolated AIB assembly (requires taskBundleRef; OCI output requires referrer support)")
-	buildCmd.Flags().StringVar(opts.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
+	buildCmd.Flags().BoolVar(&opts.Build.SecureBuild, "secure", false, "use digest-pinned tasks and locked inputs for network-isolated AIB assembly (requires taskBundleRef; OCI output requires referrer support)")
+	buildCmd.Flags().StringVar(&opts.Build.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
 	// Reproducible build
-	buildCmd.Flags().BoolVar(opts.Reproducible, "reproducible", false, "save RPMs, manifest, lockfile, and task bundle for future reproduction (requires --secure)")
-	buildCmd.Flags().StringVar(opts.TaskBundleRef, "task-bundle-ref", "", "digest-pinned Tekton bundle ref for reproducible rebuild (e.g. quay.io/org/tasks@sha256:abc...)")
-	buildCmd.Flags().StringVar(opts.RestoreSourcesRef, "restore-sources", "", "OCI image ref from prior build — restores archived sources for exact reproducible rebuild")
+	buildCmd.Flags().BoolVar(&opts.Build.Reproducible, "reproducible", false, "save RPMs, manifest, lockfile, and task bundle for future reproduction (requires --secure)")
+	buildCmd.Flags().StringVar(&opts.Build.TaskBundleRef, "task-bundle-ref", "", "digest-pinned Tekton bundle ref for reproducible rebuild (e.g. quay.io/org/tasks@sha256:abc...)")
+	buildCmd.Flags().StringVar(&opts.Build.RestoreSourcesRef, "restore-sources", "", "OCI image ref from prior build — restores archived sources for exact reproducible rebuild")
 	// Internal registry options
-	buildCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
-	buildCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
-	buildCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: bootc)")
+	buildCmd.Flags().BoolVar(&opts.Registry.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
+	buildCmd.Flags().StringVar(&opts.Registry.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
+	buildCmd.Flags().StringVar(&opts.Registry.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: bootc)")
 	addS3Flags(buildCmd, opts)
 
-	resolveCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	resolveCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
-	resolveCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "cluster operation name (default: manifest name with -resolve suffix)")
-	resolveCmd.Flags().IntVar(opts.Timeout, "timeout", 30, "resolution timeout in minutes")
-	resolveCmd.Flags().StringVar(opts.TTL, "ttl", "", "retention after completion (0 keeps the operation)")
-	resolveCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution to resolve")
-	resolveCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
-	resolveCmd.Flags().StringVarP(opts.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
-	resolveCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "output lockfile path (default: <manifest>.lock)")
+	resolveCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	resolveCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	resolveCmd.Flags().StringVarP(&opts.Build.Name, "name", "n", "", "cluster operation name (default: manifest name with -resolve suffix)")
+	resolveCmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 30, "resolution timeout in minutes")
+	resolveCmd.Flags().StringVar(&opts.Build.TTL, "ttl", "", "retention after completion (0 keeps the operation)")
+	resolveCmd.Flags().StringVarP(&opts.Build.Distro, "distro", "d", "autosd", "distribution to resolve")
+	resolveCmd.Flags().StringVarP(&opts.Build.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
+	resolveCmd.Flags().StringVarP(&opts.Build.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
+	resolveCmd.Flags().StringVarP(&opts.Output.Dir, "output", "o", "", "output lockfile path (default: <manifest>.lock)")
 	resolveCmd.Flags().StringVar(
-		opts.AutomotiveImageBuilder, "aib-image",
+		&opts.Build.AutomotiveImageBuilder, "aib-image",
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
-	resolveCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
-	resolveCmd.Flags().StringArrayVar(opts.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
-	resolveCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra argument passed to AIB (can be repeated)")
+	resolveCmd.Flags().StringArrayVarP(&opts.Build.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
+	resolveCmd.Flags().StringArrayVar(&opts.Build.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
+	resolveCmd.Flags().StringArrayVar(&opts.Build.AIBExtraArgs, "extra-args", []string{}, "extra argument passed to AIB (can be repeated)")
 
 	listCmd.Flags().StringVar(
-		opts.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
+		&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
 	)
 	listCmd.Flags().StringVar(
-		opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"),
+		&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"),
 		"Bearer token for authentication (e.g., OpenShift access token)",
 	)
 	showCmd.Flags().StringVar(
-		opts.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
+		&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL (e.g. https://api.example)",
 	)
 	showCmd.Flags().StringVar(
-		opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"),
+		&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"),
 		"Bearer token for authentication (e.g., OpenShift access token)",
 	)
 
 	// disk command flags (create disk from existing container)
-	diskCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	diskCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	diskCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	diskCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	addNotificationFlags(diskCmd, opts)
-	diskCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the build job (auto-generated if omitted)")
-	diskCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "download disk image to file from registry (uses --internal-registry when no --push given)")
+	diskCmd.Flags().StringVarP(&opts.Build.Name, "name", "n", "", "name for the build job (auto-generated if omitted)")
+	diskCmd.Flags().StringVarP(&opts.Output.Dir, "output", "o", "", "download disk image to file from registry (uses --internal-registry when no --push given)")
 	diskCmd.Flags().StringVar(
-		opts.DiskFormat, "format", "", "disk image format (qcow2, raw, simg); inferred from output filename if not set",
+		&opts.Build.DiskFormat, "format", "", "disk image format (qcow2, raw, simg); inferred from output filename if not set",
 	)
-	diskCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
-	diskCmd.Flags().StringVar(opts.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
+	diskCmd.Flags().StringVar(&opts.Build.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
+	diskCmd.Flags().StringVar(&opts.Registry.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
 	diskCmd.Flags().StringVar(
-		opts.RegistryAuthFile,
+		&opts.Registry.AuthFile,
 		"registry-auth-file",
 		"",
 		"path to Docker/Podman auth file for push authentication (takes precedence over env vars and auto-discovery)",
 	)
-	diskCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution")
-	diskCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform (default: qemu)")
-	diskCmd.Flags().StringVarP(opts.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
+	diskCmd.Flags().StringVarP(&opts.Build.Distro, "distro", "d", "autosd", "distribution")
+	diskCmd.Flags().StringVarP(&opts.Build.Target, "target", "t", "", "target platform (default: qemu)")
+	diskCmd.Flags().StringVarP(&opts.Build.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
 	diskCmd.Flags().StringVar(
-		opts.AutomotiveImageBuilder, "aib-image",
+		&opts.Build.AutomotiveImageBuilder, "aib-image",
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
-	diskCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
-	diskCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
-	diskCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", false, "wait for build to complete")
-	diskCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
+	diskCmd.Flags().StringArrayVar(&opts.Build.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
+	diskCmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 60, "timeout in minutes")
+	diskCmd.Flags().BoolVarP(&opts.Output.Wait, "wait", "w", false, "wait for build to complete")
+	diskCmd.Flags().BoolVarP(&opts.Output.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
 	// Jumpstarter flash options
-	diskCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
-	diskCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
-	diskCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
-	diskCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
-	diskCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
-	diskCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
-	diskCmd.Flags().StringArrayVar(opts.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
+	diskCmd.Flags().BoolVar(&opts.Flash.AfterBuild, "flash", false, "flash the image to device after build completes")
+	diskCmd.Flags().StringVar(&opts.Flash.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
+	diskCmd.Flags().StringVar(&opts.Flash.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	diskCmd.Flags().StringVar(&opts.Flash.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
+	diskCmd.Flags().StringVar(&opts.Flash.Cmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	diskCmd.Flags().StringVar(&opts.Flash.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	diskCmd.Flags().StringArrayVar(&opts.Flash.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
 	// Secure build
-	diskCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "not supported for disk-only conversion; use image build or build-dev for secure builds")
-	diskCmd.Flags().StringVar(opts.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
-	diskCmd.Flags().StringVar(opts.TaskBundleRef, "task-bundle-ref", "", "digest-pinned Tekton bundle ref for reproducible rebuild (e.g. quay.io/org/tasks@sha256:abc...)")
+	diskCmd.Flags().BoolVar(&opts.Build.SecureBuild, "secure", false, "not supported for disk-only conversion; use image build or build-dev for secure builds")
+	diskCmd.Flags().StringVar(&opts.Build.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
+	diskCmd.Flags().StringVar(&opts.Build.TaskBundleRef, "task-bundle-ref", "", "digest-pinned Tekton bundle ref for reproducible rebuild (e.g. quay.io/org/tasks@sha256:abc...)")
 	// Internal registry options
-	diskCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
-	diskCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
-	diskCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: disk)")
+	diskCmd.Flags().BoolVar(&opts.Registry.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
+	diskCmd.Flags().StringVar(&opts.Registry.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
+	diskCmd.Flags().StringVar(&opts.Registry.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: disk)")
 	addS3Flags(diskCmd, opts)
 
 	// build-dev command flags (traditional ostree/package builds)
-	buildDevCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	buildDevCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	buildDevCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	buildDevCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	addNotificationFlags(buildDevCmd, opts)
-	buildDevCmd.Flags().StringVarP(opts.BuildName, "name", "n", "", "name for the ImageBuild")
-	buildDevCmd.Flags().StringVarP(opts.Distro, "distro", "d", "autosd", "distribution to build")
-	buildDevCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
-	buildDevCmd.Flags().StringVarP(opts.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
-	buildDevCmd.Flags().StringVar(opts.Mode, "mode", "package", "build mode: image (ostree) or package (package-based)")
-	buildDevCmd.Flags().StringVar(opts.ExportFormat, "format", "", "export format: qcow2, raw, simg, etc.")
-	buildDevCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "download artifact to file from registry (uses --internal-registry when no --push given)")
-	buildDevCmd.Flags().StringVar(opts.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
-	buildDevCmd.Flags().StringVar(opts.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
+	buildDevCmd.Flags().StringVarP(&opts.Build.Name, "name", "n", "", "name for the ImageBuild")
+	buildDevCmd.Flags().StringVarP(&opts.Build.Distro, "distro", "d", "autosd", "distribution to build")
+	buildDevCmd.Flags().StringVarP(&opts.Build.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
+	buildDevCmd.Flags().StringVarP(&opts.Build.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
+	buildDevCmd.Flags().StringVar(&opts.Build.Mode, "mode", "package", "build mode: image (ostree) or package (package-based)")
+	buildDevCmd.Flags().StringVar(&opts.Build.ExportFormat, "format", "", "export format: qcow2, raw, simg, etc.")
+	buildDevCmd.Flags().StringVarP(&opts.Output.Dir, "output", "o", "", "download artifact to file from registry (uses --internal-registry when no --push given)")
+	buildDevCmd.Flags().StringVar(&opts.Build.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
+	buildDevCmd.Flags().StringVar(&opts.Registry.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
 	buildDevCmd.Flags().StringVar(
-		opts.RegistryAuthFile,
+		&opts.Registry.AuthFile,
 		"registry-auth-file",
 		"",
 		"path to Docker/Podman auth file for push authentication (takes precedence over env vars and auto-discovery)",
 	)
 	buildDevCmd.Flags().StringVar(
-		opts.AutomotiveImageBuilder, "aib-image",
+		&opts.Build.AutomotiveImageBuilder, "aib-image",
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
-	buildDevCmd.Flags().StringArrayVarP(opts.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
-	buildDevCmd.Flags().StringArrayVar(opts.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
-	buildDevCmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
-	buildDevCmd.Flags().StringVar(opts.Lockfile, "lockfile", "", "Path to an AIB JSON lockfile generated by resolve")
+	buildDevCmd.Flags().StringArrayVarP(&opts.Build.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
+	buildDevCmd.Flags().StringArrayVar(&opts.Build.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
+	buildDevCmd.Flags().StringArrayVar(&opts.Build.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
+	buildDevCmd.Flags().StringVar(&opts.Build.Lockfile, "lockfile", "", "Path to an AIB JSON lockfile generated by resolve")
 	addGitSourceFlags(buildDevCmd, opts)
-	buildDevCmd.Flags().StringVar(opts.RootPassword, "root-password", "", "set hashed root password (env:VAR or file:PATH)")
-	buildDevCmd.Flags().StringArrayVar(opts.ExtraRepos, "extra-repo", []string{}, "extra RPM repo (workspace:path or oci:image-ref, can be repeated)")
-	buildDevCmd.Flags().StringVar(opts.LocalRepo, "local-repo", "", "OCI image with RPM repo to use as primary package source (preferred over network repos)")
-	buildDevCmd.Flags().StringVar(opts.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
-	buildDevCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
-	buildDevCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", false, "wait for build to complete")
-	buildDevCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
+	buildDevCmd.Flags().StringVar(&opts.Build.RootPassword, "root-password", "", "set hashed root password (env:VAR or file:PATH)")
+	buildDevCmd.Flags().StringArrayVar(&opts.Build.ExtraRepos, "extra-repo", []string{}, "extra RPM repo (workspace:path or oci:image-ref, can be repeated)")
+	buildDevCmd.Flags().StringVar(&opts.Build.LocalRepo, "local-repo", "", "OCI image with RPM repo to use as primary package source (preferred over network repos)")
+	buildDevCmd.Flags().StringVar(&opts.Build.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
+	buildDevCmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 60, "timeout in minutes")
+	buildDevCmd.Flags().BoolVarP(&opts.Output.Wait, "wait", "w", false, "wait for build to complete")
+	buildDevCmd.Flags().BoolVarP(&opts.Output.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
 	// Jumpstarter flash options
-	buildDevCmd.Flags().BoolVar(opts.FlashAfterBuild, "flash", false, "flash the image to device after build completes")
-	buildDevCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
-	buildDevCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
-	buildDevCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
-	buildDevCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
-	buildDevCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
-	buildDevCmd.Flags().StringArrayVar(opts.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
+	buildDevCmd.Flags().BoolVar(&opts.Flash.AfterBuild, "flash", false, "flash the image to device after build completes")
+	buildDevCmd.Flags().StringVar(&opts.Flash.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
+	buildDevCmd.Flags().StringVar(&opts.Flash.LeaseDuration, "lease-duration", "03:00:00", "device lease duration for flash (HH:MM:SS)")
+	buildDevCmd.Flags().StringVar(&opts.Flash.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
+	buildDevCmd.Flags().StringVar(&opts.Flash.Cmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	buildDevCmd.Flags().StringVar(&opts.Flash.ExporterSelector, "exporter", "", "direct exporter selector for flash (alternative to --target lookup)")
+	buildDevCmd.Flags().StringArrayVar(&opts.Flash.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
 	// Secure build
-	buildDevCmd.Flags().BoolVar(opts.SecureBuild, "secure", false, "use digest-pinned tasks and locked inputs for network-isolated AIB assembly (requires taskBundleRef; OCI output requires referrer support)")
-	buildDevCmd.Flags().StringVar(opts.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
+	buildDevCmd.Flags().BoolVar(&opts.Build.SecureBuild, "secure", false, "use digest-pinned tasks and locked inputs for network-isolated AIB assembly (requires taskBundleRef; OCI output requires referrer support)")
+	buildDevCmd.Flags().StringVar(&opts.Build.TTL, "ttl", "", "time-to-live for the build (e.g. 24h, 72h, 168h); empty=server default, 0=no expiry")
 	// Reproducible build
-	buildDevCmd.Flags().BoolVar(opts.Reproducible, "reproducible", false, "save RPMs, manifest, lockfile, and task bundle for future reproduction (requires --secure)")
-	buildDevCmd.Flags().StringVar(opts.TaskBundleRef, "task-bundle-ref", "", "digest-pinned Tekton bundle ref for reproducible rebuild (e.g. quay.io/org/tasks@sha256:abc...)")
-	buildDevCmd.Flags().StringVar(opts.RestoreSourcesRef, "restore-sources", "", "OCI image ref from prior build — restores archived sources for exact reproducible rebuild")
+	buildDevCmd.Flags().BoolVar(&opts.Build.Reproducible, "reproducible", false, "save RPMs, manifest, lockfile, and task bundle for future reproduction (requires --secure)")
+	buildDevCmd.Flags().StringVar(&opts.Build.TaskBundleRef, "task-bundle-ref", "", "digest-pinned Tekton bundle ref for reproducible rebuild (e.g. quay.io/org/tasks@sha256:abc...)")
+	buildDevCmd.Flags().StringVar(&opts.Build.RestoreSourcesRef, "restore-sources", "", "OCI image ref from prior build — restores archived sources for exact reproducible rebuild")
 	// Internal registry options
-	buildDevCmd.Flags().BoolVar(opts.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
-	buildDevCmd.Flags().StringVar(opts.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
-	buildDevCmd.Flags().StringVar(opts.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: disk)")
+	buildDevCmd.Flags().BoolVar(&opts.Registry.UseInternalRegistry, "internal-registry", false, "push to OpenShift internal registry")
+	buildDevCmd.Flags().StringVar(&opts.Registry.InternalRegistryImageName, "image-name", "", "override image name for internal registry (default: build name)")
+	buildDevCmd.Flags().StringVar(&opts.Registry.InternalRegistryTag, "image-tag", "", "tag for internal registry image (default: disk)")
 	addS3Flags(buildDevCmd, opts)
 
 	// logs command flags
-	logsCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	logsCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
-	logsCmd.Flags().IntVar(opts.Timeout, "timeout", 60, "timeout in minutes")
+	logsCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	logsCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	logsCmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 60, "timeout in minutes")
 
 	// download command flags
-	downloadCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	downloadCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
-	downloadCmd.Flags().StringVarP(opts.OutputDir, "output", "o", "", "destination file or directory for the artifact")
+	downloadCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	downloadCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	downloadCmd.Flags().StringVarP(&opts.Output.Dir, "output", "o", "", "destination file or directory for the artifact")
 
 	// token command flags
-	tokenCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	tokenCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	tokenCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	tokenCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 
 	// delete command flags
-	deleteCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	deleteCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	deleteCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	deleteCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 
 	// cancel command flags
-	cancelCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	cancelCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	cancelCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	cancelCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 
 	// flash command flags
-	flashCmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "REST API server base URL")
-	flashCmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	flashCmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "REST API server base URL")
+	flashCmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
 	addNotificationFlags(flashCmd, opts)
-	flashCmd.Flags().StringVar(opts.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
-	flashCmd.Flags().StringVarP(opts.FlashName, "name", "n", "", "name for the flash job (auto-generated if omitted)")
-	flashCmd.Flags().StringVarP(opts.Target, "target", "t", "", "target platform for exporter lookup")
-	flashCmd.Flags().StringVar(opts.ExporterSelector, "exporter", "", "direct exporter selector (alternative to --target)")
-	flashCmd.Flags().StringVar(opts.LeaseDuration, "lease-duration", "03:00:00", "device lease duration (HH:MM:SS)")
-	flashCmd.Flags().StringVar(opts.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
-	flashCmd.Flags().StringVar(opts.FlashCmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
-	flashCmd.Flags().StringArrayVar(opts.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
+	flashCmd.Flags().StringVar(&opts.Flash.JumpstarterClient, "client", "", "path to Jumpstarter client config file (auto-detected if omitted)")
+	flashCmd.Flags().StringVarP(&opts.Flash.Name, "name", "n", "", "name for the flash job (auto-generated if omitted)")
+	flashCmd.Flags().StringVarP(&opts.Build.Target, "target", "t", "", "target platform for exporter lookup")
+	flashCmd.Flags().StringVar(&opts.Flash.ExporterSelector, "exporter", "", "direct exporter selector (alternative to --target)")
+	flashCmd.Flags().StringVar(&opts.Flash.LeaseDuration, "lease-duration", "03:00:00", "device lease duration (HH:MM:SS)")
+	flashCmd.Flags().StringVar(&opts.Flash.LeaseName, "lease", "", "existing Jumpstarter lease name (mutually exclusive with --lease-duration)")
+	flashCmd.Flags().StringVar(&opts.Flash.Cmd, "flash-cmd", "", "override flash command (default: from OperatorConfig target mapping)")
+	flashCmd.Flags().StringArrayVar(&opts.Flash.LeaseTags, "lease-tag", []string{}, "tag for Jumpstarter lease (key=value, can be repeated)")
 	flashCmd.Flags().StringVar(
-		opts.RegistryAuthFile,
+		&opts.Registry.AuthFile,
 		"registry-auth-file",
 		"",
 		"path to Docker/Podman auth file for OCI image pull authentication (takes precedence over env vars and auto-discovery)",
 	)
-	flashCmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", false, "follow flash logs (shows full log output instead of progress bar)")
-	flashCmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", true, "wait for flash to complete")
+	flashCmd.Flags().BoolVarP(&opts.Output.FollowLogs, "follow", "f", false, "follow flash logs (shows full log output instead of progress bar)")
+	flashCmd.Flags().BoolVarP(&opts.Output.Wait, "wait", "w", true, "wait for flash to complete")
 	inspectCmd := newInspectCmd(opts)
 	inspectCmd.Flags().StringVar(
-		opts.RegistryAuthFile,
+		&opts.Registry.AuthFile,
 		"registry-auth-file",
 		"",
 		"path to Docker/Podman auth file for registry authentication",
 	)
-	inspectCmd.Flags().StringVarP(opts.OutputDir, "output-dir", "o", "", "download referrer artifacts (manifest, lockfile, RPMs) to this directory")
+	inspectCmd.Flags().StringVarP(&opts.Output.Dir, "output-dir", "o", "", "download referrer artifacts (manifest, lockfile, RPMs) to this directory")
 
 	// Sealed operation shared flags
 	addSealedFlags(prepareResealCmd, opts, defaultServer)
 	addSealedFlags(resealCmd, opts, defaultServer)
 	addSealedFlags(extractForSigningCmd, opts, defaultServer)
 	addSealedFlags(injectSignedCmd, opts, defaultServer)
-	injectSignedCmd.Flags().StringVar(opts.SealedSignedRef, "signed", "", "Signed artifact ref for inject-signed")
+	injectSignedCmd.Flags().StringVar(&opts.Sealed.SignedRef, "signed", "", "Signed artifact ref for inject-signed")
 
 	cmd.AddCommand(
 		buildCmd,
@@ -419,6 +358,21 @@ func NewImageCmd(opts Options) *cobra.Command {
 	return cmd
 }
 
+// pflag initializes each shared output field as commands register their flags.
+// Restore the invoked command's own defaults when the user did not set them.
+func applyCommandOutputDefaults(cmd *cobra.Command) error {
+	for _, name := range []string{"timeout", "wait", "follow"} {
+		flag := cmd.Flags().Lookup(name)
+		if flag == nil || flag.Changed {
+			continue
+		}
+		if err := flag.Value.Set(flag.DefValue); err != nil {
+			return fmt.Errorf("restore default for --%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 func newResolveCmd(opts Options) *cobra.Command {
 	return &cobra.Command{
 		Use:   "resolve <manifest.aib.yml>",
@@ -435,9 +389,9 @@ to caib image build-dev with --lockfile. The CLI downloads the resulting lockfil
 }
 
 func addNotificationFlags(cmd *cobra.Command, opts Options) {
-	cmd.Flags().StringVar(opts.ExternalID, "external-id", "", "external correlation value included in operation status and webhook events")
-	cmd.Flags().StringVar(opts.CallbackURL, "callback-url", "", "URL for the signed terminal webhook (HTTPS required unless webhookNotifications.allowHTTP is enabled)")
-	cmd.Flags().StringVar(opts.CallbackSecretFile, "callback-secret-file", "", "file containing the 32 to 4096 byte webhook HMAC secret")
+	cmd.Flags().StringVar(&opts.Callback.ExternalID, "external-id", "", "external correlation value included in operation status and webhook events")
+	cmd.Flags().StringVar(&opts.Callback.URL, "callback-url", "", "URL for the signed terminal webhook (HTTPS required unless webhookNotifications.allowHTTP is enabled)")
+	cmd.Flags().StringVar(&opts.Callback.SecretFile, "callback-secret-file", "", "file containing the 32 to 4096 byte webhook HMAC secret")
 }
 
 func newBuildCmd(opts Options) *cobra.Command {
@@ -760,39 +714,39 @@ Input, signed artifact, and output can be given as positionals or via --input, -
 }
 
 func addS3Flags(cmd *cobra.Command, opts Options) {
-	cmd.Flags().StringVar(opts.S3Bucket, "s3-bucket", "", "S3 bucket name for artifact upload")
-	cmd.Flags().StringVar(opts.S3Prefix, "s3-prefix", "", "S3 key prefix (path within bucket)")
-	cmd.Flags().StringVar(opts.S3Region, "s3-region", "", "S3 region (defaults to us-east-1 if not specified)")
-	cmd.Flags().StringVar(opts.S3Endpoint, "s3-endpoint", "", "Custom S3 endpoint URL (for MinIO/Ceph)")
-	cmd.Flags().StringVar(opts.S3AccessKeyID, "s3-access-key-id", "", "S3 access key ID (env: AWS_ACCESS_KEY_ID)")
-	cmd.Flags().StringVar(opts.S3SecretAccessKey, "s3-secret-access-key", "", "S3 secret access key (env: AWS_SECRET_ACCESS_KEY)")
-	cmd.Flags().StringVar(opts.S3CredentialsSecret, "s3-credentials-secret", "", "Existing K8s secret with S3 credentials")
-	cmd.Flags().BoolVar(opts.S3Insecure, "s3-insecure", false, "Skip TLS verification for S3 endpoint")
+	cmd.Flags().StringVar(&opts.S3.Bucket, "s3-bucket", "", "S3 bucket name for artifact upload")
+	cmd.Flags().StringVar(&opts.S3.Prefix, "s3-prefix", "", "S3 key prefix (path within bucket)")
+	cmd.Flags().StringVar(&opts.S3.Region, "s3-region", "", "S3 region (defaults to us-east-1 if not specified)")
+	cmd.Flags().StringVar(&opts.S3.Endpoint, "s3-endpoint", "", "Custom S3 endpoint URL (for MinIO/Ceph)")
+	cmd.Flags().StringVar(&opts.S3.AccessKeyID, "s3-access-key-id", "", "S3 access key ID (env: AWS_ACCESS_KEY_ID)")
+	cmd.Flags().StringVar(&opts.S3.SecretAccessKey, "s3-secret-access-key", "", "S3 secret access key (env: AWS_SECRET_ACCESS_KEY)")
+	cmd.Flags().StringVar(&opts.S3.CredentialsSecret, "s3-credentials-secret", "", "Existing K8s secret with S3 credentials")
+	cmd.Flags().BoolVar(&opts.S3.Insecure, "s3-insecure", false, "Skip TLS verification for S3 endpoint")
 }
 
 func addSealedFlags(cmd *cobra.Command, opts Options, defaultServer string) {
-	cmd.Flags().StringVar(opts.ServerURL, "server", defaultServer, "Build API server URL")
-	cmd.Flags().StringVar(opts.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
-	cmd.Flags().StringVar(opts.SealedInputRef, "input", "", "Input/source container or artifact ref")
-	cmd.Flags().StringVar(opts.SealedOutputRef, "output", "", "Output container or artifact ref")
+	cmd.Flags().StringVar(&opts.Connection.ServerURL, "server", defaultServer, "Build API server URL")
+	cmd.Flags().StringVar(&opts.Connection.AuthToken, "token", os.Getenv("CAIB_TOKEN"), "Bearer token for authentication")
+	cmd.Flags().StringVar(&opts.Sealed.InputRef, "input", "", "Input/source container or artifact ref")
+	cmd.Flags().StringVar(&opts.Sealed.OutputRef, "output", "", "Output container or artifact ref")
 	cmd.Flags().StringVar(
-		opts.RegistryAuthFile,
+		&opts.Registry.AuthFile,
 		"registry-auth-file",
 		"",
 		"path to Docker/Podman auth file for registry authentication (takes precedence over env vars and auto-discovery)",
 	)
 	cmd.Flags().StringVar(
-		opts.AutomotiveImageBuilder, "aib-image",
+		&opts.Build.AutomotiveImageBuilder, "aib-image",
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
-	cmd.Flags().StringVar(opts.SealedBuilderImage, "builder-image", "", "Builder container image (overrides --arch default)")
-	cmd.Flags().StringVar(opts.SealedArchitecture, "arch", "", "Target architecture for default builder image (amd64, arm64); auto-detected if not set")
-	cmd.Flags().StringArrayVar(opts.AIBExtraArgs, "extra-args", nil, "Extra arguments to pass to AIB (repeatable)")
-	cmd.Flags().BoolVarP(opts.WaitForBuild, "wait", "w", false, "Wait for completion")
-	cmd.Flags().BoolVarP(opts.FollowLogs, "follow", "f", true, "Stream task logs")
-	cmd.Flags().StringVar(opts.SealedKeySecret, "key-secret", "", "Name of existing cluster secret containing sealing key (data key 'private-key')")
-	cmd.Flags().StringVar(opts.SealedKeyPasswordSecret, "key-password-secret", "", "Name of existing cluster secret containing key password (data key 'password')")
-	cmd.Flags().StringVar(opts.SealedKeyFile, "key", "", "Path to local PEM key file (uploaded to cluster automatically)")
-	cmd.Flags().StringVar(opts.SealedKeyPassword, "passwd", "", "Password for encrypted key file (used with --key)")
-	cmd.Flags().IntVar(opts.Timeout, "timeout", 120, "Timeout in minutes")
+	cmd.Flags().StringVar(&opts.Sealed.BuilderImage, "builder-image", "", "Builder container image (overrides --arch default)")
+	cmd.Flags().StringVar(&opts.Sealed.Architecture, "arch", "", "Target architecture for default builder image (amd64, arm64); auto-detected if not set")
+	cmd.Flags().StringArrayVar(&opts.Build.AIBExtraArgs, "extra-args", nil, "Extra arguments to pass to AIB (repeatable)")
+	cmd.Flags().BoolVarP(&opts.Output.Wait, "wait", "w", false, "Wait for completion")
+	cmd.Flags().BoolVarP(&opts.Output.FollowLogs, "follow", "f", true, "Stream task logs")
+	cmd.Flags().StringVar(&opts.Sealed.KeySecret, "key-secret", "", "Name of existing cluster secret containing sealing key (data key 'private-key')")
+	cmd.Flags().StringVar(&opts.Sealed.KeyPasswordSecret, "key-password-secret", "", "Name of existing cluster secret containing key password (data key 'password')")
+	cmd.Flags().StringVar(&opts.Sealed.KeyFile, "key", "", "Path to local PEM key file (uploaded to cluster automatically)")
+	cmd.Flags().StringVar(&opts.Sealed.KeyPassword, "passwd", "", "Password for encrypted key file (used with --key)")
+	cmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 120, "Timeout in minutes")
 }

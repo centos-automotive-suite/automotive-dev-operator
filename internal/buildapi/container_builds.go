@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
@@ -21,9 +24,6 @@ import (
 	kscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 )
 
 func (a *APIServer) streamContainerBuildLogs(c *gin.Context, name string) {
@@ -168,7 +168,7 @@ func setContainerBuildSecretOwnerRef(
 }
 
 func (a *APIServer) createContainerBuild(c *gin.Context) {
-	var req ContainerBuildRequest
+	var req buildcontract.ContainerBuildRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid request: %v", err)})
 		return
@@ -311,7 +311,7 @@ func (a *APIServer) createContainerBuild(c *gin.Context) {
 		}
 	}
 
-	writeJSON(c, http.StatusAccepted, ContainerBuildResponse{
+	writeJSON(c, http.StatusAccepted, buildcontract.ContainerBuildResponse{
 		Name:        req.Name,
 		Phase:       phasePending,
 		Message:     "Container build created",
@@ -343,9 +343,9 @@ func listContainerBuilds(c *gin.Context) {
 
 	page := applyPagination(cbList.Items, limit, offset)
 
-	items := make([]ContainerBuildListItem, 0, len(page))
+	items := make([]buildcontract.ContainerBuildListItem, 0, len(page))
 	for _, cb := range page {
-		item := ContainerBuildListItem{
+		item := buildcontract.ContainerBuildListItem{
 			Name:        cb.Name,
 			Phase:       cb.Status.Phase,
 			Message:     cb.Status.Message,
@@ -386,7 +386,7 @@ func (a *APIServer) getContainerBuild(c *gin.Context, name string) {
 		}
 	}
 
-	resp := ContainerBuildResponse{
+	resp := buildcontract.ContainerBuildResponse{
 		Name:        cb.Name,
 		Phase:       cb.Status.Phase,
 		Message:     cb.Status.Message,

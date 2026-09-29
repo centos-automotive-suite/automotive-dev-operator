@@ -9,13 +9,13 @@ import (
 	"log"
 	"net/http"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 )
 
 const (
@@ -73,7 +73,7 @@ func createFlashClientSecret(
 }
 
 func createRegistrySecret(
-	ctx context.Context, k8sClient client.Client, namespace, buildName string, creds *RegistryCredentials,
+	ctx context.Context, k8sClient client.Client, namespace, buildName string, creds *buildcontract.RegistryCredentials,
 ) (string, error) {
 	if creds == nil || !creds.Enabled {
 		return "", nil
@@ -145,7 +145,7 @@ func createRegistrySecret(
 
 // createPushSecret creates a kubernetes.io/dockerconfigjson secret for pushing artifacts to a registry
 func createPushSecret(
-	ctx context.Context, k8sClient client.Client, namespace, buildName string, creds *RegistryCredentials,
+	ctx context.Context, k8sClient client.Client, namespace, buildName string, creds *buildcontract.RegistryCredentials,
 ) (string, error) {
 	if creds == nil || !creds.Enabled {
 		return "", fmt.Errorf("registry credentials are required for push")
@@ -225,7 +225,7 @@ func createPushSecret(
 // setupBuildSecrets creates necessary secrets for the build
 func setupBuildSecrets(
 	ctx context.Context, k8sClient client.Client,
-	namespace string, req *BuildRequest,
+	namespace string, req *buildcontract.BuildRequest,
 ) (envSecretRef, pushSecretName string, err error) {
 	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled {
 		envSecretRef, err = createRegistrySecret(ctx, k8sClient, namespace, req.Name, req.RegistryCredentials)
@@ -250,7 +250,7 @@ func setupBuildSecrets(
 func resolveS3Credentials(
 	ctx context.Context,
 	k8sClient client.Client,
-	req *BuildRequest,
+	req *buildcontract.BuildRequest,
 	namespace string,
 ) (int, error) {
 	if req.S3Bucket == "" {
@@ -288,7 +288,7 @@ func createS3Secret(
 	ctx context.Context,
 	k8sClient client.Client,
 	buildName, namespace string,
-	creds *S3Credentials,
+	creds *buildcontract.S3Credentials,
 ) (string, error) {
 	if creds == nil {
 		return "", nil
@@ -333,7 +333,7 @@ func setBuildSecretOwnerRefs(
 	ctx context.Context, k8sClient client.Client,
 	namespace string, owner *automotivev1alpha1.ImageBuild,
 	envSecretRef, pushSecretName, flashSecretName string,
-	req *BuildRequest,
+	req *buildcontract.BuildRequest,
 ) {
 	for _, name := range []string{envSecretRef, pushSecretName, flashSecretName} {
 		if name == "" {
@@ -354,7 +354,7 @@ func setBuildSecretOwnerRefs(
 // cleanupInlineS3Secret deletes an S3 secret that was generated from inline
 // credentials. It is a best-effort operation used on failure paths to avoid
 // orphaned secrets.
-func cleanupInlineS3Secret(ctx context.Context, k8sClient client.Client, req *BuildRequest, namespace string) {
+func cleanupInlineS3Secret(ctx context.Context, k8sClient client.Client, req *buildcontract.BuildRequest, namespace string) {
 	if req.S3Credentials == nil || req.S3CredentialsSecretName == "" {
 		return
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -44,8 +45,8 @@ func callbackTestScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func callbackTestValue() *BuildCallback {
-	return &BuildCallback{
+func callbackTestValue() *buildcontract.BuildCallback {
+	return &buildcontract.BuildCallback{
 		URL:    "https://receiver.example/hook",
 		Secret: base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901")),
 	}

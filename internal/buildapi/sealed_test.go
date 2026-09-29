@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
@@ -21,7 +22,7 @@ var _ = Describe("Sealed", func() {
 				c.Request = httptest.NewRequest("POST", "/v1/extract-for-signings", nil)
 
 				op := resolveSealedOperation(c)
-				Expect(op).To(Equal(SealedExtractForSigning))
+				Expect(op).To(Equal(buildcontract.SealedExtractForSigning))
 			})
 
 			It("returns empty operation for unknown path", func() {
@@ -37,8 +38,8 @@ var _ = Describe("Sealed", func() {
 
 		Describe("validateSealedRequest", func() {
 			It("accepts operation and validates container refs", func() {
-				req := &SealedRequest{
-					Operation: SealedReseal,
+				req := &buildcontract.SealedRequest{
+					Operation: buildcontract.SealedReseal,
 					InputRef:  "quay.io/example/input:latest",
 					OutputRef: "quay.io/example/output:latest",
 				}
@@ -49,8 +50,8 @@ var _ = Describe("Sealed", func() {
 			})
 
 			It("generates a default name when name is empty", func() {
-				req := &SealedRequest{
-					Operation: SealedPrepareReseal,
+				req := &buildcontract.SealedRequest{
+					Operation: buildcontract.SealedPrepareReseal,
 					InputRef:  "quay.io/example/input:latest",
 				}
 
@@ -60,7 +61,7 @@ var _ = Describe("Sealed", func() {
 			})
 
 			It("rejects inject-signed stage without signedRef", func() {
-				req := &SealedRequest{
+				req := &buildcontract.SealedRequest{
 					Stages:   []string{"prepare-reseal", "inject-signed"},
 					InputRef: "quay.io/example/input:latest",
 				}
@@ -70,8 +71,8 @@ var _ = Describe("Sealed", func() {
 			})
 
 			It("rejects invalid operation", func() {
-				req := &SealedRequest{
-					Operation: SealedOperation("bad-op"),
+				req := &buildcontract.SealedRequest{
+					Operation: buildcontract.SealedOperation("bad-op"),
 					InputRef:  "quay.io/example/input:latest",
 				}
 

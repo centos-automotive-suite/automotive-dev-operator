@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
 )
 
@@ -28,9 +28,9 @@ func TestValidateSecurityFlagsInternalRegistry(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := newTestDiskOpts()
-			*opts.SecureBuild = tc.secure
-			*opts.Reproducible = tc.reproducible
-			*opts.UseInternalRegistry = tc.internal
+			opts.Build.SecureBuild = tc.secure
+			opts.Build.Reproducible = tc.reproducible
+			opts.Registry.UseInternalRegistry = tc.internal
 
 			err := NewHandler(opts).validateSecurityFlags()
 			if tc.wantError == "" {
@@ -56,8 +56,8 @@ func TestSecureBuildCommandsRejectInternalRegistry(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := newTestDiskOpts()
-			*opts.SecureBuild = true
-			*opts.UseInternalRegistry = true
+			opts.Build.SecureBuild = true
+			opts.Registry.UseInternalRegistry = true
 			err := tc.validate(NewHandler(opts))
 			if err == nil || !strings.Contains(err.Error(), "--secure cannot be used with --internal-registry") {
 				t.Fatalf("validation error = %v, want secure internal-registry rejection", err)
@@ -119,11 +119,11 @@ func TestValidateManifestSchemaImagePriority(t *testing.T) {
 
 			aibImage := tc.flagValue
 			opts := newTestDiskOpts()
-			opts.AutomotiveImageBuilder = &aibImage
+			opts.Build.AutomotiveImageBuilder = aibImage
 
-			var config *buildapitypes.OperatorConfigResponse
+			var config *buildcontract.OperatorConfigResponse
 			if tc.configImage != "" {
-				config = &buildapitypes.OperatorConfigResponse{
+				config = &buildcontract.OperatorConfigResponse{
 					AutomotiveImageBuilder: tc.configImage,
 				}
 			}

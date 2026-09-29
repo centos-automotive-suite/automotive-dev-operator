@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/auth"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 func TestExecuteWithReauthPreservesForbiddenResponse(t *testing.T) {
@@ -32,7 +32,7 @@ func TestExecuteWithReauthPreservesForbiddenResponse(t *testing.T) {
 
 	token := "valid-token"
 	err := ExecuteWithReauth(server.URL, &token, false, func(client *buildapiclient.Client) error {
-		_, createErr := client.CreateWorkspace(context.Background(), buildapitypes.WorkspaceRequest{Name: "test"})
+		_, createErr := client.CreateWorkspace(context.Background(), buildcontract.WorkspaceRequest{Name: "test"})
 		return createErr
 	})
 

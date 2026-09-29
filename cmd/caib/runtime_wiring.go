@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/buildcmd"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/downloadcmd"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/flashcmd"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/image"
@@ -12,174 +13,18 @@ import (
 )
 
 type runtimeState struct {
-	ServerURL              *string
-	Manifest               *string
-	BuildName              *string
-	OutputFormat           *string
-	Distro                 *string
-	Target                 *string
-	Architecture           *string
-	ExportFormat           *string
-	Mode                   *string
-	AutomotiveImageBuilder *string
-	StorageClass           *string
-	OutputDir              *string
-	Timeout                *int
-	WaitForBuild           *bool
-	CustomDefs             *[]string
-	DefineFiles            *[]string
-	AIBExtraArgs           *[]string
-	GitURL                 *string
-	GitRef                 *string
-	GitSecret              *string
-	GitLockfile            *string
-	Lockfile               *string
-	RootPassword           *string
-	ExtraRepos             *[]string
-	LocalRepo              *string
-	Workspace              *string
-	FollowLogs             *bool
-	CompressionAlgo        *string
-	AuthToken              *string
-	ExternalID             *string
-	CallbackURL            *string
-	CallbackSecretFile     *string
-
-	ContainerPush    *string
-	BuildDiskImage   *bool
-	DiskFormat       *string
-	ExportOCI        *string
-	BuilderImage     *string
-	RegistryAuthFile *string
-	ContainerRef     *string
-	RebuildBuilder   *bool
-
-	FlashAfterBuild   *bool
-	JumpstarterClient *string
-	FlashName         *string
-	ExporterSelector  *string
-	LeaseDuration     *string
-	LeaseName         *string
-	FlashCmd          *string
-	LeaseTags         *[]string
-
-	UseInternalRegistry       *bool
-	InternalRegistryImageName *string
-	InternalRegistryTag       *string
-
-	SecureBuild       *bool
-	Reproducible      *bool
-	TaskBundleRef     *string
-	RestoreSourcesRef *string
-	TTL               *string
-
-	S3Bucket            *string
-	S3Prefix            *string
-	S3Region            *string
-	S3Endpoint          *string
-	S3AccessKeyID       *string
-	S3SecretAccessKey   *string
-	S3CredentialsSecret *string
-	S3Insecure          *bool
-
-	InsecureSkipTLS *bool
-
-	SealedBuilderImage      *string
-	SealedArchitecture      *string
-	SealedKeySecret         *string
-	SealedKeyPasswordSecret *string
-	SealedKeyFile           *string
-	SealedKeyPassword       *string
-	SealedInputRef          *string
-	SealedOutputRef         *string
-	SealedSignedRef         *string
+	Quiet      bool
+	Connection commandopts.Connection
+	Output     commandopts.Output
+	Callback   commandopts.Callback
+	Registry   commandopts.Registry
+	S3         commandopts.S3
+	Flash      commandopts.Flash
+	Sealed     commandopts.Sealed
+	Build      commandopts.Build
 }
 
-func newRuntimeState() runtimeState {
-	return runtimeState{
-		ServerURL:              &serverURL,
-		Manifest:               &manifest,
-		BuildName:              &buildName,
-		OutputFormat:           &outputFormat,
-		Distro:                 &distro,
-		Target:                 &target,
-		Architecture:           &architecture,
-		ExportFormat:           &exportFormat,
-		Mode:                   &mode,
-		AutomotiveImageBuilder: &automotiveImageBuilder,
-		StorageClass:           &storageClass,
-		OutputDir:              &outputDir,
-		Timeout:                &timeout,
-		WaitForBuild:           &waitForBuild,
-		CustomDefs:             &customDefs,
-		DefineFiles:            &defineFiles,
-		AIBExtraArgs:           &aibExtraArgs,
-		Lockfile:               new(string),
-		GitURL:                 new(string),
-		GitRef:                 new(string),
-		GitSecret:              new(string),
-		GitLockfile:            new(string),
-		RootPassword:           &rootPassword,
-		ExtraRepos:             &extraRepos,
-		LocalRepo:              &localRepo,
-		Workspace:              &workspaceName,
-		FollowLogs:             &followLogs,
-		CompressionAlgo:        &compressionAlgo,
-		AuthToken:              &authToken,
-		ExternalID:             &externalID,
-		CallbackURL:            &callbackURL,
-		CallbackSecretFile:     &callbackSecretFile,
-
-		ContainerPush:    &containerPush,
-		BuildDiskImage:   &buildDiskImage,
-		DiskFormat:       &diskFormat,
-		ExportOCI:        &exportOCI,
-		BuilderImage:     &builderImage,
-		RegistryAuthFile: &registryAuthFile,
-		ContainerRef:     &containerRef,
-		RebuildBuilder:   &rebuildBuilder,
-
-		FlashAfterBuild:   &flashAfterBuild,
-		JumpstarterClient: &jumpstarterClient,
-		FlashName:         &flashName,
-		ExporterSelector:  &exporterSelector,
-		LeaseDuration:     &leaseDuration,
-		LeaseName:         &leaseName,
-		FlashCmd:          &flashCmdOverride,
-		LeaseTags:         &leaseTags,
-
-		UseInternalRegistry:       &useInternalRegistry,
-		InternalRegistryImageName: &internalRegistryImageName,
-		InternalRegistryTag:       &internalRegistryTag,
-
-		SecureBuild:       &secureBuild,
-		Reproducible:      &reproducibleBuild,
-		TaskBundleRef:     &taskBundleRef,
-		RestoreSourcesRef: &restoreSourcesRef,
-		TTL:               &buildTTL,
-
-		S3Bucket:            &s3Bucket,
-		S3Prefix:            &s3Prefix,
-		S3Region:            &s3Region,
-		S3Endpoint:          &s3Endpoint,
-		S3AccessKeyID:       &s3AccessKeyID,
-		S3SecretAccessKey:   &s3SecretAccessKey,
-		S3CredentialsSecret: &s3CredentialsSecret,
-		S3Insecure:          &s3Insecure,
-
-		InsecureSkipTLS: &insecureSkipTLS,
-
-		SealedBuilderImage:      &sealedBuilderImage,
-		SealedArchitecture:      &sealedArchitecture,
-		SealedKeySecret:         &sealedKeySecret,
-		SealedKeyPasswordSecret: &sealedKeyPasswordSecret,
-		SealedKeyFile:           &sealedKeyFile,
-		SealedKeyPassword:       &sealedKeyPassword,
-		SealedInputRef:          &sealedInputRef,
-		SealedOutputRef:         &sealedOutputRef,
-		SealedSignedRef:         &sealedSignedRef,
-	}
-}
+func newRuntimeState() *runtimeState { return &runtimeState{} }
 
 type handlerSet struct {
 	build    *buildcmd.Handler
@@ -191,149 +36,19 @@ type handlerSet struct {
 	inspect  *inspectcmd.Handler
 }
 
-func (s runtimeState) newHandlers() handlerSet {
+func (s *runtimeState) newHandlers() handlerSet {
 	return handlerSet{
-		build: buildcmd.NewHandler(buildcmd.Options{
-			ServerURL:                 s.ServerURL,
-			Manifest:                  s.Manifest,
-			BuildName:                 s.BuildName,
-			Distro:                    s.Distro,
-			Target:                    s.Target,
-			Architecture:              s.Architecture,
-			ExportFormat:              s.ExportFormat,
-			Mode:                      s.Mode,
-			AutomotiveImageBuilder:    s.AutomotiveImageBuilder,
-			StorageClass:              s.StorageClass,
-			OutputDir:                 s.OutputDir,
-			Timeout:                   s.Timeout,
-			WaitForBuild:              s.WaitForBuild,
-			CustomDefs:                s.CustomDefs,
-			DefineFiles:               s.DefineFiles,
-			AIBExtraArgs:              s.AIBExtraArgs,
-			Lockfile:                  s.Lockfile,
-			GitURL:                    s.GitURL,
-			GitRef:                    s.GitRef,
-			GitSecret:                 s.GitSecret,
-			GitLockfile:               s.GitLockfile,
-			RootPassword:              s.RootPassword,
-			ExtraRepos:                s.ExtraRepos,
-			LocalRepo:                 s.LocalRepo,
-			Workspace:                 s.Workspace,
-			FollowLogs:                s.FollowLogs,
-			CompressionAlgo:           s.CompressionAlgo,
-			AuthToken:                 s.AuthToken,
-			ExternalID:                s.ExternalID,
-			CallbackURL:               s.CallbackURL,
-			CallbackSecretFile:        s.CallbackSecretFile,
-			ContainerPush:             s.ContainerPush,
-			BuildDiskImage:            s.BuildDiskImage,
-			DiskFormat:                s.DiskFormat,
-			ExportOCI:                 s.ExportOCI,
-			BuilderImage:              s.BuilderImage,
-			RegistryAuthFile:          s.RegistryAuthFile,
-			ContainerRef:              s.ContainerRef,
-			RebuildBuilder:            s.RebuildBuilder,
-			FlashAfterBuild:           s.FlashAfterBuild,
-			JumpstarterClient:         s.JumpstarterClient,
-			LeaseDuration:             s.LeaseDuration,
-			LeaseName:                 s.LeaseName,
-			FlashCmd:                  s.FlashCmd,
-			ExporterSelector:          s.ExporterSelector,
-			LeaseTags:                 s.LeaseTags,
-			UseInternalRegistry:       s.UseInternalRegistry,
-			InternalRegistryImageName: s.InternalRegistryImageName,
-			InternalRegistryTag:       s.InternalRegistryTag,
-			SecureBuild:               s.SecureBuild,
-			Reproducible:              s.Reproducible,
-			TaskBundleRef:             s.TaskBundleRef,
-			RestoreSourcesRef:         s.RestoreSourcesRef,
-			TTL:                       s.TTL,
-			S3Bucket:                  s.S3Bucket,
-			S3Prefix:                  s.S3Prefix,
-			S3Region:                  s.S3Region,
-			S3Endpoint:                s.S3Endpoint,
-			S3AccessKeyID:             s.S3AccessKeyID,
-			S3SecretAccessKey:         s.S3SecretAccessKey,
-			S3CredentialsSecret:       s.S3CredentialsSecret,
-			S3Insecure:                s.S3Insecure,
-			InsecureSkipTLS:           s.InsecureSkipTLS,
-			OutputFormat:              s.OutputFormat,
-			HandleError:               handleError,
-		}),
-		query: querycmd.NewHandler(querycmd.Options{
-			ServerURL:       s.ServerURL,
-			AuthToken:       s.AuthToken,
-			OutputFormat:    s.OutputFormat,
-			InsecureSkipTLS: s.InsecureSkipTLS,
-			HandleError:     handleError,
-		}),
-		download: downloadcmd.NewHandler(downloadcmd.Options{
-			ServerURL:       s.ServerURL,
-			AuthToken:       s.AuthToken,
-			OutputDir:       s.OutputDir,
-			InsecureSkipTLS: s.InsecureSkipTLS,
-			HandleError:     handleError,
-		}),
-		flash: flashcmd.NewHandler(flashcmd.Options{
-			ServerURL:          s.ServerURL,
-			AuthToken:          s.AuthToken,
-			JumpstarterClient:  s.JumpstarterClient,
-			FlashName:          s.FlashName,
-			Target:             s.Target,
-			ExporterSelector:   s.ExporterSelector,
-			LeaseDuration:      s.LeaseDuration,
-			LeaseName:          s.LeaseName,
-			FlashCmd:           s.FlashCmd,
-			LeaseTags:          s.LeaseTags,
-			WaitForBuild:       s.WaitForBuild,
-			FollowLogs:         s.FollowLogs,
-			InsecureSkipTLS:    s.InsecureSkipTLS,
-			RegistryAuthFile:   s.RegistryAuthFile,
-			OutputFormat:       s.OutputFormat,
-			ExternalID:         s.ExternalID,
-			CallbackURL:        s.CallbackURL,
-			CallbackSecretFile: s.CallbackSecretFile,
-			HandleError:        handleError,
-		}),
-		sealed: sealedcmd.NewHandler(sealedcmd.Options{
-			ServerURL:               s.ServerURL,
-			AuthToken:               s.AuthToken,
-			AutomotiveImageBuilder:  s.AutomotiveImageBuilder,
-			SealedBuilderImage:      s.SealedBuilderImage,
-			SealedArchitecture:      s.SealedArchitecture,
-			AIBExtraArgs:            s.AIBExtraArgs,
-			WaitForBuild:            s.WaitForBuild,
-			FollowLogs:              s.FollowLogs,
-			Timeout:                 s.Timeout,
-			SealedKeySecret:         s.SealedKeySecret,
-			SealedKeyPasswordSecret: s.SealedKeyPasswordSecret,
-			SealedKeyFile:           s.SealedKeyFile,
-			SealedKeyPassword:       s.SealedKeyPassword,
-			SealedInputRef:          s.SealedInputRef,
-			SealedOutputRef:         s.SealedOutputRef,
-			SealedSignedRef:         s.SealedSignedRef,
-			RegistryAuthFile:        s.RegistryAuthFile,
-			InsecureSkipTLS:         s.InsecureSkipTLS,
-			HandleError:             handleError,
-		}),
-		token: tokencmd.NewHandler(tokencmd.Options{
-			ServerURL:       s.ServerURL,
-			AuthToken:       s.AuthToken,
-			InsecureSkipTLS: s.InsecureSkipTLS,
-			OutputFormat:    s.OutputFormat,
-			HandleError:     handleError,
-		}),
-		inspect: inspectcmd.NewHandler(inspectcmd.Options{
-			RegistryAuthFile: s.RegistryAuthFile,
-			OutputDir:        s.OutputDir,
-			OutputFormat:     s.OutputFormat,
-			InsecureSkipTLS:  s.InsecureSkipTLS,
-			HandleError:      handleError,
-		}),
+		build:    buildcmd.NewHandler(buildcmd.Options{Connection: &s.Connection, Output: &s.Output, Callback: &s.Callback, Registry: &s.Registry, S3: &s.S3, Flash: &s.Flash, Build: &s.Build, HandleError: handleError}),
+		query:    querycmd.NewHandler(querycmd.Options{Connection: &s.Connection, Output: &s.Output, HandleError: handleError}),
+		download: downloadcmd.NewHandler(downloadcmd.Options{Connection: &s.Connection, Output: &s.Output, HandleError: handleError}),
+		flash:    flashcmd.NewHandler(flashcmd.Options{Connection: &s.Connection, Output: &s.Output, Callback: &s.Callback, Flash: &s.Flash, Registry: &s.Registry, Build: &s.Build, HandleError: handleError}),
+		sealed:   sealedcmd.NewHandler(sealedcmd.Options{Connection: &s.Connection, Output: &s.Output, Sealed: &s.Sealed, Registry: &s.Registry, Build: &s.Build, HandleError: handleError}),
+		token:    tokencmd.NewHandler(tokencmd.Options{Connection: &s.Connection, Output: &s.Output, HandleError: handleError}),
+		inspect:  inspectcmd.NewHandler(inspectcmd.Options{Connection: &s.Connection, Output: &s.Output, Registry: &s.Registry, HandleError: handleError}),
 	}
 }
 
-func (s runtimeState) imageOptions(h handlerSet) image.Options {
+func (s *runtimeState) imageOptions(h handlerSet) image.Options {
 	return image.Options{
 		RunBuild:             h.build.RunBuild,
 		RunResolve:           h.build.RunResolve,
@@ -353,80 +68,13 @@ func (s runtimeState) imageOptions(h handlerSet) image.Options {
 		RunCancel:            h.build.RunCancel,
 		RunInspect:           h.inspect.RunInspect,
 		GetDefaultArch:       getDefaultArch,
-
-		ServerURL:              s.ServerURL,
-		AuthToken:              s.AuthToken,
-		ExternalID:             s.ExternalID,
-		CallbackURL:            s.CallbackURL,
-		CallbackSecretFile:     s.CallbackSecretFile,
-		BuildName:              s.BuildName,
-		Distro:                 s.Distro,
-		Target:                 s.Target,
-		Architecture:           s.Architecture,
-		ExportFormat:           s.ExportFormat,
-		Mode:                   s.Mode,
-		AutomotiveImageBuilder: s.AutomotiveImageBuilder,
-		OutputDir:              s.OutputDir,
-		Timeout:                s.Timeout,
-		WaitForBuild:           s.WaitForBuild,
-		CustomDefs:             s.CustomDefs,
-		DefineFiles:            s.DefineFiles,
-		AIBExtraArgs:           s.AIBExtraArgs,
-		Lockfile:               s.Lockfile,
-		GitURL:                 s.GitURL,
-		GitRef:                 s.GitRef,
-		GitSecret:              s.GitSecret,
-		GitLockfile:            s.GitLockfile,
-		RootPassword:           s.RootPassword,
-		ExtraRepos:             s.ExtraRepos,
-		LocalRepo:              s.LocalRepo,
-		Workspace:              s.Workspace,
-		FollowLogs:             s.FollowLogs,
-		CompressionAlgo:        s.CompressionAlgo,
-		ContainerPush:          s.ContainerPush,
-		BuildDiskImage:         s.BuildDiskImage,
-		DiskFormat:             s.DiskFormat,
-		ExportOCI:              s.ExportOCI,
-		BuilderImage:           s.BuilderImage,
-		RegistryAuthFile:       s.RegistryAuthFile,
-		RebuildBuilder:         s.RebuildBuilder,
-
-		FlashAfterBuild:   s.FlashAfterBuild,
-		JumpstarterClient: s.JumpstarterClient,
-		FlashName:         s.FlashName,
-		ExporterSelector:  s.ExporterSelector,
-		LeaseDuration:     s.LeaseDuration,
-		LeaseName:         s.LeaseName,
-		FlashCmd:          s.FlashCmd,
-		LeaseTags:         s.LeaseTags,
-
-		UseInternalRegistry:       s.UseInternalRegistry,
-		InternalRegistryImageName: s.InternalRegistryImageName,
-		InternalRegistryTag:       s.InternalRegistryTag,
-
-		SecureBuild:       s.SecureBuild,
-		Reproducible:      s.Reproducible,
-		TaskBundleRef:     s.TaskBundleRef,
-		RestoreSourcesRef: s.RestoreSourcesRef,
-		TTL:               s.TTL,
-
-		S3Bucket:            s.S3Bucket,
-		S3Prefix:            s.S3Prefix,
-		S3Region:            s.S3Region,
-		S3Endpoint:          s.S3Endpoint,
-		S3AccessKeyID:       s.S3AccessKeyID,
-		S3SecretAccessKey:   s.S3SecretAccessKey,
-		S3CredentialsSecret: s.S3CredentialsSecret,
-		S3Insecure:          s.S3Insecure,
-
-		SealedBuilderImage:      s.SealedBuilderImage,
-		SealedArchitecture:      s.SealedArchitecture,
-		SealedKeySecret:         s.SealedKeySecret,
-		SealedKeyPasswordSecret: s.SealedKeyPasswordSecret,
-		SealedKeyFile:           s.SealedKeyFile,
-		SealedKeyPassword:       s.SealedKeyPassword,
-		SealedInputRef:          s.SealedInputRef,
-		SealedOutputRef:         s.SealedOutputRef,
-		SealedSignedRef:         s.SealedSignedRef,
+		Connection:           &s.Connection,
+		Output:               &s.Output,
+		Callback:             &s.Callback,
+		Registry:             &s.Registry,
+		S3:                   &s.S3,
+		Flash:                &s.Flash,
+		Sealed:               &s.Sealed,
+		Build:                &s.Build,
 	}
 }

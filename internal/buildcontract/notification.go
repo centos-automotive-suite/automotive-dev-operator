@@ -1,10 +1,6 @@
-package buildapi
+package buildcontract
 
-import (
-	"encoding/json"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-)
+import automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 
 // BuildCallback requests a signed terminal event for a build or flash operation.
 type BuildCallback struct {
@@ -19,12 +15,3 @@ func (c BuildCallback) GoString() string { return c.String() }
 type ArtifactStatus = automotivev1alpha1.ArtifactStatus
 type FlashOutcomeStatus = automotivev1alpha1.FlashOutcomeStatus
 type NotificationStatus = automotivev1alpha1.NotificationStatus
-
-// MarshalJSON prevents the write-only callback from leaking through a build template response.
-func (r BuildTemplateResponse) MarshalJSON() ([]byte, error) {
-	type templateResponse BuildTemplateResponse
-	return json.Marshal(struct {
-		templateResponse
-		Callback *BuildCallback `json:"callback,omitempty"`
-	}{templateResponse: templateResponse(r)})
-}

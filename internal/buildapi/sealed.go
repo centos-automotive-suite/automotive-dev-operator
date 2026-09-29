@@ -12,30 +12,30 @@ import (
 	"strings"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	"go.opentelemetry.io/otel/attribute"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
-	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
-	"go.opentelemetry.io/otel/attribute"
 )
 
 // sealedPathToOperation maps the API path prefix to the AIB sealed operation.
-var sealedPathToOperation = map[string]SealedOperation{
-	"/v1/prepare-reseals":      SealedPrepareReseal,
-	"/v1/reseals":              SealedReseal,
-	"/v1/extract-for-signings": SealedExtractForSigning,
-	"/v1/inject-signeds":       SealedInjectSigned,
+var sealedPathToOperation = map[string]buildcontract.SealedOperation{
+	"/v1/prepare-reseals":      buildcontract.SealedPrepareReseal,
+	"/v1/reseals":              buildcontract.SealedReseal,
+	"/v1/extract-for-signings": buildcontract.SealedExtractForSigning,
+	"/v1/inject-signeds":       buildcontract.SealedInjectSigned,
 }
 
 // resolveSealedOperation extracts the sealed operation from the request URL path.
-func resolveSealedOperation(c *gin.Context) SealedOperation {
+func resolveSealedOperation(c *gin.Context) buildcontract.SealedOperation {
 	p := c.Request.URL.Path
 	for prefix, op := range sealedPathToOperation {
 		if strings.HasPrefix(p, prefix) {
@@ -46,7 +46,7 @@ func resolveSealedOperation(c *gin.Context) SealedOperation {
 }
 
 // validateSealedRequest validates and normalizes a SealedRequest, returning the resolved stages or an error message.
-func validateSealedRequest(req *SealedRequest) ([]string, string) {
+func validateSealedRequest(req *buildcontract.SealedRequest) ([]string, string) {
 	validOps := map[string]bool{
 		"prepare-reseal": true, "reseal": true, "extract-for-signing": true, "inject-signed": true,
 	}
@@ -115,12 +115,12 @@ func (a *APIServer) handleCreateSealed(c *gin.Context) {
 	a.createSealed(c, op)
 }
 
-func (a *APIServer) createSealed(c *gin.Context, pathOp SealedOperation) {
+func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOperation) {
 	ctx, span := apiTracer.Start(c.Request.Context(), "createSealed")
 	defer span.End()
 	opLabel := sealedOperationLabel(pathOp, nil)
 
-	var req SealedRequest
+	var req buildcontract.SealedRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		spanError(span, err)
 		SealedCreateRequestsTotal.WithLabelValues(opLabel, "bad_request").Inc()
@@ -230,7 +230,7 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp SealedOperation) {
 	}
 	SealedCreateRequestsTotal.WithLabelValues(opLabel, "accepted").Inc()
 
-	writeJSON(c, http.StatusAccepted, SealedResponse{
+	writeJSON(c, http.StatusAccepted, buildcontract.SealedResponse{
 		Name:        req.Name,
 		Phase:       phasePending,
 		Message:     "Reseal job created",
@@ -264,13 +264,13 @@ func (a *APIServer) listSealed(c *gin.Context) {
 
 	page := applyPagination(list.Items, limit, offset)
 
-	resp := make([]SealedListItem, 0, len(page))
+	resp := make([]buildcontract.SealedListItem, 0, len(page))
 	for _, s := range page {
 		var compStr string
 		if s.Status.CompletionTime != nil {
 			compStr = s.Status.CompletionTime.Format(time.RFC3339)
 		}
-		resp = append(resp, SealedListItem{
+		resp = append(resp, buildcontract.SealedListItem{
 			Name:           s.Name,
 			Phase:          s.Status.Phase,
 			Message:        s.Status.Message,
@@ -305,7 +305,7 @@ func (a *APIServer) getSealed(c *gin.Context, name string) {
 	if sealed.Status.CompletionTime != nil {
 		compStr = sealed.Status.CompletionTime.Format(time.RFC3339)
 	}
-	writeJSON(c, http.StatusOK, SealedResponse{
+	writeJSON(c, http.StatusOK, buildcontract.SealedResponse{
 		Name:            sealed.Name,
 		Phase:           sealed.Status.Phase,
 		Message:         sealed.Status.Message,

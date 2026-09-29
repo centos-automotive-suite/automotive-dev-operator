@@ -21,9 +21,8 @@ const (
 	sourceCAIBEnv       = "CAIB_SERVER env"
 )
 
-var statusOutputFormat string
-
-func newStatusCmd() *cobra.Command {
+func newStatusCmd(insecure *bool) *cobra.Command {
+	format := "table"
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show which Build API server builds will run on",
@@ -36,9 +35,9 @@ Examples:
   caib status
   caib status -o json
   caib status -o yaml`,
-		Run: runStatus,
+		Run: func(_ *cobra.Command, _ []string) { runStatus(format, *insecure) },
 	}
-	cmd.Flags().StringVarP(&statusOutputFormat, "output", "o", "table", "output format: table, json, yaml")
+	cmd.Flags().StringVarP(&format, "output", "o", "table", "output format: table, json, yaml")
 	return cmd
 }
 
@@ -52,27 +51,27 @@ type serverInfo struct {
 	Status string `json:"status" yaml:"status"`
 }
 
-func runStatus(_ *cobra.Command, _ []string) {
-	format, err := caibcommon.ResolveOutputFormat(&statusOutputFormat)
+func runStatus(outputFormat string, insecure bool) {
+	format, err := caibcommon.ResolveOutputFormat(&outputFormat)
 	if err != nil {
 		handleError(err)
 		return
 	}
 
-	info := gatherStatus()
+	info := gatherStatus(insecure)
 	caibcommon.RenderFormatted(format, info, func() error {
 		printStatusTable(info)
 		return nil
 	}, handleError)
 }
 
-func gatherStatus() statusInfo {
+func gatherStatus(insecure bool) statusInfo {
 	var info statusInfo
 
 	info.Server.URL, info.Server.Source = resolveServerWithSource()
 
 	if info.Server.URL != "" {
-		info.Server.Status = checkServerHealth(info.Server.URL)
+		info.Server.Status = checkServerHealth(info.Server.URL, insecure)
 	} else {
 		info.Server.Status = statusNotConfigured
 	}
@@ -102,11 +101,11 @@ func resolveServerWithSource() (string, string) {
 	return "", ""
 }
 
-func checkServerHealth(serverURL string) string {
+func checkServerHealth(serverURL string, insecure bool) string {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipTLS, MinVersion: tls.VersionTLS12}, //nolint:gosec
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure, MinVersion: tls.VersionTLS12}, //nolint:gosec
 		},
 	}
 

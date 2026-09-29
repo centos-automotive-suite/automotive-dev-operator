@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 )

@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
 )
 
 const execStreamPreamble = "Waiting for logs...\n"
@@ -25,7 +26,7 @@ func (h *Handler) materializeWorkspaceFiles(
 	api *buildapiclient.Client,
 	workspace, manifest string,
 ) (string, []map[string]string, func(), error) {
-	rewritten, refs, err := buildapitypes.ExtractWorkspaceAddFiles(manifest)
+	rewritten, refs, err := workspacemanifest.ExtractWorkspaceAddFiles(manifest)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -72,7 +73,7 @@ func (h *Handler) materializeWorkspaceFiles(
 
 func fetchWorkspaceFile(ctx context.Context, api *buildapiclient.Client, workspace, absPath string) ([]byte, error) {
 	quoted := "'" + strings.ReplaceAll(absPath, "'", `'\''`) + "'"
-	body, err := api.ExecWorkspace(ctx, workspace, buildapitypes.WorkspaceExecRequest{
+	body, err := api.ExecWorkspace(ctx, workspace, buildcontract.WorkspaceExecRequest{
 		Command: "cat -- " + quoted,
 	})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 )
 
@@ -30,7 +31,7 @@ func parseTestExtraRepos(t *testing.T, customDefs []string) []testRepoEntry {
 }
 
 func TestResolveOCIRepoImages_Empty(t *testing.T) {
-	req := &BuildRequest{}
+	req := &buildcontract.BuildRequest{}
 	if err := resolveOCIRepoImages(req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -40,7 +41,7 @@ func TestResolveOCIRepoImages_Empty(t *testing.T) {
 }
 
 func TestResolveOCIRepoImages_Single(t *testing.T) {
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		OCIRepoImages: []string{"quay.io/org/rpms:v1"},
 	}
 	if err := resolveOCIRepoImages(req); err != nil {
@@ -61,7 +62,7 @@ func TestResolveOCIRepoImages_Single(t *testing.T) {
 }
 
 func TestResolveOCIRepoImages_ExceedsMax(t *testing.T) {
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		OCIRepoImages: []string{
 			"quay.io/a:v1",
 			"quay.io/b:v1",
@@ -77,7 +78,7 @@ func TestResolveOCIRepoImages_ExceedsMax(t *testing.T) {
 }
 
 func TestResolveOCIRepoImages_EmptyRef(t *testing.T) {
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		OCIRepoImages: []string{"  "},
 	}
 	err := resolveOCIRepoImages(req)
@@ -95,7 +96,7 @@ func TestResolveOCIRepoImages_MergeWithWorkspaceRepos(t *testing.T) {
 	}
 	wsJSON, _ := json.Marshal(wsRepos)
 
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		CustomDefs:    []string{"some_def=value", "extra_repos=" + string(wsJSON)},
 		OCIRepoImages: []string{"quay.io/org/rpms:v1"},
 	}
@@ -126,7 +127,7 @@ func TestResolveOCIRepoImages_MergeWithWorkspaceRepos(t *testing.T) {
 }
 
 func TestResolveOCIRepoImages_NoExistingExtraRepos(t *testing.T) {
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		CustomDefs:    []string{"some_def=value"},
 		OCIRepoImages: []string{"quay.io/org/rpms:v1"},
 	}
@@ -144,10 +145,10 @@ func TestResolveOCIRepoImages_NoExistingExtraRepos(t *testing.T) {
 }
 
 func TestBuildAIBSpecOCIRepoImages(t *testing.T) {
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Distro:        "autosd",
 		Target:        "qemu",
-		Mode:          ModeBootc,
+		Mode:          buildcontract.ModeBootc,
 		OCIRepoImages: []string{"quay.io/org/rpms:v1"},
 	}
 	spec := buildAIBSpec(req, "name: test\n", "test.aib.yml", false)
@@ -161,10 +162,10 @@ func TestBuildAIBSpecOCIRepoImages(t *testing.T) {
 }
 
 func TestBuildAIBSpecNoOCIRepoImages(t *testing.T) {
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Distro: "autosd",
 		Target: "qemu",
-		Mode:   ModeBootc,
+		Mode:   buildcontract.ModeBootc,
 	}
 	spec := buildAIBSpec(req, "name: test\n", "test.aib.yml", false)
 
@@ -174,7 +175,7 @@ func TestBuildAIBSpecNoOCIRepoImages(t *testing.T) {
 }
 
 func TestResolveOCIRepoImages_LocalRepoPriority(t *testing.T) {
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		OCIRepoImages: []string{"quay.io/org/rpms:v1"},
 		LocalRepo:     true,
 	}
@@ -192,7 +193,7 @@ func TestResolveOCIRepoImages_LocalRepoPriority(t *testing.T) {
 }
 
 func TestResolveOCIRepoImages_ExtraRepoNoPriority(t *testing.T) {
-	req := &BuildRequest{
+	req := &buildcontract.BuildRequest{
 		OCIRepoImages: []string{"quay.io/org/rpms:v1"},
 	}
 	if err := resolveOCIRepoImages(req); err != nil {

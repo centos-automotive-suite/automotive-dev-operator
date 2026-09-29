@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/logstream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
@@ -30,27 +31,12 @@ const (
 
 // Options wires sealed command handlers to caller-owned state and dependencies.
 type Options struct {
-	ServerURL              *string
-	AuthToken              *string
-	AutomotiveImageBuilder *string
-	SealedBuilderImage     *string
-	SealedArchitecture     *string
-	AIBExtraArgs           *[]string
-	WaitForBuild           *bool
-	FollowLogs             *bool
-	Timeout                *int
-
-	SealedKeySecret         *string
-	SealedKeyPasswordSecret *string
-	SealedKeyFile           *string
-	SealedKeyPassword       *string
-	SealedInputRef          *string
-	SealedOutputRef         *string
-	SealedSignedRef         *string
-
-	RegistryAuthFile *string
-	InsecureSkipTLS  *bool
-	HandleError      func(error)
+	Connection  *commandopts.Connection
+	Output      *commandopts.Output
+	Sealed      *commandopts.Sealed
+	Registry    *commandopts.Registry
+	Build       *commandopts.Build
+	HandleError func(error)
 }
 
 // Handler implements sealed command run functions.
@@ -59,8 +45,27 @@ type Handler struct {
 }
 
 // NewHandler creates a sealed operations handler.
+func (o Options) withDefaults() Options {
+	if o.Connection == nil {
+		o.Connection = &commandopts.Connection{}
+	}
+	if o.Output == nil {
+		o.Output = &commandopts.Output{}
+	}
+	if o.Sealed == nil {
+		o.Sealed = &commandopts.Sealed{}
+	}
+	if o.Registry == nil {
+		o.Registry = &commandopts.Registry{}
+	}
+	if o.Build == nil {
+		o.Build = &commandopts.Build{}
+	}
+	return o
+}
+
 func NewHandler(opts Options) *Handler {
-	return &Handler{opts: opts}
+	return &Handler{opts: opts.withDefaults()}
 }
 
 func (h *Handler) handleError(err error) {
@@ -74,10 +79,10 @@ func (h *Handler) handleError(err error) {
 
 func (h *Handler) applyWaitFollowDefaults(cmd *cobra.Command) {
 	if !cmd.Flags().Changed("wait") {
-		*h.opts.WaitForBuild = false
+		h.opts.Output.Wait = false
 	}
 	if !cmd.Flags().Changed("follow") {
-		*h.opts.FollowLogs = true
+		h.opts.Output.FollowLogs = true
 	}
 }
 
@@ -89,7 +94,7 @@ func (h *Handler) RunPrepareReseal(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	h.sealedRunViaAPI(buildapitypes.SealedPrepareReseal, inputRef, outputRef, "")
+	h.sealedRunViaAPI(buildcontract.SealedPrepareReseal, inputRef, outputRef, "")
 }
 
 // RunReseal handles `caib image reseal`.
@@ -100,7 +105,7 @@ func (h *Handler) RunReseal(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	h.sealedRunViaAPI(buildapitypes.SealedReseal, inputRef, outputRef, "")
+	h.sealedRunViaAPI(buildcontract.SealedReseal, inputRef, outputRef, "")
 }
 
 // RunExtractForSigning handles `caib image extract-for-signing`.
@@ -111,7 +116,7 @@ func (h *Handler) RunExtractForSigning(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	h.sealedRunViaAPI(buildapitypes.SealedExtractForSigning, inputRef, outputRef, "")
+	h.sealedRunViaAPI(buildcontract.SealedExtractForSigning, inputRef, outputRef, "")
 }
 
 // RunInjectSigned handles `caib image inject-signed`.
@@ -122,22 +127,22 @@ func (h *Handler) RunInjectSigned(cmd *cobra.Command, args []string) {
 		h.handleError(err)
 		return
 	}
-	h.sealedRunViaAPI(buildapitypes.SealedInjectSigned, inputRef, outputRef, signedRef)
+	h.sealedRunViaAPI(buildcontract.SealedInjectSigned, inputRef, outputRef, signedRef)
 }
 
 func (h *Handler) sealedBuildRequest(
-	op buildapitypes.SealedOperation,
+	op buildcontract.SealedOperation,
 	inputRef, outputRef, signedRef string,
-) (buildapitypes.SealedRequest, error) {
-	req := buildapitypes.SealedRequest{
+) (buildcontract.SealedRequest, error) {
+	req := buildcontract.SealedRequest{
 		Operation:    op,
 		InputRef:     inputRef,
 		OutputRef:    outputRef,
 		SignedRef:    signedRef,
-		AIBImage:     *h.opts.AutomotiveImageBuilder,
-		BuilderImage: *h.opts.SealedBuilderImage,
-		Architecture: *h.opts.SealedArchitecture,
-		AIBExtraArgs: *h.opts.AIBExtraArgs,
+		AIBImage:     h.opts.Build.AutomotiveImageBuilder,
+		BuilderImage: h.opts.Sealed.BuilderImage,
+		Architecture: h.opts.Sealed.Architecture,
+		AIBExtraArgs: h.opts.Build.AIBExtraArgs,
 	}
 
 	registryURL, username, password := registryauth.ExtractRegistryCredentials(inputRef, outputRef)
@@ -145,25 +150,25 @@ func (h *Handler) sealedBuildRequest(
 		registryURL,
 		username,
 		password,
-		*h.opts.RegistryAuthFile,
+		h.opts.Registry.AuthFile,
 	)
 	if err != nil {
 		return req, err
 	}
 	req.RegistryCredentials = registryCreds
 
-	if keyFile := strings.TrimSpace(*h.opts.SealedKeyFile); keyFile != "" {
+	if keyFile := strings.TrimSpace(h.opts.Sealed.KeyFile); keyFile != "" {
 		keyData, err := os.ReadFile(keyFile)
 		if err != nil {
 			return req, fmt.Errorf("failed to read key file %s: %w", keyFile, err)
 		}
 		req.KeyContent = string(keyData)
-		if keyPassword := strings.TrimSpace(*h.opts.SealedKeyPassword); keyPassword != "" {
+		if keyPassword := strings.TrimSpace(h.opts.Sealed.KeyPassword); keyPassword != "" {
 			req.KeyPassword = keyPassword
 		}
-	} else if keySecret := strings.TrimSpace(*h.opts.SealedKeySecret); keySecret != "" {
+	} else if keySecret := strings.TrimSpace(h.opts.Sealed.KeySecret); keySecret != "" {
 		req.KeySecretRef = keySecret
-		if keyPassSecret := strings.TrimSpace(*h.opts.SealedKeyPasswordSecret); keyPassSecret != "" {
+		if keyPassSecret := strings.TrimSpace(h.opts.Sealed.KeyPasswordSecret); keyPassSecret != "" {
 			req.KeyPasswordSecretRef = keyPassSecret
 		}
 	}
@@ -171,8 +176,8 @@ func (h *Handler) sealedBuildRequest(
 	return req, nil
 }
 
-func (h *Handler) sealedRunViaAPI(op buildapitypes.SealedOperation, inputRef, outputRef, signedRef string) {
-	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+func (h *Handler) sealedRunViaAPI(op buildcontract.SealedOperation, inputRef, outputRef, signedRef string) {
+	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -192,7 +197,7 @@ func (h *Handler) sealedRunViaAPI(op buildapitypes.SealedOperation, inputRef, ou
 	}
 	clilog.Infof("Job %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
 
-	if *h.opts.WaitForBuild || *h.opts.FollowLogs {
+	if h.opts.Output.Wait || h.opts.Output.FollowLogs {
 		h.sealedWaitForCompletion(ctx, api, op, resp.Name)
 	}
 }
@@ -200,11 +205,11 @@ func (h *Handler) sealedRunViaAPI(op buildapitypes.SealedOperation, inputRef, ou
 func (h *Handler) sealedWaitForCompletion(
 	ctx context.Context,
 	api *buildapiclient.Client,
-	op buildapitypes.SealedOperation,
+	op buildcontract.SealedOperation,
 	name string,
 ) {
 	clilog.Infoln("Waiting for job to complete...")
-	sealedTimeout := time.Duration(*h.opts.Timeout) * time.Minute
+	sealedTimeout := time.Duration(h.opts.Output.Timeout) * time.Minute
 	waitCtx, cancel := context.WithTimeout(ctx, sealedTimeout)
 	defer cancel()
 
@@ -252,7 +257,7 @@ func (h *Handler) sealedWaitForCompletion(
 				return
 			}
 
-			if *h.opts.FollowLogs && !logStreaming && (st.Phase == phaseRunning || st.Phase == phasePending) {
+			if h.opts.Output.FollowLogs && !logStreaming && (st.Phase == phaseRunning || st.Phase == phasePending) {
 				if logRetries < maxSealedLogRetries {
 					logCtx, logCancel := context.WithTimeout(waitCtx, requestTimeout)
 					streamErr := h.sealedStreamLogs(logCtx, op, name)
@@ -269,26 +274,26 @@ func (h *Handler) sealedWaitForCompletion(
 					clilog.Infof("Log streaming failed after %d attempts. Falling back to status updates.\n", maxSealedLogRetries)
 					logRetryWarningShown = true
 					logStreaming = false
-					*h.opts.FollowLogs = false
+					h.opts.Output.FollowLogs = false
 				}
 			}
 		}
 	}
 }
 
-func (h *Handler) sealedStreamLogs(ctx context.Context, op buildapitypes.SealedOperation, name string) error {
-	logURL := strings.TrimRight(*h.opts.ServerURL, "/") +
-		buildapitypes.SealedOperationAPIPath(op) + "/" + url.PathEscape(name) + "/logs?follow=1"
+func (h *Handler) sealedStreamLogs(ctx context.Context, op buildcontract.SealedOperation, name string) error {
+	logURL := strings.TrimRight(h.opts.Connection.ServerURL, "/") +
+		buildcontract.SealedOperationAPIPath(op) + "/" + url.PathEscape(name) + "/logs?follow=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, logURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create log request: %w", err)
 	}
-	if t := strings.TrimSpace(*h.opts.AuthToken); t != "" {
+	if t := strings.TrimSpace(h.opts.Connection.AuthToken); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
 
 	transport := &http.Transport{}
-	if *h.opts.InsecureSkipTLS {
+	if h.opts.Connection.InsecureSkipTLS {
 		transport.TLSClientConfig = &tls.Config{
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
@@ -321,8 +326,8 @@ func (h *Handler) sealedStreamLogs(ctx context.Context, op buildapitypes.SealedO
 
 // resolveSealedTwoRefs returns input and output refs from --input/--output flags or positionals (any order).
 func (h *Handler) resolveSealedTwoRefs(args []string) (inputRef, outputRef string, err error) {
-	in := strings.TrimSpace(*h.opts.SealedInputRef)
-	out := strings.TrimSpace(*h.opts.SealedOutputRef)
+	in := strings.TrimSpace(h.opts.Sealed.InputRef)
+	out := strings.TrimSpace(h.opts.Sealed.OutputRef)
 	if in != "" && out != "" {
 		return in, out, nil
 	}
@@ -340,9 +345,9 @@ func (h *Handler) resolveSealedTwoRefs(args []string) (inputRef, outputRef strin
 
 // resolveSealedThreeRefs returns input, signed, and output refs from --input/--signed/--output flags or positionals (any order).
 func (h *Handler) resolveSealedThreeRefs(args []string) (inputRef, signedRef, outputRef string, err error) {
-	in := strings.TrimSpace(*h.opts.SealedInputRef)
-	signed := strings.TrimSpace(*h.opts.SealedSignedRef)
-	out := strings.TrimSpace(*h.opts.SealedOutputRef)
+	in := strings.TrimSpace(h.opts.Sealed.InputRef)
+	signed := strings.TrimSpace(h.opts.Sealed.SignedRef)
+	out := strings.TrimSpace(h.opts.Sealed.OutputRef)
 	if in != "" && signed != "" && out != "" {
 		return in, signed, out, nil
 	}

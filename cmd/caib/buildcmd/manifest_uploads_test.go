@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
-	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	"gopkg.in/yaml.v3"
 )
@@ -71,12 +72,12 @@ func TestPrepareManifestUploads_LocalPaths(t *testing.T) {
 			}
 			manifestPath := filepath.Join(manifestDir, "image.aib.yml")
 			writeUploadTestFile(t, manifestPath, string(manifestBytes))
-			h := &Handler{}
+			h := NewHandler(Options{})
 			if tt.workspace {
-				h.opts.Workspace = new("test-workspace")
+				h.opts.Build.Workspace = "test-workspace"
 				t.Setenv("CAIB_CLIENT_WORKSPACE_UPLOAD", "0")
 			}
-			req := &buildapi.BuildRequest{Manifest: string(manifestBytes)}
+			req := &buildcontract.BuildRequest{Manifest: string(manifestBytes)}
 			refs, cleanup, err := h.prepareManifestUploads(context.Background(), nil, req, manifestPath)
 			if err != nil {
 				t.Fatal(err)
@@ -166,8 +167,8 @@ func TestPrepareManifestUploads_PathCollisions(t *testing.T) {
 				second = "../../files/./app.conf"
 			}
 			manifest := fmt.Sprintf("content:\n  add_files:\n    - path: /etc/one\n      source_path: ../../files/app.conf\n    - path: /etc/two\n      source_path: %s\n", second)
-			h := &Handler{}
-			req := &buildapi.BuildRequest{Manifest: manifest}
+			h := NewHandler(Options{})
+			req := &buildcontract.BuildRequest{Manifest: manifest}
 			refs, cleanup, err := h.prepareManifestUploads(context.Background(), nil, req, filepath.Join(t.TempDir(), "image.aib.yml"))
 			if cleanup != nil {
 				defer cleanup()
@@ -201,8 +202,8 @@ content:
 	for _, upload := range []string{"0", "1"} {
 		t.Run("client workspace upload="+upload, func(t *testing.T) {
 			t.Setenv("CAIB_CLIENT_WORKSPACE_UPLOAD", upload)
-			h := &Handler{opts: Options{Workspace: new("test-workspace")}}
-			req := &buildapi.BuildRequest{Manifest: manifest}
+			h := &Handler{opts: Options{Build: &commandopts.Build{Workspace: "test-workspace"}}}
+			req := &buildcontract.BuildRequest{Manifest: manifest}
 			refs, cleanup, err := h.prepareManifestUploads(context.Background(), nil, req, "image.aib.yml")
 			if err != nil {
 				t.Fatal(err)

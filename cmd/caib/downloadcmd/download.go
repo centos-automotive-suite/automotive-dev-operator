@@ -7,10 +7,11 @@ import (
 	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/registryauth"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
@@ -18,11 +19,8 @@ const phaseCompleted = "Completed"
 
 // Options wires download handler dependencies.
 type Options struct {
-	ServerURL       *string
-	AuthToken       *string
-	OutputDir       *string
-	InsecureSkipTLS *bool
-
+	Connection  *commandopts.Connection
+	Output      *commandopts.Output
 	HandleError func(error)
 }
 
@@ -32,8 +30,18 @@ type Handler struct {
 }
 
 // NewHandler creates a download handler.
+func (o Options) withDefaults() Options {
+	if o.Connection == nil {
+		o.Connection = &commandopts.Connection{}
+	}
+	if o.Output == nil {
+		o.Output = &commandopts.Output{}
+	}
+	return o
+}
+
 func NewHandler(opts Options) *Handler {
-	return &Handler{opts: opts}
+	return &Handler{opts: opts.withDefaults()}
 }
 
 func (h *Handler) handleError(err error) {
@@ -49,28 +57,24 @@ func (h *Handler) RunDownload(_ *cobra.Command, args []string) {
 	ctx := context.Background()
 	downloadBuildName := args[0]
 
-	if h.opts.ServerURL == nil || strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		h.handleError(common.ServerURLRequiredError(fmt.Sprintf("caib image download --server <server-url> -o <dir> %s", downloadBuildName)))
 		return
 	}
-	if h.opts.OutputDir == nil || strings.TrimSpace(*h.opts.OutputDir) == "" {
+	if strings.TrimSpace(h.opts.Output.Dir) == "" {
 		h.handleError(common.NewActionableError(
 			fmt.Errorf("--output / -o is required"),
 			fmt.Sprintf("caib image download -o <output-dir> %s", downloadBuildName),
 		))
 		return
 	}
-	if h.opts.InsecureSkipTLS == nil {
-		h.handleError(fmt.Errorf("internal error: --insecure option is not configured"))
-		return
-	}
 
-	serverURL := strings.TrimSpace(*h.opts.ServerURL)
-	outputDir := strings.TrimSpace(*h.opts.OutputDir)
-	insecureSkipTLS := *h.opts.InsecureSkipTLS
+	serverURL := strings.TrimSpace(h.opts.Connection.ServerURL)
+	outputDir := strings.TrimSpace(h.opts.Output.Dir)
+	insecureSkipTLS := h.opts.Connection.InsecureSkipTLS
 
-	var st *buildapitypes.BuildResponse
-	err := common.ExecuteWithReauth(serverURL, h.opts.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
+	var st *buildcontract.BuildResponse
+	err := common.ExecuteWithReauth(serverURL, &h.opts.Connection.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
 		var getErr error
 		st, getErr = api.GetBuild(ctx, downloadBuildName)
 		return getErr

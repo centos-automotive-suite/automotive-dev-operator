@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	"gopkg.in/yaml.v3"
 )
 
@@ -236,7 +237,7 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func TestPrintStructured_JSON(t *testing.T) {
 	format := testFormatJSON
-	h := NewHandler(Options{OutputFormat: &format})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}})
 
 	annotations := fullAnnotations()
 	referrers := []referrerInfo{
@@ -277,7 +278,7 @@ func TestPrintStructured_JSON(t *testing.T) {
 
 func TestPrintStructured_YAML(t *testing.T) {
 	format := testFormatYAML
-	h := NewHandler(Options{OutputFormat: &format})
+	h := NewHandler(Options{Output: &commandopts.Output{Format: format}})
 
 	annotations := fullAnnotations()
 	referrers := []referrerInfo{

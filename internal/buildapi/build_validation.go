@@ -9,16 +9,16 @@ import (
 	"strings"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 )
 
 // digestPinnedRef matches an OCI reference with a sha256 digest: image@sha256:<64 hex chars>
 var digestPinnedRef = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
 
-func validateBuildRequest(req *BuildRequest) error {
+func validateBuildRequest(req *buildcontract.BuildRequest) error {
 	if err := validateOperationMetadata(req.ExternalID, req.Callback); err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func validateBuildRequest(req *BuildRequest) error {
 		return err
 	}
 
-	if req.Mode == ModeDisk {
+	if req.Mode == buildcontract.ModeDisk {
 		if req.SecureBuild || req.Reproducible {
 			return fmt.Errorf("secure/reproducible dependency locking is not supported for disk-only builds")
 		}
@@ -80,7 +80,7 @@ func validateBuildRequest(req *BuildRequest) error {
 	return nil
 }
 
-func validateGitSourceRequest(req *BuildRequest) error {
+func validateGitSourceRequest(req *buildcontract.BuildRequest) error {
 	if req.GitSource == nil {
 		if req.ArchitectureFallback != "" {
 			return fmt.Errorf("architectureFallback requires gitSource")
@@ -106,11 +106,11 @@ func validateGitSourceRequest(req *BuildRequest) error {
 	return nil
 }
 
-func validateResolveOnlyRequest(req *BuildRequest) error {
+func validateResolveOnlyRequest(req *buildcontract.BuildRequest) error {
 	if !req.ResolveOnly {
 		return nil
 	}
-	if req.Mode != ModePackage {
+	if req.Mode != buildcontract.ModePackage {
 		return fmt.Errorf("resolveOnly requires package mode")
 	}
 	if req.Lockfile != "" || req.RestoreSourcesRef != "" || req.Reproducible || req.SecureBuild || req.BuildDiskImage || req.FlashEnabled || req.ContainerRef != "" || req.ContainerPush != "" {
@@ -159,12 +159,12 @@ func resolveAndClampTTL(ctx context.Context, k8sClient client.Client, namespace,
 }
 
 // applyBuildDefaults sets default values for build request fields
-func applyBuildDefaults(req *BuildRequest) error {
+func applyBuildDefaults(req *buildcontract.BuildRequest) error {
 	fallback, err := automotivev1alpha1.NormalizeGitArchitectureFallback(string(req.ArchitectureFallback))
 	if err != nil {
 		return err
 	}
-	req.ArchitectureFallback = Architecture(fallback)
+	req.ArchitectureFallback = buildcontract.Architecture(fallback)
 	if req.Distro == "" {
 		req.Distro = "autosd"
 	}
@@ -179,10 +179,10 @@ func applyBuildDefaults(req *BuildRequest) error {
 		req.ExportFormat = formatImage
 	}
 	if req.Mode == "" {
-		req.Mode = ModeBootc
+		req.Mode = buildcontract.ModeBootc
 	}
 	if strings.TrimSpace(string(req.Compression)) == "" {
-		req.Compression = CompressionGzip
+		req.Compression = buildcontract.CompressionGzip
 	}
 	if !req.Compression.IsValid() {
 		return fmt.Errorf("invalid compression %q: must be gzip or xz", req.Compression)
@@ -209,7 +209,7 @@ func applyBuildDefaults(req *BuildRequest) error {
 	return nil
 }
 
-func validateRestoreSourcesRef(req *BuildRequest) error {
+func validateRestoreSourcesRef(req *buildcontract.BuildRequest) error {
 	if req.RestoreSourcesRef == "" {
 		return nil
 	}
@@ -222,7 +222,7 @@ func validateRestoreSourcesRef(req *BuildRequest) error {
 }
 
 // validateTargetDefaults checks that each target's default values are within its own accepted values.
-func validateTargetDefaults(targets map[string]TargetDefaults) error {
+func validateTargetDefaults(targets map[string]buildcontract.TargetDefaults) error {
 	if len(targets) == 0 {
 		return nil
 	}

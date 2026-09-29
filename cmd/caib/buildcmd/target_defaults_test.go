@@ -3,7 +3,7 @@ package buildcmd
 import (
 	"testing"
 
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
@@ -21,129 +21,129 @@ func newCmdWithArchFlag(archValue string, changed bool) *cobra.Command {
 
 func TestApplyTargetDefaults_NilConfig(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", false)
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ebbr",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 	}
 
 	ApplyTargetDefaults(cmd, nil, req)
 
-	if req.Architecture != buildapitypes.Architecture("amd64") {
+	if req.Architecture != buildcontract.Architecture("amd64") {
 		t.Errorf("expected architecture to remain amd64, got %s", req.Architecture)
 	}
 }
 
 func TestApplyTargetDefaults_EmptyTargets(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", false)
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{},
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ebbr",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 	}
 
 	ApplyTargetDefaults(cmd, config, req)
 
-	if req.Architecture != buildapitypes.Architecture("amd64") {
+	if req.Architecture != buildcontract.Architecture("amd64") {
 		t.Errorf("expected architecture to remain amd64, got %s", req.Architecture)
 	}
 }
 
 func TestApplyTargetDefaults_NoMatchingTarget(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", false)
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{
 			"qemu": {},
 		},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ebbr",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 	}
 
 	ApplyTargetDefaults(cmd, config, req)
 
-	if req.Architecture != buildapitypes.Architecture("amd64") {
+	if req.Architecture != buildcontract.Architecture("amd64") {
 		t.Errorf("expected architecture to remain amd64, got %s", req.Architecture)
 	}
 }
 
 func TestApplyTargetDefaults_AppliesArchFromMapping(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", false)
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{
 			"ebbr": {
 				Architecture: "arm64",
 			},
 		},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ebbr",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 	}
 
 	ApplyTargetDefaults(cmd, config, req)
 
-	if req.Architecture != buildapitypes.Architecture("arm64") {
+	if req.Architecture != buildcontract.Architecture("arm64") {
 		t.Errorf("expected architecture to be overridden to arm64, got %s", req.Architecture)
 	}
 }
 
 func TestApplyTargetDefaults_ExplicitArchOverridesMapping(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", true) // user explicitly set --arch amd64
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{
 			"ebbr": {
 				Architecture: "arm64",
 			},
 		},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ebbr",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 	}
 
 	ApplyTargetDefaults(cmd, config, req)
 
-	if req.Architecture != buildapitypes.Architecture("amd64") {
+	if req.Architecture != buildcontract.Architecture("amd64") {
 		t.Errorf("expected explicit --arch to override mapping, got %s", req.Architecture)
 	}
 }
 
 func TestApplyTargetDefaults_ExplicitArchArm64OverridesMapping(t *testing.T) {
 	cmd := newCmdWithArchFlag("arm64", true) // user explicitly set --arch arm64
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{
 			"ebbr": {
 				Architecture: "amd64", // mapping says amd64
 			},
 		},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ebbr",
-		Architecture: buildapitypes.Architecture("arm64"),
+		Architecture: buildcontract.Architecture("arm64"),
 	}
 
 	ApplyTargetDefaults(cmd, config, req)
 
-	if req.Architecture != buildapitypes.Architecture("arm64") {
+	if req.Architecture != buildcontract.Architecture("arm64") {
 		t.Errorf("expected explicit --arch arm64 to override mapping amd64, got %s", req.Architecture)
 	}
 }
 
 func TestApplyTargetDefaults_PrependsExtraArgs(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", false)
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{
 			"ride": {
 				ExtraArgs: []string{"--separate-partitions"},
 			},
 		},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ride",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 		AIBExtraArgs: []string{"--user-arg"},
 	}
 
@@ -162,16 +162,16 @@ func TestApplyTargetDefaults_PrependsExtraArgs(t *testing.T) {
 
 func TestApplyTargetDefaults_ExtraArgsWithNoUserArgs(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", false)
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{
 			"ride": {
 				ExtraArgs: []string{"--separate-partitions", "--verbose"},
 			},
 		},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ride",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 	}
 
 	ApplyTargetDefaults(cmd, config, req)
@@ -189,23 +189,23 @@ func TestApplyTargetDefaults_ExtraArgsWithNoUserArgs(t *testing.T) {
 
 func TestApplyTargetDefaults_BothArchAndExtraArgs(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", false)
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{
 			"ride": {
 				Architecture: "arm64",
 				ExtraArgs:    []string{"--separate-partitions"},
 			},
 		},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "ride",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 		AIBExtraArgs: []string{"--my-arg"},
 	}
 
 	ApplyTargetDefaults(cmd, config, req)
 
-	if req.Architecture != buildapitypes.Architecture("arm64") {
+	if req.Architecture != buildcontract.Architecture("arm64") {
 		t.Errorf("expected architecture arm64, got %s", req.Architecture)
 	}
 	expected := []string{"--separate-partitions", "--my-arg"}
@@ -221,21 +221,21 @@ func TestApplyTargetDefaults_BothArchAndExtraArgs(t *testing.T) {
 
 func TestApplyTargetDefaults_MappingWithEmptyArchDoesNotOverride(t *testing.T) {
 	cmd := newCmdWithArchFlag("amd64", false)
-	config := &buildapitypes.OperatorConfigResponse{
-		TargetDefaults: map[string]buildapitypes.TargetDefaults{
+	config := &buildcontract.OperatorConfigResponse{
+		TargetDefaults: map[string]buildcontract.TargetDefaults{
 			"qemu": {
 				// Architecture intentionally empty
 			},
 		},
 	}
-	req := &buildapitypes.BuildRequest{
+	req := &buildcontract.BuildRequest{
 		Target:       "qemu",
-		Architecture: buildapitypes.Architecture("amd64"),
+		Architecture: buildcontract.Architecture("amd64"),
 	}
 
 	ApplyTargetDefaults(cmd, config, req)
 
-	if req.Architecture != buildapitypes.Architecture("amd64") {
+	if req.Architecture != buildcontract.Architecture("amd64") {
 		t.Errorf("expected architecture to remain amd64 when mapping has no arch, got %s", req.Architecture)
 	}
 }

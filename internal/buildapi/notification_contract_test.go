@@ -10,12 +10,13 @@ import (
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/featuregates"
 	"github.com/gin-gonic/gin"
 )
 
-func validCallback() *BuildCallback {
-	return &BuildCallback{
+func validCallback() *buildcontract.BuildCallback {
+	return &buildcontract.BuildCallback{
 		URL:    "https://receiver.example.com/hooks/builds",
 		Secret: base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))),
 	}
@@ -25,18 +26,18 @@ func TestNotificationMetadataValidation(t *testing.T) {
 	tests := []struct {
 		name       string
 		externalID string
-		callback   *BuildCallback
+		callback   *buildcontract.BuildCallback
 		valid      bool
 	}{
 		{name: "none", valid: true},
 		{name: "valid", externalID: "pipeline-42", callback: validCallback(), valid: true},
 		{name: "external id too long", externalID: strings.Repeat("x", MaxExternalIDBytes+1)},
 		{name: "external id control character", externalID: "pipeline\n42"},
-		{name: "HTTP callback", callback: &BuildCallback{URL: "http://receiver.example.com/hook", Secret: validCallback().Secret}, valid: true},
-		{name: "callback credentials", callback: &BuildCallback{URL: "https://user:pass@receiver.example.com/hook", Secret: validCallback().Secret}},
-		{name: "callback fragment", callback: &BuildCallback{URL: "https://receiver.example.com/hook#token", Secret: validCallback().Secret}},
-		{name: "short secret", callback: &BuildCallback{URL: "https://receiver.example.com/hook", Secret: base64.StdEncoding.EncodeToString([]byte("short"))}},
-		{name: "malformed secret", callback: &BuildCallback{URL: "https://receiver.example.com/hook", Secret: "not-base64"}},
+		{name: "HTTP callback", callback: &buildcontract.BuildCallback{URL: "http://receiver.example.com/hook", Secret: validCallback().Secret}, valid: true},
+		{name: "callback credentials", callback: &buildcontract.BuildCallback{URL: "https://user:pass@receiver.example.com/hook", Secret: validCallback().Secret}},
+		{name: "callback fragment", callback: &buildcontract.BuildCallback{URL: "https://receiver.example.com/hook#token", Secret: validCallback().Secret}},
+		{name: "short secret", callback: &buildcontract.BuildCallback{URL: "https://receiver.example.com/hook", Secret: base64.StdEncoding.EncodeToString([]byte("short"))}},
+		{name: "malformed secret", callback: &buildcontract.BuildCallback{URL: "https://receiver.example.com/hook", Secret: "not-base64"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,8 +50,8 @@ func TestNotificationMetadataValidation(t *testing.T) {
 
 func TestCallbackPolicy(t *testing.T) {
 	httpsCallback := validCallback()
-	httpCallback := &BuildCallback{URL: "http://receiver.example.com/hook", Secret: httpsCallback.Secret}
-	invalidCallback := &BuildCallback{URL: "https://invalid host/hook", Secret: httpsCallback.Secret}
+	httpCallback := &buildcontract.BuildCallback{URL: "http://receiver.example.com/hook", Secret: httpsCallback.Secret}
+	invalidCallback := &buildcontract.BuildCallback{URL: "https://invalid host/hook", Secret: httpsCallback.Secret}
 	enabled := &automotivev1alpha1.OperatorConfig{Spec: automotivev1alpha1.OperatorConfigSpec{
 		FeatureGates: map[string]bool{string(featuregates.WebhookNotifications): true},
 	}}
@@ -60,7 +61,7 @@ func TestCallbackPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		config   *automotivev1alpha1.OperatorConfig
-		callback *BuildCallback
+		callback *buildcontract.BuildCallback
 		valid    bool
 	}{
 		{name: "no callback", callback: nil, valid: true},
@@ -93,7 +94,7 @@ func TestOperationRequestEnvelope(t *testing.T) {
 			c, _ := gin.CreateTestContext(w)
 			c.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
 			c.Request.Header.Set("Content-Type", "application/json")
-			var request BuildRequest
+			var request buildcontract.BuildRequest
 			accepted := bindOperationRequest(c, &request)
 			if accepted != (tc.status == http.StatusOK) || w.Code != tc.status {
 				t.Fatalf("accepted=%v status=%d body=%s", accepted, w.Code, w.Body.String())
@@ -103,7 +104,7 @@ func TestOperationRequestEnvelope(t *testing.T) {
 }
 
 func TestCallbackFormattingAndJSONRedaction(t *testing.T) {
-	request := BuildRequest{Name: "build", Manifest: "name: image", ExternalID: "pipeline-42", Callback: validCallback()}
+	request := buildcontract.BuildRequest{Name: "build", Manifest: "name: image", ExternalID: "pipeline-42", Callback: validCallback()}
 	for _, format := range []string{"%v", "%+v", "%#v"} {
 		formatted := fmt.Sprintf(format, request)
 		for _, secret := range []string{"receiver.example.com", validCallback().Secret} {
@@ -112,7 +113,7 @@ func TestCallbackFormattingAndJSONRedaction(t *testing.T) {
 			}
 		}
 	}
-	template := BuildTemplateResponse{BuildRequest: request}
+	template := buildcontract.BuildTemplateResponse{BuildRequest: request}
 	data, err := json.Marshal(template)
 	if err != nil {
 		t.Fatal(err)

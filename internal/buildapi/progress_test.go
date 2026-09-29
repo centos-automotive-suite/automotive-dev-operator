@@ -8,6 +8,7 @@ import (
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
@@ -121,7 +122,7 @@ func TestBuildProgressAcrossPodTransitions(t *testing.T) {
 			cs := progressTestClient(t, tt.pods...)
 			tasks := readTaskProgressFromPods(t.Context(), cs, "test-run", "test-ns")
 			got := buildProgressStep(build, tasks, false)
-			want := BuildStep{Stage: tt.stage, Done: tt.done, Total: 5}
+			want := buildcontract.BuildStep{Stage: tt.stage, Done: tt.done, Total: 5}
 			if *got != want {
 				t.Fatalf("progress = %+v, want %+v", *got, want)
 			}

@@ -2,12 +2,14 @@ package buildapi
 
 import (
 	"testing"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 func TestBuildAIBSpec(t *testing.T) {
 	tests := []struct {
 		name             string
-		req              *BuildRequest
+		req              *buildcontract.BuildRequest
 		manifest         string
 		manifestFileName string
 		inputFilesServer bool
@@ -26,10 +28,10 @@ func TestBuildAIBSpec(t *testing.T) {
 	}{
 		{
 			name: "basic build spec",
-			req: &BuildRequest{
+			req: &buildcontract.BuildRequest{
 				Distro: "autosd",
 				Target: "qemu",
-				Mode:   ModeBootc,
+				Mode:   buildcontract.ModeBootc,
 			},
 			manifest:         "name: test\n",
 			manifestFileName: "test.aib.yml",
@@ -41,10 +43,10 @@ func TestBuildAIBSpec(t *testing.T) {
 		},
 		{
 			name: "with custom defs and extra args",
-			req: &BuildRequest{
+			req: &buildcontract.BuildRequest{
 				Distro:       "autosd",
 				Target:       "qemu",
-				Mode:         ModeImage,
+				Mode:         buildcontract.ModeImage,
 				CustomDefs:   []string{"FOO=bar", "BAZ=qux"},
 				AIBExtraArgs: []string{"--verbose", "--no-cache"},
 			},
@@ -60,10 +62,10 @@ func TestBuildAIBSpec(t *testing.T) {
 		},
 		{
 			name: "with container ref and builder image",
-			req: &BuildRequest{
+			req: &buildcontract.BuildRequest{
 				Distro:                 "cs9",
 				Target:                 "aws",
-				Mode:                   ModeDisk,
+				Mode:                   buildcontract.ModeDisk,
 				ContainerRef:           "quay.io/myorg/myimage:latest",
 				AutomotiveImageBuilder: "quay.io/centos-sig-automotive/aib:v1",
 				BuilderImage:           "quay.io/myorg/builder:latest",
@@ -83,10 +85,10 @@ func TestBuildAIBSpec(t *testing.T) {
 		},
 		{
 			name: "with root password",
-			req: &BuildRequest{
+			req: &buildcontract.BuildRequest{
 				Distro:       "autosd",
 				Target:       "qemu",
-				Mode:         ModeBootc,
+				Mode:         buildcontract.ModeBootc,
 				RootPassword: "$6$salt$hashvalue",
 			},
 			manifest:         "name: root-pw\n",
@@ -100,10 +102,10 @@ func TestBuildAIBSpec(t *testing.T) {
 		},
 		{
 			name: "empty manifest filename",
-			req: &BuildRequest{
+			req: &buildcontract.BuildRequest{
 				Distro: "autosd",
 				Target: "qemu",
-				Mode:   ModeBootc,
+				Mode:   buildcontract.ModeBootc,
 			},
 			manifest:     "name: no-filename\n",
 			wantDistro:   "autosd",

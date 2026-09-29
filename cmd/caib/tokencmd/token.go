@@ -6,19 +6,17 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/commandopts"
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
 // Options wires token handler dependencies.
 type Options struct {
-	ServerURL       *string
-	AuthToken       *string
-	InsecureSkipTLS *bool
-	OutputFormat    *string
-
+	Connection  *commandopts.Connection
+	Output      *commandopts.Output
 	HandleError func(error)
 }
 
@@ -28,8 +26,18 @@ type Handler struct {
 }
 
 // NewHandler creates a token handler.
+func (o Options) withDefaults() Options {
+	if o.Connection == nil {
+		o.Connection = &commandopts.Connection{}
+	}
+	if o.Output == nil {
+		o.Output = &commandopts.Output{}
+	}
+	return o
+}
+
 func NewHandler(opts Options) *Handler {
-	return &Handler{opts: opts}
+	return &Handler{opts: opts.withDefaults()}
 }
 
 func (h *Handler) handleError(err error) {
@@ -45,26 +53,22 @@ func (h *Handler) RunToken(_ *cobra.Command, args []string) {
 	ctx := context.Background()
 	buildName := args[0]
 
-	if h.opts.ServerURL == nil || strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
 	}
-	if h.opts.InsecureSkipTLS == nil {
-		h.handleError(fmt.Errorf("internal error: --insecure option is not configured"))
-		return
-	}
 
-	serverURL := strings.TrimSpace(*h.opts.ServerURL)
-	insecureSkipTLS := *h.opts.InsecureSkipTLS
+	serverURL := strings.TrimSpace(h.opts.Connection.ServerURL)
+	insecureSkipTLS := h.opts.Connection.InsecureSkipTLS
 
-	format, fmtErr := common.ResolveOutputFormat(h.opts.OutputFormat)
+	format, fmtErr := common.ResolveOutputFormat(&h.opts.Output.Format)
 	if fmtErr != nil {
 		h.handleError(fmtErr)
 		return
 	}
 
-	var tok *buildapitypes.TokenResponse
-	err := common.ExecuteWithReauth(serverURL, h.opts.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
+	var tok *buildcontract.TokenResponse
+	err := common.ExecuteWithReauth(serverURL, &h.opts.Connection.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
 		var tokenErr error
 		tok, tokenErr = api.CreateBuildToken(ctx, buildName)
 		return tokenErr

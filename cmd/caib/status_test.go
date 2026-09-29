@@ -93,7 +93,7 @@ func TestCheckServerHealth_Reachable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	status := checkServerHealth(srv.URL)
+	status := checkServerHealth(srv.URL, false)
 	if status != statusReachable {
 		t.Errorf("expected %q, got %q", statusReachable, status)
 	}
@@ -105,7 +105,7 @@ func TestCheckServerHealth_Unhealthy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	status := checkServerHealth(srv.URL)
+	status := checkServerHealth(srv.URL, false)
 	expected := "unhealthy (HTTP 503)"
 	if status != expected {
 		t.Errorf("expected %q, got %q", expected, status)
@@ -113,7 +113,7 @@ func TestCheckServerHealth_Unhealthy(t *testing.T) {
 }
 
 func TestCheckServerHealth_Unreachable(t *testing.T) {
-	status := checkServerHealth("http://127.0.0.1:1")
+	status := checkServerHealth("http://127.0.0.1:1", false)
 	if len(status) < 12 || status[:11] != "unreachable" {
 		t.Errorf("expected 'unreachable (...)', got %q", status)
 	}
@@ -135,7 +135,7 @@ func TestGatherStatus_WithServer(t *testing.T) {
 		"JMP_CLIENT_CONFIG_HOME": filepath.Join(tmp, "no-jmp"),
 	})
 
-	info := gatherStatus()
+	info := gatherStatus(false)
 
 	if info.Server.URL != srv.URL {
 		t.Errorf("expected server URL %q, got %q", srv.URL, info.Server.URL)
@@ -157,7 +157,7 @@ func TestGatherStatus_NoServer(t *testing.T) {
 		"JMP_CLIENT_CONFIG_HOME": filepath.Join(tmp, "no-jmp"),
 	})
 
-	info := gatherStatus()
+	info := gatherStatus(false)
 
 	if info.Server.URL != "" {
 		t.Errorf("expected empty server URL, got %q", info.Server.URL)

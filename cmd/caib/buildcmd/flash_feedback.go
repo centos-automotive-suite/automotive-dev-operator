@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/fatih/color"
 )
 
@@ -33,7 +33,7 @@ func hasUnresolvedFlashImagePlaceholder(cmd string) bool {
 }
 
 // displayFlashInstructions shows flash instructions when flash is not executed or fails.
-func (h *Handler) displayFlashInstructions(st *buildapitypes.BuildResponse, isFailure bool) {
+func (h *Handler) displayFlashInstructions(st *buildcontract.BuildResponse, isFailure bool) {
 	if clilog.IsQuiet() {
 		return
 	}
@@ -44,7 +44,7 @@ func (h *Handler) displayFlashInstructions(st *buildapitypes.BuildResponse, isFa
 		return
 	}
 	// Don't show jumpstarter instructions if user requested a local download.
-	if *h.opts.OutputDir != "" {
+	if h.opts.Output.Dir != "" {
 		return
 	}
 
@@ -105,8 +105,8 @@ func (h *Handler) displayFlashInstructions(st *buildapitypes.BuildResponse, isFa
 	}
 }
 
-func (h *Handler) handleFlashError(err error, st *buildapitypes.BuildResponse) {
-	if *h.opts.FlashAfterBuild && st != nil {
+func (h *Handler) handleFlashError(err error, st *buildcontract.BuildResponse) {
+	if h.opts.Flash.AfterBuild && st != nil {
 		h.displayFlashInstructions(st, true)
 	}
 	h.handleError(err)

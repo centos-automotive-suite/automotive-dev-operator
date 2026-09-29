@@ -4,20 +4,21 @@ import (
 	"context"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func pendingNotification(configured bool) *NotificationStatus {
+func pendingNotification(configured bool) *buildcontract.NotificationStatus {
 	if !configured {
 		return nil
 	}
-	return &NotificationStatus{State: automotivev1alpha1.DeliveryPending}
+	return &buildcontract.NotificationStatus{State: automotivev1alpha1.DeliveryPending}
 }
 
-func getNotificationStatus(ctx context.Context, k8sClient client.Client, namespace string, subjectUID types.UID, configured bool) (*NotificationStatus, error) {
+func getNotificationStatus(ctx context.Context, k8sClient client.Client, namespace string, subjectUID types.UID, configured bool) (*buildcontract.NotificationStatus, error) {
 	if !configured {
 		return nil, nil
 	}
@@ -36,8 +37,8 @@ func getNotificationStatus(ctx context.Context, k8sClient client.Client, namespa
 	return &status, nil
 }
 
-func listNotificationStatuses(ctx context.Context, k8sClient client.Client, namespace string, subjectUIDs []types.UID) (map[types.UID]*NotificationStatus, error) {
-	statuses := map[types.UID]*NotificationStatus{}
+func listNotificationStatuses(ctx context.Context, k8sClient client.Client, namespace string, subjectUIDs []types.UID) (map[types.UID]*buildcontract.NotificationStatus, error) {
+	statuses := map[types.UID]*buildcontract.NotificationStatus{}
 	for _, subjectUID := range subjectUIDs {
 		if _, exists := statuses[subjectUID]; exists {
 			continue
@@ -51,7 +52,7 @@ func listNotificationStatuses(ctx context.Context, k8sClient client.Client, name
 	return statuses, nil
 }
 
-func projectedNotification(statuses map[types.UID]*NotificationStatus, subjectUID types.UID, configured bool) *NotificationStatus {
+func projectedNotification(statuses map[types.UID]*buildcontract.NotificationStatus, subjectUID types.UID, configured bool) *buildcontract.NotificationStatus {
 	if !configured {
 		return nil
 	}

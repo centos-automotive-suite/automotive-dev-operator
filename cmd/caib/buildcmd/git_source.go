@@ -6,12 +6,12 @@ import (
 	"path"
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/spf13/cobra"
 )
 
 func (h *Handler) readBuildSource(manifestPath string) ([]byte, *api.GitSource, error) {
-	url, ref, secret, gitLockfile := ptrStr(h.opts.GitURL), ptrStr(h.opts.GitRef), ptrStr(h.opts.GitSecret), ptrStr(h.opts.GitLockfile)
+	url, ref, secret, gitLockfile := h.opts.Build.GitURL, h.opts.Build.GitRef, h.opts.Build.GitSecret, h.opts.Build.GitLockfile
 	if url == "" {
 		if ref != "" || secret != "" || gitLockfile != "" {
 			return nil, nil, fmt.Errorf("--git-ref, --git-secret, and --git-lockfile require --git-url")
@@ -19,10 +19,10 @@ func (h *Handler) readBuildSource(manifestPath string) ([]byte, *api.GitSource, 
 		data, err := os.ReadFile(manifestPath)
 		return data, nil, err
 	}
-	if ptrStr(h.opts.Lockfile) != "" {
+	if h.opts.Build.Lockfile != "" {
 		return nil, nil, fmt.Errorf("--lockfile cannot be used with --git-url; commit %s beside the manifest or use --git-lockfile for another committed file", path.Base(defaultLockfilePath(manifestPath)))
 	}
-	if ptrStr(h.opts.Workspace) != "" || ptrStr(h.opts.LocalRepo) != "" || (h.opts.ExtraRepos != nil && len(*h.opts.ExtraRepos) != 0) {
+	if h.opts.Build.Workspace != "" || h.opts.Build.LocalRepo != "" || (len(h.opts.Build.ExtraRepos) != 0) {
 		return nil, nil, fmt.Errorf("git builds do not support workspace or extra repository overlays")
 	}
 	if gitLockfile != "" {
@@ -36,7 +36,7 @@ func (h *Handler) readBuildSource(manifestPath string) ([]byte, *api.GitSource, 
 }
 
 // Leave target-dependent defaults unset until the source TaskRun reads the manifest.
-func deferGitDefaults(cmd *cobra.Command, req *buildapi.BuildRequest) {
+func deferGitDefaults(cmd *cobra.Command, req *buildcontract.BuildRequest) {
 	if req.GitSource == nil {
 		return
 	}

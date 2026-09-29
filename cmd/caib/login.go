@@ -71,7 +71,7 @@ func checkServerReachable(serverURL string, insecureSkipTLS bool) error {
 }
 
 // runLogin saves the server URL and optionally performs OIDC authentication.
-func runLogin(_ *cobra.Command, args []string) {
+func runLogin(_ *cobra.Command, args []string, insecureSkipTLS bool) {
 	var server string
 
 	if len(args) == 0 {

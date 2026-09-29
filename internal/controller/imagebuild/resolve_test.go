@@ -27,7 +27,7 @@ func TestResolveOnlyReachesPipelineRun(t *testing.T) {
 			if err := r.Create(ctx, config); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.createBuildTaskRun(ctx, &ib); err != nil {
+			if err := r.createBuildPipelineRun(ctx, &ib); err != nil {
 				t.Fatal(err)
 			}
 			var runs tektonv1.PipelineRunList

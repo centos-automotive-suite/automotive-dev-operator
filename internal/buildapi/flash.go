@@ -11,24 +11,25 @@ import (
 	"strings"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/jumpstarter"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
-	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 )
 
 func (a *APIServer) createFlash(c *gin.Context) {
-	var req FlashRequest
+	var req buildcontract.FlashRequest
 	if !bindOperationRequest(c, &req) {
 		return
 	}
@@ -123,7 +124,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		}
 	}
 
-	leaseTags := BuildLeaseTags(operatorConfig.Spec.Jumpstarter.GetDefaultLeaseTags(), req.Name, req.LeaseTags)
+	leaseTags := jumpstarter.BuildLeaseTags(operatorConfig.Spec.Jumpstarter.GetDefaultLeaseTags(), req.Name, req.LeaseTags)
 
 	// Build workspace bindings
 	workspaces := []tektonv1.WorkspaceBinding{
@@ -232,7 +233,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 
 	FlashCreatedTotal.Inc()
 
-	writeJSON(c, http.StatusAccepted, FlashResponse{
+	writeJSON(c, http.StatusAccepted, buildcontract.FlashResponse{
 		ExternalID:   req.ExternalID,
 		Notification: pendingNotification(req.Callback != nil),
 		Name:         req.Name,
@@ -243,7 +244,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 	})
 }
 
-func validateAndNormalizeFlashRequest(c *gin.Context, req *FlashRequest) bool {
+func validateAndNormalizeFlashRequest(c *gin.Context, req *buildcontract.FlashRequest) bool {
 	if err := validateOperationMetadata(req.ExternalID, req.Callback); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "InvalidRequest"})
 		return false
@@ -280,7 +281,7 @@ func (a *APIServer) prepareFlashRequest(
 	c *gin.Context,
 	k8sClient client.Client,
 	namespace string,
-	req *FlashRequest,
+	req *buildcontract.FlashRequest,
 ) bool {
 	if httpErr := validateCallbackAdmission(ctx, k8sClient, namespace, req.Callback); httpErr != nil {
 		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
@@ -293,7 +294,7 @@ func (a *APIServer) prepareFlashRequest(
 	return true
 }
 
-func flashTaskAnnotations(ctx context.Context, req FlashRequest, requestedBy string, callbackSecret *corev1.Secret) map[string]string {
+func flashTaskAnnotations(ctx context.Context, req buildcontract.FlashRequest, requestedBy string, callbackSecret *corev1.Secret) map[string]string {
 	annotations := map[string]string{
 		labels.RequestedBy: requestedBy,
 		labels.ImageRef:    req.ImageRef,
@@ -336,7 +337,7 @@ func (a *APIServer) finalizeFlashCallback(
 	return nil
 }
 
-func (a *APIServer) applyFlashImageSource(ctx context.Context, k8sClient client.Client, namespace string, req *FlashRequest) *httpError {
+func (a *APIServer) applyFlashImageSource(ctx context.Context, k8sClient client.Client, namespace string, req *buildcontract.FlashRequest) *httpError {
 	if req.CatalogImage != "" {
 		ref, httpErr := resolveFlashImageFromCatalog(ctx, k8sClient, namespace, req.CatalogImage)
 		if httpErr != nil {
@@ -387,14 +388,14 @@ func (a *APIServer) listFlash(c *gin.Context) {
 		return
 	}
 
-	resp := make([]FlashListItem, 0, len(page))
+	resp := make([]buildcontract.FlashListItem, 0, len(page))
 	for _, tr := range page {
 		phase, message := getTaskRunStatus(&tr)
 		var compStr string
 		if tr.Status.CompletionTime != nil {
 			compStr = tr.Status.CompletionTime.Format(time.RFC3339)
 		}
-		resp = append(resp, FlashListItem{
+		resp = append(resp, buildcontract.FlashListItem{
 			ExternalID:     tr.Annotations[notifications.AnnotationExternalID],
 			Notification:   projectedNotification(notificationStatuses, tr.UID, tr.Annotations[notifications.AnnotationCallbackSecretRef] != ""),
 			Name:           tr.Name,
@@ -448,7 +449,7 @@ func (a *APIServer) getFlash(c *gin.Context, name string) {
 		compStr = taskRun.Status.CompletionTime.Format(time.RFC3339)
 	}
 
-	writeJSON(c, http.StatusOK, FlashResponse{
+	writeJSON(c, http.StatusOK, buildcontract.FlashResponse{
 		ExternalID:     taskRun.Annotations[notifications.AnnotationExternalID],
 		Notification:   notificationStatus,
 		Name:           taskRun.Name,

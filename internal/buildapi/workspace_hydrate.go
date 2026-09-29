@@ -11,6 +11,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -125,7 +126,7 @@ func HydrateWorkspaceForImageBuild(
 		return permanentHydrateErrorf("kubernetes rest config is required to hydrate workspace files")
 	}
 
-	var refs []WorkspaceHydrateRef
+	var refs []workspacemanifest.WorkspaceHydrateRef
 	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
 		return permanentHydrateErrorf("parsing workspace-hydrate annotation: %w", err)
 	}
@@ -206,7 +207,7 @@ func listWorkspaceHydrateFiles(
 	ctx context.Context,
 	restCfg *rest.Config,
 	namespace, workspacePod string,
-	refs []WorkspaceHydrateRef,
+	refs []workspacemanifest.WorkspaceHydrateRef,
 ) ([]hydrateFile, error) {
 	payload, err := json.Marshal(refs)
 	if err != nil {

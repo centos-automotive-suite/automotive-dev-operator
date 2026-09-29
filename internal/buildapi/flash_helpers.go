@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/image/v5/docker"
-	"github.com/containers/image/v5/types"
-
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
+	"github.com/containers/image/v5/docker"
+	"github.com/containers/image/v5/types"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,21 +29,8 @@ type httpError struct {
 	message string
 }
 
-// BuildLeaseTags merges OperatorConfig defaults, build name, and user-provided tags into a comma-separated string.
-func BuildLeaseTags(operatorConfigDefaults, buildName, userTags string) string {
-	parts := make([]string, 0, 3)
-	if operatorConfigDefaults != "" {
-		parts = append(parts, operatorConfigDefaults)
-	}
-	parts = append(parts, "build-name="+buildName)
-	if userTags != "" {
-		parts = append(parts, userTags)
-	}
-	return strings.Join(parts, ",")
-}
-
 // resolveFlashTargetConfig resolves exporter selector and flash command from request and OperatorConfig.
-func resolveFlashTargetConfig(req FlashRequest, operatorConfig *automotivev1alpha1.OperatorConfig) (string, string) {
+func resolveFlashTargetConfig(req buildcontract.FlashRequest, operatorConfig *automotivev1alpha1.OperatorConfig) (string, string) {
 	exporterSelector := req.ExporterSelector
 	flashCmd := req.FlashCmd
 	if req.Target != "" && operatorConfig.Spec.Jumpstarter != nil {
@@ -57,17 +44,6 @@ func resolveFlashTargetConfig(req FlashRequest, operatorConfig *automotivev1alph
 		}
 	}
 	return exporterSelector, flashCmd
-}
-
-// PinFlashDigest appends @digest to a registry URL when the URL is not already digest-pinned.
-func PinFlashDigest(registryURL, digest string) string {
-	if registryURL == "" || digest == "" {
-		return registryURL
-	}
-	if strings.Contains(registryURL, "@") {
-		return registryURL
-	}
-	return registryURL + "@" + digest
 }
 
 func catalogFlashDigest(img *automotivev1alpha1.CatalogImage) string {
@@ -97,7 +73,7 @@ func resolveFlashImageFromCatalog(ctx context.Context, k8sClient client.Client, 
 	if img.Spec.RegistryURL == "" {
 		return "", &httpError{code: http.StatusBadRequest, message: fmt.Sprintf("catalog image %q has no registry URL", name)}
 	}
-	return PinFlashDigest(img.Spec.RegistryURL, catalogFlashDigest(img)), nil
+	return registryutil.PinDigest(img.Spec.RegistryURL, catalogFlashDigest(img)), nil
 }
 
 // readImageAnnotationsFn reads OCI manifest annotations for a given image reference.
@@ -136,7 +112,7 @@ func readImageAnnotations(ctx context.Context, imageRef string, sysCtx *types.Sy
 
 // systemContextFromCredentials builds a types.SystemContext with Docker auth
 // from FlashRequest registry credentials. Returns nil if no credentials.
-func systemContextFromCredentials(creds *RegistryCredentials) *types.SystemContext {
+func systemContextFromCredentials(creds *buildcontract.RegistryCredentials) *types.SystemContext {
 	if creds == nil || !creds.Enabled {
 		return nil
 	}
@@ -153,7 +129,7 @@ func systemContextFromCredentials(creds *RegistryCredentials) *types.SystemConte
 }
 
 // resolveTargetFromImage inspects OCI image annotations and returns the target name if present.
-func resolveTargetFromImage(ctx context.Context, imageRef string, creds *RegistryCredentials) string {
+func resolveTargetFromImage(ctx context.Context, imageRef string, creds *buildcontract.RegistryCredentials) string {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -167,7 +143,7 @@ func resolveTargetFromImage(ctx context.Context, imageRef string, creds *Registr
 
 // createFlashClientConfigSecret creates the Jumpstarter client config secret for a standalone flash job.
 func createFlashClientConfigSecret(
-	ctx context.Context, clientset kubernetes.Interface, namespace string, req FlashRequest,
+	ctx context.Context, clientset kubernetes.Interface, namespace string, req buildcontract.FlashRequest,
 ) (string, *corev1.Secret, *httpError) {
 	clientConfigBytes, err := base64.StdEncoding.DecodeString(req.ClientConfig)
 	if err != nil {
@@ -204,7 +180,7 @@ func createFlashClientConfigSecret(
 // Returns the secret name, the created secret (for owner ref setup), and an error if creation fails.
 // Returns empty name and nil secret if no credentials are provided.
 func createFlashOCIAuthSecret(
-	ctx context.Context, clientset kubernetes.Interface, namespace, flashName string, creds *RegistryCredentials,
+	ctx context.Context, clientset kubernetes.Interface, namespace, flashName string, creds *buildcontract.RegistryCredentials,
 ) (string, *corev1.Secret, *httpError) {
 	if creds == nil || !creds.Enabled {
 		return "", nil, nil
@@ -250,7 +226,7 @@ func createFlashOCIAuthSecret(
 
 // extractOCICredentials extracts username/password from RegistryCredentials.
 // For docker-config auth, it returns the entry matching RegistryURL.
-func extractOCICredentials(creds *RegistryCredentials) (string, string, error) {
+func extractOCICredentials(creds *buildcontract.RegistryCredentials) (string, string, error) {
 	if creds == nil || !creds.Enabled {
 		return "", "", nil
 	}

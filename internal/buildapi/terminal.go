@@ -1,9 +1,11 @@
 package buildapi
 
+import "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+
 import api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 
-func storedArtifacts(build *api.ImageBuild) []ArtifactStatus {
-	var artifacts []ArtifactStatus
+func storedArtifacts(build *api.ImageBuild) []buildcontract.ArtifactStatus {
+	var artifacts []buildcontract.ArtifactStatus
 	if build.Status.TerminalResult != nil {
 		artifacts = build.Status.TerminalResult.Artifacts
 	} else {
@@ -12,16 +14,16 @@ func storedArtifacts(build *api.ImageBuild) []ArtifactStatus {
 	if !build.Spec.GetResolveOnly() {
 		return artifacts
 	}
-	projected := append([]ArtifactStatus(nil), artifacts...)
+	projected := append([]buildcontract.ArtifactStatus(nil), artifacts...)
 	for i := range projected {
-		if projected[i].Kind == string(ModeDisk) {
+		if projected[i].Kind == string(buildcontract.ModeDisk) {
 			projected[i].Kind = "lockfile"
 		}
 	}
 	return projected
 }
 
-func storedFlash(build *api.ImageBuild) *FlashOutcomeStatus {
+func storedFlash(build *api.ImageBuild) *buildcontract.FlashOutcomeStatus {
 	if build.Status.TerminalResult != nil {
 		return build.Status.TerminalResult.Flash
 	}
@@ -33,7 +35,7 @@ func storedArtifactURLs(build *api.ImageBuild) (container, disk string) {
 		switch artifact.Kind {
 		case "container":
 			container = artifact.URL
-		case string(ModeDisk), "lockfile":
+		case string(buildcontract.ModeDisk), "lockfile":
 			disk = artifact.URL
 		}
 	}

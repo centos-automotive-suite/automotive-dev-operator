@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
@@ -41,7 +42,7 @@ var _ = Describe("Sealed Metrics", func() {
 		It("records bad request metric for sealed route through router", func() {
 			metricsTestRouter := gin.New()
 			metricsTestRouter.POST("/v1/reseals", sealedMetricsMiddleware(), func(c *gin.Context) {
-				server.createSealed(c, SealedReseal)
+				server.createSealed(c, buildcontract.SealedReseal)
 			})
 			metricsTestRouter.GET("/metrics", metricsHandler())
 
@@ -66,7 +67,7 @@ var _ = Describe("Sealed Metrics", func() {
 
 	Context("sealedOperationLabel", func() {
 		It("prefers explicit operation", func() {
-			label := sealedOperationLabel(SealedReseal, []string{"prepare-reseal"})
+			label := sealedOperationLabel(buildcontract.SealedReseal, []string{"prepare-reseal"})
 			Expect(label).To(Equal("reseal"))
 		})
 

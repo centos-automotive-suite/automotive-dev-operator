@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -56,7 +57,7 @@ func sealedMetricsMiddleware() gin.HandlerFunc {
 	}
 }
 
-func sealedOperationLabel(op SealedOperation, stages []string) string {
+func sealedOperationLabel(op buildcontract.SealedOperation, stages []string) string {
 	if op != "" {
 		return string(op)
 	}

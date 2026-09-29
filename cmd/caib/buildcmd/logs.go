@@ -15,8 +15,8 @@ import (
 	common "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/logstream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/ui"
-	buildapitypes "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
+	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -24,12 +24,12 @@ import (
 //nolint:gocyclo // Complex state machine for build progress tracking with log streaming.
 func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclient.Client, name string) error {
 	clilog.Infoln("Waiting for build to complete...")
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(*h.opts.Timeout)*time.Minute)
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(h.opts.Output.Timeout)*time.Minute)
 	defer cancel()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	userFollowRequested := *h.opts.FollowLogs
+	userFollowRequested := h.opts.Output.FollowLogs
 	var lastPhase, lastMessage string
 	pendingWarningShown := false
 	retryLimitWarningShown := false
@@ -38,7 +38,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 		ResponseHeaderTimeout: 30 * time.Second,
 		IdleConnTimeout:       2 * time.Minute,
 	}
-	if *h.opts.InsecureSkipTLS {
+	if h.opts.Connection.InsecureSkipTLS {
 		logTransport.TLSClientConfig = &tls.Config{
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
@@ -71,13 +71,13 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 				continue
 			}
 
-			if !clilog.IsQuiet() && !*h.opts.FollowLogs && !streamState.Active {
+			if !clilog.IsQuiet() && !h.opts.Output.FollowLogs && !streamState.Active {
 				progressCtx, progressCancel := context.WithTimeout(timeoutCtx, 10*time.Second)
 				progress, _ := api.GetBuildProgress(progressCtx, name)
 				progressCancel()
 
 				displayPhase := st.Phase
-				var step *buildapitypes.BuildStep
+				var step *buildcontract.BuildStep
 				if progress != nil {
 					step = progress.Step
 					if progress.Phase != "" {
@@ -104,9 +104,9 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 					leaseID = streamState.LeaseID
 				}
 				h.lastLeaseID = leaseID
-				if leaseID != "" && h.opts.Workspace != nil && *h.opts.Workspace != "" {
+				if leaseID != "" && h.opts.Build.Workspace != "" {
 					leaseCtx, cancelLease := context.WithTimeout(ctx, 10*time.Second)
-					leaseErr := api.SetWorkspaceLease(leaseCtx, *h.opts.Workspace, leaseID)
+					leaseErr := api.SetWorkspaceLease(leaseCtx, h.opts.Build.Workspace, leaseID)
 					cancelLease()
 					if leaseErr != nil {
 						fmt.Fprintf(os.Stderr, "Warning: failed to update workspace lease: %v\n", leaseErr)
@@ -118,7 +118,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 						h.displayFlashCompletionBanner(leaseID)
 					} else {
 						fmt.Println("Build completed successfully!")
-						if *h.opts.FlashAfterBuild {
+						if h.opts.Flash.AfterBuild {
 							fmt.Println("\nWarning: --flash was requested but flash was not executed.")
 							fmt.Println("This may be because no Jumpstarter target mapping exists for this target.")
 							fmt.Println("Check OperatorConfig for JumpstarterTargetMappings configuration.")
@@ -143,7 +143,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 				return fmt.Errorf("%s", st.Message)
 			}
 
-			if !*h.opts.FollowLogs || streamState.Active {
+			if !h.opts.Output.FollowLogs || streamState.Active {
 				continue
 			}
 
@@ -179,7 +179,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 						retryLimitWarningShown = true
 					}
 				} else {
-					*h.opts.FollowLogs = userFollowRequested
+					h.opts.Output.FollowLogs = userFollowRequested
 				}
 			}
 		}
@@ -199,7 +199,7 @@ func (h *Handler) tryLogStreaming(ctx context.Context, logClient *http.Client, n
 	if err != nil {
 		return fmt.Errorf("failed to create log request: %w", err)
 	}
-	if authToken := strings.TrimSpace(*h.opts.AuthToken); authToken != "" {
+	if authToken := strings.TrimSpace(h.opts.Connection.AuthToken); authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
 
@@ -221,7 +221,7 @@ func (h *Handler) tryLogStreaming(ctx context.Context, logClient *http.Client, n
 }
 
 func (h *Handler) buildLogURL(buildName string, startTime time.Time) string {
-	logURL := strings.TrimRight(*h.opts.ServerURL, "/") + "/v1/builds/" + url.PathEscape(buildName) + "/logs?follow=1"
+	logURL := strings.TrimRight(h.opts.Connection.ServerURL, "/") + "/v1/builds/" + url.PathEscape(buildName) + "/logs?follow=1"
 	if !startTime.IsZero() {
 		logURL += "&since=" + url.QueryEscape(startTime.Format(time.RFC3339))
 	}
@@ -265,12 +265,12 @@ func (h *Handler) RunLogs(_ *cobra.Command, args []string) {
 	ctx := context.Background()
 	name := args[0]
 
-	if strings.TrimSpace(*h.opts.ServerURL) == "" {
+	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		h.handleError(fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')"))
 		return
 	}
 
-	api, err := common.CreateBuildAPIClient(*h.opts.ServerURL, h.opts.AuthToken, *h.opts.InsecureSkipTLS)
+	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -287,7 +287,7 @@ func (h *Handler) RunLogs(_ *cobra.Command, args []string) {
 		logTransport := &http.Transport{
 			ResponseHeaderTimeout: 30 * time.Second,
 		}
-		if *h.opts.InsecureSkipTLS {
+		if h.opts.Connection.InsecureSkipTLS {
 			logTransport.TLSClientConfig = &tls.Config{
 				InsecureSkipVerify: true,
 				MinVersion:         tls.VersionTLS12,
@@ -304,6 +304,6 @@ func (h *Handler) RunLogs(_ *cobra.Command, args []string) {
 		return
 	}
 
-	*h.opts.FollowLogs = true
+	h.opts.Output.FollowLogs = true
 	h.finishBuild(ctx, api, name, true)
 }
