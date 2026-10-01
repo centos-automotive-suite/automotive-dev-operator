@@ -16,8 +16,8 @@ func TestCLIExcludesBuildAPIServer(t *testing.T) {
 	}
 	const serverPackage = "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	for dependency := range strings.FieldsSeq(string(out)) {
-		if dependency == serverPackage {
-			t.Fatalf("CLI imports server package %s", serverPackage)
+		if strings.HasPrefix(dependency, serverPackage) && dependency != serverPackage+"/client" {
+			t.Fatalf("CLI imports server package %s", dependency)
 		}
 	}
 }

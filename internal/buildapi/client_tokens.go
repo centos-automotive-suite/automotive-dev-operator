@@ -43,7 +43,7 @@ func (a *APIServer) authenticateExternalJWT(c *gin.Context, token string, authn 
 }
 
 func (a *APIServer) ensureClientTokenSecret(c *gin.Context, username string, oidcToken string) error {
-	k8sClient, err := getClientFromRequest(c)
+	k8sClient, err := a.deps.getClientFromRequest(c)
 	if err != nil {
 		return err
 	}

@@ -9,7 +9,6 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
 	"github.com/gin-gonic/gin"
-	"github.com/go-logr/logr"
 	tekton "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -85,10 +84,9 @@ func TestStoredTerminalAPIProjection(t *testing.T) {
 		Subject: api.DeliverySubject{UID: flash.UID},
 	}, Status: api.WebhookDeliveryStatus{NotificationStatus: api.NotificationStatus{State: api.DeliveryFailed, Attempts: 2, LastError: "receiver rejected request"}}}
 	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(build, flash, buildDelivery, flashDelivery).Build()
-	original := getClientFromRequestFn
-	getClientFromRequestFn = func(*gin.Context) (client.Client, error) { return k8s, nil }
-	t.Cleanup(func() { getClientFromRequestFn = original })
-	server := NewAPIServer(":0", logr.Discard())
+
+	server := newTestServer(t, nil)
+	server.deps.getClientFromRequest = func(*gin.Context) (client.Client, error) { return k8s, nil }
 	for _, path := range []string{"build", "builds", "flash", "flashes"} {
 		t.Run(path, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -98,7 +96,7 @@ func TestStoredTerminalAPIProjection(t *testing.T) {
 			case "build":
 				server.getBuild(ctx, "build")
 			case "builds":
-				listBuilds(ctx)
+				server.listBuilds(ctx)
 			case "flash":
 				server.getFlash(ctx, "flash")
 			case "flashes":

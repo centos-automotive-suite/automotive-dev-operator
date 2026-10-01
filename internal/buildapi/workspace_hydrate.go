@@ -13,7 +13,6 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -109,8 +108,13 @@ type hydrateFile struct {
 
 // HydrateWorkspaceForImageBuild copies workspace add_files onto the build
 // upload pod (shared PVC) using the workspace-hydrate annotation.
-func HydrateWorkspaceForImageBuild(
+func HydrateWorkspaceForImageBuild(ctx context.Context, restCfg *rest.Config, k8sClient client.Client, imageBuild *automotivev1alpha1.ImageBuild) error {
+	return hydrateWorkspace(ctx, podExecutor{newExecutor: newPodExecExecutor}, restCfg, k8sClient, imageBuild)
+}
+
+func hydrateWorkspace(
 	ctx context.Context,
+	p podExecutor,
 	restCfg *rest.Config,
 	k8sClient client.Client,
 	imageBuild *automotivev1alpha1.ImageBuild,
@@ -154,7 +158,7 @@ func HydrateWorkspaceForImageBuild(
 		return fmt.Errorf("workspace %q is not running", wsName)
 	}
 
-	files, err := listWorkspaceHydrateFiles(ctx, restCfg, imageBuild.Namespace, ws.Status.PodName, refs)
+	files, err := p.listWorkspaceHydrateFiles(ctx, restCfg, imageBuild.Namespace, ws.Status.PodName, refs)
 	if err != nil {
 		return err
 	}
@@ -169,14 +173,14 @@ func HydrateWorkspaceForImageBuild(
 		// Skip files already copied so a retried hydrate makes forward
 		// progress instead of restarting the whole transfer. copyReaderToPod
 		// writes atomically, so a present file is guaranteed complete.
-		exists, err := fileExistsOnPod(ctx, restCfg, imageBuild.Namespace, uploadPod.Name, uploadContainer, destPath)
+		exists, err := p.fileExistsOnPod(ctx, restCfg, imageBuild.Namespace, uploadPod.Name, uploadContainer, destPath)
 		if err != nil {
 			return err
 		}
 		if exists {
 			continue
 		}
-		if err := copyFileBetweenPods(
+		if err := p.copyFileBetweenPods(
 			ctx, restCfg, imageBuild.Namespace,
 			ws.Status.PodName, workspaceContainerName, f.Src,
 			uploadPod.Name, uploadContainer, destPath,
@@ -190,20 +194,20 @@ func HydrateWorkspaceForImageBuild(
 // fileExistsOnPod reports whether path is a regular file on the pod. It uses a
 // command that always exits 0 so a transient exec failure is distinguishable
 // from a missing file.
-func fileExistsOnPod(
+func (p podExecutor) fileExistsOnPod(
 	ctx context.Context,
 	config *rest.Config,
 	namespace, podName, containerName, podPath string,
 ) (bool, error) {
 	cmd := []string{"/bin/sh", "-c", `[ -f "$1" ] && printf yes || printf no`, "--", podPath}
 	var stdout, stderr bytes.Buffer
-	if err := streamPodExec(ctx, config, namespace, podName, containerName, cmd, bytes.NewReader(nil), &stdout, &stderr); err != nil {
+	if err := p.stream(ctx, config, namespace, podName, containerName, cmd, bytes.NewReader(nil), &stdout, &stderr); err != nil {
 		return false, wrapPodStreamError("stat on upload pod", err, &stderr)
 	}
 	return strings.TrimSpace(stdout.String()) == "yes", nil
 }
 
-func listWorkspaceHydrateFiles(
+func (p podExecutor) listWorkspaceHydrateFiles(
 	ctx context.Context,
 	restCfg *rest.Config,
 	namespace, workspacePod string,
@@ -215,7 +219,7 @@ func listWorkspaceHydrateFiles(
 	}
 	var stdout, stderr bytes.Buffer
 	cmd := []string{"python3", "-c", workspaceListPython, workspaceFSRoot}
-	if err := streamPodExec(ctx, restCfg, namespace, workspacePod, workspaceContainerName, cmd, bytes.NewReader(payload), &stdout, &stderr); err != nil {
+	if err := p.stream(ctx, restCfg, namespace, workspacePod, workspaceContainerName, cmd, bytes.NewReader(payload), &stdout, &stderr); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
 			err = fmt.Errorf("listing workspace files: %w (%s)", err, msg)
@@ -237,39 +241,9 @@ func listWorkspaceHydrateFiles(
 	return files, nil
 }
 
-func streamPodExec(
-	ctx context.Context,
-	config *rest.Config,
-	namespace, podName, containerName string,
-	cmd []string,
-	stdin io.Reader,
-	stdout, stderr io.Writer,
-) error {
-	executor, err := newPodExecExecutorFn(config, namespace, podName, containerName, cmd)
-	if err != nil {
-		return err
-	}
-	opts := remotecommand.StreamOptions{
-		Stdin:  stdin,
-		Stdout: stdout,
-		Stderr: stderr,
-	}
-	return executor.StreamWithContext(ctx, opts)
-}
-
-func wrapPodStreamError(op string, err error, stderr *bytes.Buffer) error {
-	if err == nil {
-		return nil
-	}
-	if stderr.Len() > 0 {
-		return fmt.Errorf("%s: %w (stderr: %s)", op, err, stderr.String())
-	}
-	return err
-}
-
 // copyFileBetweenPods streams srcPath from the source pod to dstPath on the
 // destination pod through an io.Pipe so the operator never buffers the file.
-func copyFileBetweenPods(
+func (p podExecutor) copyFileBetweenPods(
 	ctx context.Context,
 	config *rest.Config,
 	namespace, srcPod, srcContainer, srcPath, dstPod, dstContainer, dstPath string,
@@ -277,12 +251,12 @@ func copyFileBetweenPods(
 	pr, pw := io.Pipe()
 	srcErrCh := make(chan error, 1)
 	go func() {
-		err := copyFileFromPodToWriter(ctx, config, namespace, srcPod, srcContainer, srcPath, pw)
+		err := p.copyFileFromPodToWriter(ctx, config, namespace, srcPod, srcContainer, srcPath, pw)
 		_ = pw.CloseWithError(err)
 		srcErrCh <- err
 	}()
 
-	destErr := copyReaderToPod(ctx, config, namespace, dstPod, dstContainer, pr, dstPath)
+	destErr := p.copyReaderToPod(ctx, config, namespace, dstPod, dstContainer, pr, dstPath)
 	_ = pr.Close()
 	srcErr := <-srcErrCh
 	if destErr != nil {
@@ -294,7 +268,7 @@ func copyFileBetweenPods(
 	return nil
 }
 
-func copyFileFromPodToWriter(
+func (p podExecutor) copyFileFromPodToWriter(
 	ctx context.Context,
 	config *rest.Config,
 	namespace, podName, containerName, podPath string,
@@ -302,8 +276,8 @@ func copyFileFromPodToWriter(
 ) error {
 	cmd := []string{"/bin/sh", "-c", "cat -- \"$1\"", "--", podPath} //nolint:goconst // matches copyFileToPod
 	var stderr bytes.Buffer
-	// newPodExecExecutorFn always advertises Stdin; send an immediate EOF so
+	// The pod executor always advertises Stdin; send an immediate EOF so
 	// cat does not hang waiting for a closed stream.
-	err := streamPodExec(ctx, config, namespace, podName, containerName, cmd, bytes.NewReader(nil), w, &stderr)
+	err := p.stream(ctx, config, namespace, podName, containerName, cmd, bytes.NewReader(nil), w, &stderr)
 	return wrapPodStreamError("copy from pod", err, &stderr)
 }

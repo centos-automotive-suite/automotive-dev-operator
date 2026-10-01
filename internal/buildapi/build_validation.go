@@ -120,7 +120,7 @@ func validateResolveOnlyRequest(req *buildcontract.BuildRequest) error {
 }
 
 // resolveAndClampTTL validates the requested TTL and enforces MaxBuildTTL if configured.
-func resolveAndClampTTL(ctx context.Context, k8sClient client.Client, namespace, requestedTTL string) (string, error) {
+func (a *APIServer) resolveAndClampTTL(ctx context.Context, k8sClient client.Client, namespace, requestedTTL string) (string, error) {
 	if requestedTTL == "" {
 		return requestedTTL, nil
 	}
@@ -133,7 +133,7 @@ func resolveAndClampTTL(ctx context.Context, k8sClient client.Client, namespace,
 			return "", fmt.Errorf("TTL must not be negative")
 		}
 	}
-	operatorCfg, cfgErr := loadOperatorConfigFn(ctx, k8sClient, namespace)
+	operatorCfg, cfgErr := a.deps.loadOperatorConfig(ctx, k8sClient, namespace)
 	if cfgErr != nil && !k8serrors.IsNotFound(cfgErr) {
 		return "", fmt.Errorf("failed to load OperatorConfig: %w", cfgErr)
 	}

@@ -40,7 +40,9 @@ var _ = Describe("APIServer", func() {
 	BeforeEach(func() {
 		gin.SetMode(gin.TestMode)
 		logger = logr.Discard()
-		server = NewAPIServer(":0", logger)
+		server = newTestServer(GinkgoT(), nil)
+		server.router = server.createRouter()
+		server.server = &http.Server{Addr: server.addr, Handler: server.router}
 	})
 
 	AfterEach(func() {
@@ -49,6 +51,7 @@ var _ = Describe("APIServer", func() {
 
 	Context("Server Creation", func() {
 		It("should create a valid API server", func() {
+			server = NewAPIServer(":0", logger)
 			Expect(server).NotTo(BeNil())
 			Expect(server.router).NotTo(BeNil())
 			Expect(server.server).NotTo(BeNil())
@@ -116,25 +119,19 @@ var _ = Describe("APIServer", func() {
 
 	Context("createBuild S3 validation", func() {
 		var (
-			originalGetClientFromRequestFn func(*gin.Context) (ctrlclient.Client, error)
-			originalLoadOperatorConfigFn   func(context.Context, ctrlclient.Client, string) (*automotivev1alpha1.OperatorConfig, error)
-			originalNamespace              string
-			hasOriginalNamespace           bool
+			originalNamespace    string
+			hasOriginalNamespace bool
 		)
 
 		BeforeEach(func() {
-			originalGetClientFromRequestFn = getClientFromRequestFn
-			originalLoadOperatorConfigFn = loadOperatorConfigFn
 			originalNamespace, hasOriginalNamespace = os.LookupEnv("BUILD_API_NAMESPACE")
 			Expect(os.Setenv("BUILD_API_NAMESPACE", "test-ns")).To(Succeed())
-			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+			server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return nil, k8serrors.NewNotFound(schema.GroupResource{}, "config")
 			}
 		})
 
 		AfterEach(func() {
-			getClientFromRequestFn = originalGetClientFromRequestFn
-			loadOperatorConfigFn = originalLoadOperatorConfigFn
 			if hasOriginalNamespace {
 				Expect(os.Setenv("BUILD_API_NAMESPACE", originalNamespace)).To(Succeed())
 			} else {
@@ -154,7 +151,7 @@ var _ = Describe("APIServer", func() {
 
 		It("should return 400 when both s3Credentials and s3CredentialsSecretName are set", func() {
 			fakeClient := newCreateBuildFakeClient()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -179,7 +176,7 @@ var _ = Describe("APIServer", func() {
 
 		It("should accept s3Bucket without credentials for IAM-based auth", func() {
 			fakeClient := newCreateBuildFakeClient()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -204,7 +201,7 @@ var _ = Describe("APIServer", func() {
 
 		It("should preserve a Git architecture fallback without setting the build architecture", func() {
 			fakeClient := newCreateBuildFakeClient()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 			body := `{"name":"git-build","gitSource":{"url":"https://git.example.com/os.git","manifestPath":"demo.aib.yml"},"architectureFallback":"x86_64"}`
@@ -252,7 +249,7 @@ var _ = Describe("APIServer", func() {
 				}).
 				Build()
 
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -286,7 +283,7 @@ var _ = Describe("APIServer", func() {
 			Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
 			Expect(corev1.AddToScheme(scheme)).To(Succeed())
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -323,7 +320,7 @@ var _ = Describe("APIServer", func() {
 			Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
 			Expect(corev1.AddToScheme(scheme)).To(Succeed())
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -354,19 +351,16 @@ var _ = Describe("APIServer", func() {
 
 	Context("Delete Build", func() {
 		var (
-			originalGetClientFromRequestFn func(*gin.Context) (ctrlclient.Client, error)
-			originalNamespace              string
-			hasOriginalNamespace           bool
+			originalNamespace    string
+			hasOriginalNamespace bool
 		)
 
 		BeforeEach(func() {
-			originalGetClientFromRequestFn = getClientFromRequestFn
 			originalNamespace, hasOriginalNamespace = os.LookupEnv("BUILD_API_NAMESPACE")
 			Expect(os.Setenv("BUILD_API_NAMESPACE", "test-ns")).To(Succeed())
 		})
 
 		AfterEach(func() {
-			getClientFromRequestFn = originalGetClientFromRequestFn
 			if hasOriginalNamespace {
 				Expect(os.Setenv("BUILD_API_NAMESPACE", originalNamespace)).To(Succeed())
 			} else {
@@ -405,7 +399,7 @@ var _ = Describe("APIServer", func() {
 
 		It("should return 404 when build does not exist", func() {
 			fakeClient := newFakeClient()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -423,7 +417,7 @@ var _ = Describe("APIServer", func() {
 		It("should return 403 when user does not own the build", func() {
 			build := newTestBuild("my-build", "alice", false, "", "")
 			fakeClient := newFakeClient(build)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -441,7 +435,7 @@ var _ = Describe("APIServer", func() {
 		It("should delete a build owned by the requester", func() {
 			build := newTestBuild("my-build", "alice", false, "", "")
 			fakeClient := newFakeClient(build)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -504,7 +498,7 @@ var _ = Describe("APIServer", func() {
 				WithObjects(build, is, ist).
 				Build()
 
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -541,19 +535,16 @@ var _ = Describe("APIServer", func() {
 
 	Context("Cancel Build", func() {
 		var (
-			originalGetClientFromRequestFn func(*gin.Context) (ctrlclient.Client, error)
-			originalNamespace              string
-			hasOriginalNamespace           bool
+			originalNamespace    string
+			hasOriginalNamespace bool
 		)
 
 		BeforeEach(func() {
-			originalGetClientFromRequestFn = getClientFromRequestFn
 			originalNamespace, hasOriginalNamespace = os.LookupEnv("BUILD_API_NAMESPACE")
 			Expect(os.Setenv("BUILD_API_NAMESPACE", "test-ns")).To(Succeed())
 		})
 
 		AfterEach(func() {
-			getClientFromRequestFn = originalGetClientFromRequestFn
 			if hasOriginalNamespace {
 				Expect(os.Setenv("BUILD_API_NAMESPACE", originalNamespace)).To(Succeed())
 			} else {
@@ -586,7 +577,7 @@ var _ = Describe("APIServer", func() {
 
 		It("should return 404 when build does not exist", func() {
 			fakeClient := newCancelFakeClient()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -604,7 +595,7 @@ var _ = Describe("APIServer", func() {
 		It("should return 403 when user does not own the build", func() {
 			build := newCancelTestBuild("Building", "")
 			fakeClient := newCancelFakeClient(build)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -622,7 +613,7 @@ var _ = Describe("APIServer", func() {
 		It("should return 409 when build is already completed", func() {
 			build := newCancelTestBuild("Completed", "")
 			fakeClient := newCancelFakeClient(build)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -640,7 +631,7 @@ var _ = Describe("APIServer", func() {
 		It("should return 409 when build has already failed", func() {
 			build := newCancelTestBuild("Failed", "")
 			fakeClient := newCancelFakeClient(build)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -658,7 +649,7 @@ var _ = Describe("APIServer", func() {
 		It("should cancel a pending build without a PipelineRun", func() {
 			build := newCancelTestBuild("Pending", "")
 			fakeClient := newCancelFakeClient(build)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -709,7 +700,7 @@ var _ = Describe("APIServer", func() {
 					return c.Update(ctx, obj, opts...)
 				},
 			})
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -743,7 +734,7 @@ var _ = Describe("APIServer", func() {
 				},
 			}
 			fakeClient := newCancelFakeClient(build, pipelineRun)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -767,7 +758,7 @@ var _ = Describe("APIServer", func() {
 				},
 			}
 			fakeClient := newCancelFakeClient(build, pipelineRun)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -800,25 +791,16 @@ var _ = Describe("APIServer", func() {
 
 	Context("OperatorConfig Endpoint", func() {
 		var (
-			originalGetClientFromRequestFn func(*gin.Context) (ctrlclient.Client, error)
-			originalLoadOperatorConfigFn   func(context.Context, ctrlclient.Client, string) (*automotivev1alpha1.OperatorConfig, error)
-			originalLoadTargetDefaultsFn   func(context.Context, ctrlclient.Client, string) (map[string]buildcontract.TargetDefaults, error)
-			originalNamespace              string
-			hasOriginalNamespace           bool
+			originalNamespace    string
+			hasOriginalNamespace bool
 		)
 
 		BeforeEach(func() {
-			originalGetClientFromRequestFn = getClientFromRequestFn
-			originalLoadOperatorConfigFn = loadOperatorConfigFn
-			originalLoadTargetDefaultsFn = loadTargetDefaultsFn
 			originalNamespace, hasOriginalNamespace = os.LookupEnv("BUILD_API_NAMESPACE")
 			Expect(os.Setenv("BUILD_API_NAMESPACE", "default")).To(Succeed())
 		})
 
 		AfterEach(func() {
-			getClientFromRequestFn = originalGetClientFromRequestFn
-			loadOperatorConfigFn = originalLoadOperatorConfigFn
-			loadTargetDefaultsFn = originalLoadTargetDefaultsFn
 			if hasOriginalNamespace {
 				Expect(os.Setenv("BUILD_API_NAMESPACE", originalNamespace)).To(Succeed())
 			} else {
@@ -827,10 +809,10 @@ var _ = Describe("APIServer", func() {
 		})
 
 		It("should return default AIB image when config resource is not found", func() {
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return nil, nil
 			}
-			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+			server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return nil, k8serrors.NewNotFound(
 					schema.GroupResource{
 						Group:    "automotive.sdv.cloud.redhat.com",
@@ -874,13 +856,13 @@ var _ = Describe("APIServer", func() {
 				},
 			}
 
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return nil, nil
 			}
-			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+			server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return config, nil
 			}
-			loadTargetDefaultsFn = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]buildcontract.TargetDefaults, error) {
+			server.deps.loadTargetDefaults = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]buildcontract.TargetDefaults, error) {
 				return map[string]buildcontract.TargetDefaults{
 					"ebbr": {Architecture: "arm64", ExtraArgs: []string{"--separate-partitions"}},
 				}, nil
@@ -915,13 +897,13 @@ var _ = Describe("APIServer", func() {
 			config := &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{},
 			}
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return nil, nil
 			}
-			loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+			server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return config, nil
 			}
-			loadTargetDefaultsFn = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]buildcontract.TargetDefaults, error) {
+			server.deps.loadTargetDefaults = func(_ context.Context, _ ctrlclient.Client, _ string) (map[string]buildcontract.TargetDefaults, error) {
 				return map[string]buildcontract.TargetDefaults{
 					"qemu": {
 						DefaultFormat:         "raw",

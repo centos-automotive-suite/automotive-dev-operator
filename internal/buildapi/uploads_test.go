@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -134,12 +133,10 @@ func TestValidateDestPath(t *testing.T) {
 	}
 }
 
-// uploadTestFixture sets up mocks and returns a cleanup function.
 type uploadTestFixture struct {
-	server    *APIServer
-	fakeK8s   ctrlclient.Client
-	uploaded  map[string][]byte // podPath -> content captured by fake executor
-	cleanupFn func()
+	server   *APIServer
+	fakeK8s  ctrlclient.Client
+	uploaded map[string][]byte // podPath -> content captured by fake executor
 }
 
 func setupUploadTest(t *testing.T, objs ...ctrlclient.Object) *uploadTestFixture {
@@ -161,20 +158,17 @@ func setupUploadTest(t *testing.T, objs ...ctrlclient.Object) *uploadTestFixture
 	}
 	fakeClient := builder.Build()
 
-	origGetClient := getClientFromRequestFn
-	origGetREST := getRESTConfigFromRequestFn
-	origExec := newPodExecExecutorFn
-
+	server := newTestServer(t, nil)
 	t.Setenv("BUILD_API_NAMESPACE", "test-ns")
-	getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+	server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 		return fakeClient, nil
 	}
-	getRESTConfigFromRequestFn = func(_ *gin.Context) (*rest.Config, error) {
+	server.deps.getRESTConfigFromRequest = func(_ *gin.Context) (*rest.Config, error) {
 		return &rest.Config{}, nil
 	}
 
 	uploaded := make(map[string][]byte)
-	newPodExecExecutorFn = func(
+	server.exec.newExecutor = func(
 		_ *rest.Config, _, _, _ string, cmd []string,
 	) (remotecommand.Executor, error) {
 		podPath := cmd[len(cmd)-1]
@@ -187,20 +181,10 @@ func setupUploadTest(t *testing.T, objs ...ctrlclient.Object) *uploadTestFixture
 		}, nil
 	}
 
-	server := &APIServer{
-		log:    logr.Discard(),
-		limits: DefaultAPILimits(),
-	}
-
 	return &uploadTestFixture{
 		server:   server,
 		fakeK8s:  fakeClient,
 		uploaded: uploaded,
-		cleanupFn: func() {
-			getClientFromRequestFn = origGetClient
-			getRESTConfigFromRequestFn = origGetREST
-			newPodExecExecutorFn = origExec
-		},
 	}
 }
 
@@ -265,7 +249,6 @@ func buildMultipartRequest(t *testing.T, parts []multipartPart) *http.Request {
 
 func TestUploadFiles_BuildNotFound(t *testing.T) {
 	fix := setupUploadTest(t)
-	defer fix.cleanupFn()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -281,7 +264,6 @@ func TestUploadFiles_BuildNotFound(t *testing.T) {
 func TestUploadFiles_NoPodReady(t *testing.T) {
 	build := newTestImageBuild()
 	fix := setupUploadTest(t, build)
-	defer fix.cleanupFn()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -298,7 +280,6 @@ func TestUploadFiles_ContentTooLarge(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
 	fix.server.limits.MaxTotalUploadSize = 10
 
@@ -319,7 +300,6 @@ func TestUploadFiles_SingleFile(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -353,7 +333,6 @@ func TestUploadFiles_PathFieldSetsDestination(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -377,7 +356,6 @@ func TestUploadFiles_UnsafeFilenameRejected(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -397,9 +375,8 @@ func TestUploadFiles_StreamToPodFails(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
-	newPodExecExecutorFn = func(
+	fix.server.exec.newExecutor = func(
 		_ *rest.Config, _, _, _ string, _ []string,
 	) (remotecommand.Executor, error) {
 		return &fakeRemoteExecutor{
@@ -442,7 +419,6 @@ func TestUploadFiles_EmptyMultipartRejected(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -473,7 +449,6 @@ func TestUploadFiles_PathOnlyNoFileRejected(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -492,7 +467,6 @@ func TestUploadFiles_PathFieldTooLargeRejected(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -521,7 +495,6 @@ func TestUploadFiles_TotalSizeEnforcedBeforePodCopy(t *testing.T) {
 	build := newTestImageBuild()
 	pod := newTestUploadPod()
 	fix := setupUploadTest(t, build, pod)
-	defer fix.cleanupFn()
 
 	fix.server.limits.MaxTotalUploadSize = 5
 	fix.server.limits.MaxUploadFileSize = 100
@@ -543,19 +516,15 @@ func TestUploadFiles_TotalSizeEnforcedBeforePodCopy(t *testing.T) {
 }
 
 func TestCopyFileToPodStreamsRawBytesWithNoTarCommand(t *testing.T) {
+	executor := podExecutor{}
 	content := []byte("hello\x00world\n")
 	localPath := writeTempUploadFile(t, content)
-
-	originalNewPodExecExecutorFn := newPodExecExecutorFn
-	t.Cleanup(func() {
-		newPodExecExecutorFn = originalNewPodExecExecutorFn
-	})
 
 	var gotNamespace, gotPodName, gotContainerName string
 	var gotCmd []string
 	var gotBytes []byte
 
-	newPodExecExecutorFn = func(
+	executor.newExecutor = func(
 		_ *rest.Config,
 		namespace, podName, containerName string,
 		cmd []string,
@@ -577,7 +546,7 @@ func TestCopyFileToPodStreamsRawBytesWithNoTarCommand(t *testing.T) {
 		}, nil
 	}
 
-	err := copyFileToPod(
+	err := executor.copyFileToPod(
 		context.Background(),
 		&rest.Config{},
 		"test-ns",
@@ -609,15 +578,11 @@ func TestCopyFileToPodStreamsRawBytesWithNoTarCommand(t *testing.T) {
 }
 
 func TestCopyFileToPodPropagatesStreamErrors(t *testing.T) {
+	executor := podExecutor{}
 	localPath := writeTempUploadFile(t, []byte("content"))
 
-	originalNewPodExecExecutorFn := newPodExecExecutorFn
-	t.Cleanup(func() {
-		newPodExecExecutorFn = originalNewPodExecExecutorFn
-	})
-
 	wantErr := errors.New("stream failed")
-	newPodExecExecutorFn = func(
+	executor.newExecutor = func(
 		_ *rest.Config,
 		_, _, _ string,
 		_ []string,
@@ -629,7 +594,7 @@ func TestCopyFileToPodPropagatesStreamErrors(t *testing.T) {
 		}, nil
 	}
 
-	err := copyFileToPod(context.Background(), &rest.Config{}, "test-ns", "test-pod", "fileserver", localPath, "/workspace/shared/file.txt")
+	err := executor.copyFileToPod(context.Background(), &rest.Config{}, "test-ns", "test-pod", "fileserver", localPath, "/workspace/shared/file.txt")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected error %v, got %v", wantErr, err)
 	}

@@ -29,7 +29,7 @@ import (
 func (a *APIServer) streamContainerBuildLogs(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -50,7 +50,7 @@ func (a *APIServer) streamContainerBuildLogs(c *gin.Context, name string) {
 		return
 	}
 
-	cs, err := getClientsetOrFail(c)
+	cs, err := a.getClientsetOrFail(c)
 	if err != nil {
 		return
 	}
@@ -178,7 +178,7 @@ func (a *APIServer) createContainerBuild(c *gin.Context) {
 		req.Name = fmt.Sprintf("cb-%s", uuid.New().String()[:8])
 	}
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -212,14 +212,14 @@ func (a *APIServer) createContainerBuild(c *gin.Context) {
 
 	// Handle internal registry: create SA token secret, ensure ImageStream, generate output ref
 	if req.UseInternalRegistry {
-		restCfg, err := getRESTConfigFromRequestFn(c)
+		restCfg, err := a.deps.getRESTConfigFromRequest(c)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to get REST config: %v", err)})
 			return
 		}
 
-		tokenLifetime := resolveTokenLifetime(ctx, k8sClient, namespace)
-		secretName, err := createInternalRegistrySecretFn(ctx, restCfg, namespace, req.Name, tokenLifetime)
+		tokenLifetime := a.resolveTokenLifetime(ctx, k8sClient, namespace)
+		secretName, err := a.deps.createInternalRegistrySecret(ctx, restCfg, namespace, req.Name, tokenLifetime)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create internal registry secret: %v", err)})
 			return
@@ -320,11 +320,11 @@ func (a *APIServer) createContainerBuild(c *gin.Context) {
 	})
 }
 
-func listContainerBuilds(c *gin.Context) {
+func (a *APIServer) listContainerBuilds(c *gin.Context) {
 	namespace := resolveNamespace()
 	limit, offset := parsePagination(c)
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -367,7 +367,7 @@ func listContainerBuilds(c *gin.Context) {
 func (a *APIServer) getContainerBuild(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -410,7 +410,7 @@ func (a *APIServer) getContainerBuild(c *gin.Context, name string) {
 	if requester == buildOwner &&
 		cb.Spec.UseServiceAccountAuth &&
 		isTerminalPhase(cb.Status.Phase) {
-		tokenLifetime := resolveTokenLifetime(ctx, k8sClient, namespace)
+		tokenLifetime := a.resolveTokenLifetime(ctx, k8sClient, namespace)
 		token, _, tokenErr := a.mintRegistryToken(ctx, c, namespace, tokenLifetime)
 		if tokenErr != nil {
 			a.log.Error(tokenErr, "failed to mint registry token for container build", "build", name)
@@ -488,7 +488,7 @@ func findWaiterContainer(pod *corev1.Pod) string {
 func (a *APIServer) uploadContainerBuildContext(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -544,7 +544,7 @@ func (a *APIServer) uploadContainerBuildContext(c *gin.Context, name string) {
 	}
 
 	// Stream the request body (tarball) into the waiter container
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error getting REST config: %v", err)})
 		return

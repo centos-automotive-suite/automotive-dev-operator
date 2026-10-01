@@ -10,7 +10,6 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
-	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
@@ -26,11 +25,9 @@ import (
 
 var _ = Describe("Flash", func() {
 	var (
-		server                             *APIServer
-		originalGetClientFromRequestFn     func(*gin.Context) (ctrlclient.Client, error)
-		originalGetRESTConfigFromRequestFn func(*gin.Context) (*rest.Config, error)
-		originalNamespace                  string
-		hasOriginalNamespace               bool
+		server               *APIServer
+		originalNamespace    string
+		hasOriginalNamespace bool
 	)
 
 	newFakeClient := func(objs ...ctrlclient.Object) ctrlclient.Client {
@@ -93,16 +90,13 @@ var _ = Describe("Flash", func() {
 
 	BeforeEach(func() {
 		gin.SetMode(gin.TestMode)
-		server = NewAPIServer(":0", logr.Discard())
-		originalGetClientFromRequestFn = getClientFromRequestFn
-		originalGetRESTConfigFromRequestFn = getRESTConfigFromRequestFn
+		server = newTestServer(GinkgoT(), nil)
+
 		originalNamespace, hasOriginalNamespace = os.LookupEnv("BUILD_API_NAMESPACE")
 		Expect(os.Setenv("BUILD_API_NAMESPACE", "test-ns")).To(Succeed())
 	})
 
 	AfterEach(func() {
-		getClientFromRequestFn = originalGetClientFromRequestFn
-		getRESTConfigFromRequestFn = originalGetRESTConfigFromRequestFn
 		if hasOriginalNamespace {
 			Expect(os.Setenv("BUILD_API_NAMESPACE", originalNamespace)).To(Succeed())
 		} else {
@@ -152,7 +146,7 @@ var _ = Describe("Flash", func() {
 	Context("getFlash", func() {
 		It("should return 404 for nonexistent flash TaskRun", func() {
 			fakeClient := newFakeClient()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -175,7 +169,7 @@ var _ = Describe("Flash", func() {
 				},
 			}
 			fakeClient := newFakeClient(tr)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -191,7 +185,7 @@ var _ = Describe("Flash", func() {
 		It("should return flash details for valid flash TaskRun", func() {
 			tr := newFlashTaskRun("my-flash", "alice", "running")
 			fakeClient := newFakeClient(tr)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -218,7 +212,7 @@ var _ = Describe("Flash", func() {
 				},
 			}
 			fakeClient := newFakeClient(tr)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -240,7 +234,7 @@ var _ = Describe("Flash", func() {
 	Context("listFlash", func() {
 		It("should return empty list when no flash TaskRuns exist", func() {
 			fakeClient := newFakeClient()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -263,7 +257,7 @@ var _ = Describe("Flash", func() {
 			tr2.CreationTimestamp = metav1.NewTime(time.Now())
 
 			fakeClient := newFakeClient(tr1, tr2)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -287,14 +281,14 @@ var _ = Describe("Flash", func() {
 
 		BeforeEach(func() {
 			fakeRESTConfig = &rest.Config{Host: "https://fake-k8s:6443"}
-			getRESTConfigFromRequestFn = func(_ *gin.Context) (*rest.Config, error) {
+			server.deps.getRESTConfigFromRequest = func(_ *gin.Context) (*rest.Config, error) {
 				return fakeRESTConfig, nil
 			}
 		})
 
 		It("should return 404 for nonexistent flash TaskRun", func() {
 			fakeClient := newFakeClient()
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 
@@ -310,7 +304,7 @@ var _ = Describe("Flash", func() {
 		It("should return 503 when flash pod is not ready", func() {
 			tr := newFlashTaskRun("my-flash", "alice", "pending")
 			fakeClient := newFakeClient(tr)
-			getClientFromRequestFn = func(_ *gin.Context) (ctrlclient.Client, error) {
+			server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
 				return fakeClient, nil
 			}
 

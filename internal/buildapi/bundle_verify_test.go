@@ -197,19 +197,19 @@ var _ = Describe("verifyWorkspaceImage", func() {
 })
 
 var _ = Describe("resolveTaskBundleRef", func() {
+	var server *APIServer
+	BeforeEach(func() { server = newTestServer(GinkgoT(), nil) })
 	It("should return empty when secureBuild is false", func() {
 		req := &buildcontract.BuildRequest{SecureBuild: false}
 		k8sClient := newFakeClient()
-		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
+		ref, status, err := server.resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ref).To(BeEmpty())
 		Expect(status).To(Equal(0))
 	})
 
 	It("should reject non-digest-pinned explicit ref", func() {
-		origFn := loadOperatorConfigFn
-		defer func() { loadOperatorConfigFn = origFn }()
-		loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return &automotivev1alpha1.OperatorConfig{}, nil
 		}
 
@@ -218,17 +218,15 @@ var _ = Describe("resolveTaskBundleRef", func() {
 			TaskBundleRef: "quay.io/example/bundle:latest",
 		}
 		k8sClient := newFakeClient()
-		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
+		ref, status, err := server.resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).To(HaveOccurred())
 		Expect(ref).To(BeEmpty())
 		Expect(status).To(Equal(http.StatusBadRequest))
 	})
 
 	It("should resolve from OperatorConfig when TaskBundleRef is empty", func() {
-		origFn := loadOperatorConfigFn
-		defer func() { loadOperatorConfigFn = origFn }()
 		configRef := "quay.io/example/bundle@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-		loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{
 					OSBuilds: &automotivev1alpha1.OSBuildsConfig{
@@ -241,16 +239,14 @@ var _ = Describe("resolveTaskBundleRef", func() {
 
 		req := &buildcontract.BuildRequest{SecureBuild: true}
 		k8sClient := newFakeClient()
-		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
+		ref, status, err := server.resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ref).To(Equal(configRef))
 		Expect(status).To(Equal(0))
 	})
 
 	It("should reject when OperatorConfig TaskBundleRef is not set", func() {
-		origFn := loadOperatorConfigFn
-		defer func() { loadOperatorConfigFn = origFn }()
-		loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{
 					OSBuilds: &automotivev1alpha1.OSBuildsConfig{},
@@ -260,7 +256,7 @@ var _ = Describe("resolveTaskBundleRef", func() {
 
 		req := &buildcontract.BuildRequest{SecureBuild: true}
 		k8sClient := newFakeClient()
-		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
+		ref, status, err := server.resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("taskBundleRef is not set"))
 		Expect(ref).To(BeEmpty())
@@ -268,15 +264,13 @@ var _ = Describe("resolveTaskBundleRef", func() {
 	})
 
 	It("should reject when OperatorConfig is nil", func() {
-		origFn := loadOperatorConfigFn
-		defer func() { loadOperatorConfigFn = origFn }()
-		loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return nil, nil
 		}
 
 		req := &buildcontract.BuildRequest{SecureBuild: true}
 		k8sClient := newFakeClient()
-		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
+		ref, status, err := server.resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("OperatorConfig is nil"))
 		Expect(ref).To(BeEmpty())
@@ -284,15 +278,13 @@ var _ = Describe("resolveTaskBundleRef", func() {
 	})
 
 	It("should fail closed when OperatorConfig cannot be loaded", func() {
-		origFn := loadOperatorConfigFn
-		defer func() { loadOperatorConfigFn = origFn }()
-		loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return nil, context.DeadlineExceeded
 		}
 
 		req := &buildcontract.BuildRequest{SecureBuild: true}
 		k8sClient := newFakeClient()
-		ref, status, err := resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
+		ref, status, err := server.resolveTaskBundleRef(context.Background(), k8sClient, "ns", req)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("OperatorConfig could not be read"))
 		Expect(ref).To(BeEmpty())

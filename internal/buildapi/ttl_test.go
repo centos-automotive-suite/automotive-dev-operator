@@ -10,34 +10,30 @@ import (
 )
 
 var _ = Describe("resolveAndClampTTL", func() {
-	var origFn func(context.Context, ctrlclient.Client, string) (*automotivev1alpha1.OperatorConfig, error)
+	var server *APIServer
 
 	BeforeEach(func() {
-		origFn = loadOperatorConfigFn
-	})
-
-	AfterEach(func() {
-		loadOperatorConfigFn = origFn
+		server = newTestServer(GinkgoT(), nil)
 	})
 
 	It("passes through empty TTL unchanged", func() {
-		result, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "")
+		result, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal(""))
 	})
 
 	It("passes through zero TTL when no max configured", func() {
-		loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return nil, nil
 		}
 
-		result, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "0")
+		result, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "0")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal("0"))
 	})
 
 	It("rejects zero TTL when MaxBuildTTL is set", func() {
-		loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{
 					OSBuilds: &automotivev1alpha1.OSBuildsConfig{
@@ -47,13 +43,13 @@ var _ = Describe("resolveAndClampTTL", func() {
 			}, nil
 		}
 
-		_, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "0")
+		_, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "0")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("not allowed when MaxBuildTTL is set"))
 	})
 
 	It("returns valid TTL as-is when no max configured", func() {
-		loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{
 					OSBuilds: &automotivev1alpha1.OSBuildsConfig{},
@@ -61,13 +57,13 @@ var _ = Describe("resolveAndClampTTL", func() {
 			}, nil
 		}
 
-		result, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "48h")
+		result, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "48h")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal("48h"))
 	})
 
 	It("rejects TTL exceeding MaxBuildTTL", func() {
-		loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{
 					OSBuilds: &automotivev1alpha1.OSBuildsConfig{
@@ -77,13 +73,13 @@ var _ = Describe("resolveAndClampTTL", func() {
 			}, nil
 		}
 
-		_, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "168h")
+		_, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "168h")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("exceeds maximum"))
 	})
 
 	It("allows TTL within MaxBuildTTL", func() {
-		loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{
 					OSBuilds: &automotivev1alpha1.OSBuildsConfig{
@@ -93,25 +89,25 @@ var _ = Describe("resolveAndClampTTL", func() {
 			}, nil
 		}
 
-		result, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "48h")
+		result, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "48h")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal("48h"))
 	})
 
 	It("rejects invalid TTL format", func() {
-		_, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "not-a-duration")
+		_, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "not-a-duration")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("invalid TTL"))
 	})
 
 	It("rejects negative TTL", func() {
-		_, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "-1h")
+		_, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "-1h")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("must not be negative"))
 	})
 
 	It("ignores MaxBuildTTL when set to zero", func() {
-		loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return &automotivev1alpha1.OperatorConfig{
 				Spec: automotivev1alpha1.OperatorConfigSpec{
 					OSBuilds: &automotivev1alpha1.OSBuildsConfig{
@@ -121,17 +117,17 @@ var _ = Describe("resolveAndClampTTL", func() {
 			}, nil
 		}
 
-		result, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "999h")
+		result, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "999h")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal("999h"))
 	})
 
 	It("handles missing OperatorConfig gracefully", func() {
-		loadOperatorConfigFn = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		server.deps.loadOperatorConfig = func(_ context.Context, _ ctrlclient.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 			return nil, nil
 		}
 
-		result, err := resolveAndClampTTL(context.Background(), nil, "test-ns", "48h")
+		result, err := server.resolveAndClampTTL(context.Background(), nil, "test-ns", "48h")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal("48h"))
 	})

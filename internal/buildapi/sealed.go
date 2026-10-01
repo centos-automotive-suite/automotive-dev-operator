@@ -146,13 +146,13 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 		attribute.String("sealed.operation", opLabel),
 	)
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		spanError(span, err)
 		SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
 		return
 	}
-	clientset, err := getClientsetOrFail(c)
+	clientset, err := a.getClientsetOrFail(c)
 	if err != nil {
 		spanError(span, err)
 		SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
@@ -246,7 +246,7 @@ func (a *APIServer) listSealed(c *gin.Context) {
 	namespace := resolveNamespace()
 	limit, offset := parsePagination(c)
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		spanError(span, err)
 		return
@@ -288,7 +288,7 @@ func (a *APIServer) getSealed(c *gin.Context, name string) {
 	span.SetAttributes(attribute.String("sealed.name", name))
 
 	namespace := resolveNamespace()
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		spanError(span, err)
 		return
@@ -324,12 +324,12 @@ func (a *APIServer) streamSealedLogs(c *gin.Context, name string) {
 	span.SetAttributes(attribute.String("sealed.name", name))
 
 	namespace := resolveNamespace()
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		spanError(span, err)
 		return
 	}
-	clientset, err := getClientsetOrFail(c)
+	clientset, err := a.getClientsetOrFail(c)
 	if err != nil {
 		spanError(span, err)
 		return

@@ -71,8 +71,8 @@ func getExternalRegistryRoute(ctx context.Context, k8sClient client.Client, name
 }
 
 // resolveTokenLifetime loads the registry token lifetime from OperatorConfig.
-func resolveTokenLifetime(ctx context.Context, k8sClient client.Client, namespace string) int64 {
-	operatorCfg, err := loadOperatorConfigFn(ctx, k8sClient, namespace)
+func (a *APIServer) resolveTokenLifetime(ctx context.Context, k8sClient client.Client, namespace string) int64 {
+	operatorCfg, err := a.deps.loadOperatorConfig(ctx, k8sClient, namespace)
 	if err != nil || operatorCfg == nil || operatorCfg.Spec.OSBuilds == nil {
 		return automotivev1alpha1.DefaultRegistryTokenLifetimeSeconds
 	}
@@ -214,7 +214,7 @@ func imageStreamHasTags(ctx context.Context, k8sClient client.Client, namespace,
 // mintRegistryToken creates a fresh short-lived token for the pipeline SA
 // so the caller can pull images from the internal registry.
 func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, namespace string, tokenLifetimeSeconds int64) (string, metav1.Time, error) {
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		return "", metav1.Time{}, fmt.Errorf("error getting REST config for token mint: %w", err)
 	}

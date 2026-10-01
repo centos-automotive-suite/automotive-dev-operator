@@ -17,8 +17,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/catalog"
 	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/catalogcontract"
 	"github.com/gorilla/websocket"
 )
 
@@ -364,7 +364,7 @@ func (c *Client) GetFlash(ctx context.Context, name string) (*buildapi.FlashResp
 }
 
 // GetCatalogImage retrieves a catalog image by name.
-func (c *Client) GetCatalogImage(ctx context.Context, name string) (*catalog.CatalogImageResponse, error) {
+func (c *Client) GetCatalogImage(ctx context.Context, name string) (*catalogcontract.CatalogImageResponse, error) {
 	endpoint := c.resolve(path.Join("/v1/catalog/images", url.PathEscape(name)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -381,7 +381,7 @@ func (c *Client) GetCatalogImage(ctx context.Context, name string) (*catalog.Cat
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("catalog image %q not found", name)
 	}
-	var out catalog.CatalogImageResponse
+	var out catalogcontract.CatalogImageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
 	}

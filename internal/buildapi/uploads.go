@@ -1,7 +1,6 @@
 package buildapi
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -60,7 +59,7 @@ func validateDestPath(dest string) (string, error) {
 	return cleanDest, nil
 }
 
-func processFilePart(part *multipart.Part, pendingPath string, uctx *uploadContext, remainingBytes int64) (processFilePartResult, error) {
+func (a *APIServer) processFilePart(part *multipart.Part, pendingPath string, uctx *uploadContext, remainingBytes int64) (processFilePartResult, error) {
 	dest := pendingPath
 	if dest == "" {
 		dest = strings.TrimSpace(part.FileName())
@@ -100,7 +99,7 @@ func processFilePart(part *multipart.Part, pendingPath string, uctx *uploadConte
 	}
 
 	destPath := "/workspace/shared/" + cleanDest
-	if err := copyFileToPod(uctx.ctx, uctx.restCfg, uctx.namespace, uctx.podName, uctx.container, tmpName, destPath); err != nil {
+	if err := a.exec.copyFileToPod(uctx.ctx, uctx.restCfg, uctx.namespace, uctx.podName, uctx.container, tmpName, destPath); err != nil {
 		return processFilePartResult{}, fmt.Errorf("stream to pod failed: %w", err)
 	}
 
@@ -141,7 +140,7 @@ func UploadPodReady(ctx context.Context, k8sClient client.Client, namespace, bui
 func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -171,7 +170,7 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 		return
 	}
 
-	restCfg, err := getRESTConfigFromRequestFn(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("rest config: %v", err)})
 		return
@@ -220,7 +219,7 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 		}
 
 		remainingBytes := a.limits.MaxTotalUploadSize - totalBytesUploaded
-		result, err := processFilePart(part, pendingPath, uctx, remainingBytes)
+		result, err := a.processFilePart(part, pendingPath, uctx, remainingBytes)
 		pendingPath = ""
 		if err != nil {
 			if errors.Is(err, errTotalSizeExceeded) {
@@ -251,30 +250,4 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 		return
 	}
 	writeJSON(c, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func copyFileToPod(ctx context.Context, config *rest.Config, namespace, podName, containerName, localPath, podPath string) error {
-	f, err := os.Open(localPath)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := f.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to close file: %v\n", err)
-		}
-	}()
-	return copyReaderToPod(ctx, config, namespace, podName, containerName, f, podPath)
-}
-
-func copyReaderToPod(ctx context.Context, config *rest.Config, namespace, podName, containerName string, r io.Reader, podPath string) error {
-	// Stream raw file bytes via stdin; the pod-side command writes them directly.
-	// Uses only sh + cat (available in ubi-minimal), no tar dependency.
-	// Write to a temp file and rename so an interrupted transfer never leaves a
-	// truncated file at podPath (hydration skips files that already exist).
-	cmd := []string{"/bin/sh", "-c",
-		"mkdir -p \"$(dirname \"$1\")\" && tmp=\"$1.part.$$\" && cat > \"$tmp\" && chmod 0600 \"$tmp\" && mv -f \"$tmp\" \"$1\"",
-		"--", podPath}
-	var stderr bytes.Buffer
-	err := streamPodExec(ctx, config, namespace, podName, containerName, cmd, r, io.Discard, &stderr)
-	return wrapPodStreamError("copy to pod", err, &stderr)
 }

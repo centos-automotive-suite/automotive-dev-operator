@@ -17,106 +17,10 @@ limitations under the License.
 package catalog
 
 import (
-	"time"
-
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/catalogcontract"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-// CatalogImageResponse represents a catalog image in API responses
-//
-//nolint:revive // Name intentionally includes package name for clarity in external API
-type CatalogImageResponse struct {
-	Name             string                `json:"name"`
-	RegistryURL      string                `json:"registryUrl"`
-	Digest           string                `json:"digest,omitempty"`
-	Tags             []string              `json:"tags,omitempty"`
-	Phase            string                `json:"phase"`
-	Architecture     string                `json:"architecture,omitempty"`
-	Distro           string                `json:"distro,omitempty"`
-	DistroVersion    string                `json:"distroVersion,omitempty"`
-	Targets          []HardwareTargetInfo  `json:"targets,omitempty"`
-	Bootc            bool                  `json:"bootc"`
-	SizeBytes        int64                 `json:"sizeBytes,omitempty"`
-	LayerCount       int                   `json:"layerCount,omitempty"`
-	LastVerified     *time.Time            `json:"lastVerified,omitempty"`
-	PublishedAt      *time.Time            `json:"publishedAt,omitempty"`
-	CreatedAt        time.Time             `json:"createdAt"`
-	SourceImageBuild string                `json:"sourceImageBuild,omitempty"`
-	SourceType       string                `json:"sourceType,omitempty"`
-	ScheduleName     string                `json:"scheduleName,omitempty"`
-	BuildMode        string                `json:"buildMode,omitempty"`
-	ExportFormat     string                `json:"exportFormat,omitempty"`
-	Labels           map[string]string     `json:"labels,omitempty"`
-	ArtifactRefs     []ArtifactRefInfo     `json:"artifactRefs,omitempty"`
-	DownloadURL      string                `json:"downloadUrl,omitempty"`
-	IsMultiArch      bool                  `json:"isMultiArch,omitempty"`
-	PlatformVariants []PlatformVariantInfo `json:"platformVariants,omitempty"`
-	AccessCount      int64                 `json:"accessCount,omitempty"`
-	StatusReason     string                `json:"statusReason,omitempty"`
-	StatusMessage    string                `json:"statusMessage,omitempty"`
-}
-
-// ArtifactRefInfo represents artifact reference information in responses
-type ArtifactRefInfo struct {
-	Type      string `json:"type"`
-	URL       string `json:"url"`
-	Digest    string `json:"digest,omitempty"`
-	SizeBytes int64  `json:"sizeBytes,omitempty"`
-	Format    string `json:"format,omitempty"`
-}
-
-// PlatformVariantInfo represents a platform-specific variant in API responses
-type PlatformVariantInfo struct {
-	Architecture string `json:"architecture,omitempty"`
-	OS           string `json:"os,omitempty"`
-	Variant      string `json:"variant,omitempty"`
-	Digest       string `json:"digest,omitempty"`
-	SizeBytes    int64  `json:"sizeBytes,omitempty"`
-}
-
-// HardwareTargetInfo represents hardware target information in responses
-type HardwareTargetInfo struct {
-	Name     string `json:"name"`
-	Verified bool   `json:"verified"`
-	Notes    string `json:"notes,omitempty"`
-}
-
-// CatalogImageListResponse represents a list of catalog images
-//
-//nolint:revive // Name intentionally includes package name for clarity in external API
-type CatalogImageListResponse struct {
-	Items    []CatalogImageResponse `json:"items"`
-	Total    int                    `json:"total"`
-	Continue string                 `json:"continue,omitempty"`
-}
-
-// CreateCatalogImageRequest represents a request to create a catalog image
-type CreateCatalogImageRequest struct {
-	Name           string               `json:"name" binding:"required"`
-	RegistryURL    string               `json:"registryUrl" binding:"required"`
-	Digest         string               `json:"digest,omitempty"`
-	Tags           []string             `json:"tags,omitempty"`
-	AuthSecretName string               `json:"authSecretName,omitempty"`
-	Architecture   string               `json:"architecture,omitempty"`
-	Distro         string               `json:"distro,omitempty"`
-	DistroVersion  string               `json:"distroVersion,omitempty"`
-	Targets        []HardwareTargetInfo `json:"targets,omitempty"`
-	Bootc          bool                 `json:"bootc"`
-}
-
-// PublishImageBuildRequest represents a request to publish an ImageBuild to the catalog
-type PublishImageBuildRequest struct {
-	ImageBuildName   string   `json:"imageBuildName" binding:"required"`
-	CatalogImageName string   `json:"catalogImageName,omitempty"`
-	Tags             []string `json:"tags,omitempty"`
-}
-
-// VerifyImageResponse represents the response from verifying an image
-type VerifyImageResponse struct {
-	Message   string `json:"message"`
-	Triggered bool   `json:"triggered"`
-}
 
 // ListQueryParams represents query parameters for listing catalog images
 type ListQueryParams struct {
@@ -132,8 +36,8 @@ type ListQueryParams struct {
 }
 
 // ToCatalogImageResponse converts a CatalogImage CR to an API response
-func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) CatalogImageResponse {
-	response := CatalogImageResponse{
+func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) catalogcontract.CatalogImageResponse {
+	response := catalogcontract.CatalogImageResponse{
 		Name:        catalogImage.Name,
 		RegistryURL: catalogImage.Spec.RegistryURL,
 		Digest:      catalogDigest(catalogImage),
@@ -153,7 +57,7 @@ func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) Catal
 		response.ExportFormat = catalogImage.Spec.Metadata.ExportFormat
 
 		for _, target := range catalogImage.Spec.Metadata.Targets {
-			response.Targets = append(response.Targets, HardwareTargetInfo{
+			response.Targets = append(response.Targets, catalogcontract.HardwareTargetInfo{
 				Name:     target.Name,
 				Verified: target.Verified,
 				Notes:    target.Notes,
@@ -177,7 +81,7 @@ func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) Catal
 
 		// Extract platform variants for multi-arch images
 		for _, variant := range catalogImage.Status.RegistryMetadata.PlatformVariants {
-			response.PlatformVariants = append(response.PlatformVariants, PlatformVariantInfo{
+			response.PlatformVariants = append(response.PlatformVariants, catalogcontract.PlatformVariantInfo{
 				Architecture: variant.Architecture,
 				OS:           variant.OS,
 				Variant:      variant.Variant,
@@ -213,7 +117,7 @@ func ToCatalogImageResponse(catalogImage *automotivev1alpha1.CatalogImage) Catal
 
 	// Extract artifact references
 	for _, ref := range catalogImage.Status.ArtifactRefs {
-		response.ArtifactRefs = append(response.ArtifactRefs, ArtifactRefInfo{
+		response.ArtifactRefs = append(response.ArtifactRefs, catalogcontract.ArtifactRefInfo{
 			Type:      ref.Type,
 			URL:       ref.URL,
 			Digest:    ref.Digest,
@@ -262,9 +166,9 @@ func catalogDigest(catalogImage *automotivev1alpha1.CatalogImage) string {
 // ToCatalogImageListResponse converts a list of CatalogImage CRs to an API response
 func ToCatalogImageListResponse(
 	list *automotivev1alpha1.CatalogImageList, continueToken string,
-) CatalogImageListResponse {
-	response := CatalogImageListResponse{
-		Items:    make([]CatalogImageResponse, 0, len(list.Items)),
+) catalogcontract.CatalogImageListResponse {
+	response := catalogcontract.CatalogImageListResponse{
+		Items:    make([]catalogcontract.CatalogImageResponse, 0, len(list.Items)),
 		Total:    len(list.Items),
 		Continue: continueToken,
 	}

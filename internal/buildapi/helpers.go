@@ -39,8 +39,8 @@ func (a *APIServer) wrapNamedHandler(op string, fn func(*gin.Context, string)) g
 	}
 }
 
-func getK8sClientOrFail(c *gin.Context) (client.Client, error) {
-	k8sClient, err := getClientFromRequestFn(c)
+func (a *APIServer) getK8sClientOrFail(c *gin.Context) (client.Client, error) {
+	k8sClient, err := a.deps.getClientFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("k8s client error: %v", err)})
 		return nil, err
@@ -48,8 +48,8 @@ func getK8sClientOrFail(c *gin.Context) (client.Client, error) {
 	return k8sClient, nil
 }
 
-func getClientsetOrFail(c *gin.Context) (*kubernetes.Clientset, error) {
-	restCfg, err := getRESTConfigFromRequestFn(c)
+func (a *APIServer) getClientsetOrFail(c *gin.Context) (*kubernetes.Clientset, error) {
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("REST config error: %v", err)})
 		return nil, err

@@ -396,7 +396,7 @@ func (a *APIServer) authenticateRequest(c *gin.Context) (string, string, *authEr
 	// Fallback to kubeconfig TokenReview authentication
 	authAttempts = append(authAttempts, "k8s_token_review")
 
-	cfg, err := getRESTConfigFromRequest(c)
+	cfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		a.log.Error(err, "Failed to get REST config for TokenReview fallback")
 		return "", "", &authError{

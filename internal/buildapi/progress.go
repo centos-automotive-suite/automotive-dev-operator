@@ -330,7 +330,7 @@ func (a *APIServer) handleGetProgress(c *gin.Context) {
 	name := c.Param("name")
 	namespace := resolveNamespace()
 
-	k8sClient, err := getClientFromRequest(c)
+	k8sClient, err := a.deps.getClientFromRequest(c)
 	if err != nil {
 		a.log.Error(err, "failed to get k8s client for progress", "name", name)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -363,7 +363,7 @@ func (a *APIServer) handleGetProgress(c *gin.Context) {
 		if ok && time.Since(cached.time) < progressCacheTTL {
 			tasks = cached.tasks
 		} else {
-			restCfg, err := getRESTConfigFromRequest(c)
+			restCfg, err := a.deps.getRESTConfigFromRequest(c)
 			if err != nil {
 				a.log.Error(err, "failed to get REST config for progress pod read")
 			} else {

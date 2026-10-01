@@ -26,6 +26,7 @@ import (
 )
 
 func TestHydrateWorkspaceForImageBuild(t *testing.T) {
+	executor := podExecutor{}
 	scheme := runtime.NewScheme()
 	if err := automotivev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -77,11 +78,8 @@ func TestHydrateWorkspaceForImageBuild(t *testing.T) {
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ib, ws, uploadPod, wsPod).Build()
 
-	origExec := newPodExecExecutorFn
-	t.Cleanup(func() { newPodExecExecutorFn = origExec })
-
 	uploaded := map[string][]byte{}
-	newPodExecExecutorFn = func(_ *rest.Config, _, podName, _ string, cmd []string) (remotecommand.Executor, error) {
+	executor.newExecutor = func(_ *rest.Config, _, podName, _ string, cmd []string) (remotecommand.Executor, error) {
 		joined := strings.Join(cmd, " ")
 		return &fakeRemoteExecutor{
 			streamWithContextFn: func(_ context.Context, opts remotecommand.StreamOptions) error {
@@ -102,7 +100,7 @@ func TestHydrateWorkspaceForImageBuild(t *testing.T) {
 		}, nil
 	}
 
-	if err := HydrateWorkspaceForImageBuild(context.Background(), &rest.Config{}, fakeClient, ib); err != nil {
+	if err := hydrateWorkspace(context.Background(), executor, &rest.Config{}, fakeClient, ib); err != nil {
 		t.Fatalf("HydrateWorkspaceForImageBuild: %v", err)
 	}
 	got := uploaded["/workspace/shared/"+relFile]
@@ -146,6 +144,7 @@ func TestHydrateWorkspaceForImageBuild_NoAnnotation(t *testing.T) {
 }
 
 func TestHydrateWorkspaceForImageBuild_RejectsTraversalDest(t *testing.T) {
+	executor := podExecutor{}
 	scheme := runtime.NewScheme()
 	if err := automotivev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -183,11 +182,8 @@ func TestHydrateWorkspaceForImageBuild_RejectsTraversalDest(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ib, ws, uploadPod, wsPod).Build()
 
-	origExec := newPodExecExecutorFn
-	t.Cleanup(func() { newPodExecExecutorFn = origExec })
-
 	uploaded := map[string][]byte{}
-	newPodExecExecutorFn = func(_ *rest.Config, _, podName, _ string, cmd []string) (remotecommand.Executor, error) {
+	executor.newExecutor = func(_ *rest.Config, _, podName, _ string, cmd []string) (remotecommand.Executor, error) {
 		joined := strings.Join(cmd, " ")
 		return &fakeRemoteExecutor{
 			streamWithContextFn: func(_ context.Context, opts remotecommand.StreamOptions) error {
@@ -205,7 +201,7 @@ func TestHydrateWorkspaceForImageBuild_RejectsTraversalDest(t *testing.T) {
 		}, nil
 	}
 
-	err := HydrateWorkspaceForImageBuild(context.Background(), &rest.Config{}, fakeClient, ib)
+	err := hydrateWorkspace(context.Background(), executor, &rest.Config{}, fakeClient, ib)
 	if err == nil {
 		t.Fatal("expected destination path rejection")
 	}
@@ -221,6 +217,7 @@ func TestHydrateWorkspaceForImageBuild_RejectsTraversalDest(t *testing.T) {
 // already present on the upload pod are not re-copied, so a retried hydrate
 // makes forward progress instead of restarting the whole transfer.
 func TestHydrateWorkspaceForImageBuild_SkipsExistingFiles(t *testing.T) {
+	executor := podExecutor{}
 	scheme := runtime.NewScheme()
 	if err := automotivev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -260,11 +257,8 @@ func TestHydrateWorkspaceForImageBuild_SkipsExistingFiles(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ib, ws, uploadPod, wsPod).Build()
 
-	origExec := newPodExecExecutorFn
-	t.Cleanup(func() { newPodExecExecutorFn = origExec })
-
 	uploaded := map[string][]byte{}
-	newPodExecExecutorFn = func(_ *rest.Config, _, podName, _ string, cmd []string) (remotecommand.Executor, error) {
+	executor.newExecutor = func(_ *rest.Config, _, podName, _ string, cmd []string) (remotecommand.Executor, error) {
 		joined := strings.Join(cmd, " ")
 		return &fakeRemoteExecutor{
 			streamWithContextFn: func(_ context.Context, opts remotecommand.StreamOptions) error {
@@ -285,7 +279,7 @@ func TestHydrateWorkspaceForImageBuild_SkipsExistingFiles(t *testing.T) {
 		}, nil
 	}
 
-	if err := HydrateWorkspaceForImageBuild(context.Background(), &rest.Config{}, fakeClient, ib); err != nil {
+	if err := hydrateWorkspace(context.Background(), executor, &rest.Config{}, fakeClient, ib); err != nil {
 		t.Fatalf("HydrateWorkspaceForImageBuild: %v", err)
 	}
 	if len(uploaded) != 0 {
@@ -297,9 +291,8 @@ func TestHydrateWorkspaceForImageBuild_SkipsExistingFiles(t *testing.T) {
 // escape reported by the workspace lister is classified as a permanent error
 // so the controller fails the build instead of retrying forever.
 func TestListWorkspaceHydrateFiles_EscapeIsPermanent(t *testing.T) {
-	origExec := newPodExecExecutorFn
-	t.Cleanup(func() { newPodExecExecutorFn = origExec })
-	newPodExecExecutorFn = func(_ *rest.Config, _, _, _ string, _ []string) (remotecommand.Executor, error) {
+	executor := podExecutor{}
+	executor.newExecutor = func(_ *rest.Config, _, _, _ string, _ []string) (remotecommand.Executor, error) {
 		return &fakeRemoteExecutor{
 			streamWithContextFn: func(_ context.Context, opts remotecommand.StreamOptions) error {
 				_, _ = opts.Stderr.Write([]byte("workspace files escape /workspace: /workspace/evil\n"))
@@ -307,7 +300,7 @@ func TestListWorkspaceHydrateFiles_EscapeIsPermanent(t *testing.T) {
 			},
 		}, nil
 	}
-	_, err := listWorkspaceHydrateFiles(
+	_, err := executor.listWorkspaceHydrateFiles(
 		context.Background(), &rest.Config{}, testNamespace, "workspace-dev-ws",
 		[]workspacemanifest.WorkspaceHydrateRef{{Kind: hydrateKindPath, AbsPath: "/workspace/evil"}},
 	)

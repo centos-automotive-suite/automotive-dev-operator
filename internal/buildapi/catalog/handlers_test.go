@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/catalogcontract"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,7 +67,7 @@ func TestHandleGetCatalogImage_DoesNotWrite(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp CatalogImageResponse
+	var resp catalogcontract.CatalogImageResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestHandleListCatalogImages_SortByCreated(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp CatalogImageListResponse
+	var resp catalogcontract.CatalogImageListResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -179,7 +180,7 @@ func TestHandleListCatalogImages_SortByPublishedAt(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp CatalogImageListResponse
+	var resp catalogcontract.CatalogImageListResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -239,7 +240,7 @@ func TestHandleListCatalogImages_LatestUsesPublishedAt(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp CatalogImageListResponse
+	var resp catalogcontract.CatalogImageListResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -344,7 +345,7 @@ func TestHandleListCatalogImages_Latest(t *testing.T) {
 				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 			}
 
-			var resp CatalogImageListResponse
+			var resp catalogcontract.CatalogImageListResponse
 			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
@@ -422,7 +423,7 @@ func TestHandleListCatalogImages_DefaultAvailableLatest(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp CatalogImageListResponse
+	var resp catalogcontract.CatalogImageListResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -484,7 +485,7 @@ func TestHandleListCatalogImages_PhaseAllLatestFalse(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp CatalogImageListResponse
+	var resp catalogcontract.CatalogImageListResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -493,7 +494,7 @@ func TestHandleListCatalogImages_PhaseAllLatestFalse(t *testing.T) {
 	}
 }
 
-func namesOf(items []CatalogImageResponse) []string {
+func namesOf(items []catalogcontract.CatalogImageResponse) []string {
 	names := make([]string, len(items))
 	for i, item := range items {
 		names[i] = item.Name
@@ -573,7 +574,7 @@ func TestScheduleNameInResponse(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp CatalogImageResponse
+	var resp catalogcontract.CatalogImageResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

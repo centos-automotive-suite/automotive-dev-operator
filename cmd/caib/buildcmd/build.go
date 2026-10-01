@@ -833,136 +833,7 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
-	if err != nil {
-		h.handleError(err)
-		return
-	}
-
-	manifestBytes, gitSource, err := h.readBuildSource(manifestPath)
-	if err != nil {
-		h.handleError(fmt.Errorf("error reading manifest: %w", err))
-		return
-	}
-
-	h.resolveTarget(cmd, common.ManifestTarget(manifestBytes))
-
-	validateFlash := gitSource == nil && h.opts.Flash.AfterBuild && h.opts.Flash.ExporterSelector == ""
-	operatorConfig, cfgErr := h.fetchTargetDefaults(ctx, api, h.opts.Build.Target, validateFlash)
-	if cfgErr != nil {
-		h.handleError(cfgErr)
-		return
-	}
-
-	if gitSource == nil && !h.validateManifestSchema(operatorConfig, manifestBytes) {
-		return
-	}
-
-	customDefs, err := h.resolveCustomDefs()
-	if err != nil {
-		h.handleError(err)
-		return
-	}
-
-	lockfile, err := h.readLockfile()
-	if err != nil {
-		h.handleError(err)
-		return
-	}
-
-	rootPassword, err := h.resolveRootPassword()
-	if err != nil {
-		h.handleError(err)
-		return
-	}
-
-	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(h.opts.Build.ExtraRepos, h.opts.Build.LocalRepo)
-	if err != nil {
-		h.handleError(err)
-		return
-	}
-
-	req := buildcontract.BuildRequest{
-		Name:                   h.opts.Build.Name,
-		Manifest:               string(manifestBytes),
-		GitSource:              gitSource,
-		ManifestFileName:       filepath.Base(manifestPath),
-		Distro:                 buildcontract.Distro(h.opts.Build.Distro),
-		Target:                 buildcontract.Target(h.opts.Build.Target),
-		Architecture:           buildcontract.Architecture(h.opts.Build.Architecture),
-		ExportFormat:           buildcontract.ExportFormat(h.opts.Build.DiskFormat),
-		Mode:                   buildcontract.ModeBootc,
-		AutomotiveImageBuilder: h.opts.Build.AutomotiveImageBuilder,
-		StorageClass:           h.opts.Build.StorageClass,
-		CustomDefs:             customDefs,
-		AIBExtraArgs:           h.opts.Build.AIBExtraArgs,
-		Lockfile:               lockfile,
-		RootPassword:           rootPassword,
-		ExtraRepos:             workspaceRepos,
-		OCIRepoImages:          ociRepoImages,
-		LocalRepo:              localRepo,
-		Workspace:              h.opts.Build.Workspace,
-		Compression:            buildcontract.Compression(h.opts.Build.CompressionAlgo),
-		ContainerPush:          h.opts.Registry.ContainerPush,
-		BuildDiskImage:         h.opts.Build.BuildDiskImage,
-		ExportOCI:              h.opts.Registry.ExportOCI,
-		BuilderImage:           h.opts.Build.BuilderImage,
-		RebuildBuilder:         h.opts.Build.RebuildBuilder,
-		SecureBuild:            h.opts.Build.SecureBuild,
-		Reproducible:           h.opts.Build.Reproducible,
-		TaskBundleRef:          h.opts.Build.TaskBundleRef,
-		RestoreSourcesRef:      h.opts.Build.RestoreSourcesRef,
-		TTL:                    h.opts.Build.TTL,
-	}
-
-	if err := h.applyRegistryCredentialsToRequest(&req); err != nil {
-		h.handleError(err)
-		return
-	}
-
-	if req.GitSource == nil {
-		ApplyTargetDefaults(cmd, operatorConfig, &req)
-	}
-	deferGitDefaults(cmd, &req)
-
-	if err := h.applyFlashOptions(&req, "--push-disk"); err != nil {
-		h.handleError(err)
-		return
-	}
-
-	if err := h.applyS3Options(cmd, &req); err != nil {
-		h.handleError(err)
-		return
-	}
-	if err := h.applyNotificationOptions(&req); err != nil {
-		h.handleError(err)
-		return
-	}
-
-	localRefs, cleanup, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestPath)
-	if refsErr != nil {
-		h.handleError(fmt.Errorf("manifest file reference error: %w", refsErr))
-		return
-	}
-	defer cleanup()
-	req.HasLocalFiles = len(localRefs) > 0
-
-	resp, err := api.CreateBuild(ctx, req)
-	if err != nil {
-		h.handleError(err)
-		return
-	}
-	clilog.Infof("Build %s accepted: %s - %s\n", resp.Name, resp.Phase, resp.Message)
-	h.displayBuildLogsCommand(resp.Name)
-
-	if len(localRefs) > 0 {
-		if err := h.handleFileUploads(ctx, api, resp.Name, localRefs); err != nil {
-			h.handleError(err)
-			return
-		}
-	}
-
-	h.finishBuild(ctx, api, resp.Name, h.opts.Output.Wait || h.opts.Output.FollowLogs || h.opts.Output.Dir != "" || h.opts.Flash.AfterBuild)
+	h.runManifestBuild(ctx, cmd, manifestPath, false)
 }
 
 // RunDisk handles `caib image disk`.
@@ -1127,6 +998,10 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
+	h.runManifestBuild(ctx, cmd, manifestPath, true)
+}
+
+func (h *Handler) runManifestBuild(ctx context.Context, cmd *cobra.Command, manifestPath string, development bool) {
 	api, err := common.CreateBuildAPIClient(h.opts.Connection.ServerURL, &h.opts.Connection.AuthToken, h.opts.Connection.InsecureSkipTLS)
 	if err != nil {
 		h.handleError(err)
@@ -1170,10 +1045,17 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	parsedMode, err := parseDevMode(h.opts.Build.Mode)
-	if err != nil {
-		h.handleError(err)
-		return
+	mode := buildcontract.ModeBootc
+	exportFormat := h.opts.Build.DiskFormat
+	pushFlag := "--push-disk"
+	if development {
+		mode, err = parseDevMode(h.opts.Build.Mode)
+		if err != nil {
+			h.handleError(err)
+			return
+		}
+		exportFormat = h.opts.Build.ExportFormat
+		pushFlag = "--push"
 	}
 
 	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(h.opts.Build.ExtraRepos, h.opts.Build.LocalRepo)
@@ -1190,8 +1072,8 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		Distro:                 buildcontract.Distro(h.opts.Build.Distro),
 		Target:                 buildcontract.Target(h.opts.Build.Target),
 		Architecture:           buildcontract.Architecture(h.opts.Build.Architecture),
-		ExportFormat:           buildcontract.ExportFormat(h.opts.Build.ExportFormat),
-		Mode:                   parsedMode,
+		ExportFormat:           buildcontract.ExportFormat(exportFormat),
+		Mode:                   mode,
 		AutomotiveImageBuilder: h.opts.Build.AutomotiveImageBuilder,
 		StorageClass:           h.opts.Build.StorageClass,
 		CustomDefs:             customDefs,
@@ -1211,6 +1093,13 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 		TTL:                    h.opts.Build.TTL,
 	}
 
+	if !development {
+		req.ContainerPush = h.opts.Registry.ContainerPush
+		req.BuildDiskImage = h.opts.Build.BuildDiskImage
+		req.BuilderImage = h.opts.Build.BuilderImage
+		req.RebuildBuilder = h.opts.Build.RebuildBuilder
+	}
+
 	if err := h.applyRegistryCredentialsToRequest(&req); err != nil {
 		h.handleError(err)
 		return
@@ -1221,7 +1110,7 @@ func (h *Handler) RunBuildDev(cmd *cobra.Command, args []string) {
 	}
 	deferGitDefaults(cmd, &req)
 
-	if err := h.applyFlashOptions(&req, "--push"); err != nil {
+	if err := h.applyFlashOptions(&req, pushFlag); err != nil {
 		h.handleError(err)
 		return
 	}

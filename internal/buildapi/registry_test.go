@@ -59,7 +59,6 @@ func newUnstructuredImageStreamTag(namespace, stream, tag string) *unstructured.
 }
 
 var _ = Describe("Registry", func() {
-
 	Describe("ensureImageStream", func() {
 		It("creates ImageStream when it does not exist", func() {
 			scheme := newRegistryTestScheme()
@@ -223,34 +222,30 @@ var _ = Describe("Registry", func() {
 	})
 
 	Describe("resolveTokenLifetime", func() {
-		var originalFn func(ctx context.Context, c client.Client, ns string) (*automotivev1alpha1.OperatorConfig, error)
+		var server *APIServer
 
 		BeforeEach(func() {
-			originalFn = loadOperatorConfigFn
+			server = newTestServer(GinkgoT(), nil)
 		})
 
-		AfterEach(func() {
-			loadOperatorConfigFn = originalFn
-		})
-
-		It("returns default when loadOperatorConfigFn errors", func() {
-			loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+		It("returns default when loading OperatorConfig fails", func() {
+			server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return nil, fmt.Errorf("not found")
 			}
-			lifetime := resolveTokenLifetime(context.Background(), nil, "ns")
+			lifetime := server.resolveTokenLifetime(context.Background(), nil, "ns")
 			Expect(lifetime).To(Equal(automotivev1alpha1.DefaultRegistryTokenLifetimeSeconds))
 		})
 
 		It("returns default when OSBuilds is nil", func() {
-			loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+			server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return &automotivev1alpha1.OperatorConfig{}, nil
 			}
-			lifetime := resolveTokenLifetime(context.Background(), nil, "ns")
+			lifetime := server.resolveTokenLifetime(context.Background(), nil, "ns")
 			Expect(lifetime).To(Equal(automotivev1alpha1.DefaultRegistryTokenLifetimeSeconds))
 		})
 
 		It("returns custom value when set", func() {
-			loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+			server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return &automotivev1alpha1.OperatorConfig{
 					Spec: automotivev1alpha1.OperatorConfigSpec{
 						OSBuilds: &automotivev1alpha1.OSBuildsConfig{
@@ -259,15 +254,15 @@ var _ = Describe("Registry", func() {
 					},
 				}, nil
 			}
-			lifetime := resolveTokenLifetime(context.Background(), nil, "ns")
+			lifetime := server.resolveTokenLifetime(context.Background(), nil, "ns")
 			Expect(lifetime).To(Equal(int64(7200)))
 		})
 
 		It("returns default when config is nil", func() {
-			loadOperatorConfigFn = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
+			server.deps.loadOperatorConfig = func(_ context.Context, _ client.Client, _ string) (*automotivev1alpha1.OperatorConfig, error) {
 				return nil, nil
 			}
-			lifetime := resolveTokenLifetime(context.Background(), nil, "ns")
+			lifetime := server.resolveTokenLifetime(context.Background(), nil, "ns")
 			Expect(lifetime).To(Equal(automotivev1alpha1.DefaultRegistryTokenLifetimeSeconds))
 		})
 	})

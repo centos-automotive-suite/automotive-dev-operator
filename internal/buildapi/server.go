@@ -37,7 +37,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -45,11 +44,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
-	"k8s.io/client-go/kubernetes"
-	kscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -112,93 +108,6 @@ func buildProducedArtifacts(build *automotivev1alpha1.ImageBuild) bool {
 	}
 }
 
-var getClientFromRequestFn = getClientFromRequest
-var getRESTConfigFromRequestFn = getRESTConfigFromRequest
-var createInternalRegistrySecretFn = createInternalRegistrySecret
-var newPodExecExecutorFn = func(
-	config *rest.Config,
-	namespace, podName, containerName string,
-	cmd []string,
-) (remotecommand.Executor, error) {
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	req := clientset.CoreV1().RESTClient().Post().Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: containerName,
-			Command:   cmd,
-			Stdin:     true,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, kscheme.ParameterCodec)
-	return remotecommand.NewSPDYExecutor(config, http.MethodPost, req.URL())
-}
-var loadOperatorConfigFn = func(
-	ctx context.Context,
-	k8sClient client.Client,
-	namespace string,
-) (*automotivev1alpha1.OperatorConfig, error) {
-	operatorConfig := &automotivev1alpha1.OperatorConfig{}
-	if err := k8sClient.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      "config",
-	}, operatorConfig); err != nil {
-		return nil, err
-	}
-	return operatorConfig, nil
-}
-
-var loadTargetDefaultsFn = func(
-	ctx context.Context,
-	k8sClient client.Client,
-	namespace string,
-) (map[string]buildcontract.TargetDefaults, error) {
-	cm := &corev1.ConfigMap{}
-	if err := k8sClient.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      "aib-target-defaults",
-	}, cm); err != nil {
-		return nil, err
-	}
-
-	data, ok := cm.Data["target-defaults.yaml"]
-	if !ok {
-		return nil, nil
-	}
-
-	var parsed struct {
-		Targets map[string]struct {
-			Architecture          string   `yaml:"architecture"`
-			ExtraArgs             []string `yaml:"extraArgs"`
-			DefaultFormat         string   `yaml:"defaultFormat"`
-			AcceptedFormats       []string `yaml:"acceptedFormats"`
-			AcceptedArchitectures []string `yaml:"acceptedArchitectures"`
-		} `yaml:"targets"`
-	}
-	if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
-		return nil, fmt.Errorf("failed to parse target-defaults.yaml: %w", err)
-	}
-
-	result := make(map[string]buildcontract.TargetDefaults, len(parsed.Targets))
-	for name, t := range parsed.Targets {
-		result[name] = buildcontract.TargetDefaults{
-			Architecture:          t.Architecture,
-			ExtraArgs:             t.ExtraArgs,
-			DefaultFormat:         t.DefaultFormat,
-			AcceptedFormats:       t.AcceptedFormats,
-			AcceptedArchitectures: t.AcceptedArchitectures,
-		}
-	}
-
-	if err := validateTargetDefaults(result); err != nil {
-		return nil, fmt.Errorf("invalid target-defaults.yaml: %w", err)
-	}
-
-	return result, nil
-}
-
 // APILimits holds configurable limits for the API server
 type APILimits struct {
 	MaxUploadFileSize           int64
@@ -219,6 +128,8 @@ func DefaultAPILimits() APILimits {
 
 // APIServer provides the REST API for build operations.
 type APIServer struct {
+	exec                podExecutor
+	deps                apiDependencies
 	server              *http.Server
 	router              *gin.Engine
 	addr                string
@@ -251,7 +162,7 @@ func NewAPIServerWithLimits(addr string, logger logr.Logger, limits APILimits) *
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	a := &APIServer{addr: addr, log: logger, limits: limits}
+	a := &APIServer{addr: addr, log: logger, limits: limits, deps: defaultAPIDependencies(), exec: podExecutor{newExecutor: newPodExecExecutor}}
 	if clientID := strings.TrimSpace(os.Getenv("BUILD_API_OIDC_CLIENT_ID")); clientID != "" {
 		a.oidcClientID = clientID
 	}
@@ -390,11 +301,11 @@ func (a *APIServer) createRouter() *gin.Engine {
 		buildsGroup.Use(a.authMiddleware())
 		{
 			buildsGroup.POST("", a.wrapHandler("create build", a.createBuild))
-			buildsGroup.GET("", a.wrapHandler("list builds", listBuilds))
+			buildsGroup.GET("", a.wrapHandler("list builds", a.listBuilds))
 			buildsGroup.GET("/:name", a.wrapNamedHandler("get build", a.getBuild))
 			buildsGroup.GET("/:name/logs", a.wrapNamedHandler("logs requested", a.streamLogs))
 			buildsGroup.GET("/:name/progress", a.handleGetProgress)
-			buildsGroup.GET("/:name/template", a.wrapNamedHandler("template requested", getBuildTemplate))
+			buildsGroup.GET("/:name/template", a.wrapNamedHandler("template requested", a.getBuildTemplate))
 			buildsGroup.POST("/:name/uploads", a.wrapNamedHandler("uploads", a.uploadFiles))
 			buildsGroup.POST("/:name/token", a.handleCreateBuildToken)
 			buildsGroup.POST("/:name/cancel", a.wrapNamedHandler("cancel build", a.cancelBuild))
@@ -420,7 +331,7 @@ func (a *APIServer) createRouter() *gin.Engine {
 		containerBuildsGroup.Use(a.authMiddleware())
 		{
 			containerBuildsGroup.POST("", a.wrapHandler("create container build", a.createContainerBuild))
-			containerBuildsGroup.GET("", a.wrapHandler("list container builds", listContainerBuilds))
+			containerBuildsGroup.GET("", a.wrapHandler("list container builds", a.listContainerBuilds))
 			containerBuildsGroup.GET("/:name", a.wrapNamedHandler("get container build", a.getContainerBuild))
 			containerBuildsGroup.POST("/:name/upload", a.wrapNamedHandler("container build upload", a.uploadContainerBuildContext))
 			containerBuildsGroup.GET("/:name/logs", a.wrapNamedHandler("container build logs", a.streamContainerBuildLogs))
@@ -494,7 +405,7 @@ func (a *APIServer) handleCreateBuildToken(c *gin.Context) {
 	a.log.Info("token requested", "build", name, "reqID", c.GetString("reqID"))
 
 	namespace := resolveNamespace()
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -533,7 +444,7 @@ func (a *APIServer) handleCreateBuildToken(c *gin.Context) {
 		return
 	}
 
-	tokenLifetime := resolveTokenLifetime(ctx, k8sClient, namespace)
+	tokenLifetime := a.resolveTokenLifetime(ctx, k8sClient, namespace)
 	token, expiresAt, err := a.mintRegistryToken(ctx, c, namespace, tokenLifetime)
 	if err != nil {
 		a.log.Error(err, "failed to mint registry token", "build", name)
@@ -560,7 +471,7 @@ func (a *APIServer) handleCreateBuildToken(c *gin.Context) {
 }
 
 func (a *APIServer) deleteBuild(c *gin.Context, name string) {
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -634,7 +545,7 @@ func cancellationRejection(build *automotivev1alpha1.ImageBuild, requester strin
 }
 
 func (a *APIServer) cancelBuild(c *gin.Context, name string) {
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -829,13 +740,13 @@ func (a *APIServer) setupInternalRegistryBuild(
 	}
 
 	// Create auth secret from SA token
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error getting REST config: %v", err)})
 		return "", "", err
 	}
-	tokenLifetime := resolveTokenLifetime(ctx, k8sClient, namespace)
-	secretName, err := createInternalRegistrySecret(ctx, restCfg, namespace, req.Name, tokenLifetime)
+	tokenLifetime := a.resolveTokenLifetime(ctx, k8sClient, namespace)
+	secretName, err := a.deps.createInternalRegistrySecret(ctx, restCfg, namespace, req.Name, tokenLifetime)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return "", "", err
@@ -1001,7 +912,7 @@ type workspaceBuildResolution struct {
 // - Starts an HTTP file server in the workspace pod and injects workspace_url as a custom define
 func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *buildcontract.BuildRequest) (workspaceBuildResolution, error) {
 	var res workspaceBuildResolution
-	operatorConfig, _ := loadOperatorConfigFn(ctx, k8sClient, namespace)
+	operatorConfig, _ := a.deps.loadOperatorConfig(ctx, k8sClient, namespace)
 	var wsConfig *automotivev1alpha1.WorkspacesConfig
 	if operatorConfig != nil {
 		wsConfig = operatorConfig.Spec.Workspaces
@@ -1140,7 +1051,7 @@ func (a *APIServer) bindWorkspaceToBuild(
 	namespace, requester string,
 	req *buildcontract.BuildRequest,
 ) (string, []workspacemanifest.WorkspaceHydrateRef, bool) {
-	restCfg, restErr := getRESTConfigFromRequest(c)
+	restCfg, restErr := a.deps.getRESTConfigFromRequest(c)
 	if restErr != nil {
 		spanError(span, restErr)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"}) //nolint:goconst // matches existing handlers
@@ -1209,12 +1120,12 @@ func setWorkspaceUploadAnnotations(annotations map[string]string, hydrateRefs []
 // buildAIBSpec creates AIBSpec configuration from build request
 // resolveTaskBundleRef resolves and optionally verifies the Tekton Bundle reference.
 // Returns the validated ref, an HTTP status code, and error.
-func resolveTaskBundleRef(ctx context.Context, k8sClient client.Client, namespace string, req *buildcontract.BuildRequest) (string, int, error) {
+func (a *APIServer) resolveTaskBundleRef(ctx context.Context, k8sClient client.Client, namespace string, req *buildcontract.BuildRequest) (string, int, error) {
 	if !req.SecureBuild {
 		return "", 0, nil
 	}
 
-	operatorConfig, err := loadOperatorConfigFn(ctx, k8sClient, namespace)
+	operatorConfig, err := a.deps.loadOperatorConfig(ctx, k8sClient, namespace)
 	if err != nil {
 		return "", http.StatusInternalServerError, fmt.Errorf("secureBuild requested but OperatorConfig could not be read: %w", err)
 	}
@@ -1300,7 +1211,7 @@ func (a *APIServer) validateManifestSchema(c *gin.Context, span trace.Span, req 
 }
 
 func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *buildcontract.BuildRequest) bool {
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		spanError(span, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
@@ -1362,7 +1273,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		spanError(span, err)
 		return
@@ -1375,13 +1286,13 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		return
 	}
 
-	if httpErr := validateCallbackAdmission(ctx, k8sClient, namespace, req.Callback); httpErr != nil {
+	if httpErr := a.validateCallbackAdmission(ctx, k8sClient, namespace, req.Callback); httpErr != nil {
 		spanError(span, errors.New(httpErr.message))
 		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
 		return
 	}
 
-	effectiveTTL, ttlErr := resolveAndClampTTL(ctx, k8sClient, namespace, req.TTL)
+	effectiveTTL, ttlErr := a.resolveAndClampTTL(ctx, k8sClient, namespace, req.TTL)
 	if ttlErr != nil {
 		spanError(span, ttlErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": ttlErr.Error()})
@@ -1398,7 +1309,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	req.Name = fmt.Sprintf("%s-%s", req.Name, uuid.New().String()[:5])
 	span.SetAttributes(attribute.String("build.name", req.Name))
 
-	taskBundleRef, bundleStatus, bundleErr := resolveTaskBundleRef(ctx, k8sClient, namespace, &req)
+	taskBundleRef, bundleStatus, bundleErr := a.resolveTaskBundleRef(ctx, k8sClient, namespace, &req)
 	if bundleErr != nil {
 		spanError(span, bundleErr)
 		c.JSON(bundleStatus, gin.H{"error": bundleErr.Error()})
@@ -1565,11 +1476,11 @@ func (a *APIServer) createBuild(c *gin.Context) {
 	})
 }
 
-func listBuilds(c *gin.Context) {
+func (a *APIServer) listBuilds(c *gin.Context) {
 	namespace := resolveNamespace()
 	limit, offset := parsePagination(c)
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -1654,7 +1565,7 @@ func listBuilds(c *gin.Context) {
 
 func (a *APIServer) getBuild(c *gin.Context, name string) {
 	namespace := resolveNamespace()
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -1747,7 +1658,7 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 		build.Spec.GetUseServiceAccountAuth() &&
 		isTerminalPhase(build.Status.Phase) {
 		var tokenErr error
-		tokenLifetime := resolveTokenLifetime(ctx, k8sClient, namespace)
+		tokenLifetime := a.resolveTokenLifetime(ctx, k8sClient, namespace)
 		registryToken, _, tokenErr = a.mintRegistryToken(ctx, c, namespace, tokenLifetime)
 		if tokenErr != nil {
 			a.log.Error(tokenErr, "failed to mint registry token", "build", name)
@@ -1816,9 +1727,9 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 }
 
 // getBuildTemplate returns a BuildRequest-like struct representing the inputs that produced a given build
-func getBuildTemplate(c *gin.Context, name string) {
+func (a *APIServer) getBuildTemplate(c *gin.Context, name string) {
 	namespace := resolveNamespace()
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -1876,7 +1787,7 @@ func (a *APIServer) handleGetOperatorConfig(c *gin.Context) {
 
 	a.log.Info("getting operator config", "reqID", reqID)
 
-	k8sClient, err := getClientFromRequestFn(c)
+	k8sClient, err := a.deps.getClientFromRequest(c)
 	if err != nil {
 		a.log.Error(err, "failed to get k8s client", "reqID", reqID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create Kubernetes client"})
@@ -1885,7 +1796,7 @@ func (a *APIServer) handleGetOperatorConfig(c *gin.Context) {
 
 	namespace := resolveNamespace()
 
-	operatorConfig, err := loadOperatorConfigFn(ctx, k8sClient, namespace)
+	operatorConfig, err := a.deps.loadOperatorConfig(ctx, k8sClient, namespace)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			a.log.Info("OperatorConfig not found; returning defaults", "reqID", reqID, "namespace", namespace)
@@ -1915,7 +1826,7 @@ func (a *APIServer) handleGetOperatorConfig(c *gin.Context) {
 	}
 
 	// Load build defaults from target-defaults ConfigMap
-	targetDefaults, err := loadTargetDefaultsFn(ctx, k8sClient, namespace)
+	targetDefaults, err := a.deps.loadTargetDefaults(ctx, k8sClient, namespace)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
 			a.log.Error(err, "failed to load target defaults ConfigMap", "reqID", reqID, "namespace", namespace)

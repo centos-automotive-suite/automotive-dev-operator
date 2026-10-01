@@ -113,7 +113,7 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 		return
 	}
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -122,7 +122,7 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 	requester := a.resolveRequester(c)
 
 	// Load workspace configuration from OperatorConfig
-	operatorConfig, cfgErr := loadOperatorConfigFn(c.Request.Context(), k8sClient, namespace)
+	operatorConfig, cfgErr := a.deps.loadOperatorConfig(c.Request.Context(), k8sClient, namespace)
 	if cfgErr != nil && !k8serrors.IsNotFound(cfgErr) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load operator config"})
 		return
@@ -243,7 +243,7 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 }
 
 func (a *APIServer) listWorkspaces(c *gin.Context) {
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -290,7 +290,7 @@ func (a *APIServer) deleteWorkspace(c *gin.Context, name string) {
 		return // response already sent
 	}
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -323,7 +323,7 @@ func (a *APIServer) setWorkspaceStopped(c *gin.Context, name string, stopped boo
 		return
 	}
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -358,7 +358,7 @@ func (a *APIServer) handleSetWorkspaceLease(c *gin.Context) {
 		return
 	}
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -374,7 +374,7 @@ func (a *APIServer) handleSetWorkspaceLease(c *gin.Context) {
 }
 
 func (a *APIServer) getOwnedWorkspace(c *gin.Context, name string) (*automotivev1alpha1.Workspace, error) {
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes client")
 	}
@@ -407,7 +407,7 @@ func (a *APIServer) touchWorkspaceActivity(c *gin.Context, ws *automotivev1alpha
 	if ws.Spec.Stopped {
 		return
 	}
-	k8sClient, err := getClientFromRequestFn(c)
+	k8sClient, err := a.deps.getClientFromRequest(c)
 	if err != nil {
 		return
 	}
@@ -432,7 +432,7 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 	namespace := ws.Namespace
 	podName := ws.Status.PodName
 
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
 		return
@@ -516,7 +516,7 @@ func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
 		return
@@ -616,7 +616,7 @@ func (a *APIServer) syncDeleteWorkspace(c *gin.Context, name string) {
 	}
 	a.touchWorkspaceActivity(c, ws)
 
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
 		return
@@ -653,7 +653,7 @@ func (a *APIServer) execWorkspace(c *gin.Context, name string) {
 	}
 	a.touchWorkspaceActivity(c, ws)
 
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
 		return
@@ -685,7 +685,7 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 	namespace := ws.Namespace
 	podName := ws.Status.PodName
 
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
 		return
@@ -814,7 +814,7 @@ func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	restCfg, err := getRESTConfigFromRequest(c)
+	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
 		return

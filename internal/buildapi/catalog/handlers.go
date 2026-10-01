@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/catalogcontract"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/labels"
@@ -154,7 +155,7 @@ func (h *Handler) HandleCreateCatalogImage(c *gin.Context) {
 	ctx := context.Background()
 	namespace := h.defaultNamespace
 
-	var req CreateCatalogImageRequest
+	var req catalogcontract.CreateCatalogImageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
 		return
@@ -267,7 +268,7 @@ func (h *Handler) HandleVerifyCatalogImage(c *gin.Context) {
 	}
 
 	h.log.Info("triggered verification for catalog image", "name", name)
-	c.JSON(http.StatusOK, VerifyImageResponse{
+	c.JSON(http.StatusOK, catalogcontract.VerifyImageResponse{
 		Message:   "Verification triggered successfully",
 		Triggered: true,
 	})
@@ -277,7 +278,7 @@ func (h *Handler) HandleVerifyCatalogImage(c *gin.Context) {
 func (h *Handler) HandlePublishImageBuild(c *gin.Context) {
 	ctx := context.Background()
 
-	var req PublishImageBuildRequest
+	var req catalogcontract.PublishImageBuildRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
 		return

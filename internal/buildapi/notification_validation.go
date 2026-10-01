@@ -71,7 +71,7 @@ func validateCallbackPolicy(config *automotivev1alpha1.OperatorConfig, callback 
 	return nil
 }
 
-func validateCallbackAdmission(
+func (a *APIServer) validateCallbackAdmission(
 	ctx context.Context,
 	k8sClient client.Client,
 	namespace string,
@@ -80,7 +80,7 @@ func validateCallbackAdmission(
 	if callback == nil {
 		return nil
 	}
-	config, err := loadOperatorConfigFn(ctx, k8sClient, namespace)
+	config, err := a.deps.loadOperatorConfig(ctx, k8sClient, namespace)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return &httpError{code: http.StatusBadRequest, message: "webhook notifications are disabled"}

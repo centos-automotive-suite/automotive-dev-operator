@@ -37,7 +37,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		return
 	}
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -48,7 +48,7 @@ func (a *APIServer) createFlash(c *gin.Context) {
 		return
 	}
 
-	clientset, err := getClientsetOrFail(c)
+	clientset, err := a.getClientsetOrFail(c)
 	if err != nil {
 		return
 	}
@@ -283,7 +283,7 @@ func (a *APIServer) prepareFlashRequest(
 	namespace string,
 	req *buildcontract.FlashRequest,
 ) bool {
-	if httpErr := validateCallbackAdmission(ctx, k8sClient, namespace, req.Callback); httpErr != nil {
+	if httpErr := a.validateCallbackAdmission(ctx, k8sClient, namespace, req.Callback); httpErr != nil {
 		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
 		return false
 	}
@@ -356,7 +356,7 @@ func (a *APIServer) listFlash(c *gin.Context) {
 	namespace := resolveNamespace()
 	limit, offset := parsePagination(c)
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -412,7 +412,7 @@ func (a *APIServer) listFlash(c *gin.Context) {
 func (a *APIServer) getFlash(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -482,11 +482,11 @@ func getTaskRunStatus(tr *tektonv1.TaskRun) (phase, message string) {
 func (a *APIServer) streamFlashLogs(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
-	clientset, err := getClientsetOrFail(c)
+	clientset, err := a.getClientsetOrFail(c)
 	if err != nil {
 		return
 	}

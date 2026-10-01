@@ -219,7 +219,7 @@ func processPodLogs(
 func (a *APIServer) streamLogs(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
-	k8sClient, err := getK8sClientOrFail(c)
+	k8sClient, err := a.getK8sClientOrFail(c)
 	if err != nil {
 		return
 	}
@@ -239,7 +239,7 @@ func (a *APIServer) streamLogs(c *gin.Context, name string) {
 		return
 	}
 
-	cs, err := getClientsetOrFail(c)
+	cs, err := a.getClientsetOrFail(c)
 	if err != nil {
 		return
 	}
