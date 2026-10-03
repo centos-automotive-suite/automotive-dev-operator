@@ -114,7 +114,7 @@ func TestPublishFromImageBuild_PropagatesScheduleName(t *testing.T) {
 				Container: "quay.io/test/img:latest",
 			},
 		},
-		Status: automotivev1alpha1.ImageBuildStatus{Phase: "Completed"},
+		Status: automotivev1alpha1.ImageBuildStatus{Phase: "Completed", BuilderImageUsed: "registry.test/ns/aib-build@sha256:" + strings.Repeat("a", 64)},
 	}
 
 	pub := newFakePublisherWithRegistry()
@@ -122,6 +122,18 @@ func TestPublishFromImageBuild_PropagatesScheduleName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishFromImageBuild() error: %v", err)
 	}
+	if res.CatalogImage.Spec.BuilderImage != ib.Status.BuilderImageUsed {
+		t.Fatal("catalog did not retain builder reference")
+	}
+	ib.Status.BuilderImageUsed = "registry.test/ns/aib-build@sha256:" + strings.Repeat("b", 64)
+	updated, err := pub.PublishFromImageBuild(context.Background(), ib, "", nil, nil, PublishSourceScheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.CatalogImage.Spec.BuilderImage != ib.Status.BuilderImageUsed {
+		t.Fatal("catalog did not update builder reference")
+	}
+
 	if got := res.CatalogImage.Labels[automotivev1alpha1.LabelScheduledImageBuildName]; got != "nightly-autosd-qemu" {
 		t.Errorf("expected schedule label propagated, got %q", got)
 	}
