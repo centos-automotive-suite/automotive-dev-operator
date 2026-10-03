@@ -688,6 +688,12 @@ spec:
                       Default: 90
                     format: int32
                     type: integer
+                  builderCacheTTL:
+                    description: |-
+                      BuilderCacheTTL expires unused helper cache tags. Referenced helpers retain pin tags.
+                      Uses Go duration format; "0" disables cache expiry. Default: "720h" (30 days).
+                    pattern: ^0$|^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                    type: string
                   certificates:
                     description: Certificates defines trusted certificate configuration
                       for build tasks.
