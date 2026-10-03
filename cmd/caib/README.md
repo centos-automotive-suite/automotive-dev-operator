@@ -132,6 +132,8 @@ caib image build <manifest.aib.yml> [flags]
 | `--push-disk` | | Push disk image as OCI artifact to registry |
 | `-o`, `--output` | | Download disk image to local file (implies `--disk`) |
 | `--builder-image` | | Custom aib-build container |
+| `--builder-cache-policy` | `validate` | Check helper freshness online, or `reuse` a cached helper without depsolving |
+| `--rebuild-builder` | `false` | Force a helper rebuild, overriding the cache policy |
 | `--aib-image` | `quay.io/.../automotive-image-builder:1.3.5` | AIB container image |
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--timeout` | `60` | Timeout in minutes |
@@ -151,6 +153,24 @@ caib image build <manifest.aib.yml> [flags]
 | `--task-bundle-ref` | | Digest-pinned Tekton bundle ref for reproducible rebuild (e.g. `quay.io/org/tasks@sha256:abc...`) |
 | `--restore-sources` | | OCI image ref from prior build — restores archived sources for exact reproducible rebuild |
 | `--ttl` | | Time-to-live for the build (e.g. `24h`, `72h`; empty=server default, `0`=no expiry) |
+
+**Builder cache retention:** Helper images are stored in the namespace's `aib-build`
+repository. Each distinct ordered set of custom definitions gets a separate cache
+tag. There is no automatic eviction or last-used tracking for these tags. A
+value that changes on every build, such as an image version or build ID, can
+therefore create an ever-growing set of tagged helper images. Where possible,
+keep definitions stable and supply per-build metadata outside the definitions.
+Both cache policies use the same tags; `reuse` does not limit tag growth.
+
+Build consumers create a `pin-<sha256>` tag before using a managed helper, keeping
+the recorded digest pullable after the cache tag changes. Failed cache pinning or
+pulls trigger a rebuild. These pin tags also remain until explicitly removed.
+
+Plan separate retention for helper cache tags. Before removing tags or pruning
+images, account for active builds and retained images that reference helper
+digests for later disk conversion or resealing. Removing a tag alone does not
+immediately reclaim its image data. Automated pruning based on last use remains
+follow-up work; a tag's last push time is not its last use time.
 
 **Examples:**
 

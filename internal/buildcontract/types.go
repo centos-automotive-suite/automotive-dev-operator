@@ -183,12 +183,13 @@ type BuildRequest struct {
 	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`
 	PushRepository         string               `json:"pushRepository,omitempty"`
 
-	ContainerPush  string `json:"containerPush,omitempty"`  // Registry URL to push bootc container
-	BuildDiskImage bool   `json:"buildDiskImage,omitempty"` // Build disk image from bootc container
-	ExportOCI      string `json:"exportOci,omitempty"`      // Registry URL to push disk as OCI artifact
-	BuilderImage   string `json:"builderImage,omitempty"`   // Custom builder image
-	RebuildBuilder bool   `json:"rebuildBuilder,omitempty"` // Force rebuild of bootc builder image
-	HasLocalFiles  bool   `json:"hasLocalFiles,omitempty"`  // Client has local files to upload (source_path/source_glob)
+	ContainerPush      string `json:"containerPush,omitempty"`      // Registry URL to push bootc container
+	BuildDiskImage     bool   `json:"buildDiskImage,omitempty"`     // Build disk image from bootc container
+	ExportOCI          string `json:"exportOci,omitempty"`          // Registry URL to push disk as OCI artifact
+	BuilderImage       string `json:"builderImage,omitempty"`       // Custom builder image
+	RebuildBuilder     bool   `json:"rebuildBuilder,omitempty"`     // Force rebuild of bootc builder image
+	BuilderCachePolicy string `json:"builderCachePolicy,omitempty"` // validate (default) or reuse cached helpers without depsolving
+	HasLocalFiles      bool   `json:"hasLocalFiles,omitempty"`      // Client has local files to upload (source_path/source_glob)
 
 	// Internal registry push configuration (not supported by secure builds because
 	// the registry cannot publish their required OCI referrers).

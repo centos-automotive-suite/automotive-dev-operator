@@ -19,6 +19,11 @@ import (
 var digestPinnedRef = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
 
 func validateBuildRequest(req *buildcontract.BuildRequest) error {
+	switch req.BuilderCachePolicy {
+	case "", "validate", "reuse":
+	default:
+		return fmt.Errorf("invalid builderCachePolicy %q: must be validate or reuse", req.BuilderCachePolicy)
+	}
 	if err := validateOperationMetadata(req.ExternalID, req.Callback); err != nil {
 		return err
 	}

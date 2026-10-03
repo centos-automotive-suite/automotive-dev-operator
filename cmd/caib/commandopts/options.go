@@ -100,6 +100,7 @@ type Build struct {
 	BuilderImage           string
 	ContainerRef           string
 	RebuildBuilder         bool
+	BuilderCachePolicy     string
 	SecureBuild            bool
 	Reproducible           bool
 	TaskBundleRef          string

@@ -1,6 +1,7 @@
 package buildcmd
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -121,5 +122,23 @@ func TestRunDiskDefaultsToInternalRegistry(t *testing.T) {
 				t.Errorf("UseInternalRegistry = %v, want %v", opts.Registry.UseInternalRegistry, tc.wantInternal)
 			}
 		})
+	}
+}
+
+func TestDiskBuildSubmitsBuilderCachePolicy(t *testing.T) {
+	fixture := &manifestSubmissionServer{t: t, uploaded: true}
+	srv := httptest.NewServer(fixture)
+	defer srv.Close()
+	opts := newTestDiskOpts()
+	opts.Connection.ServerURL, opts.Connection.AuthToken = srv.URL, "test-token"
+	opts.Build.Name, opts.Build.BuilderCachePolicy, opts.Build.RebuildBuilder = "test-build", "reuse", true
+	var buildErr error
+	opts.HandleError = func(err error) { buildErr = err }
+	NewHandler(opts).RunDisk(&cobra.Command{}, []string{"quay.io/test/image:latest"})
+	if buildErr != nil {
+		t.Fatal(buildErr)
+	}
+	if req := fixture.submitted; req == nil || req.BuilderCachePolicy != "reuse" || !req.RebuildBuilder {
+		t.Fatalf("builder options not submitted: %+v", req)
 	}
 }

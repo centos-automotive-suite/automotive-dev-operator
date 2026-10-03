@@ -47,6 +47,16 @@ spec:
                     items:
                       type: string
                     type: array
+                  builderCachePolicy:
+                    default: validate
+                    description: |-
+                      BuilderCachePolicy controls automatic helper freshness checks. Validate checks
+                      resolved inputs online; reuse accepts a cached digest without depsolving.
+                      Cache misses still build online. RebuildBuilder overrides this policy.
+                    enum:
+                    - validate
+                    - reuse
+                    type: string
                   builderImage:
                     description: |-
                       BuilderImage specifies a custom osbuild builder container image

@@ -26,7 +26,7 @@ spec:
       # Replace with actual manifest content
       name: sample-build
     manifestFileName: "sample.aib.yml"
-    image: "quay.io/centos-sig-automotive/automotive-image-builder:1.0.0"
+    image: "quay.io/centos-sig-automotive/automotive-image-builder:1.3.5"
     #builderImage: ""       # optional: custom osbuild builder
     #inputFilesServer: false # optional: enable file upload server
     #containerRef: ""       # required for mode=disk
