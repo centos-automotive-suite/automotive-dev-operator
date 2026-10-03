@@ -20,17 +20,22 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/oci"
 	"github.com/containers/image/v5/docker"
+	"github.com/containers/image/v5/image"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/types"
+	digest "github.com/opencontainers/go-digest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
@@ -122,7 +127,10 @@ func (c *DefaultRegistryClient) GetImageMetadata(
 		}
 	}()
 
-	// Get the manifest
+	return readImageMetadata(ctx, src, sysCtx)
+}
+
+func readImageMetadata(ctx context.Context, src types.ImageSource, sysCtx *types.SystemContext) (*automotivev1alpha1.RegistryMetadata, error) {
 	manifestBytes, manifestType, err := src.GetManifest(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get manifest: %w", err)
@@ -203,11 +211,21 @@ func (c *DefaultRegistryClient) GetImageMetadata(
 		}
 	}
 
-	// Get the resolved digest
-	digest, err := manifest.Digest(manifestBytes)
-	if err == nil {
-		metadata.ResolvedDigest = digest.String()
+	// Pin this lookup to the manifest already read: a moving catalog tag must
+	// not associate one revision's helper with another revision's digest.
+	resolvedDigest, err := manifest.Digest(manifestBytes)
+	if err != nil {
+		return nil, fmt.Errorf("digest image manifest: %w", err)
 	}
+	metadata.ResolvedDigest = resolvedDigest.String()
+
+	// Keep every platform's helper, not just the manager's architecture.
+	src = &cachedManifestSource{ImageSource: src, digest: resolvedDigest, raw: manifestBytes, mediaType: manifestType}
+	metadata.BuilderImages, err = readBuilderImages(ctx, src, sysCtx, &resolvedDigest, 0)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "Could not resolve builder metadata", "digest", resolvedDigest)
+	}
+	metadata.BuilderImageResolved = err == nil
 
 	return metadata, nil
 }
@@ -371,4 +389,84 @@ func NormalizeArchitecture(arch string) string {
 func GetCurrentTime() *metav1.Time {
 	now := metav1.Now()
 	return &now
+}
+
+// Preserve containers/image's config validation while reusing manifests already read.
+type cachedManifestSource struct {
+	types.ImageSource
+	digest    digest.Digest
+	raw       []byte
+	mediaType string
+}
+
+func (s *cachedManifestSource) GetManifest(ctx context.Context, instance *digest.Digest) ([]byte, string, error) {
+	if instance != nil && *instance == s.digest {
+		return s.raw, s.mediaType, nil
+	}
+	return s.ImageSource.GetManifest(ctx, instance)
+}
+
+// readBuilderImages reads manifests and configs, never filesystem layers.
+func readBuilderImages(ctx context.Context, src types.ImageSource, sys *types.SystemContext, instance *digest.Digest, depth int) ([]string, error) {
+	if depth > 8 {
+		return nil, fmt.Errorf("image index nesting exceeds 8 levels")
+	}
+	raw, mediaType, err := src.GetManifest(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	if instance != nil {
+		src = &cachedManifestSource{ImageSource: src, digest: *instance, raw: raw, mediaType: mediaType}
+	}
+	var manifestData struct {
+		Annotations map[string]string `json:"annotations"`
+		Config      struct {
+			MediaType string `json:"mediaType"`
+		} `json:"config"`
+		Manifests []struct {
+			Digest digest.Digest `json:"digest"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(raw, &manifestData); err != nil {
+		return nil, err
+	}
+	key := oci.Get().AnnotationKey("builder-image")
+	refs := []string{}
+	if ref := manifestData.Annotations[key]; ref != "" {
+		refs = append(refs, ref)
+	}
+	if mediaType == manifest.DockerV2ListMediaType || mediaType == "application/vnd.oci.image.index.v1+json" {
+		var childErrors []error
+		for _, child := range manifestData.Manifests {
+			if err := child.Digest.Validate(); err != nil {
+				childErrors = append(childErrors, fmt.Errorf("inspect child %q: %w", child.Digest, err))
+				continue
+			}
+			children, err := readBuilderImages(ctx, src, sys, &child.Digest, depth+1)
+			refs = append(refs, children...)
+			if err != nil {
+				childErrors = append(childErrors, fmt.Errorf("inspect child %q: %w", child.Digest, err))
+			}
+		}
+		return refs, errors.Join(childErrors...)
+	} else if _, annotated := manifestData.Annotations[key]; !annotated && manifestData.Config.MediaType != "application/vnd.oci.empty.v1+json" {
+		// Disk artifacts use the OCI empty config and carry provenance only in
+		// manifest annotations. Inspecting them as container images is invalid.
+		parsed, err := image.FromUnparsedImage(ctx, sys, image.UnparsedInstance(src, instance))
+		var info *types.ImageInspectInfo
+		if err == nil {
+			info, err = parsed.Inspect(ctx)
+		}
+		if err != nil {
+			var artifact manifest.NonImageArtifactError
+			if errors.As(err, &artifact) {
+				return refs, nil
+			}
+			return nil, err
+		}
+		if ref := info.Labels[key]; ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs, nil
 }

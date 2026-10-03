@@ -1,14 +1,18 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/catalogcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/catalogimage"
+	"github.com/containers/image/v5/types"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +21,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 )
@@ -35,6 +40,98 @@ func newTestHandler(objs ...client.Object) (*Handler, client.Client) {
 	c := builder.Build()
 	h := NewHandler(c, logr.Discard(), "default")
 	return h, c
+}
+
+type publishRegistry struct {
+	catalogimage.RegistryClient
+	err error
+}
+
+func (r publishRegistry) VerifyImageAccessible(context.Context, string, *types.DockerAuthConfig) (bool, error) {
+	return r.err == nil, r.err
+}
+
+func (r publishRegistry) GetImageMetadata(context.Context, string, *types.DockerAuthConfig) (*automotivev1alpha1.RegistryMetadata, error) {
+	return &automotivev1alpha1.RegistryMetadata{BuilderImageResolved: true, SizeBytes: 1024}, nil
+}
+
+func TestHandlePublishImageBuild_PreservesProvenance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name        string
+		catalogName string
+		registryErr error
+	}{
+		{name: "verified", catalogName: "published"},
+		{name: "registry unavailable", registryErr: fmt.Errorf("temporary registry failure")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			build := &automotivev1alpha1.ImageBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "source", Namespace: "default"},
+				Spec: automotivev1alpha1.ImageBuildSpec{
+					Architecture: "aarch64",
+					AIB:          &automotivev1alpha1.AIBSpec{Mode: "bootc", Distro: "autosd", Target: "ebbr"},
+					Export:       &automotivev1alpha1.ExportSpec{Container: "quay.io/test/image:latest"},
+				},
+				Status: automotivev1alpha1.ImageBuildStatus{
+					Phase:            automotivev1alpha1.ImageBuildPhaseCompleted,
+					BuilderImageUsed: "registry.example/default/aib-build@sha256:" + strings.Repeat("a", 64),
+				},
+			}
+			unrelated := &automotivev1alpha1.CatalogImage{
+				ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: build.Namespace},
+				Spec:       automotivev1alpha1.CatalogImageSpec{RegistryURL: build.Spec.GetContainerPush()},
+			}
+			c := fake.NewClientBuilder().WithScheme(newTestScheme()).WithObjects(build, unrelated).
+				WithStatusSubresource(&automotivev1alpha1.CatalogImage{}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+						// The API server drops status on creation when the status subresource is enabled.
+						obj.(*automotivev1alpha1.CatalogImage).Status = automotivev1alpha1.CatalogImageStatus{}
+						return c.Create(ctx, obj, opts...)
+					},
+				}).Build()
+			h := NewHandler(c, logr.Discard(), "default")
+			h.publisher = catalogimage.NewPublisher(c, publishRegistry{err: tc.registryErr}, nil, logr.Discard())
+			router := gin.New()
+			router.POST("/catalog/publish", h.HandlePublishImageBuild)
+			body := fmt.Sprintf(`{"imageBuildName":"source","catalogImageName":%q,"tags":["release"]}`, tc.catalogName)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/catalog/publish", strings.NewReader(body)))
+			if w.Code != http.StatusCreated {
+				t.Fatalf("publish returned %d: %s", w.Code, w.Body.String())
+			}
+			var response catalogcontract.CatalogImageResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			name := tc.catalogName
+			if name == "" {
+				name = build.Name
+			}
+			var entry automotivev1alpha1.CatalogImage
+			if err := c.Get(t.Context(), client.ObjectKey{Name: name, Namespace: build.Namespace}, &entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry.Spec.BuilderImage != build.Status.BuilderImageUsed || entry.Status.SourceImageBuild != build.Name {
+				t.Fatalf("lost persisted provenance: %+v", entry)
+			}
+			if entry.Labels[automotivev1alpha1.LabelSourceType] != string(catalogimage.PublishSourceManual) ||
+				response.SourceType != string(catalogimage.PublishSourceManual) || response.SourceImageBuild != build.Name {
+				t.Fatalf("incorrect manual source: labels=%v response=%+v", entry.Labels, response)
+			}
+			if entry.Spec.RegistryURL != build.Spec.GetContainerPush() || len(entry.Spec.Tags) != 1 || entry.Spec.Tags[0] != "release" ||
+				entry.Spec.Metadata.Architecture != "arm64" || entry.Spec.Metadata.ExportFormat != "oci" || !entry.Spec.Metadata.Bootc {
+				t.Fatalf("incorrect published metadata: %+v", entry.Spec)
+			}
+			if (entry.Status.RegistryMetadata == nil) != (tc.registryErr != nil) {
+				t.Fatalf("unexpected registry metadata: %+v", entry.Status.RegistryMetadata)
+			}
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(unrelated), unrelated); err != nil {
+				t.Fatalf("publishing removed an unrelated entry: %v", err)
+			}
+		})
+	}
 }
 
 func TestHandleGetCatalogImage_DoesNotWrite(t *testing.T) {

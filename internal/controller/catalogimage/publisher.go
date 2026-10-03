@@ -55,6 +55,8 @@ type PublishOptions struct {
 	RegistryURL string
 	// Digest is the optional content-addressable digest
 	Digest string
+	// BuilderImage retains the helper independently of the source build.
+	BuilderImage string
 	// Tags are category tags to apply
 	Tags []string
 	// Metadata contains automotive-specific metadata
@@ -105,8 +107,7 @@ type PublishResult struct {
 }
 
 // Publish creates or updates a CatalogImage and optionally verifies registry accessibility.
-// Existing entries are resolved by stable name first, then by registry URL (fixed-tag
-// scheduled builds). URL matches under a different name are re-homed to opts.Name.
+// Scheduled publishes also replace older entries at the same fixed registry tag.
 func (p *Publisher) Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 	log := p.log.WithValues("name", opts.Name, "namespace", opts.Namespace, "registryURL", opts.RegistryURL)
 	log.Info("Publishing image to catalog")
@@ -253,13 +254,13 @@ func (p *Publisher) PublishFromImageBuild(
 		AuthSecretRef:        authSecretRef,
 		Source:               publishSource,
 		SourceImageBuildName: imageBuild.Name,
+		BuilderImage:         imageBuild.Status.BuilderImageUsed,
 		ScheduleName:         scheduleName,
 		VerifyAccessibility:  true,
 	})
 }
 
-// resolveExisting finds a CatalogImage to update. Prefer the stable name; fall back to
-// registry URL. Every URL match under a different name is stale and must be deleted.
+// Only scheduled publishing owns the replacement of older entries sharing a URL.
 func (p *Publisher) resolveExisting(
 	ctx context.Context,
 	opts PublishOptions,
@@ -273,6 +274,10 @@ func (p *Publisher) resolveExisting(
 		} else if client.IgnoreNotFound(getErr) != nil {
 			return nil, nil, fmt.Errorf("failed to get catalog image %s: %w", opts.Name, getErr)
 		}
+	}
+
+	if opts.Source != PublishSourceScheduled {
+		return named, nil, nil
 	}
 
 	matches, err := p.listByRegistryURL(ctx, opts.Namespace, opts.RegistryURL)
@@ -302,12 +307,18 @@ func (p *Publisher) listByRegistryURL(ctx context.Context, namespace, registryUR
 	if registryURL == "" {
 		return nil, nil
 	}
-	lister := NewCatalogImageLister(p.client)
-	list, err := lister.ListByRegistryURL(ctx, namespace, registryURL)
-	if err != nil {
+	// The build API uses a direct client, without the controller's field indexes.
+	var list automotivev1alpha1.CatalogImageList
+	if err := p.client.List(ctx, &list, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("failed to check for existing catalog image: %w", err)
 	}
-	return list.Items, nil
+	var matches []automotivev1alpha1.CatalogImage
+	for _, entry := range list.Items {
+		if entry.Spec.RegistryURL == registryURL {
+			matches = append(matches, entry)
+		}
+	}
+	return matches, nil
 }
 
 func (p *Publisher) deleteStale(ctx context.Context, keepName string, stale []automotivev1alpha1.CatalogImage) error {
@@ -327,6 +338,7 @@ func (p *Publisher) deleteStale(ctx context.Context, keepName string, stale []au
 func (p *Publisher) updateCatalogImage(catalogImage *automotivev1alpha1.CatalogImage, opts PublishOptions) {
 	catalogImage.Spec.RegistryURL = opts.RegistryURL
 	catalogImage.Spec.Digest = opts.Digest
+	catalogImage.Spec.BuilderImage = opts.BuilderImage
 	catalogImage.Spec.Tags = opts.Tags
 	catalogImage.Spec.AuthSecretRef = opts.AuthSecretRef
 	catalogImage.Spec.Metadata = opts.Metadata
@@ -368,6 +380,7 @@ func (p *Publisher) buildCatalogImage(opts PublishOptions) *automotivev1alpha1.C
 		Spec: automotivev1alpha1.CatalogImageSpec{
 			RegistryURL:   opts.RegistryURL,
 			Digest:        opts.Digest,
+			BuilderImage:  opts.BuilderImage,
 			Tags:          opts.Tags,
 			AuthSecretRef: opts.AuthSecretRef,
 			Metadata:      opts.Metadata,
