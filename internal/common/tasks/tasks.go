@@ -772,6 +772,12 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					},
 				},
 				{
+					Name:        "builder-cache-policy",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Builder freshness policy: validate resolved inputs online or reuse a cached digest; forced rebuilds take precedence",
+					Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "validate"},
+				},
+				{
 					Name:        "rebuild-builder",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Force rebuild of the bootc builder image (true/false)",
@@ -956,6 +962,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 						taskParamEnvVar("CLUSTER_REGISTRY_ROUTE", "cluster-registry-route"),
 						taskParamEnvVar("CONTAINER_REF", "container-ref"),
 						taskParamEnvVar("REBUILD_BUILDER", "rebuild-builder"),
+						taskParamEnvVar("BUILDER_CACHE_POLICY", "builder-cache-policy"),
 						taskParamEnvVar("USE_PERSISTENT_CACHE", "use-persistent-cache"),
 						taskParamEnvVar("REPRODUCIBLE", "reproducible"),
 						taskParamEnvVar("SECURE_BUILD", "secure-build"),
@@ -1390,6 +1397,12 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					},
 				},
 				{
+					Name:        "builder-cache-policy",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Builder freshness policy: validate resolved inputs online or reuse a cached digest; forced rebuilds take precedence",
+					Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "validate"},
+				},
+				{
 					Name:        "rebuild-builder",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Force rebuild of the bootc builder image (true/false)",
@@ -1621,7 +1634,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 								"distro", "target", "mode", "export-format", "compression",
 								"automotive-image-builder", "container-push", "build-disk-image",
 								"export-oci", "builder-image", "cluster-registry-route",
-								"container-ref", "rebuild-builder", "use-persistent-cache",
+								"container-ref", "rebuild-builder", "builder-cache-policy", "use-persistent-cache",
 								"yq-helper-image", "hermeto-image", "hermeto-prefetch", "resolve-only", "secure-build", "reproducible", "restore-sources-ref", "insecure-registry",
 							),
 							traceIDPipelineParam(),
@@ -2067,6 +2080,12 @@ func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tek
 					},
 				},
 				{
+					Name:        "builder-cache-policy",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Builder freshness policy: validate resolved inputs online or reuse a cached digest; forced rebuilds take precedence",
+					Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: "validate"},
+				},
+				{
 					Name:        "rebuild-builder",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Force rebuild of the bootc builder image (true/false)",
@@ -2123,6 +2142,10 @@ func GeneratePrepareBuilderTask(namespace string, buildConfig *BuildConfig) *tek
 						{
 							Name:  "TARGET_ARCH",
 							Value: "$(params.target-architecture)",
+						},
+						{
+							Name:  "BUILDER_CACHE_POLICY",
+							Value: "$(params.builder-cache-policy)",
 						},
 						{
 							Name:  "REBUILD_BUILDER",

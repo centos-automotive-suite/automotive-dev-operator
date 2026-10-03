@@ -137,3 +137,11 @@ func TestValidateManifestSchemaImagePriority(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateBuilderCachePolicy(t *testing.T) {
+	opts := newTestOpts()
+	opts.Build.BuilderCachePolicy = "invalid"
+	if err := NewHandler(opts).validateBootcBuildFlags(); err == nil || !strings.Contains(err.Error(), "--builder-cache-policy") {
+		t.Fatalf("expected policy validation error, got %v", err)
+	}
+}

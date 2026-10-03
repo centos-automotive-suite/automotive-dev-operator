@@ -56,6 +56,7 @@ func TestManifestBuildSubmission(t *testing.T) {
 				opts.Connection.ServerURL, opts.Connection.AuthToken = srv.URL, "test-token"
 				opts.Build.Name, opts.Build.Mode = "test-build", "package"
 				opts.Build.BuilderImage, opts.Build.RebuildBuilder = "builder.example/image:latest", true
+				opts.Build.BuilderCachePolicy = "reuse"
 				opts.Build.AIBExtraArgs, opts.Build.CustomDefs = []string{"user-arg"}, []string{"user=value"}
 				opts.Build.Lockfile = filepath.Join(root, "input.lock")
 				opts.Registry.ContainerPush, opts.Registry.ExportOCI = "registry.example/container:latest", "registry.example/disk:latest"
@@ -99,7 +100,7 @@ func TestManifestBuildSubmission(t *testing.T) {
 				if development {
 					wantMode = buildcontract.ModePackage
 				}
-				if req.Mode != wantMode || req.BuildDiskImage == development || (req.ContainerPush != "") == development || (req.BuilderImage != "") == development || req.RebuildBuilder == development {
+				if req.Mode != wantMode || req.BuildDiskImage == development || (req.ContainerPush != "") == development || (req.BuilderImage != "") == development || req.RebuildBuilder == development || (req.BuilderCachePolicy == "reuse") == development {
 					t.Fatalf("mode-specific fields changed: %+v", req)
 				}
 				assertManifestSource(t, req, git, explicit, fixture.uploaded, lockfile)

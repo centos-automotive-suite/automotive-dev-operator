@@ -142,6 +142,7 @@ func baseParams(imageBuild *automotivev1alpha1.ImageBuild, operatorConfig *autom
 		boolParam("s3-insecure-skip-tls-verify", imageBuild.Spec.GetS3InsecureSkipTLSVerify()),
 		stringParam("builder-image", imageBuild.Spec.GetBuilderImage()),
 		boolParam("rebuild-builder", imageBuild.Spec.GetRebuildBuilder()),
+		stringParam("builder-cache-policy", imageBuild.Spec.GetBuilderCachePolicy()),
 		stringParam("secret-ref", imageBuild.Spec.SecretRef),
 		boolParam("use-persistent-cache", imageBuild.Spec.BuildCachePVC != ""),
 		boolParam("secure-build", imageBuild.Spec.SecureBuild),
