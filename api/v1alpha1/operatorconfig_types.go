@@ -17,8 +17,10 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -865,6 +867,12 @@ type OSBuildsConfig struct {
 	// +optional
 	DefaultBuildTTL string `json:"defaultBuildTTL,omitempty"`
 
+	// BuilderCacheTTL expires unused helper cache tags. Referenced helpers retain pin tags.
+	// Uses Go duration format; "0" disables cache expiry. Default: "720h" (30 days).
+	// +kubebuilder:validation:Pattern=`^0$|^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
+	// +optional
+	BuilderCacheTTL string `json:"builderCacheTTL,omitempty"`
+
 	// MaxBuildTTL is the maximum TTL that users can request for individual builds.
 	// Build requests specifying a TTL greater than this value are rejected.
 	// Set to "0" for no maximum. Uses Go duration format (e.g. "168h" for 1 week).
@@ -918,6 +926,19 @@ func (c *OSBuildsConfig) GetDefaultBuildTTL() string {
 		return c.DefaultBuildTTL
 	}
 	return DefaultBuildTTL
+}
+
+// GetBuilderCacheTTL returns the helper cache lifetime; zero disables expiry.
+func (c *OSBuildsConfig) GetBuilderCacheTTL() (time.Duration, error) {
+	value := "720h"
+	if c != nil && c.BuilderCacheTTL != "" {
+		value = c.BuilderCacheTTL
+	}
+	ttl, err := time.ParseDuration(value)
+	if err != nil || ttl < 0 {
+		return 0, fmt.Errorf("invalid builderCacheTTL %q", value)
+	}
+	return ttl, nil
 }
 
 // GetMaxBuildTTL returns the max build TTL string, or empty if no max is set
