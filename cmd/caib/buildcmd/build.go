@@ -155,8 +155,18 @@ func (h *Handler) validateRegistryFlags(pushFlagName, suggestion string) error {
 	return nil
 }
 
+func (h *Handler) validateBuilderCachePolicy() error {
+	if !buildcontract.ValidBuilderCachePolicy(h.opts.Build.BuilderCachePolicy) {
+		return fmt.Errorf("invalid --builder-cache-policy %q (expected validate or reuse)", h.opts.Build.BuilderCachePolicy)
+	}
+	return nil
+}
+
 // validateBootcBuildFlags validates flag combinations for the build command.
 func (h *Handler) validateBootcBuildFlags() error {
+	if err := h.validateBuilderCachePolicy(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(h.opts.Connection.ServerURL) == "" {
 		return common.ServerURLRequiredError("caib image build --server <server-url>")
 	}
@@ -838,6 +848,10 @@ func (h *Handler) RunBuild(cmd *cobra.Command, args []string) {
 
 // RunDisk handles `caib image disk`.
 func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
+	if err := h.validateBuilderCachePolicy(); err != nil {
+		h.handleError(err)
+		return
+	}
 	h.applyWaitFollowDefaults(cmd, false)
 
 	ctx := context.Background()
@@ -889,6 +903,8 @@ func (h *Handler) RunDisk(cmd *cobra.Command, args []string) {
 	req := buildcontract.BuildRequest{
 		Name:                   h.opts.Build.Name,
 		ContainerRef:           containerRef,
+		BuilderCachePolicy:     h.opts.Build.BuilderCachePolicy,
+		RebuildBuilder:         h.opts.Build.RebuildBuilder,
 		Distro:                 buildcontract.Distro(h.opts.Build.Distro),
 		Target:                 buildcontract.Target(h.opts.Build.Target),
 		Architecture:           buildcontract.Architecture(h.opts.Build.Architecture),
@@ -1098,6 +1114,7 @@ func (h *Handler) runManifestBuild(ctx context.Context, cmd *cobra.Command, mani
 		req.BuildDiskImage = h.opts.Build.BuildDiskImage
 		req.BuilderImage = h.opts.Build.BuilderImage
 		req.RebuildBuilder = h.opts.Build.RebuildBuilder
+		req.BuilderCachePolicy = h.opts.Build.BuilderCachePolicy
 	}
 
 	if err := h.applyRegistryCredentialsToRequest(&req); err != nil {

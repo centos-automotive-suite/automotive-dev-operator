@@ -473,6 +473,7 @@ func TestBuildScript_ReceivesParamsThroughEnvironment(t *testing.T) {
 		"CLUSTER_REGISTRY_ROUTE": "$(params.cluster-registry-route)",
 		"CONTAINER_REF":          "$(params.container-ref)",
 		"REBUILD_BUILDER":        "$(params.rebuild-builder)",
+		"BUILDER_CACHE_POLICY":   "$(params.builder-cache-policy)",
 		"USE_PERSISTENT_CACHE":   "$(params.use-persistent-cache)",
 		"REPRODUCIBLE":           "$(params.reproducible)",
 		"RESTORE_SOURCES_REF":    "$(params.restore-sources-ref)",
@@ -872,5 +873,49 @@ func TestHermetoPrefetchDefaultsAndBinding(t *testing.T) {
 				t.Fatalf("prefetch binding = %q, present=%t", got, ok)
 			}
 		})
+	}
+}
+
+func TestBuilderCachePolicyTaskPlumbing(t *testing.T) {
+	for _, task := range []*tektonv1.Task{
+		GenerateBuildAutomotiveImageTask("test-ns", nil, ""),
+		GeneratePrepareBuilderTask("test-ns", nil),
+	} {
+		foundParam, foundEnv := false, false
+		for _, param := range task.Spec.Params {
+			if param.Name == "builder-cache-policy" {
+				foundParam = param.Default != nil && param.Default.StringVal == "validate"
+			}
+		}
+		for _, step := range task.Spec.Steps {
+			for _, env := range step.Env {
+				if env.Name == "BUILDER_CACHE_POLICY" && env.Value == "$(params.builder-cache-policy)" {
+					foundEnv = true
+				}
+			}
+		}
+		if !foundParam || !foundEnv {
+			t.Errorf("%s: policy default=%t, environment=%t", task.Name, foundParam, foundEnv)
+		}
+	}
+	pipeline := GenerateTektonPipeline("test", "test-ns", nil)
+	foundDefault, foundBinding := false, false
+	for _, param := range pipeline.Spec.Params {
+		if param.Name == "builder-cache-policy" {
+			foundDefault = param.Default != nil && param.Default.StringVal == "validate"
+		}
+	}
+	for _, task := range pipeline.Spec.Tasks {
+		if task.Name != "build-image" {
+			continue
+		}
+		for _, param := range task.Params {
+			if param.Name == "builder-cache-policy" && param.Value.StringVal == "$(params.builder-cache-policy)" {
+				foundBinding = true
+			}
+		}
+	}
+	if !foundDefault || !foundBinding {
+		t.Fatalf("pipeline policy default=%t, build binding=%t", foundDefault, foundBinding)
 	}
 }

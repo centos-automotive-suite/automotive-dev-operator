@@ -40,6 +40,9 @@ var PushArtifactS3Script = ""
 //go:embed scripts/build_builder.sh
 var buildBuilderScript string
 
+//go:embed scripts/builder_cache.sh
+var builderCacheScript string
+
 // BuildBuilderScript contains the embedded shell script for building the builder image.
 var BuildBuilderScript = ""
 
@@ -51,8 +54,8 @@ var FlashImageScript = ""
 
 func init() {
 	ociVars := oci.Get().ShellVars()
-	BuildImageScript = commonScript + "\n" + ociVars + "\n" + hermetoScript + "\n" + buildImageScript
-	BuildBuilderScript = commonScript + "\n" + buildBuilderScript
+	BuildImageScript = commonScript + "\n" + ociVars + "\n" + hermetoScript + "\n" + builderCacheScript + "\n" + buildImageScript
+	BuildBuilderScript = commonScript + "\n" + builderCacheScript + "\n" + buildBuilderScript
 	PushArtifactScript = commonScript + "\n" + ociVars + "\n" + pushArtifactScript
 	PushArtifactS3Script = commonScript + "\n" + pushArtifactS3Script
 	FlashImageScript = commonScript + "\n" + flashImageScript

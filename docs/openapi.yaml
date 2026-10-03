@@ -486,6 +486,11 @@ components:
           type: string
         rebuildBuilder:
           type: boolean
+        builderCachePolicy:
+          description: Validate helper freshness online (default), or reuse a cached digest without depsolving. Cache misses build online; rebuildBuilder overrides this policy.
+          type: string
+          enum: [validate, reuse]
+          default: validate
         registryCredentials:
           allOf:
             - $ref: '#/components/schemas/RegistryCredentials'
@@ -719,6 +724,11 @@ components:
               type: string
             rebuildBuilder:
               type: boolean
+            builderCachePolicy:
+              description: Validate helper freshness online (default), or reuse a cached digest without depsolving. Cache misses build online; rebuildBuilder overrides this policy.
+              type: string
+              enum: [validate, reuse]
+              default: validate
             reproducible:
               type: boolean
             restoreSourcesRef:

@@ -108,7 +108,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
 	buildCmd.Flags().StringVar(&opts.Build.BuilderImage, "builder-image", "", "custom builder container")
-	buildCmd.Flags().BoolVar(&opts.Build.RebuildBuilder, "rebuild-builder", false, "force rebuild of the bootc builder image")
+	addBuilderCacheFlags(buildCmd, opts.Build)
 	buildCmd.Flags().StringArrayVarP(&opts.Build.CustomDefs, "define", "D", []string{}, "custom definition KEY=VALUE")
 	buildCmd.Flags().StringArrayVar(&opts.Build.DefineFiles, "define-file", []string{}, "load defines from YAML dictionary file (can be repeated)")
 	buildCmd.Flags().StringArrayVar(&opts.Build.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
@@ -199,6 +199,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 		&opts.Build.AutomotiveImageBuilder, "aib-image",
 		automotivev1alpha1.DefaultAutomotiveImageBuilderImage, "AIB container image",
 	)
+	addBuilderCacheFlags(diskCmd, opts.Build)
 	diskCmd.Flags().StringArrayVar(&opts.Build.AIBExtraArgs, "extra-args", []string{}, "extra arguments to pass to AIB (can be repeated)")
 	diskCmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 60, "timeout in minutes")
 	diskCmd.Flags().BoolVarP(&opts.Output.Wait, "wait", "w", false, "wait for build to complete")
@@ -749,4 +750,9 @@ func addSealedFlags(cmd *cobra.Command, opts Options, defaultServer string) {
 	cmd.Flags().StringVar(&opts.Sealed.KeyFile, "key", "", "Path to local PEM key file (uploaded to cluster automatically)")
 	cmd.Flags().StringVar(&opts.Sealed.KeyPassword, "passwd", "", "Password for encrypted key file (used with --key)")
 	cmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 120, "Timeout in minutes")
+}
+
+func addBuilderCacheFlags(cmd *cobra.Command, build *commandopts.Build) {
+	cmd.Flags().BoolVar(&build.RebuildBuilder, "rebuild-builder", false, "force rebuild of the bootc builder image")
+	cmd.Flags().StringVar(&build.BuilderCachePolicy, "builder-cache-policy", "validate", "builder cache policy: validate freshness online, or reuse a cached helper without depsolving (cache misses still build; --rebuild-builder overrides)")
 }

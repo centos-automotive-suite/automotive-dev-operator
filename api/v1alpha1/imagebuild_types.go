@@ -216,6 +216,14 @@ type AIBSpec struct {
 	// RebuildBuilder forces rebuilding the bootc builder image even if a cached version exists in the registry.
 	RebuildBuilder bool `json:"rebuildBuilder,omitempty"`
 
+	// BuilderCachePolicy controls automatic helper freshness checks. Validate checks
+	// resolved inputs online; reuse accepts a cached digest without depsolving.
+	// Cache misses still build online. RebuildBuilder overrides this policy.
+	// +kubebuilder:validation:Enum=validate;reuse
+	// +kubebuilder:default=validate
+	// +optional
+	BuilderCachePolicy string `json:"builderCachePolicy,omitempty"`
+
 	// InputFilesServer indicates if an upload server should be created for local file references
 	// When true, the build waits in "Uploading" phase until files are uploaded
 	InputFilesServer bool `json:"inputFilesServer,omitempty"`
@@ -693,6 +701,14 @@ func (s *ImageBuildSpec) GetFlashClientConfigSecretRef() string {
 		return s.Flash.ClientConfigSecretRef
 	}
 	return ""
+}
+
+// GetBuilderCachePolicy returns the automatic helper freshness policy.
+func (s *ImageBuildSpec) GetBuilderCachePolicy() string {
+	if s.AIB != nil && s.AIB.BuilderCachePolicy != "" {
+		return s.AIB.BuilderCachePolicy
+	}
+	return "validate"
 }
 
 // GetRebuildBuilder returns whether the builder image should be forcibly rebuilt
