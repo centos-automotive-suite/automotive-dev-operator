@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 
+	imagev1 "github.com/openshift/api/image/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -47,6 +48,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/telemetry"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/buildercache"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/catalogimage"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/containerbuild"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/image"
@@ -91,6 +93,7 @@ func init() {
 	utilruntime.Must(securityv1.AddToScheme(scheme))
 	utilruntime.Must(tektonv1.AddToScheme(scheme))
 	utilruntime.Must(routev1.Install(scheme))
+	utilruntime.Must(imagev1.Install(scheme))
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 	utilruntime.Must(shipwrightv1beta1.SchemeBuilder.AddToScheme(scheme))
 
@@ -258,6 +261,8 @@ func main() {
 	}
 
 	if mode == modeBuild || mode == modeAll {
+		setupBuilderCache(mgr)
+
 		imageBuildReconciler := &imagebuild.ImageBuildReconciler{
 			Client:     mgr.GetClient(),
 			APIReader:  mgr.GetAPIReader(),
@@ -394,4 +399,13 @@ func readTracingConfig(restConfig *rest.Config, s *runtime.Scheme, namespace str
 	}
 
 	return true, cfg.Spec.Tracing.GetEndpoint(), cfg.Spec.Tracing.GetSamplingRatio(), cfg.Spec.Tracing.IsInsecure()
+}
+
+func setupBuilderCache(mgr ctrl.Manager) {
+	if err := (&buildercache.Reconciler{
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder("builder-cache-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "BuilderCache")
+		os.Exit(1)
+	}
 }

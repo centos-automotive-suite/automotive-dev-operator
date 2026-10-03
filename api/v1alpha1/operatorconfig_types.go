@@ -865,6 +865,12 @@ type OSBuildsConfig struct {
 	// +optional
 	DefaultBuildTTL string `json:"defaultBuildTTL,omitempty"`
 
+	// BuilderCacheTTL expires unused helper cache tags. Referenced helpers retain pin tags.
+	// Uses Go duration format; "0" disables cache expiry. Default: "720h" (30 days).
+	// +kubebuilder:validation:Pattern=`^0$|^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
+	// +optional
+	BuilderCacheTTL string `json:"builderCacheTTL,omitempty"`
+
 	// MaxBuildTTL is the maximum TTL that users can request for individual builds.
 	// Build requests specifying a TTL greater than this value are rejected.
 	// Set to "0" for no maximum. Uses Go duration format (e.g. "168h" for 1 week).

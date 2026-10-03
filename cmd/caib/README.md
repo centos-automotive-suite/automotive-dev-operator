@@ -154,23 +154,30 @@ caib image build <manifest.aib.yml> [flags]
 | `--restore-sources` | | OCI image ref from prior build — restores archived sources for exact reproducible rebuild |
 | `--ttl` | | Time-to-live for the build (e.g. `24h`, `72h`; empty=server default, `0`=no expiry) |
 
-**Builder cache retention:** Helper images are stored in the namespace's `aib-build`
-repository. Each distinct ordered set of custom definitions gets a separate cache
-tag. There is no automatic eviction or last-used tracking for these tags. A
-value that changes on every build, such as an image version or build ID, can
-therefore create an ever-growing set of tagged helper images. Where possible,
-keep definitions stable and supply per-build metadata outside the definitions.
-Both cache policies use the same tags; `reuse` does not limit tag growth.
+**Builder cache retention:** Each ordered set of custom definitions gets a separate
+cache tag in the namespace's `aib-build` repository. The controller expires cache
+tags after 30 days without a completed build using them. Configure
+`OperatorConfig.spec.osBuilds.builderCacheTTL` with a Go duration (for example,
+`168h`); `0` disables cache expiry. Registry pruning separately reclaims image data.
 
-Build consumers create a `pin-<sha256>` tag before using a managed helper, keeping
-the recorded digest pullable after the cache tag changes. Failed cache pinning or
-pulls trigger a rebuild. These pin tags also remain until explicitly removed.
+Before publishing, builds create a `pin-<sha256>` tag for their managed helper.
+Pins keep the digest pullable even after cache tags change or expire. They remain
+while an ImageBuild, CatalogImage, or explicit ImageReseal helper reference needs
+them. Catalog entries retain helper references independently of deleted builds.
+Unreferenced pins have a 24-hour grace period; active builds and reseals defer
+orphan-pin deletion while cache tags can still expire. If an image must remain
+usable after its build is deleted, keep its
+catalog entry. Images retained only in an external registry are not tracked.
 
-Plan separate retention for helper cache tags. Before removing tags or pruning
-images, account for active builds and retained images that reference helper
-digests for later disk conversion or resealing. Removing a tag alone does not
-immediately reclaim its image data. Automated pruning based on last use remains
-follow-up work; a tag's last push time is not its last use time.
+Existing tags receive a full retention window when first observed. Older catalog
+entries are recovered from their source build or registry metadata; unresolved
+entries defer cleanup. Existing mutable helper references also retain their
+original tag. Pin backfill requires the digest to remain in ImageStream history;
+it cannot recover a helper already removed by pruning. Missing helpers produce
+`BuilderImageUnavailable` warning events on their referencing objects without
+blocking cleanup. The `BuilderCacheCleanupDeferred` condition on OperatorConfig
+reports safety deferrals and clears when they are resolved. Cache pull failures fall
+back to rebuilding, including with `--builder-cache-policy reuse`.
 
 **Examples:**
 
