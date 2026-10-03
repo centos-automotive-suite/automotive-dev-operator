@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/catalogcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/catalogimage"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/labels"
@@ -47,6 +48,7 @@ type Handler struct {
 	client           client.Client
 	log              logr.Logger
 	defaultNamespace string
+	publisher        *catalogimage.Publisher
 }
 
 // NewHandler creates a new catalog API handler
@@ -58,6 +60,7 @@ func NewHandler(client client.Client, log logr.Logger, defaultNamespace string) 
 		client:           client,
 		log:              log.WithName("catalog-handler"),
 		defaultNamespace: defaultNamespace,
+		publisher:        catalogimage.NewPublisher(client, catalogimage.NewRegistryClient(), nil, log),
 	}
 }
 
@@ -276,7 +279,7 @@ func (h *Handler) HandleVerifyCatalogImage(c *gin.Context) {
 
 // HandlePublishImageBuild publishes an ImageBuild to the catalog
 func (h *Handler) HandlePublishImageBuild(c *gin.Context) {
-	ctx := context.Background()
+	ctx := c.Request.Context()
 
 	var req catalogcontract.PublishImageBuildRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -315,44 +318,15 @@ func (h *Handler) HandlePublishImageBuild(c *gin.Context) {
 		return
 	}
 
-	// Determine catalog image name
-	catalogImageName := req.CatalogImageName
-	if catalogImageName == "" {
-		catalogImageName = req.ImageBuildName
-	}
-
-	// Create CatalogImage
-	catalogImage := &automotivev1alpha1.CatalogImage{}
-	catalogImage.Name = catalogImageName
-	catalogImage.Namespace = h.defaultNamespace
-	catalogImage.Spec = automotivev1alpha1.CatalogImageSpec{
-		RegistryURL: registryURL,
-		Tags:        req.Tags,
-		Metadata: &automotivev1alpha1.CatalogImageMetadata{
-			Architecture: imageBuild.Spec.Architecture,
-			Distro:       imageBuild.Spec.GetDistro(),
-			BuildMode:    imageBuild.Spec.GetMode(),
-		},
-	}
-
-	// Add hardware target if available
-	if imageBuild.Spec.GetTarget() != "" {
-		catalogImage.Spec.Metadata.Targets = []automotivev1alpha1.HardwareTarget{
-			{Name: imageBuild.Spec.GetTarget(), Verified: true},
-		}
-	}
-
-	// Set source ImageBuild reference in status (will be set by controller, but preempt for response)
-	catalogImage.Status.SourceImageBuild = req.ImageBuildName
-
-	if err := h.client.Create(ctx, catalogImage); err != nil {
+	result, err := h.publisher.PublishFromImageBuild(ctx, imageBuild, req.CatalogImageName, req.Tags, nil, catalogimage.PublishSourceManual)
+	if err != nil {
 		h.log.Error(err, "failed to create catalog image from ImageBuild", "imageBuild", req.ImageBuildName)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish ImageBuild to catalog"})
 		return
 	}
 
-	h.log.Info("published ImageBuild to catalog", "imageBuild", req.ImageBuildName, "catalogImage", catalogImageName)
-	response := ToCatalogImageResponse(catalogImage)
+	h.log.Info("published ImageBuild to catalog", "imageBuild", req.ImageBuildName, "catalogImage", result.CatalogImage.Name)
+	response := ToCatalogImageResponse(result.CatalogImage)
 	c.JSON(http.StatusCreated, response)
 }
 

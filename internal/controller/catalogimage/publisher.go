@@ -55,6 +55,8 @@ type PublishOptions struct {
 	RegistryURL string
 	// Digest is the optional content-addressable digest
 	Digest string
+	// BuilderImage retains the helper independently of the source build.
+	BuilderImage string
 	// Tags are category tags to apply
 	Tags []string
 	// Metadata contains automotive-specific metadata
@@ -253,6 +255,7 @@ func (p *Publisher) PublishFromImageBuild(
 		AuthSecretRef:        authSecretRef,
 		Source:               publishSource,
 		SourceImageBuildName: imageBuild.Name,
+		BuilderImage:         imageBuild.Status.BuilderImageUsed,
 		ScheduleName:         scheduleName,
 		VerifyAccessibility:  true,
 	})
@@ -302,12 +305,18 @@ func (p *Publisher) listByRegistryURL(ctx context.Context, namespace, registryUR
 	if registryURL == "" {
 		return nil, nil
 	}
-	lister := NewCatalogImageLister(p.client)
-	list, err := lister.ListByRegistryURL(ctx, namespace, registryURL)
-	if err != nil {
+	// The build API uses a direct client, without the controller's field indexes.
+	var list automotivev1alpha1.CatalogImageList
+	if err := p.client.List(ctx, &list, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("failed to check for existing catalog image: %w", err)
 	}
-	return list.Items, nil
+	var matches []automotivev1alpha1.CatalogImage
+	for _, entry := range list.Items {
+		if entry.Spec.RegistryURL == registryURL {
+			matches = append(matches, entry)
+		}
+	}
+	return matches, nil
 }
 
 func (p *Publisher) deleteStale(ctx context.Context, keepName string, stale []automotivev1alpha1.CatalogImage) error {
@@ -327,6 +336,7 @@ func (p *Publisher) deleteStale(ctx context.Context, keepName string, stale []au
 func (p *Publisher) updateCatalogImage(catalogImage *automotivev1alpha1.CatalogImage, opts PublishOptions) {
 	catalogImage.Spec.RegistryURL = opts.RegistryURL
 	catalogImage.Spec.Digest = opts.Digest
+	catalogImage.Spec.BuilderImage = opts.BuilderImage
 	catalogImage.Spec.Tags = opts.Tags
 	catalogImage.Spec.AuthSecretRef = opts.AuthSecretRef
 	catalogImage.Spec.Metadata = opts.Metadata
@@ -368,6 +378,7 @@ func (p *Publisher) buildCatalogImage(opts PublishOptions) *automotivev1alpha1.C
 		Spec: automotivev1alpha1.CatalogImageSpec{
 			RegistryURL:   opts.RegistryURL,
 			Digest:        opts.Digest,
+			BuilderImage:  opts.BuilderImage,
 			Tags:          opts.Tags,
 			AuthSecretRef: opts.AuthSecretRef,
 			Metadata:      opts.Metadata,

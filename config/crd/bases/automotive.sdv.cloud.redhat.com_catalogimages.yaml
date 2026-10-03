@@ -71,6 +71,11 @@ spec:
                 required:
                 - name
                 type: object
+              builderImage:
+                description: |-
+                  BuilderImage is the helper reference retained independently of the source ImageBuild.
+                  Keeping this reference protects a managed helper from garbage collection.
+                type: string
               digest:
                 description: Digest is the immutable content-addressable identifier
                   (sha256:...)
@@ -280,6 +285,16 @@ spec:
                 description: RegistryMetadata contains metadata extracted from the
                   registry
                 properties:
+                  builderImageResolved:
+                    description: BuilderImageResolved distinguishes an image without
+                      a helper from unresolved metadata.
+                    type: boolean
+                  builderImages:
+                    description: BuilderImages contains helper references from all
+                      image platforms.
+                    items:
+                      type: string
+                    type: array
                   createdAt:
                     description: CreatedAt is when the image was created in the registry
                     format: date-time
