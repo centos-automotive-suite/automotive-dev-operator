@@ -32,6 +32,11 @@ type CatalogImageSpec struct {
 	// +optional
 	Digest string `json:"digest,omitempty"`
 
+	// BuilderImage is the helper reference retained independently of the source ImageBuild.
+	// Keeping this reference protects a managed helper from garbage collection.
+	// +optional
+	BuilderImage string `json:"builderImage,omitempty"`
+
 	// Tags are mutable labels for categorization
 	// +optional
 	Tags []string `json:"tags,omitempty"`
@@ -211,6 +216,14 @@ type ArtifactReference struct {
 
 // RegistryMetadata contains metadata extracted from the container registry
 type RegistryMetadata struct {
+	// BuilderImages contains helper references from all image platforms.
+	// +optional
+	BuilderImages []string `json:"builderImages,omitempty"`
+
+	// BuilderImageResolved distinguishes an image without a helper from unresolved metadata.
+	// +optional
+	BuilderImageResolved bool `json:"builderImageResolved,omitempty"`
+
 	// ResolvedDigest is the digest resolved from the registry
 	// +optional
 	ResolvedDigest string `json:"resolvedDigest,omitempty"`
