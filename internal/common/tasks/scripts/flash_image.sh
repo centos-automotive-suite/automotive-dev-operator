@@ -15,10 +15,11 @@ if [[ ! -f "${JMP_CLIENT_CONFIG}" ]]; then
     exit 1
 fi
 
-# Copy config to writable path so jmp can persist refreshed tokens
-cp "${JMP_CLIENT_CONFIG}" /tmp/client.yaml
-export JMP_CLIENT_CONFIG=/tmp/client.yaml
+# Jumpstarter saves refreshed credentials under <config home>/clients/<alias>.yaml.
 export JMP_CLIENT_CONFIG_HOME=/tmp
+mkdir -p "${JMP_CLIENT_CONFIG_HOME}/clients"
+cp "${JMP_CLIENT_CONFIG}" "${JMP_CLIENT_CONFIG_HOME}/clients/client.yaml"
+export JMP_CLIENT_CONFIG="${JMP_CLIENT_CONFIG_HOME}/clients/client.yaml"
 
 echo "Using client config: ${JMP_CLIENT_CONFIG}"
 
