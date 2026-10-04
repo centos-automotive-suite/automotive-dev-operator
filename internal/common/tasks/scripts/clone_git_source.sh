@@ -41,7 +41,7 @@ if [ "${SOURCE_DISCOVERY:-}" = "true" ]; then
   git config remote.origin.promisor true
   git config remote.origin.partialclonefilter blob:none
   git fetch --quiet --depth=1 --filter=blob:none --no-tags origin "${SOURCE_REVISION:-HEAD}"
-  git rev-parse FETCH_HEAD > ../commit
+  git rev-parse 'FETCH_HEAD^{commit}' > ../commit
   entry=$(git ls-tree FETCH_HEAD -- "$SOURCE_MANIFEST")
   case "$entry" in
     "100644 "*|"100755 "*) ;;
@@ -55,7 +55,7 @@ if [ -n "${SOURCE_COMMIT:-}" ]; then
   if ! git fetch --quiet --depth=1 --no-tags origin "$SOURCE_COMMIT"; then
     git fetch --quiet --depth=1 --no-tags origin "${SOURCE_REVISION:-HEAD}"
   fi
-  actual_commit=$(git rev-parse FETCH_HEAD)
+  actual_commit=$(git rev-parse 'FETCH_HEAD^{commit}')
   if [ "$actual_commit" != "$SOURCE_COMMIT" ]; then
     echo "Git revision changed since discovery; retry the build to discover its new target" >&2
     exit 1

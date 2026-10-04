@@ -80,6 +80,26 @@ func TestGitSourceStaging(t *testing.T) {
 	}
 }
 
+func assertGitSourceSnapshot(t *testing.T, cmd *exec.Cmd, workspace, wantCommit string) string {
+	t.Helper()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("checkout: %v %s", err, out)
+	}
+	commit, err := os.ReadFile(filepath.Join(workspace, ".caib-source", "commit"))
+	if err != nil || strings.TrimSpace(string(commit)) != wantCommit {
+		t.Fatalf("commit=%s want=%s err=%v", commit, wantCommit, err)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, ".caib-source", "repository", "demo.aib.yml"))
+	if err != nil || string(data) != "name: first\n" {
+		t.Fatalf("manifest=%s err=%v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".caib-source", "repository", ".git")); !os.IsNotExist(err) {
+		t.Fatal("Git metadata retained in build context")
+	}
+	return string(out)
+}
+
 func TestCloneGitSourceSnapshot(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -114,56 +134,77 @@ func TestCloneGitSourceSnapshot(t *testing.T) {
 	runGit("commit", "-m", "first")
 	first := runGit("rev-parse", "HEAD")
 	runGit("tag", "release")
+	runGit("tag", "-a", "annotated-release", "-m", "first release")
 	server := httptest.NewTLSServer(&cgi.Handler{Path: git, Args: []string{"http-backend"}, Env: []string{"GIT_PROJECT_ROOT=" + dir, "GIT_HTTP_EXPORT_ALL=1"}})
 	defer server.Close()
 	caFile := filepath.Join(dir, "ca.pem")
 	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	clone := func(ref string) {
+	sourceCommand := func(ref, workspace string, env ...string) *exec.Cmd {
+		cmd := exec.Command("sh", "-c", CloneGitSourceScript)
+		cmd.Env = append(os.Environ(), "SOURCE_URL="+server.URL+"/repo/.git", "SOURCE_REVISION="+ref, "SOURCE_WORKSPACE="+workspace, "SOURCE_MANIFEST=demo.aib.yml", "SOURCE_DISCOVERY=", "SOURCE_COMMIT=", "GIT_SSL_CAINFO="+caFile)
+		cmd.Env = append(cmd.Env, env...)
+		return cmd
+	}
+	clone := func(ref string, env ...string) string {
 		t.Helper()
 		workspace := t.TempDir()
-		cmd := exec.Command("sh", "-c", CloneGitSourceScript)
-		cmd.Env = append(os.Environ(), "SOURCE_URL="+server.URL+"/repo/.git", "SOURCE_REVISION="+ref, "SOURCE_WORKSPACE="+workspace, "GIT_SSL_CAINFO="+caFile)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("checkout %q: %v %s", ref, err, out)
-		}
-		commit, err := os.ReadFile(filepath.Join(workspace, ".caib-source", "commit"))
-		if err != nil || strings.TrimSpace(string(commit)) != first {
-			t.Fatalf("commit=%s err=%v", commit, err)
-		}
-		data, err := os.ReadFile(filepath.Join(workspace, ".caib-source", "repository", "demo.aib.yml"))
-		if err != nil || string(data) != "name: first\n" {
-			t.Fatalf("manifest=%s err=%v", data, err)
-		}
-		if _, err := os.Stat(filepath.Join(workspace, ".caib-source", "repository", ".git")); !os.IsNotExist(err) {
-			t.Fatal("Git metadata retained in build context")
-		}
+		return assertGitSourceSnapshot(t, sourceCommand(ref, workspace, env...), workspace, first)
 	}
 	clone("")
 	clone("main")
 	clone("release")
-	workspace := t.TempDir()
-	discover := exec.Command("sh", "-c", CloneGitSourceScript)
-	discover.Env = append(os.Environ(), "SOURCE_URL="+server.URL+"/repo/.git", "SOURCE_REVISION=main", "SOURCE_WORKSPACE="+workspace, "SOURCE_MANIFEST=demo.aib.yml", "SOURCE_DISCOVERY=true", "GIT_SSL_CAINFO="+caFile)
-	if out, err := discover.CombinedOutput(); err != nil {
-		t.Fatalf("discover: %v %s", err, out)
-	} else if strings.Contains(string(out), "filtering not recognized by server") {
-		t.Fatalf("discovery did not use the blob-less fetch: %s", out)
+	clone("annotated-release")
+	discover := func(ref string) string {
+		t.Helper()
+		workspace := t.TempDir()
+		if out, err := sourceCommand(ref, workspace, "SOURCE_DISCOVERY=true").CombinedOutput(); err != nil {
+			t.Fatalf("discover %q: %v %s", ref, err, out)
+		} else if strings.Contains(string(out), "filtering not recognized by server") {
+			t.Fatalf("discovery did not use the blob-less fetch: %s", out)
+		}
+		commit, err := os.ReadFile(filepath.Join(workspace, ".caib-source", "commit"))
+		if err != nil || strings.TrimSpace(string(commit)) != first {
+			t.Fatalf("discovered %q commit=%s want=%s err=%v", ref, commit, first, err)
+		}
+		if data, err := os.ReadFile(filepath.Join(workspace, ".caib-source", "manifest")); err != nil || string(data) != "name: first\n" {
+			t.Fatalf("discovered manifest=%q err=%v", data, err)
+		}
+		if _, err := os.Stat(filepath.Join(workspace, ".caib-source", "repository", "demo.aib.yml")); !os.IsNotExist(err) {
+			t.Fatal("discovery checked out the repository")
+		}
+		objects := exec.Command(git, "-C", filepath.Join(workspace, ".caib-source", "repository"), "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
+		localObjects, err := objects.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(localObjects), manifestBlob) || strings.Contains(string(localObjects), largeBlob) {
+			t.Fatal("discovery should fetch the manifest blob but not unrelated file blobs")
+		}
+		return strings.TrimSpace(string(commit))
 	}
-	if data, err := os.ReadFile(filepath.Join(workspace, ".caib-source", "manifest")); err != nil || string(data) != "name: first\n" {
-		t.Fatalf("discovered manifest=%q err=%v", data, err)
-	}
-	if _, err := os.Stat(filepath.Join(workspace, ".caib-source", "repository", "demo.aib.yml")); !os.IsNotExist(err) {
-		t.Fatal("discovery checked out the repository")
-	}
-	objects := exec.Command(git, "-C", filepath.Join(workspace, ".caib-source", "repository"), "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
-	localObjects, err := objects.Output()
-	if err != nil {
+	discover("main")
+	discover("release")
+	annotatedCommit := discover("annotated-release")
+	clone("annotated-release", "SOURCE_COMMIT="+annotatedCommit)
+
+	// Some servers reject fetching a commit ID directly; keep the fallback fetch real.
+	bin := t.TempDir()
+	const rejectedFetch = "simulated rejection of direct commit fetch"
+	shim := `#!/bin/sh
+if [ "$1" = fetch ] && [ -n "${SOURCE_COMMIT:-}" ] && [ "${6:-}" = "$SOURCE_COMMIT" ]; then
+  echo '` + rejectedFetch + `' >&2
+  exit 1
+fi
+exec "$GIT_SOURCE_TEST_REAL_GIT" "$@"
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(localObjects), manifestBlob) || strings.Contains(string(localObjects), largeBlob) {
-		t.Fatal("discovery should fetch the manifest blob but not unrelated file blobs")
+	fallbackEnv := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "GIT_SOURCE_TEST_REAL_GIT=" + git, "SOURCE_COMMIT=" + annotatedCommit}
+	if out := clone("annotated-release", fallbackEnv...); !strings.Contains(out, rejectedFetch) {
+		t.Fatalf("pinned checkout did not exercise the fallback fetch: %s", out)
 	}
 	if err := os.WriteFile(manifest, []byte("name: second\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -171,11 +212,18 @@ func TestCloneGitSourceSnapshot(t *testing.T) {
 	runGit("add", ".")
 	runGit("commit", "-m", "second")
 	clone(first)
+	runGit("tag", "-f", "-a", "annotated-release", "-m", "second release")
+	clone("annotated-release", "SOURCE_COMMIT="+annotatedCommit)
+	workspace := t.TempDir()
+	if out, err := sourceCommand("annotated-release", workspace, fallbackEnv...).CombinedOutput(); err == nil || !strings.Contains(string(out), rejectedFetch) || !strings.Contains(string(out), "Git revision changed since discovery") {
+		t.Fatalf("moved annotated tag fallback: %v %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".caib-source", "repository", "demo.aib.yml")); !os.IsNotExist(err) {
+		t.Fatal("moved annotated tag was checked out despite the pinned commit")
+	}
 	checkout := func(commit string) (string, error) {
 		t.Helper()
-		cmd := exec.Command("sh", "-c", CloneGitSourceScript)
-		cmd.Env = append(os.Environ(), "SOURCE_URL="+server.URL+"/repo/.git", "SOURCE_REVISION=main", "SOURCE_WORKSPACE="+t.TempDir(), "SOURCE_COMMIT="+commit, "GIT_SSL_CAINFO="+caFile)
-		out, err := cmd.CombinedOutput()
+		out, err := sourceCommand("main", t.TempDir(), "SOURCE_COMMIT="+commit).CombinedOutput()
 		return string(out), err
 	}
 	if out, err := checkout(first); err != nil {
@@ -189,8 +237,7 @@ func TestCloneGitSourceSnapshot(t *testing.T) {
 	}
 	runGit("add", ".")
 	runGit("commit", "-m", "symlink")
-	symlinkDiscovery := exec.Command("sh", "-c", CloneGitSourceScript)
-	symlinkDiscovery.Env = append(os.Environ(), "SOURCE_URL="+server.URL+"/repo/.git", "SOURCE_REVISION=main", "SOURCE_WORKSPACE="+t.TempDir(), "SOURCE_MANIFEST=link.aib.yml", "SOURCE_DISCOVERY=true", "GIT_SSL_CAINFO="+caFile)
+	symlinkDiscovery := sourceCommand("main", t.TempDir(), "SOURCE_MANIFEST=link.aib.yml", "SOURCE_DISCOVERY=true")
 	if out, err := symlinkDiscovery.CombinedOutput(); err == nil || !strings.Contains(string(out), "must not be a symlink") {
 		t.Fatalf("symlink discovery: %v %s", err, out)
 	}
