@@ -1030,11 +1030,6 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 			return ctrl.Result{}, err
 		}
 
-		recordBuildMetrics(imageBuild, pipelineRun, buildStatusSuccess)
-		if imageBuild.Spec.IsFlashEnabled() {
-			r.recordPipelineFlashMetrics(ctx, imageBuild, pipelineRun, buildStatusSuccess)
-		}
-
 		// Cleanup transient secrets
 		cleanupErr := r.cleanupTransientSecrets(ctx, imageBuild, r.Log)
 
@@ -1062,10 +1057,6 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 			log.Error(err, "Failed to update status to Cancelled")
 			return ctrl.Result{}, err
 		}
-		recordBuildMetrics(imageBuild, pipelineRun, buildStatusFailure)
-		if imageBuild.Spec.IsFlashEnabled() {
-			r.recordPipelineFlashMetrics(ctx, imageBuild, pipelineRun, buildStatusFailure)
-		}
 		if cleanupErr != nil {
 			return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
 		}
@@ -1075,10 +1066,6 @@ func (r *ImageBuildReconciler) checkBuildProgress(
 	if err := r.updateStatus(ctx, imageBuild, phaseFailed, r.pipelineRunFailureDetail(ctx, pipelineRun)); err != nil {
 		log.Error(err, "Failed to update status to Failed")
 		return ctrl.Result{}, err
-	}
-	recordBuildMetrics(imageBuild, pipelineRun, buildStatusFailure)
-	if imageBuild.Spec.IsFlashEnabled() {
-		r.recordPipelineFlashMetrics(ctx, imageBuild, pipelineRun, buildStatusFailure)
 	}
 	if cleanupErr != nil {
 		return ctrl.Result{RequeueAfter: secretCleanupRequeue}, nil
@@ -1640,13 +1627,11 @@ func (r *ImageBuildReconciler) handleFlashingState(
 		if err := r.updateStatus(ctx, imageBuild, phaseCompleted, "Build, push, and flash completed successfully"); err != nil {
 			return ctrl.Result{}, err
 		}
-		recordFlashMetrics(imageBuild, taskRun, buildStatusSuccess)
 	} else {
 		phase, message := settledTaskStatus(taskRun, taskRunFailureMessage(taskRun, "Flash to device failed"), "Flash to device cancelled")
 		if err := r.updateStatus(ctx, imageBuild, phase, message); err != nil {
 			return ctrl.Result{}, err
 		}
-		recordFlashMetrics(imageBuild, taskRun, buildStatusFailure)
 	}
 
 	if cleanupErr != nil {
@@ -1881,8 +1866,8 @@ func (r *ImageBuildReconciler) deleteSecret(
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ImageBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.Add(r.seedMetricsFromCRs(mgr)); err != nil {
-		return fmt.Errorf("failed to register metrics seeder: %w", err)
+	if err := mgr.Add(r.trackBuildMetrics(mgr)); err != nil {
+		return fmt.Errorf("failed to register metrics tracker: %w", err)
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
@@ -1984,8 +1969,12 @@ func recordBuildMetrics(imageBuild *automotivev1alpha1.ImageBuild, pipelineRun *
 	BuildTotal.WithLabelValues(mode, distro, target, format, arch, status).Inc()
 
 	// Record wall-clock duration from CR timestamps
-	if imageBuild.Status.StartTime != nil && imageBuild.Status.CompletionTime != nil {
-		duration := imageBuild.Status.CompletionTime.Sub(imageBuild.Status.StartTime.Time).Seconds()
+	start := imageBuild.Status.StartTime
+	if imageBuild.Status.TerminalResult != nil && imageBuild.Status.TerminalResult.StartedAt != nil {
+		start = imageBuild.Status.TerminalResult.StartedAt
+	}
+	if end := buildCompletionTime(imageBuild); start != nil && end != nil {
+		duration := end.Sub(start.Time).Seconds()
 		BuildDuration.WithLabelValues(mode, distro, target, format, arch, status).Observe(duration)
 	}
 
@@ -2009,14 +1998,12 @@ func recordBuildMetrics(imageBuild *automotivev1alpha1.ImageBuild, pipelineRun *
 	}
 }
 
-func (r *ImageBuildReconciler) recordPipelineFlashMetrics(
+func (r *ImageBuildReconciler) recordPipelineFlashDuration(
 	ctx context.Context,
 	imageBuild *automotivev1alpha1.ImageBuild,
 	pipelineRun *tektonv1.PipelineRun,
 	status string,
 ) {
-	target := imageBuild.Spec.GetTarget()
-
 	for _, child := range pipelineRun.Status.ChildReferences {
 		if child.PipelineTaskName != "flash-image" {
 			continue
@@ -2028,18 +2015,13 @@ func (r *ImageBuildReconciler) recordPipelineFlashMetrics(
 		}, taskRun); err != nil {
 			break
 		}
-		FlashTotal.WithLabelValues(target, status).Inc()
-		if taskRun.Status.CompletionTime != nil {
-			duration := taskRun.Status.CompletionTime.Sub(taskRun.CreationTimestamp.Time).Seconds()
-			FlashDuration.WithLabelValues(target, status).Observe(duration)
-		}
+		recordFlashDuration(imageBuild, taskRun, status)
 		return
 	}
 }
 
-func recordFlashMetrics(imageBuild *automotivev1alpha1.ImageBuild, taskRun *tektonv1.TaskRun, status string) {
+func recordFlashDuration(imageBuild *automotivev1alpha1.ImageBuild, taskRun *tektonv1.TaskRun, status string) {
 	target := imageBuild.Spec.GetTarget()
-	FlashTotal.WithLabelValues(target, status).Inc()
 
 	if taskRun.Status.CompletionTime != nil {
 		duration := taskRun.Status.CompletionTime.Sub(taskRun.CreationTimestamp.Time).Seconds()

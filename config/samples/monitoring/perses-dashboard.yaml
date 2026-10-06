@@ -15,6 +15,12 @@
 # Note: Queries use namespace "automotive-dev-operator-system".
 #       Update if operator is deployed to a different namespace.
 #
+# Design: health-first. The top rows are windowed rates/ratios (the SRE
+#   golden signals) with color thresholds, answering "is it healthy now?".
+#   Cumulative "since process start" counters are demoted to context rows.
+#   The "Time Since Last Success" panel needs the
+#   ado_build_last_success_timestamp_seconds gauge.
+#
 # View in OCP Console: Observe → Dashboards (Perses)
 ---
 apiVersion: perses.dev/v1alpha2
@@ -28,9 +34,39 @@ spec:
   config:
     display:
       name: "Automotive Dev Operator"
-    duration: "6h"
+      description: >-
+        Build outcomes cover every terminal ImageBuild, including failures before
+        a PipelineRun exists. Build duration runs from build start through terminal
+        completion, including separate pushing and flashing stages. The 95% success
+        SLO measures this end-to-end outcome; phase durations measure Tekton stages.
+    duration: "24h"
     refreshInterval: "30s"
     panels:
+      metricsReady:
+        kind: Panel
+        spec:
+          display:
+            name: "Operator Metrics Ready"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "decimal"
+                decimalPlaces: 0
+              thresholds:
+                steps:
+                  - value: 0
+                    color: "#e74c3c"
+                  - value: 1
+                    color: "#27ae60"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) or vector(0)'
       activeBuilds:
         kind: Panel
         spec:
@@ -49,12 +85,12 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: 'sum(ado_build_active{namespace="automotive-dev-operator-system"}) or vector(0)'
-      successRate:
+                    query: '(max((ado_build_active{namespace="automotive-dev-operator-system"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) or vector(0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      successRate1h:
         kind: Panel
         spec:
           display:
-            name: "Success Rate"
+            name: "Success Rate: Last 1h"
           plugin:
             kind: "StatChart"
             spec:
@@ -76,12 +112,65 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: '(sum(ado_build_total{namespace="automotive-dev-operator-system",status="success"}) or vector(0)) / clamp_min(sum(ado_build_total{namespace="automotive-dev-operator-system"}), 1)'
-      avgDuration:
+                    query: '((sum(increase(ado_build_total{namespace="automotive-dev-operator-system",status="success"}[1h] @ end())) or vector(0)) / (sum(increase(ado_build_total{namespace="automotive-dev-operator-system"}[1h] @ end())) > 0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      failedBuilds:
         kind: Panel
         spec:
           display:
-            name: "Avg Build Duration"
+            name: "Failures: Last Hour"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "decimal"
+                decimalPlaces: 0
+              thresholds:
+                steps:
+                  - value: 0
+                    color: "#27ae60"
+                  - value: 1
+                    color: "#e74c3c"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(sum(increase(ado_build_total{namespace="automotive-dev-operator-system",status="failure"}[1h] @ end())) or vector(0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      lastSuccessAge:
+        kind: Panel
+        spec:
+          display:
+            name: "Time Since Last Success"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "seconds"
+                decimalPlaces: 0
+              thresholds:
+                steps:
+                  # Tunable to your build cadence: amber at 2h, red at 12h.
+                  - value: 0
+                    color: "#27ae60"
+                  - value: 7200
+                    color: "#f39c12"
+                  - value: 43200
+                    color: "#e74c3c"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(time() - max((ado_build_last_success_timestamp_seconds{namespace="automotive-dev-operator-system"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1)) > 0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      p95BuildDuration:
+        kind: Panel
+        spec:
+          display:
+            name: "P95 Build Duration: Last 1h"
           plugin:
             kind: "StatChart"
             spec:
@@ -95,45 +184,27 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: '(sum(ado_build_duration_seconds_sum{namespace="automotive-dev-operator-system"}) or vector(0)) / clamp_min(sum(ado_build_duration_seconds_count{namespace="automotive-dev-operator-system"}), 1)'
-      totalBuilds:
+                    # rate(..._bucket[1h]) → windowed quantile, not lifetime.
+                    query: '(histogram_quantile(0.95, sum by (le) (rate(ado_build_duration_seconds_bucket{namespace="automotive-dev-operator-system"}[1h] @ end()))) >= 0) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      burnRate1h:
         kind: Panel
         spec:
           display:
-            name: "Total Builds"
+            name: "Error-Budget Burn: 1h"
           plugin:
             kind: "StatChart"
             spec:
               calculation: "last-number"
               format:
                 unit: "decimal"
-                decimalPlaces: 0
-          queries:
-            - kind: "TimeSeriesQuery"
-              spec:
-                plugin:
-                  kind: "PrometheusTimeSeriesQuery"
-                  spec:
-                    query: 'sum(ado_build_total{namespace="automotive-dev-operator-system"}) or vector(0)'
-      failedBuilds:
-        kind: Panel
-        spec:
-          display:
-            name: "Failed Builds"
-          plugin:
-            kind: "StatChart"
-            spec:
-              calculation: "last-number"
-              format:
-                unit: "decimal"
-                decimalPlaces: 0
+                decimalPlaces: 2
               thresholds:
                 steps:
                   - value: 0
                     color: "#27ae60"
                   - value: 1
                     color: "#f39c12"
-                  - value: 5
+                  - value: 2
                     color: "#e74c3c"
           queries:
             - kind: "TimeSeriesQuery"
@@ -141,12 +212,94 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: 'sum(ado_build_total{namespace="automotive-dev-operator-system",status="failure"}) or vector(0)'
+                    query: '(((sum(increase(ado_build_total{namespace="automotive-dev-operator-system",status="failure"}[1h] @ end())) or vector(0)) / (sum(increase(ado_build_total{namespace="automotive-dev-operator-system"}[1h] @ end())) > 0)) / 0.05) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      burnRate6h:
+        kind: Panel
+        spec:
+          display:
+            name: "Error-Budget Burn: 6h"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "decimal"
+                decimalPlaces: 2
+              thresholds:
+                steps:
+                  - value: 0
+                    color: "#27ae60"
+                  - value: 1
+                    color: "#f39c12"
+                  - value: 2
+                    color: "#e74c3c"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(((sum(increase(ado_build_total{namespace="automotive-dev-operator-system",status="failure"}[6h] @ end())) or vector(0)) / (sum(increase(ado_build_total{namespace="automotive-dev-operator-system"}[6h] @ end())) > 0)) / 0.05) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      successRate6h:
+        kind: Panel
+        spec:
+          display:
+            name: "Success Rate: Last 6h"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "percent-decimal"
+                decimalPlaces: 1
+              thresholds:
+                steps:
+                  - value: 0
+                    color: "#e74c3c"
+                  - value: 0.8
+                    color: "#f39c12"
+                  - value: 0.95
+                    color: "#27ae60"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '((sum(increase(ado_build_total{namespace="automotive-dev-operator-system",status="success"}[6h] @ end())) or vector(0)) / (sum(increase(ado_build_total{namespace="automotive-dev-operator-system"}[6h] @ end())) > 0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      burnTrend:
+        kind: Panel
+        spec:
+          display:
+            name: "Error-Budget Burn Rate (1h vs 6h)"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "burn rate (× budget)"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(((sum(increase(ado_build_total{namespace="automotive-dev-operator-system",status="failure"}[1h])) or vector(0)) / (sum(increase(ado_build_total{namespace="automotive-dev-operator-system"}[1h])) > 0)) / 0.05) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"}) == 1)'
+                    seriesNameFormat: "Burn 1h"
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(((sum(increase(ado_build_total{namespace="automotive-dev-operator-system",status="failure"}[6h])) or vector(0)) / (sum(increase(ado_build_total{namespace="automotive-dev-operator-system"}[6h])) > 0)) / 0.05) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"}) == 1)'
+                    seriesNameFormat: "Burn 6h"
       buildRate:
         kind: Panel
         spec:
           display:
-            name: "Build Rate"
+            name: "Build Completion Rate"
           plugin:
             kind: "TimeSeriesChart"
             spec:
@@ -163,16 +316,37 @@ spec:
                   spec:
                     query: 'sum by (status) (rate(ado_build_total{namespace="automotive-dev-operator-system"}[5m]))'
                     seriesNameFormat: "{{status}}"
-      durationByTarget:
+      activeBuildsTrend:
         kind: Panel
         spec:
           display:
-            name: "Build Duration by Target"
+            name: "Active Builds Over Time"
           plugin:
             kind: "TimeSeriesChart"
             spec:
               yAxis:
-                label: "seconds"
+                label: "builds"
+              legend:
+                position: "bottom"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'max((ado_build_active{namespace="automotive-dev-operator-system"} and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} == 1)))'
+                    seriesNameFormat: "Active builds"
+      failureRateByTarget:
+        kind: Panel
+        spec:
+          display:
+            name: "Failure Ratio by Target: Last 1h"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                format:
+                  unit: "percent-decimal"
               legend:
                 position: "bottom"
                 mode: "list"
@@ -182,18 +356,19 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: '(sum by (target) (rate(ado_build_duration_seconds_sum{namespace="automotive-dev-operator-system"}[5m])) or vector(0)) / clamp_min(sum by (target) (rate(ado_build_duration_seconds_count{namespace="automotive-dev-operator-system"}[5m])), 1)'
+                    query: '(sum by (target) (increase(ado_build_total{namespace="automotive-dev-operator-system",status="failure"}[1h])) or (0 * sum by (target) (increase(ado_build_total{namespace="automotive-dev-operator-system"}[1h])))) / (sum by (target) (increase(ado_build_total{namespace="automotive-dev-operator-system"}[1h])) > 0)'
                     seriesNameFormat: "{{target}}"
-      phaseDuration:
+      p95DurationByTarget:
         kind: Panel
         spec:
           display:
-            name: "Build Phase Duration"
+            name: "P95 Build Duration by Target: Last 1h"
           plugin:
             kind: "TimeSeriesChart"
             spec:
               yAxis:
-                label: "seconds"
+                format:
+                  unit: "seconds"
               legend:
                 position: "bottom"
                 mode: "list"
@@ -203,18 +378,41 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: '(sum by (phase) (rate(ado_build_phase_duration_seconds_sum{namespace="automotive-dev-operator-system"}[5m])) or vector(0)) / clamp_min(sum by (phase) (rate(ado_build_phase_duration_seconds_count{namespace="automotive-dev-operator-system"}[5m])), 1)'
+                    query: 'histogram_quantile(0.95, sum by (target, le) (rate(ado_build_duration_seconds_bucket{namespace="automotive-dev-operator-system"}[1h]))) >= 0'
+                    seriesNameFormat: "{{target}}"
+      p95PhaseDuration:
+        kind: Panel
+        spec:
+          display:
+            name: "P95 Build Phase Duration: Last 1h"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                format:
+                  unit: "seconds"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'histogram_quantile(0.95, sum by (phase, le) (rate(ado_build_phase_duration_seconds_bucket{namespace="automotive-dev-operator-system"}[1h]))) >= 0'
                     seriesNameFormat: "{{phase}}"
-      buildsByTarget:
+      avgDurationByMode:
         kind: Panel
         spec:
           display:
-            name: "Builds by Target"
+            name: "Average Build Duration by Mode: Last 1h"
           plugin:
             kind: "TimeSeriesChart"
             spec:
               yAxis:
-                label: "builds"
+                format:
+                  unit: "seconds"
               legend:
                 position: "bottom"
                 mode: "list"
@@ -224,76 +422,13 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: 'round(sum by (target) (ado_build_total{namespace="automotive-dev-operator-system"})) or vector(0)'
-                    seriesNameFormat: "{{target}}"
-      buildsByMode:
-        kind: Panel
-        spec:
-          display:
-            name: "Builds by Mode"
-          plugin:
-            kind: "TimeSeriesChart"
-            spec:
-              yAxis:
-                label: "builds"
-              legend:
-                position: "bottom"
-                mode: "list"
-          queries:
-            - kind: "TimeSeriesQuery"
-              spec:
-                plugin:
-                  kind: "PrometheusTimeSeriesQuery"
-                  spec:
-                    query: 'round(sum by (mode) (ado_build_total{namespace="automotive-dev-operator-system"})) or vector(0)'
+                    query: 'sum by (mode) (rate(ado_build_duration_seconds_sum{namespace="automotive-dev-operator-system"}[1h])) / (sum by (mode) (rate(ado_build_duration_seconds_count{namespace="automotive-dev-operator-system"}[1h])) > 0)'
                     seriesNameFormat: "{{mode}}"
-      buildsByDistro:
+      retainedBuilds:
         kind: Panel
         spec:
           display:
-            name: "Builds by Distro"
-          plugin:
-            kind: "TimeSeriesChart"
-            spec:
-              yAxis:
-                label: "builds"
-              legend:
-                position: "bottom"
-                mode: "list"
-          queries:
-            - kind: "TimeSeriesQuery"
-              spec:
-                plugin:
-                  kind: "PrometheusTimeSeriesQuery"
-                  spec:
-                    query: 'round(sum by (distro) (ado_build_total{namespace="automotive-dev-operator-system"})) or vector(0)'
-                    seriesNameFormat: "{{distro}}"
-      buildsByArch:
-        kind: Panel
-        spec:
-          display:
-            name: "Builds by Architecture"
-          plugin:
-            kind: "TimeSeriesChart"
-            spec:
-              yAxis:
-                label: "builds"
-              legend:
-                position: "bottom"
-                mode: "list"
-          queries:
-            - kind: "TimeSeriesQuery"
-              spec:
-                plugin:
-                  kind: "PrometheusTimeSeriesQuery"
-                  spec:
-                    query: 'round(sum by (arch) (ado_build_total{namespace="automotive-dev-operator-system"})) or vector(0)'
-                    seriesNameFormat: "{{arch}}"
-      flashTotal:
-        kind: Panel
-        spec:
-          display:
-            name: "Flash Operations"
+            name: "Retained Completed Builds"
           plugin:
             kind: "StatChart"
             spec:
@@ -307,12 +442,50 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: 'sum(ado_flash_total{namespace="automotive-dev-operator-system"}) or vector(0)'
-      flashSuccessRate:
+                    query: '(max(sum by (instance) (ado_build_retained{namespace="automotive-dev-operator-system"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) or vector(0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      retainedSuccessRate:
         kind: Panel
         spec:
           display:
-            name: "Flash Success Rate"
+            name: "Retained Build Success Rate"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "percent-decimal"
+                decimalPlaces: 0
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '((max(sum by (instance) (ado_build_retained{namespace="automotive-dev-operator-system",status="success"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) or vector(0)) / (max(sum by (instance) (ado_build_retained{namespace="automotive-dev-operator-system"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) > 0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      totalBuilds:
+        kind: Panel
+        spec:
+          display:
+            name: "Completed: Process Lifetime"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "decimal"
+                decimalPlaces: 0
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(max(sum by (instance) (ado_build_total{namespace="automotive-dev-operator-system"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) or vector(0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      successRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Success Rate: Process Lifetime"
           plugin:
             kind: "StatChart"
             spec:
@@ -334,12 +507,142 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: '(sum(ado_flash_total{namespace="automotive-dev-operator-system",status="success"}) or vector(0)) / clamp_min(sum(ado_flash_total{namespace="automotive-dev-operator-system"}), 1)'
+                    query: '((max(sum by (instance) (ado_build_total{namespace="automotive-dev-operator-system",status="success"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) or vector(0)) / (max(sum by (instance) (ado_build_total{namespace="automotive-dev-operator-system"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) > 0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      buildsByTarget:
+        kind: Panel
+        spec:
+          display:
+            name: "Builds by Target (process lifetime)"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "builds"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'round(max by (target) (sum by (instance, target) (ado_build_total{namespace="automotive-dev-operator-system"} and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} == 1)))) or vector(0)'
+                    seriesNameFormat: "{{target}}"
+      buildsByMode:
+        kind: Panel
+        spec:
+          display:
+            name: "Builds by Mode (process lifetime)"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "builds"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'round(max by (mode) (sum by (instance, mode) (ado_build_total{namespace="automotive-dev-operator-system"} and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} == 1)))) or vector(0)'
+                    seriesNameFormat: "{{mode}}"
+      buildsByDistro:
+        kind: Panel
+        spec:
+          display:
+            name: "Builds by Distro (process lifetime)"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "builds"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'round(max by (distro) (sum by (instance, distro) (ado_build_total{namespace="automotive-dev-operator-system"} and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} == 1)))) or vector(0)'
+                    seriesNameFormat: "{{distro}}"
+      buildsByArch:
+        kind: Panel
+        spec:
+          display:
+            name: "Builds by Architecture (process lifetime)"
+          plugin:
+            kind: "TimeSeriesChart"
+            spec:
+              yAxis:
+                label: "builds"
+              legend:
+                position: "bottom"
+                mode: "list"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: 'round(max by (arch) (sum by (instance, arch) (ado_build_total{namespace="automotive-dev-operator-system"} and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} == 1)))) or vector(0)'
+                    seriesNameFormat: "{{arch}}"
+      flashTotal:
+        kind: Panel
+        spec:
+          display:
+            name: "Flash Operations: Process Lifetime"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "decimal"
+                decimalPlaces: 0
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '(max(sum by (instance) (ado_flash_total{namespace="automotive-dev-operator-system"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) or vector(0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
+      flashSuccessRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Flash Success Rate: Process Lifetime"
+          plugin:
+            kind: "StatChart"
+            spec:
+              calculation: "last-number"
+              format:
+                unit: "percent-decimal"
+                decimalPlaces: 1
+              thresholds:
+                steps:
+                  - value: 0
+                    color: "#e74c3c"
+                  - value: 0.8
+                    color: "#f39c12"
+                  - value: 0.95
+                    color: "#27ae60"
+          queries:
+            - kind: "TimeSeriesQuery"
+              spec:
+                plugin:
+                  kind: "PrometheusTimeSeriesQuery"
+                  spec:
+                    query: '((max(sum by (instance) (ado_flash_total{namespace="automotive-dev-operator-system",status="success"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) or vector(0)) / (max(sum by (instance) (ado_flash_total{namespace="automotive-dev-operator-system"} @ end() and on (namespace, instance) (ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end() == 1))) > 0)) and on() (max(ado_build_metrics_ready{namespace="automotive-dev-operator-system"} @ end()) == 1)'
       flashDuration:
         kind: Panel
         spec:
           display:
-            name: "Flash Duration by Target"
+            name: "Flash Duration by Target: Last 1h"
           plugin:
             kind: "TimeSeriesChart"
             spec:
@@ -354,97 +657,179 @@ spec:
                 plugin:
                   kind: "PrometheusTimeSeriesQuery"
                   spec:
-                    query: '(sum by (target) (rate(ado_flash_duration_seconds_sum{namespace="automotive-dev-operator-system"}[5m])) or vector(0)) / clamp_min(sum by (target) (rate(ado_flash_duration_seconds_count{namespace="automotive-dev-operator-system"}[5m])), 1)'
+                    query: 'sum by (target) (rate(ado_flash_duration_seconds_sum{namespace="automotive-dev-operator-system"}[1h])) / (sum by (target) (rate(ado_flash_duration_seconds_count{namespace="automotive-dev-operator-system"}[1h])) > 0)'
                     seriesNameFormat: "{{target}}"
     layouts:
       - kind: "Grid"
         spec:
           display:
-            title: "Overview"
+            title: "Service Health (now / recent window)"
           items:
             - x: 0
               y: 0
-              width: 8
+              width: 4
               height: 4
               content:
                 $ref: "#/spec/panels/activeBuilds"
+            - x: 4
+              y: 0
+              width: 4
+              height: 4
+              content:
+                $ref: "#/spec/panels/successRate1h"
             - x: 8
               y: 0
-              width: 8
-              height: 4
-              content:
-                $ref: "#/spec/panels/successRate"
-            - x: 16
-              y: 0
-              width: 8
-              height: 4
-              content:
-                $ref: "#/spec/panels/avgDuration"
-      - kind: "Grid"
-        spec:
-          display:
-            title: "Build Details"
-          items:
-            - x: 0
-              y: 0
-              width: 12
-              height: 4
-              content:
-                $ref: "#/spec/panels/totalBuilds"
-            - x: 12
-              y: 0
-              width: 12
+              width: 4
               height: 4
               content:
                 $ref: "#/spec/panels/failedBuilds"
-            - x: 0
-              y: 4
-              width: 24
-              height: 8
+            - x: 12
+              y: 0
+              width: 4
+              height: 4
               content:
-                $ref: "#/spec/panels/buildRate"
+                $ref: "#/spec/panels/lastSuccessAge"
+            - x: 16
+              y: 0
+              width: 4
+              height: 4
+              content:
+                $ref: "#/spec/panels/p95BuildDuration"
+            - x: 20
+              y: 0
+              width: 4
+              height: 4
+              content:
+                $ref: "#/spec/panels/metricsReady"
       - kind: "Grid"
         spec:
           display:
-            title: "Build Duration"
+            title: "Error Budget (SLO 95% build success)"
+          items:
+            - x: 0
+              y: 0
+              width: 4
+              height: 4
+              content:
+                $ref: "#/spec/panels/burnRate1h"
+            - x: 4
+              y: 0
+              width: 4
+              height: 4
+              content:
+                $ref: "#/spec/panels/burnRate6h"
+            - x: 8
+              y: 0
+              width: 4
+              height: 4
+              content:
+                $ref: "#/spec/panels/successRate6h"
+            - x: 12
+              y: 0
+              width: 12
+              height: 4
+              content:
+                $ref: "#/spec/panels/burnTrend"
+      - kind: "Grid"
+        spec:
+          display:
+            title: "Build Activity"
+          items:
+            - x: 0
+              y: 0
+              width: 16
+              height: 8
+              content:
+                $ref: "#/spec/panels/buildRate"
+            - x: 16
+              y: 0
+              width: 8
+              height: 8
+              content:
+                $ref: "#/spec/panels/activeBuildsTrend"
+      - kind: "Grid"
+        spec:
+          display:
+            title: "Reliability (windowed)"
           items:
             - x: 0
               y: 0
               width: 12
               height: 8
               content:
-                $ref: "#/spec/panels/durationByTarget"
+                $ref: "#/spec/panels/failureRateByTarget"
             - x: 12
               y: 0
               width: 12
               height: 8
               content:
-                $ref: "#/spec/panels/phaseDuration"
+                $ref: "#/spec/panels/p95DurationByTarget"
       - kind: "Grid"
         spec:
           display:
-            title: "Build Breakdown"
+            title: "Build Performance (windowed)"
           items:
             - x: 0
               y: 0
+              width: 12
+              height: 8
+              content:
+                $ref: "#/spec/panels/p95PhaseDuration"
+            - x: 12
+              y: 0
+              width: 12
+              height: 8
+              content:
+                $ref: "#/spec/panels/avgDurationByMode"
+      - kind: "Grid"
+        spec:
+          display:
+            title: "Build Totals and Mix"
+          items:
+            - x: 0
+              y: 0
+              width: 6
+              height: 4
+              content:
+                $ref: "#/spec/panels/totalBuilds"
+            - x: 6
+              y: 0
+              width: 6
+              height: 4
+              content:
+                $ref: "#/spec/panels/successRate"
+            - x: 12
+              y: 0
+              width: 6
+              height: 4
+              content:
+                $ref: "#/spec/panels/retainedBuilds"
+            - x: 18
+              y: 0
+              width: 6
+              height: 4
+              content:
+                $ref: "#/spec/panels/retainedSuccessRate"
+            - x: 0
+              y: 4
               width: 12
               height: 8
               content:
                 $ref: "#/spec/panels/buildsByTarget"
             - x: 12
-              y: 0
+              y: 4
               width: 12
               height: 8
               content:
                 $ref: "#/spec/panels/buildsByMode"
             - x: 0
-              y: 8
+              y: 12
               width: 12
               height: 8
               content:
                 $ref: "#/spec/panels/buildsByDistro"
             - x: 12
-              y: 8
+              y: 12
               width: 12
               height: 8
               content:

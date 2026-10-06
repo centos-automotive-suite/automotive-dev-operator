@@ -1,6 +1,8 @@
 package imagebuild
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,15 +11,121 @@ import (
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 )
 
-func gaugeValue(g prometheus.Gauge) float64 {
+func gaugeValue(g prometheus.Metric) float64 {
 	m := &io_prometheus_client.Metric{}
 	if err := g.Write(m); err != nil {
 		return 0
 	}
 	return m.GetGauge().GetValue()
+}
+
+func resetLastBuildSuccessTimestamp(t *testing.T) {
+	t.Helper()
+	previous := lastBuildSuccessTimestamp.Swap(0)
+	t.Cleanup(func() { lastBuildSuccessTimestamp.Store(previous) })
+}
+
+func TestBuildMetricsHandlerLastSuccessTimestamp(t *testing.T) {
+	resetLastBuildSuccessTimestamp(t)
+	handler := newBuildMetricsHandler(prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_active"}), testRetainedGauge(), func(build *automotivev1alpha1.ImageBuild) {
+		recordBuildMetrics(build, nil, buildMetricStatus(build))
+	})
+	completed := metav1.NewTime(time.Unix(100, 0))
+	older := metav1.NewTime(time.Unix(50, 0))
+	later := metav1.NewTime(time.Unix(200, 0))
+	for _, step := range []struct {
+		name   string
+		status string
+		end    *metav1.Time
+		want   float64
+	}{
+		{"failure before success", buildStatusFailure, &later, 0},
+		{"success uses completion time", buildStatusSuccess, &completed, 100},
+		{"older success", buildStatusSuccess, &older, 100},
+		{"failure after success", buildStatusFailure, &later, 100},
+		{"newer success", buildStatusSuccess, &later, 200},
+		{"success without completion time", buildStatusSuccess, nil, 200},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			build := newImageBuild("package", "ebbr", "simg", "arm64", nil, step.end)
+			build.Name = step.name
+			build.Status.Phase = phaseFailed
+			if step.status == buildStatusSuccess {
+				build.Status.Phase = phaseCompleted
+			}
+			handler.OnAdd(build, false)
+			if got := gaugeValue(BuildLastSuccessTimestamp); got != step.want {
+				t.Fatalf("last success timestamp = %v, want %v", got, step.want)
+			}
+		})
+	}
+}
+
+func TestReplayRestoresLastSuccessTimestamp(t *testing.T) {
+	type seedRow struct {
+		phase, previous string
+		completion      *metav1.Time
+	}
+	for _, tc := range []struct {
+		name string
+		want float64
+		rows []seedRow
+	}{
+		{name: "empty"},
+		{name: "no successful completion", rows: []seedRow{
+			{phaseCompleted, "", nil},
+			{phaseFailed, "", timePtr(300)},
+			{phaseBuilding, "", timePtr(400)},
+			{automotivev1alpha1.ImageBuildPhaseExpired, phaseFailed, timePtr(500)},
+		}},
+		{name: "unordered successes", want: 200, rows: []seedRow{
+			{automotivev1alpha1.ImageBuildPhaseExpired, phaseCompleted, timePtr(200)},
+			{phaseCompleted, "", timePtr(100)},
+			{phaseCompleted, "", nil},
+			{phaseFailed, "", timePtr(300)},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetLastBuildSuccessTimestamp(t)
+			var builds []automotivev1alpha1.ImageBuild
+			for _, row := range tc.rows {
+				build := newImageBuild("package", "ebbr", "simg", "arm64", nil, row.completion)
+				build.Status.Phase = row.phase
+				build.Status.PreviousPhase = row.previous
+				builds = append(builds, *build)
+			}
+			replayBuildMetrics(t, builds)
+			if got := gaugeValue(BuildLastSuccessTimestamp); got != tc.want {
+				t.Fatalf("seeded last success timestamp = %v, want %v", got, tc.want)
+			}
+			recordBuildSuccessTimestamp(time.Unix(1000, 0))
+			replayBuildMetrics(t, builds)
+			if got := gaugeValue(BuildLastSuccessTimestamp); got != 1000 {
+				t.Fatalf("startup seeding overwrote newer live completion: %v", got)
+			}
+		})
+	}
+}
+
+func timePtr(unix int64) *metav1.Time {
+	timestamp := metav1.NewTime(time.Unix(unix, 0))
+	return &timestamp
+}
+
+func TestRecordBuildSuccessTimestamp_Concurrent(t *testing.T) {
+	resetLastBuildSuccessTimestamp(t)
+	var workers sync.WaitGroup
+	for unix := int64(1); unix <= 100; unix++ {
+		workers.Go(func() { recordBuildSuccessTimestamp(time.Unix(unix, 0)) })
+	}
+	workers.Wait()
+	if got := gaugeValue(BuildLastSuccessTimestamp); got != 100 {
+		t.Fatalf("concurrent completions recorded %v, want latest timestamp 100", got)
+	}
 }
 
 func TestActiveBuildsHandler(t *testing.T) {
@@ -171,6 +279,29 @@ func TestRecordBuildMetrics_FailureCounter(t *testing.T) {
 	after := counterValue(BuildTotal, labels...)
 	if after-before != 1 {
 		t.Errorf("BuildTotal failure counter increment = %v, want 1", after-before)
+	}
+}
+
+func TestRecordBuildMetrics_DurationWithoutTerminalStart(t *testing.T) {
+	labels := []string{"package", "autosd", "terminal-start-fallback", "simg", "arm64", "success"}
+	beforeCount := histogramCount(BuildDuration, labels...)
+	beforeSum := histogramSum(BuildDuration, labels...)
+
+	start := metav1.NewTime(time.Unix(100, 0))
+	end := metav1.NewTime(time.Unix(280, 0))
+	ib := newImageBuild("package", "terminal-start-fallback", "simg", "arm64", &start, nil)
+	ib.Status.TerminalResult = &automotivev1alpha1.BuildTerminalResult{
+		Phase:       phaseCompleted,
+		CompletedAt: end,
+	}
+
+	recordBuildMetrics(ib, nil, buildStatusSuccess)
+
+	if got := histogramCount(BuildDuration, labels...) - beforeCount; got != 1 {
+		t.Errorf("BuildDuration sample count increment = %v, want 1", got)
+	}
+	if got := histogramSum(BuildDuration, labels...) - beforeSum; got != 180 {
+		t.Errorf("BuildDuration sample sum increment = %v, want 180", got)
 	}
 }
 
@@ -345,7 +476,7 @@ func TestBuildMetricStatus(t *testing.T) {
 	}
 }
 
-func TestSeedMetricsFromCRs(t *testing.T) {
+func TestInitialReplayDoesNotSeedCounters(t *testing.T) {
 	// Use unique label values to avoid interference from other tests
 	buildLabels := []string{"bootc", "fedora", "seed-target", "raw", "arm64", "success"}
 	failLabels := []string{"image", "fedora", "seed-target", "qcow2", "amd64", "failure"}
@@ -432,32 +563,35 @@ func TestSeedMetricsFromCRs(t *testing.T) {
 		},
 	}
 
-	seedMetrics(builds)
+	replayBuildMetrics(t, builds)
 
 	afterBuild := counterValue(BuildTotal, buildLabels...)
-	if afterBuild-beforeBuild != 3 {
-		t.Errorf("BuildTotal(success) delta = %v, want 3 (2 completed + 1 expired-from-completed)", afterBuild-beforeBuild)
+	if afterBuild != beforeBuild {
+		t.Errorf("initial replay changed success counter by %v", afterBuild-beforeBuild)
 	}
 
 	afterFail := counterValue(BuildTotal, failLabels...)
-	if afterFail-beforeFail != 2 {
-		t.Errorf("BuildTotal(failure) delta = %v, want 2 (1 failed + 1 expired-from-failed)", afterFail-beforeFail)
+	if afterFail != beforeFail {
+		t.Errorf("initial replay changed failure counter by %v", afterFail-beforeFail)
 	}
 
 	afterFlash := counterValue(FlashTotal, flashLabels...)
-	if afterFlash-beforeFlash != 1 {
-		t.Errorf("FlashTotal delta = %v, want 1", afterFlash-beforeFlash)
+	if afterFlash != beforeFlash {
+		t.Errorf("initial replay changed flash counter by %v", afterFlash-beforeFlash)
 	}
 }
 
-func TestSeedMetricsDoesNotOverwriteActiveBuilds(t *testing.T) {
-	before := gaugeValue(ActiveBuilds)
-	t.Cleanup(func() { ActiveBuilds.Set(before) })
-	ActiveBuilds.Set(2)
-
-	seedMetrics(nil)
-
-	if got := gaugeValue(ActiveBuilds); got != 2 {
-		t.Fatalf("counter seeding overwrote ActiveBuilds: got %v, want 2", got)
+func replayBuildMetrics(t *testing.T, builds []automotivev1alpha1.ImageBuild) {
+	t.Helper()
+	active := prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_active"})
+	retained := testRetainedGauge()
+	handler := newBuildMetricsHandler(active, retained, func(*automotivev1alpha1.ImageBuild) {
+		t.Error("initial replay must not count a completion")
+	})
+	for i := range builds {
+		build := builds[i].DeepCopy()
+		build.Name = fmt.Sprintf("replayed-%d", i)
+		build.UID = types.UID(build.Name)
+		handler.OnAdd(build, true)
 	}
 }
