@@ -1,0 +1,221 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: automotive-build-from-git
+  labels:
+    app.kubernetes.io/part-of: automotive-dev
+spec:
+  description: >
+    Build an automotive OS image from a manifest stored in a git repository.
+    Uses the Tekton Bundle for task resolution instead of cluster-installed tasks.
+
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL containing the AIB manifest
+    - name: git-revision
+      type: string
+      description: Git revision to checkout (branch, tag, or commit SHA)
+      default: "main"
+    - name: manifest-path
+      type: string
+      description: >
+        Path within the repo to the manifest directory.
+        The build searches for *.mpp.yml or *.aib.yml files in this directory.
+      default: "."
+
+    - name: task-bundle-ref
+      type: string
+      description: >
+        OCI reference to the signed Tekton Bundle containing automotive-dev tasks.
+        Example: quay.io/rh-sdv-cloud/automotive-dev-operator-tekton-tasks:0.1.0
+
+    - name: distro
+      type: string
+      default: "autosd"
+    - name: target
+      type: string
+      default: "qemu"
+    - name: arch
+      type: string
+      default: "aarch64"
+    - name: mode
+      type: string
+      default: "package"
+      description: "Build mode: package, image, bootc, or disk"
+    - name: export-format
+      type: string
+      default: "qcow2"
+    - name: compression
+      type: string
+      default: "gzip"
+    - name: storage-class
+      type: string
+      default: ""
+      description: Storage class for build PVC (uses cluster default if empty)
+
+    - name: container-push
+      type: string
+      default: ""
+      description: Registry URL to push bootc container image
+    - name: build-disk-image
+      type: string
+      default: "false"
+    - name: export-oci
+      type: string
+      default: ""
+      description: Registry URL to push disk image as OCI artifact
+    - name: secret-ref
+      type: string
+      default: ""
+      description: Secret name for registry credentials (used by push-artifact task)
+
+  workspaces:
+    - name: shared-workspace
+      description: PVC workspace shared across pipeline tasks
+    - name: registry-auth
+      description: Registry auth for pushing artifacts (optional)
+      optional: true
+
+  tasks:
+    - name: fetch-manifest
+      taskSpec:
+        params:
+          - name: git-url
+            type: string
+          - name: git-revision
+            type: string
+          - name: manifest-path
+            type: string
+        workspaces:
+          - name: shared
+            description: Shared workspace — manifest files go to root for build task access
+            mountPath: /workspace/shared
+        steps:
+          - name: clone-and-copy
+            image: alpine/git:latest
+            script: |
+              #!/bin/sh
+              set -e
+              CLONE_DIR=$(mktemp -d)
+              git clone --no-checkout "$(params.git-url)" "$CLONE_DIR"
+              git -C "$CLONE_DIR" checkout --detach "$(params.git-revision)" || \
+                git -C "$CLONE_DIR" checkout --detach "origin/$(params.git-revision)"
+
+              SRC="$CLONE_DIR/$(params.manifest-path)"
+              DEST="/workspace/shared"
+
+              CLONE_ROOT="$(realpath "$CLONE_DIR")"
+              SRC="$(realpath "$SRC")"
+              case "$SRC" in
+                "$CLONE_ROOT"|"$CLONE_ROOT"/*) ;;
+                *)
+                  echo "Error: manifest-path must stay within the cloned repo"
+                  exit 1
+                  ;;
+              esac
+
+              if [ ! -d "$SRC" ]; then
+                echo "Error: manifest-path '$(params.manifest-path)' not found in repo"
+                ls -la "$CLONE_DIR"/
+                exit 1
+              fi
+
+              echo "Copying manifest files from $SRC to $DEST"
+              cp -av "$SRC"/. "$DEST"/
+              echo "Workspace contents:"
+              ls -laR "$DEST"
+              rm -rf "$CLONE_DIR"
+      params:
+        - name: git-url
+          value: "$(params.git-url)"
+        - name: git-revision
+          value: "$(params.git-revision)"
+        - name: manifest-path
+          value: "$(params.manifest-path)"
+      workspaces:
+        - name: shared
+          workspace: shared-workspace
+
+    - name: build-image
+      runAfter: [fetch-manifest]
+      taskRef:
+        resolver: bundles
+        params:
+          - name: bundle
+            value: "$(params.task-bundle-ref)"
+          - name: name
+            value: build-automotive-image
+          - name: kind
+            value: task
+      params:
+        - name: target-architecture
+          value: "$(params.arch)"
+        - name: distro
+          value: "$(params.distro)"
+        - name: target
+          value: "$(params.target)"
+        - name: mode
+          value: "$(params.mode)"
+        - name: export-format
+          value: "$(params.export-format)"
+        - name: compression
+          value: "$(params.compression)"
+        - name: container-push
+          value: "$(params.container-push)"
+        - name: build-disk-image
+          value: "$(params.build-disk-image)"
+        - name: export-oci
+          value: "$(params.export-oci)"
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+        - name: manifest-config-workspace
+          workspace: shared-workspace
+        - name: registry-auth
+          workspace: registry-auth
+
+    - name: push-disk-artifact
+      taskRef:
+        resolver: bundles
+        params:
+          - name: bundle
+            value: "$(params.task-bundle-ref)"
+          - name: name
+            value: push-artifact-registry
+          - name: kind
+            value: task
+      params:
+        - name: distro
+          value: "$(params.distro)"
+        - name: target
+          value: "$(params.target)"
+        - name: arch
+          value: "$(params.arch)"
+        - name: export-format
+          value: "$(params.export-format)"
+        - name: repository-url
+          value: "$(params.export-oci)"
+        - name: secret-ref
+          value: "$(params.secret-ref)"
+        - name: artifact-filename
+          value: "$(tasks.build-image.results.artifact-filename)"
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+      runAfter: [build-image]
+      when:
+        - input: "$(params.export-oci)"
+          operator: notin
+          values: ["", "null"]
+        - input: "$(params.secret-ref)"
+          operator: notin
+          values: ["", "null"]
+
+  results:
+    - name: artifact-filename
+      description: Built artifact filename
+      value: "$(tasks.build-image.results.artifact-filename)"
+    - name: build-timing
+      description: JSON timing breakdown of build phases
+      value: "$(tasks.build-image.results.build-timing)"
