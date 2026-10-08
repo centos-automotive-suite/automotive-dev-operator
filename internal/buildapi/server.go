@@ -756,11 +756,23 @@ func (a *APIServer) setupInternalRegistryBuild(
 	return secretName, secretName, nil
 }
 
-// buildExportSpec creates ExportSpec configuration from build request
+// errWorkspaceLookup is returned by resolveExtraRepos when a workspace lookup
+// fails for a reason other than NotFound (API-server/RBAC errors). It is mapped
+// to a 500 by applyExtraRepos, and its message carries no raw error detail so
+// nothing about the cluster is leaked to the client.
+var errWorkspaceLookup = errors.New("failed to look up workspace")
+
+// podExecForExtraRepos is the exec entry point used by resolveExtraRepos.
+// It is a package variable so tests can observe/stub exec calls without a
+// live cluster.
+var podExecForExtraRepos = podExec
+
 // resolveExtraRepos processes --extra-repo flags (workspace:path pairs), starts HTTP
 // servers in the workspace pods, and injects the repos into the image and build
-// depsolver CustomDefs.
-func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, req *buildcontract.BuildRequest) error {
+// depsolver CustomDefs. Every referenced workspace is validated (ownership,
+// running, pod IP) before any server is started, so an unauthorized or invalid
+// entry rejects the whole request before any exec occurs.
+func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, requester string, req *buildcontract.BuildRequest) error {
 	if len(req.ExtraRepos) == 0 {
 		return nil
 	}
@@ -772,20 +784,46 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 		ID      string `json:"id"`
 		BaseURL string `json:"baseurl"`
 	}
-	repos := make([]repoEntry, 0, len(req.ExtraRepos))
 
+	// resolvedRepo carries everything needed to start a server, gathered in a
+	// validation pass that completes before any side effects run.
+	type resolvedRepo struct {
+		wsName   string
+		podName  string
+		podIP    string
+		repoPath string
+		port     int
+	}
+	resolved := make([]resolvedRepo, 0, len(req.ExtraRepos))
+
+	// validate every entry (ownership, running, pod IP). No side
+	// effects here, so a later unauthorized/invalid entry rejects the request
+	// before any server is started.
 	for i, entry := range req.ExtraRepos {
 		parts := strings.SplitN(entry, ":", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return fmt.Errorf("invalid --extra-repo %q: must be workspace-name:/path", entry)
 		}
 		wsName, repoPath := parts[0], parts[1]
-		port := basePort + i
 
-		// Look up the workspace pod
+		// Look up the workspace
 		ws := &automotivev1alpha1.Workspace{}
 		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: wsName}, ws); err != nil {
-			return fmt.Errorf("workspace %q not found: %w", wsName, err)
+			if k8serrors.IsNotFound(err) {
+				return fmt.Errorf("workspace %q not found", wsName)
+			}
+			// Log the real cause server-side; return a sentinel with no raw
+			// error detail so applyExtraRepos can map it to a 500 without
+			// leaking cluster internals to the client.
+			a.log.Error(err, "failed to look up workspace for extra-repo", "workspace", wsName)
+			return fmt.Errorf("%w %q", errWorkspaceLookup, wsName)
+		}
+		// Ownership check: a build may only reference extra repos from
+		// workspaces owned by the requester. On mismatch, return the exact
+		// same error as the missing-workspace case above so a caller cannot
+		// tell whether the name exists.
+		if ws.Spec.Owner != requester {
+			return fmt.Errorf("workspace %q not found", wsName)
 		}
 		if ws.Status.Phase != phaseRunning {
 			return fmt.Errorf("workspace %q is not running (phase: %s)", wsName, ws.Status.Phase)
@@ -800,20 +838,34 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 			return fmt.Errorf("workspace pod %q has no IP", ws.Status.PodName)
 		}
 
+		resolved = append(resolved, resolvedRepo{
+			wsName:   wsName,
+			podName:  ws.Status.PodName,
+			podIP:    podIP,
+			repoPath: repoPath,
+			port:     basePort + i,
+		})
+	}
+
+	// start HTTP servers and build the repo list now that every entry
+	// has passed validation. Note this is not transactional: if an exec fails
+	// partway through, servers started for earlier entries keep running.
+	repos := make([]repoEntry, 0, len(resolved))
+	for _, r := range resolved {
 		// Start HTTP server in the workspace (background, fire-and-forget).
 		// Redirect shell's own FDs first so runc exec doesn't block waiting for SPDY pipes.
 		cmd := []string{"/bin/sh", "-c",
-			fmt.Sprintf("exec 0</dev/null 1>/dev/null 2>/dev/null; cd %s && python3 -m http.server %d &", shellQuote(repoPath), port)}
-		if err := podExec(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
-			return fmt.Errorf("starting HTTP server in workspace %q: %w", wsName, err)
+			fmt.Sprintf("exec 0</dev/null 1>/dev/null 2>/dev/null; cd %s && python3 -m http.server %d &", shellQuote(r.repoPath), r.port)}
+		if err := podExecForExtraRepos(ctx, restCfg, namespace, r.podName, workspaceContainerName, cmd, io.Discard); err != nil {
+			return fmt.Errorf("starting HTTP server in workspace %q: %w", r.wsName, err)
 		}
 
-		repoURL := fmt.Sprintf("http://%s:%d", podIP, port)
+		repoURL := fmt.Sprintf("http://%s:%d", r.podIP, r.port)
 		repos = append(repos, repoEntry{
-			ID:      fmt.Sprintf("workspace-%s", wsName),
+			ID:      fmt.Sprintf("workspace-%s", r.wsName),
 			BaseURL: repoURL,
 		})
-		a.log.Info("Extra repo configured", "workspace", wsName, "url", repoURL)
+		a.log.Info("Extra repo configured", "workspace", r.wsName, "url", repoURL)
 	}
 
 	reposJSON, err := json.Marshal(repos)
@@ -1210,15 +1262,20 @@ func (a *APIServer) validateManifestSchema(c *gin.Context, span trace.Span, req 
 	return true
 }
 
-func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *buildcontract.BuildRequest) bool {
+func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, requester string, req *buildcontract.BuildRequest) bool {
 	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		spanError(span, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
 		return false
 	}
-	if err := a.resolveExtraRepos(ctx, k8sClient, restCfg, req); err != nil {
+	if err := a.resolveExtraRepos(ctx, k8sClient, restCfg, requester, req); err != nil {
 		spanError(span, err)
+		if errors.Is(err, errWorkspaceLookup) {
+			// Server-side failure (API-server/RBAC): 500, generic message.
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve extra repositories"})
+			return false
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return false
 	}
@@ -1227,9 +1284,9 @@ func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span tr
 
 // applyAllExtraRepos resolves workspace extra repos and OCI RPM repo images,
 // merging both into a single extra_repos CustomDef entry.
-func (a *APIServer) applyAllExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, req *buildcontract.BuildRequest) bool {
+func (a *APIServer) applyAllExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, requester string, req *buildcontract.BuildRequest) bool {
 	if len(req.ExtraRepos) > 0 {
-		if !a.applyExtraRepos(ctx, c, span, k8sClient, req) {
+		if !a.applyExtraRepos(ctx, c, span, k8sClient, requester, req) {
 			return false
 		}
 	}
@@ -1301,7 +1358,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 
 	// Resolve workspace extra repos and OCI RPM repo images.
 	// OCI resolution runs second so it can merge into the same extra_repos array.
-	if !a.applyAllExtraRepos(ctx, c, span, k8sClient, &req) {
+	if !a.applyAllExtraRepos(ctx, c, span, k8sClient, requestedBy, &req) {
 		return
 	}
 
