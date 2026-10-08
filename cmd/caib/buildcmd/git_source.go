@@ -22,8 +22,12 @@ func (h *Handler) readBuildSource(manifestPath string) ([]byte, *api.GitSource, 
 	if h.opts.Build.Lockfile != "" {
 		return nil, nil, fmt.Errorf("--lockfile cannot be used with --git-url; commit %s beside the manifest or use --git-lockfile for another committed file", path.Base(defaultLockfilePath(manifestPath)))
 	}
-	if h.opts.Build.Workspace != "" || h.opts.Build.LocalRepo != "" || (len(h.opts.Build.ExtraRepos) != 0) {
-		return nil, nil, fmt.Errorf("git builds do not support workspace or extra repository overlays")
+	workspaceRepos, _, _, err := resolveRepoFlags(h.opts.Build.ExtraRepos, h.opts.Build.LocalRepo)
+	if err != nil {
+		return nil, nil, err
+	}
+	if h.opts.Build.Workspace != "" || len(workspaceRepos) > 0 {
+		return nil, nil, fmt.Errorf("git builds do not support workspace or workspace repository overlays")
 	}
 	if gitLockfile != "" {
 		gitLockfile = path.Clean(gitLockfile)

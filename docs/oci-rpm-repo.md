@@ -94,6 +94,22 @@ caib image build manifest.aib.yml \
 
 Note: `--local-repo` does not need the `oci:` prefix.
 
+### Combining with a Git manifest
+
+Use a Git source for the manifest and an OCI image for application RPMs:
+
+```bash
+caib image build images/manifest.aib.yml \
+  --git-url https://git.example.com/vehicle/os.git \
+  --git-ref main \
+  --extra-repo oci:quay.io/myorg/my-rpms:latest \
+  --push quay.io/myorg/automotive-os:v1
+```
+
+This also works with `build-dev`. Use `--local-repo` instead of
+`--extra-repo oci:` when the OCI RPMs should take precedence over network repos.
+Git builds still cannot use workspace-served repositories or local file uploads.
+
 ### Combining with workspace repos
 
 OCI repos can be combined with workspace-served repos in the same build:

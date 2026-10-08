@@ -89,17 +89,26 @@ func TestValidateGitCredentialsSecret(t *testing.T) {
 }
 
 func TestValidateGitSourceSpec(t *testing.T) {
-	spec := &ImageBuildSpec{AIB: &AIBSpec{GitSource: &GitSource{URL: "https://git.example.com/os.git", ManifestPath: "demo.aib.yml"}, Mode: "package"}}
-	if err := ValidateGitSourceSpec(spec); err != nil {
-		t.Fatal(err)
-	}
-	spec.BuildCachePVC = "cache"
-	if err := ValidateGitSourceSpec(spec); err == nil {
-		t.Fatal("accepted a cache PVC with Git source")
-	}
-	spec.BuildCachePVC = ""
-	spec.AIB.OCIRepoImages = []string{"quay.io/example/repo:latest"}
-	if err := ValidateGitSourceSpec(spec); err == nil {
-		t.Fatal("accepted an OCI repository overlay with Git source")
+	for _, tt := range []struct {
+		name    string
+		mutate  func(*ImageBuildSpec)
+		invalid bool
+	}{
+		{"git", func(s *ImageBuildSpec) {}, false},
+		{"OCI repository", func(s *ImageBuildSpec) { s.AIB.OCIRepoImages = []string{"quay.io/example/repo:latest"} }, false},
+		{"cache PVC", func(s *ImageBuildSpec) { s.BuildCachePVC = "cache" }, true},
+		{"workspace", func(s *ImageBuildSpec) { s.Workspace = "dev" }, true},
+		{"manifest", func(s *ImageBuildSpec) { s.AIB.Manifest = "name: demo" }, true},
+		{"lockfile", func(s *ImageBuildSpec) { s.AIB.Lockfile = `{"version":1}` }, true},
+		{"uploads", func(s *ImageBuildSpec) { s.AIB.InputFilesServer = true }, true},
+		{"disk", func(s *ImageBuildSpec) { s.AIB.Mode = "disk" }, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &ImageBuildSpec{AIB: &AIBSpec{GitSource: &GitSource{URL: "https://git.example.com/os.git", ManifestPath: "demo.aib.yml"}, Mode: "package"}}
+			tt.mutate(spec)
+			if err := ValidateGitSourceSpec(spec); (err != nil) != tt.invalid {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }

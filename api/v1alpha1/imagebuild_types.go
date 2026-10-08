@@ -169,7 +169,7 @@ type FlashSpec struct {
 
 // AIBSpec defines the automotive-image-builder configuration
 // +kubebuilder:validation:XValidation:rule="(has(self.manifest) ? bytes(self.manifest).size() : 0) + (has(self.lockfile) ? bytes(self.lockfile).size() : 0) <= 921600",message="manifest and lockfile must not exceed 921600 bytes combined"
-// +kubebuilder:validation:XValidation:rule="!has(self.gitSource) || ((!has(self.manifest) || bytes(self.manifest).size() == 0) && (!has(self.lockfile) || bytes(self.lockfile).size() == 0) && (!has(self.mode) || self.mode != 'disk') && (!has(self.inputFilesServer) || !self.inputFilesServer) && (!has(self.ociRepoImages) || size(self.ociRepoImages) == 0))",message="Git sources cannot be combined with inline manifest/lockfile, disk mode, uploads, or OCI repository overlays"
+// +kubebuilder:validation:XValidation:rule="!has(self.gitSource) || ((!has(self.manifest) || bytes(self.manifest).size() == 0) && (!has(self.lockfile) || bytes(self.lockfile).size() == 0) && (!has(self.mode) || self.mode != 'disk') && (!has(self.inputFilesServer) || !self.inputFilesServer))",message="Git sources cannot be combined with inline manifest/lockfile, disk mode, or uploads"
 type AIBSpec struct {
 	// GitSource supplies the manifest and files instead of inline content.
 	// +optional

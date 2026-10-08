@@ -101,8 +101,8 @@ func ValidateGitSourceSpec(spec *ImageBuildSpec) error {
 	if err := ValidateGitSource(spec.GetGitSource()); err != nil {
 		return err
 	}
-	if spec.GetMode() == "disk" || spec.GetManifest() != "" || spec.GetLockfile() != "" || spec.GetInputFilesServer() || spec.Workspace != "" || spec.BuildCachePVC != "" || len(spec.GetOCIRepoImages()) > 0 {
-		return fmt.Errorf("git source cannot be combined with disk mode, inline inputs, uploads, workspace, cache PVC, or OCI repository overlays")
+	if spec.GetMode() == "disk" || spec.GetManifest() != "" || spec.GetLockfile() != "" || spec.GetInputFilesServer() || spec.Workspace != "" || spec.BuildCachePVC != "" {
+		return fmt.Errorf("git source cannot be combined with disk mode, inline inputs, uploads, workspace, or cache PVC")
 	}
 	return nil
 }

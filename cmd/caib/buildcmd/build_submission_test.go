@@ -28,7 +28,7 @@ func TestManifestBuildSubmission(t *testing.T) {
 	s3DefaultsFn = func() (*config.S3Config, error) { return nil, nil }
 	t.Cleanup(func() { s3DefaultsFn = originalS3Defaults })
 	for _, development := range []bool{false, true} {
-		for _, source := range []string{"local defaults", "local flags", "git defaults", "git flags"} {
+		for _, source := range []string{"local defaults", "local flags", "git defaults", "git flags", "git OCI repo", "git local repo"} {
 			name := "bootc/" + source
 			if development {
 				name = "development/" + source
@@ -68,6 +68,12 @@ func TestManifestBuildSubmission(t *testing.T) {
 					opts.Build.GitURL, opts.Build.GitRef, opts.Build.GitLockfile, opts.Build.Lockfile = "https://git.example/os.git", "main", "input.lock", ""
 					manifestPath = filepath.Base(manifestPath)
 				}
+				if source == "git OCI repo" {
+					opts.Build.ExtraRepos = []string{"oci:quay.io/example/rpms:v1"}
+				}
+				if source == "git local repo" {
+					opts.Build.LocalRepo = "quay.io/example/rpms:v1"
+				}
 				cmd := &cobra.Command{}
 				cmd.Flags().StringVar(&opts.Build.Target, "target", "qemu", "")
 				cmd.Flags().StringVar(&opts.Build.Architecture, "arch", "amd64", "")
@@ -105,6 +111,11 @@ func TestManifestBuildSubmission(t *testing.T) {
 				}
 				assertManifestSource(t, req, git, explicit, fixture.uploaded, lockfile)
 				assertManifestExports(t, req, opts, clientConfig, callbackSecret)
+				if source == "git OCI repo" || source == "git local repo" {
+					if !reflect.DeepEqual(req.OCIRepoImages, []string{"quay.io/example/rpms:v1"}) || req.LocalRepo != (source == "git local repo") {
+						t.Fatalf("OCI repository options lost: %+v", req)
+					}
+				}
 
 			})
 		}

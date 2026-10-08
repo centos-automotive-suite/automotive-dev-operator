@@ -134,6 +134,41 @@ func TestNewPipelineRunInputs(t *testing.T) {
 	}
 }
 
+func TestGitSourcePipelineWithOCIRepository(t *testing.T) {
+	build := planTestBuild()
+	build.Spec.AIB.GitSource = &automotivev1alpha1.GitSource{
+		URL: "https://git.example.com/os.git", ManifestPath: "images/demo.aib.yml",
+	}
+	build.Spec.AIB.OCIRepoImages = []string{"quay.io/example/rpms:v1"}
+	build.Spec.AIB.CustomDefs = []string{`extra_repos=[{"id":"oci-repo","baseurl":"file:///extra-repos/oci-repo"}]`}
+	build.Status.PVCName = "git-checkout"
+	if err := automotivev1alpha1.ValidateGitSourceSpec(&build.Spec); err != nil {
+		t.Fatal(err)
+	}
+	run, err := newPipelineRun(pipelineRunInputs{
+		build: build, operatorConfig: &automotivev1alpha1.OperatorConfig{}, manifestConfigMap: "manifest",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := run.Spec.Workspaces[0]
+	if shared.PersistentVolumeClaim == nil || shared.PersistentVolumeClaim.ClaimName != "git-checkout" {
+		t.Fatalf("Git checkout PVC not used: %+v", shared)
+	}
+	if got := planParamValues(run)["custom-defines"]; got != build.Spec.AIB.CustomDefs[0] {
+		t.Fatalf("OCI repository definition = %q", got)
+	}
+	for _, volume := range run.Spec.TaskRunTemplate.PodTemplate.Volumes {
+		if volume.Name == tasks.OCIRepoVolumeName {
+			if volume.Image == nil || volume.Image.Reference != build.Spec.AIB.OCIRepoImages[0] {
+				t.Fatalf("OCI repository volume = %+v", volume)
+			}
+			return
+		}
+	}
+	t.Fatal("OCI repository volume missing")
+}
+
 func TestNewPipelineRunBundleAndFlash(t *testing.T) {
 	build := planTestBuild()
 	build.Spec.AIB.Target = "board"

@@ -43,6 +43,35 @@ func TestGitLockfileRequiresGitURL(t *testing.T) {
 	}
 }
 
+func TestReadGitBuildSourceRepositories(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		extra     []string
+		local     string
+		workspace string
+		invalid   bool
+	}{
+		{name: "OCI", extra: []string{"oci:quay.io/example/rpms:v1"}},
+		{name: "local OCI", local: "quay.io/example/rpms:v1"},
+		{name: "workspace", workspace: "dev", invalid: true},
+		{name: "workspace repo", extra: []string{"dev:/rpms"}, invalid: true},
+		{name: "mixed repos", extra: []string{"oci:quay.io/example/rpms:v1", "dev:/rpms"}, invalid: true},
+		{name: "multiple OCI", extra: []string{"oci:quay.io/example/rpms:v1", "oci:quay.io/example/rpms:v2"}, invalid: true},
+		{name: "conflicting OCI flags", extra: []string{"oci:quay.io/example/rpms:v1"}, local: "quay.io/example/rpms:v2", invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewHandler(Options{Build: &commandopts.Build{
+				GitURL: "https://git.example.com/os.git", ExtraRepos: tt.extra,
+				LocalRepo: tt.local, Workspace: tt.workspace,
+			}})
+			_, _, err := h.readBuildSource("images/demo.aib.yml")
+			if (err != nil) != tt.invalid {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestReadLocalBuildSource(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "demo.aib.yml")
 	if err := os.WriteFile(p, []byte("name: demo\n"), 0600); err != nil {

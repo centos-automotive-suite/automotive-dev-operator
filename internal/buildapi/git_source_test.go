@@ -7,6 +7,7 @@ import (
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -30,6 +31,12 @@ func TestGitSourceRequest(t *testing.T) {
 		invalid bool
 	}{
 		{"git", func(r *buildcontract.BuildRequest) {}, false},
+		{"OCI repository", func(r *buildcontract.BuildRequest) { r.OCIRepoImages = []string{"quay.io/example/rpms:v1"} }, false},
+		{"local OCI repository", func(r *buildcontract.BuildRequest) {
+			r.OCIRepoImages = []string{"quay.io/example/rpms:v1"}
+			r.LocalRepo = true
+		}, false},
+		{"workspace repository", func(r *buildcontract.BuildRequest) { r.ExtraRepos = []string{"dev:/rpms"} }, true},
 		{"inline manifest", func(r *buildcontract.BuildRequest) { r.Manifest = "name: demo" }, true},
 		{"local lockfile", func(r *buildcontract.BuildRequest) { r.Lockfile = `{"version":1}` }, true},
 		{"upload", func(r *buildcontract.BuildRequest) { r.HasLocalFiles = true }, true},
@@ -57,6 +64,37 @@ func TestGitSourceDefaultsDeferred(t *testing.T) {
 	r.Target = " "
 	if err := applyBuildDefaults(&r); err == nil {
 		t.Fatal("explicit whitespace target accepted")
+	}
+}
+
+func TestGitSourceOCIRepositorySpec(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		req := &buildcontract.BuildRequest{
+			Name:          "git-oci-build",
+			GitSource:     &api.GitSource{URL: "https://git.example.com/os.git", ManifestPath: "images/demo.aib.yml"},
+			OCIRepoImages: []string{"quay.io/example/rpms:v1"}, LocalRepo: local,
+		}
+		if err := validateBuildRequest(req); err != nil {
+			t.Fatal(err)
+		}
+		if err := resolveOCIRepoImages(req); err != nil {
+			t.Fatal(err)
+		}
+		spec := api.ImageBuildSpec{AIB: buildAIBSpec(req, "", "", false)}
+		if err := api.ValidateGitSourceSpec(&spec); err != nil {
+			t.Fatal(err)
+		}
+		if spec.GetGitSource() == nil || spec.GetGitSource().ManifestPath != req.GitSource.ManifestPath ||
+			len(spec.GetOCIRepoImages()) != 1 || spec.GetOCIRepoImages()[0] != req.OCIRepoImages[0] {
+			t.Fatalf("Git or OCI input lost: %+v", spec.AIB)
+		}
+		repos := parseTestExtraRepos(t, spec.GetCustomDefs())
+		if len(repos) != 1 || repos[0].BaseURL != "file://"+tasks.OCIRepoMountPath {
+			t.Fatalf("OCI repository definition lost: %+v", repos)
+		}
+		if local && (repos[0].Priority == nil || *repos[0].Priority != 1) {
+			t.Fatalf("local repository priority lost: %+v", repos[0])
+		}
 	}
 }
 

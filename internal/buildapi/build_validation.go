@@ -103,8 +103,8 @@ func validateGitSourceRequest(req *buildcontract.BuildRequest) error {
 	if err := automotivev1alpha1.ValidateGitSourceSpec(spec); err != nil {
 		return err
 	}
-	if len(req.ExtraRepos) > 0 || req.LocalRepo {
-		return fmt.Errorf("git source cannot be combined with extra repository overlays")
+	if len(req.ExtraRepos) > 0 {
+		return fmt.Errorf("git source cannot be combined with workspace repository overlays")
 	}
 	return nil
 }
