@@ -837,6 +837,11 @@ func (in *ImageBuildStatus) DeepCopyInto(out *ImageBuildStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.OCIRepoImagesUsed != nil {
+		in, out := &in.OCIRepoImagesUsed, &out.OCIRepoImagesUsed
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.ExpiresAt != nil {
 		in, out := &in.ExpiresAt, &out.ExpiresAt
 		*out = (*in).DeepCopy()

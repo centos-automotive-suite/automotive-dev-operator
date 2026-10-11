@@ -28,6 +28,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
@@ -884,10 +885,10 @@ func appendWorkspaceRepoCustomDefs(req *buildcontract.BuildRequest, reposJSON []
 	)
 }
 
-// resolveOCIRepoImages validates the OCI repo image ref and injects a file:// extra_repos
+// resolveOCIRepoImages pins the OCI repo image ref and injects a file:// extra_repos
 // entry into CustomDefs. If workspace extra_repos already exist in CustomDefs, the
 // OCI entry is merged into the same JSON array.
-func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
+func resolveOCIRepoImages(ctx context.Context, req *buildcontract.BuildRequest, opts ...remote.Option) error {
 	if len(req.OCIRepoImages) == 0 {
 		return nil
 	}
@@ -904,6 +905,20 @@ func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
 	ref := strings.TrimSpace(req.OCIRepoImages[0])
 	if ref == "" {
 		return fmt.Errorf("OCI repo image ref is empty")
+	}
+	imageRef, err := name.ParseReference(ref)
+	if err != nil {
+		return fmt.Errorf("invalid OCI repo image ref %q: %w", ref, err)
+	}
+	pinnedRef := imageRef.Name()
+	if _, pinned := imageRef.(name.Digest); !pinned {
+		options := append([]remote.Option{remote.WithAuthFromKeychain(authn.DefaultKeychain)}, opts...)
+		options = append(options, remote.WithContext(ctx))
+		descriptor, err := remote.Get(imageRef, options...)
+		if err != nil {
+			return fmt.Errorf("resolving OCI repo image %q: %w", ref, err)
+		}
+		pinnedRef = imageRef.Context().Digest(descriptor.Digest.String()).Name()
 	}
 	entry := repoEntry{
 		ID:      tasks.OCIRepoVolumeName,
@@ -948,6 +963,7 @@ func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
 		req.CustomDefs = append(req.CustomDefs, prefix+string(reposJSON))
 	}
 
+	req.OCIRepoImages[0] = pinnedRef
 	return nil
 }
 
@@ -1290,7 +1306,24 @@ func (a *APIServer) applyAllExtraRepos(ctx context.Context, c *gin.Context, span
 			return false
 		}
 	}
-	if err := resolveOCIRepoImages(req); err != nil {
+	var opts []remote.Option
+	if len(req.OCIRepoImages) == 1 && !strings.Contains(req.OCIRepoImages[0], "@") {
+		sa := &corev1.ServiceAccount{}
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: automotivev1alpha1.BuildServiceAccountName, Namespace: resolveNamespace()}, sa)
+		if err != nil && !k8serrors.IsNotFound(err) {
+			spanError(span, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read build service account"})
+			return false
+		}
+		keychain, err := bundleverify.KeychainFromPullSecrets(ctx, k8sClient, resolveNamespace(), sa.ImagePullSecrets)
+		if err != nil {
+			spanError(span, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load build image pull credentials"})
+			return false
+		}
+		opts = append(opts, remote.WithAuthFromKeychain(keychain))
+	}
+	if err := resolveOCIRepoImages(ctx, req, opts...); err != nil {
 		spanError(span, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return false

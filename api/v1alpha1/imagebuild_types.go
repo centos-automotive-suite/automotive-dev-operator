@@ -391,6 +391,10 @@ type ImageBuildStatus struct {
 	// +optional
 	BuilderImageUsed string `json:"builderImageUsed,omitempty"`
 
+	// OCIRepoImagesUsed contains the digest-pinned RPM repository images mounted for the build.
+	// +optional
+	OCIRepoImagesUsed []string `json:"ociRepoImagesUsed,omitempty"`
+
 	// LeaseID is the Jumpstarter lease ID acquired during flash
 	// +optional
 	LeaseID string `json:"leaseId,omitempty"`
