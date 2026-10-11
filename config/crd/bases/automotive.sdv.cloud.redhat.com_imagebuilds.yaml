@@ -371,6 +371,11 @@ spec:
             x-kubernetes-validations:
             - message: reproducible builds require secureBuild to be true
               rule: '!has(self.reproducible) || !self.reproducible || self.secureBuild'
+            - message: 'secure builds do not support OCI repository images: Hermeto
+                requires HTTP(S) RPM URLs'
+              rule: '!has(self.secureBuild) || !self.secureBuild || !has(self.aib)
+                || !has(self.aib.ociRepoImages) || size(self.aib.ociRepoImages) ==
+                0'
             - message: secretRef is required when export.disk.oci is set (unless useServiceAccountAuth
                 is true)
               rule: '!(has(self.export) && has(self.export.disk) && has(self.export.disk.oci)
@@ -540,6 +545,13 @@ spec:
                   by the controller.
                 format: int64
                 type: integer
+              ociRepoImagesUsed:
+                description: |-
+                  OCIRepoImagesUsed contains the RPM repository references used for the build.
+                  Node-reported image references replace the spec references when available.
+                items:
+                  type: string
+                type: array
               phase:
                 description: Phase represents the current phase of the build
                 enum:

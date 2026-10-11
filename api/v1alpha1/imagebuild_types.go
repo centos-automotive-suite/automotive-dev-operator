@@ -48,6 +48,7 @@ func IsTerminalBuildPhase(phase string) bool {
 // ImageBuildSpec defines the desired state of ImageBuild
 // +kubebuilder:printcolumn:name="StorageClass",type=string,JSONPath=`.spec.storageClass`
 // +kubebuilder:validation:XValidation:rule="!has(self.reproducible) || !self.reproducible || self.secureBuild",message="reproducible builds require secureBuild to be true"
+// +kubebuilder:validation:XValidation:rule="!has(self.secureBuild) || !self.secureBuild || !has(self.aib) || !has(self.aib.ociRepoImages) || size(self.aib.ociRepoImages) == 0",message="secure builds do not support OCI repository images: Hermeto requires HTTP(S) RPM URLs"
 // +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.disk) && has(self.export.disk.oci) && size(self.export.disk.oci) > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)",message="secretRef is required when export.disk.oci is set (unless useServiceAccountAuth is true)"
 // +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.container) && size(self.export.container) > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)",message="secretRef is required when export.container is set (unless useServiceAccountAuth is true)"
 // +kubebuilder:validation:XValidation:rule="!has(self.aib) || !has(self.aib.gitSource) || ((!has(self.workspace) || size(self.workspace) == 0) && (!has(self.buildCachePVC) || size(self.buildCachePVC) == 0))",message="Git sources cannot be combined with workspace or build cache PVC"
@@ -390,6 +391,11 @@ type ImageBuildStatus struct {
 	// This is particularly useful for bootc builds where the builder may be auto-generated
 	// +optional
 	BuilderImageUsed string `json:"builderImageUsed,omitempty"`
+
+	// OCIRepoImagesUsed contains the RPM repository references used for the build.
+	// Node-reported image references replace the spec references when available.
+	// +optional
+	OCIRepoImagesUsed []string `json:"ociRepoImagesUsed,omitempty"`
 
 	// LeaseID is the Jumpstarter lease ID acquired during flash
 	// +optional

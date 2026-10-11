@@ -28,6 +28,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
@@ -884,6 +885,22 @@ func appendWorkspaceRepoCustomDefs(req *buildcontract.BuildRequest, reposJSON []
 	)
 }
 
+func validateOCIRepoImages(refs []string) error {
+	if len(refs) > 1 {
+		return fmt.Errorf("too many OCI repo images: %d exceeds maximum of 1", len(refs))
+	}
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return fmt.Errorf("OCI repo image ref is empty")
+		}
+		if _, err := name.ParseReference(ref); err != nil {
+			return fmt.Errorf("invalid OCI repo image ref %q: %w", ref, err)
+		}
+	}
+	return nil
+}
+
 // resolveOCIRepoImages validates the OCI repo image ref and injects a file:// extra_repos
 // entry into CustomDefs. If workspace extra_repos already exist in CustomDefs, the
 // OCI entry is merged into the same JSON array.
@@ -891,8 +908,8 @@ func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
 	if len(req.OCIRepoImages) == 0 {
 		return nil
 	}
-	if len(req.OCIRepoImages) > 1 {
-		return fmt.Errorf("too many OCI repo images: %d exceeds maximum of 1", len(req.OCIRepoImages))
+	if err := validateOCIRepoImages(req.OCIRepoImages); err != nil {
+		return err
 	}
 
 	type repoEntry struct {
@@ -902,9 +919,6 @@ func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
 	}
 
 	ref := strings.TrimSpace(req.OCIRepoImages[0])
-	if ref == "" {
-		return fmt.Errorf("OCI repo image ref is empty")
-	}
 	entry := repoEntry{
 		ID:      tasks.OCIRepoVolumeName,
 		BaseURL: "file://" + tasks.OCIRepoMountPath,
@@ -933,7 +947,13 @@ func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
 		if err := json.Unmarshal([]byte(existingJSON), &existing); err != nil {
 			return fmt.Errorf("parsing existing extra_repos: %w", err)
 		}
-		merged := append(existing, ociRepos...)
+		merged := existing[:0]
+		for _, repo := range existing {
+			if repo.ID != tasks.OCIRepoVolumeName {
+				merged = append(merged, repo)
+			}
+		}
+		merged = append(merged, ociRepos...)
 		mergedJSON, err := json.Marshal(merged)
 		if err != nil {
 			return fmt.Errorf("marshaling merged extra_repos: %w", err)
@@ -948,6 +968,7 @@ func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
 		req.CustomDefs = append(req.CustomDefs, prefix+string(reposJSON))
 	}
 
+	req.OCIRepoImages[0] = ref
 	return nil
 }
 

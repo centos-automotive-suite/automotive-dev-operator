@@ -1184,6 +1184,7 @@ func (r *ImageBuildReconciler) createBuildPipelineRun(
 
 	fresh.Status.PipelineRunName = pipelineRun.Name
 	fresh.Status.ResolvedExportFormat = exportFormat
+	fresh.Status.OCIRepoImagesUsed = append([]string(nil), imageBuild.Spec.GetOCIRepoImages()...)
 	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update ImageBuild with PipelineRun name: %w", err)
 	}

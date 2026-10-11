@@ -2,6 +2,7 @@ package imagebuild
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -460,5 +461,78 @@ func TestLegacyFlashCancellationMessage(t *testing.T) {
 	}
 	if ib.Status.TerminalResult == nil || !strings.HasPrefix(ib.Status.TerminalResult.Message, "Flash to device cancelled") {
 		t.Fatalf("cancellation result: %+v", ib.Status.TerminalResult)
+	}
+}
+
+func TestOCIRepoProvenanceFromBuildPod(t *testing.T) {
+	ref := "quay.io/org/rpms:v1"
+	digest := "sha256:" + strings.Repeat("b", 64)
+	reported := "quay.io/org/rpms@" + digest
+	for _, tc := range []struct {
+		name, spec, reported, stage, want string
+		missingPod, init, podReadError    bool
+	}{
+		{name: "default cluster", spec: ref},
+		{name: "pinned input", spec: ref + "@sha256:" + strings.Repeat("a", 64)},
+		{name: "node digest", spec: ref, reported: reported},
+		{name: "qualified node ref with digest-like host", spec: ref, reported: "sha256:5000/org/rpms@" + digest},
+		{name: "bare node digest", spec: ref, reported: digest, want: reported},
+		{name: "bare digest with pinned spec", spec: ref + "@sha256:" + strings.Repeat("a", 64), reported: digest, want: reported},
+		{name: "bare digest with registry port", spec: "registry.example.com:5000/org/rpms@sha256:" + strings.Repeat("a", 64), reported: digest, want: "registry.example.com:5000/org/rpms@" + digest},
+		{name: "bare digest with short spec", spec: "org/rpms:v1", reported: digest, want: "org/rpms@" + digest},
+		{name: "init container", spec: ref, reported: reported, init: true},
+		{name: "deleted pod", spec: ref, missingPod: true},
+		{name: "pod read failure", spec: ref, reported: reported, podReadError: true, want: ref},
+		{name: "other task ignored", spec: ref, reported: reported, stage: "flash-image"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ib := terminalBuild()
+			ib.Spec.Flash = nil
+			ib.Spec.AIB = &api.AIBSpec{OCIRepoImages: []string{tc.spec}}
+			stage := tc.stage
+			if stage == "" {
+				stage = "build-image"
+			}
+			tr := resultTask(stage, "Succeeded", nil)
+			tr.Status.PodName = "build-pod"
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: tr.Status.PodName, Namespace: ib.Namespace}}
+			status := corev1.ContainerStatus{Name: "step-build-image", VolumeMounts: []corev1.VolumeMountStatus{{Name: "oci-repo", VolumeStatus: &corev1.VolumeStatus{Image: &corev1.ImageVolumeStatus{ImageRef: tc.reported}}}}}
+			if tc.init {
+				pod.Status.InitContainerStatuses = []corev1.ContainerStatus{status}
+			} else {
+				pod.Status.ContainerStatuses = []corev1.ContainerStatus{status}
+			}
+			objects := []client.Object{ib, tr, resultPipeline(ib, "Succeeded", tr)}
+			if !tc.missingPod {
+				objects = append(objects, pod)
+			}
+			r := newTestReconciler(objects...)
+			if tc.podReadError {
+				r.APIReader = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, isPod := obj.(*corev1.Pod); isPod {
+							return errors.New("pod read failed")
+						}
+						return c.Get(ctx, key, obj, opts...)
+					},
+				})
+			}
+			if err := r.collectResults(t.Context(), ib, true); err != nil {
+				t.Fatal(err)
+			}
+			want := tc.spec
+			if tc.reported != "" && stage == "build-image" {
+				want = tc.reported
+			}
+			if tc.want != "" {
+				want = tc.want
+			}
+			if got := ib.Status.OCIRepoImagesUsed; len(got) != 1 || got[0] != want {
+				t.Fatalf("provenance = %v, want %q", got, want)
+			}
+			if ib.Spec.GetOCIRepoImages()[0] != tc.spec {
+				t.Fatal("provenance changed input spec")
+			}
+		})
 	}
 }

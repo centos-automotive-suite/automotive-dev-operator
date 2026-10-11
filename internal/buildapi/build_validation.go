@@ -19,6 +19,12 @@ import (
 var digestPinnedRef = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
 
 func validateBuildRequest(req *buildcontract.BuildRequest) error {
+	if err := validateOCIRepoImages(req.OCIRepoImages); err != nil {
+		return err
+	}
+	if req.SecureBuild && len(req.OCIRepoImages) > 0 {
+		return fmt.Errorf("secure builds do not support OCI repository images: Hermeto requires HTTP(S) RPM URLs")
+	}
 	if !buildcontract.ValidBuilderCachePolicy(req.BuilderCachePolicy) {
 		return fmt.Errorf("invalid builderCachePolicy %q: must be validate or reuse", req.BuilderCachePolicy)
 	}

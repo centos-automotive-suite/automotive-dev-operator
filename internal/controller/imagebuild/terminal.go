@@ -4,12 +4,14 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"strings"
 	"time"
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	tekton "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -66,6 +68,9 @@ func (r *ImageBuildReconciler) collectResults(ctx context.Context, ib *api.Image
 	reader := client.Reader(r.Client)
 	if r.APIReader != nil {
 		reader = r.APIReader
+	}
+	if ib.Status.OCIRepoImagesUsed == nil {
+		ib.Status.OCIRepoImagesUsed = append([]string(nil), ib.Spec.GetOCIRepoImages()...)
 	}
 	if ib.Spec.IsFlashEnabled() && ib.Status.Flash == nil {
 		ib.Status.Flash = &api.FlashOutcomeStatus{Enabled: true, State: "NotStarted"}
@@ -130,6 +135,32 @@ func collectPipelineChild(
 		return nil
 	}
 	observeTask(&ib.Status, tr, child.PipelineTaskName)
+	if child.PipelineTaskName == tasks.PipelineTaskBuildImage && tr.Status.PodName != "" {
+		pod := &corev1.Pod{}
+		if err := reader.Get(ctx, types.NamespacedName{Namespace: ib.Namespace, Name: tr.Status.PodName}, pod); err != nil {
+			if !errors.IsNotFound(err) {
+				ctrl.LoggerFrom(ctx).Error(err, "Unable to read build pod for OCI repository provenance", "namespace", ib.Namespace, "pod", tr.Status.PodName)
+			}
+			return nil
+		}
+		statuses := append(append([]corev1.ContainerStatus(nil), pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...)
+		for _, status := range statuses {
+			for _, mount := range status.VolumeMounts {
+				if mount.Name == tasks.OCIRepoVolumeName && mount.VolumeStatus != nil && mount.VolumeStatus.Image != nil && mount.VolumeStatus.Image.ImageRef != "" {
+					imageRef := mount.VolumeStatus.Image.ImageRef
+					if refs := ib.Spec.GetOCIRepoImages(); strings.HasPrefix(imageRef, "sha256:") && !strings.ContainsAny(imageRef, "/@") && len(refs) > 0 {
+						repository, _, _ := strings.Cut(refs[0], "@")
+						if colon := strings.LastIndex(repository, ":"); colon > strings.LastIndex(repository, "/") {
+							repository = repository[:colon]
+						}
+						imageRef = repository + "@" + imageRef
+					}
+					ib.Status.OCIRepoImagesUsed = []string{imageRef}
+					return nil
+				}
+			}
+		}
+	}
 	return nil
 }
 

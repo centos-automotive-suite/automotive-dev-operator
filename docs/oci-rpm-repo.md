@@ -20,6 +20,33 @@ Two CLI flags control this:
 
 Both flags accept an OCI image reference (e.g. `quay.io/myorg/my-rpms:latest`).
 
+Before submission, `caib` attempts to resolve tags using the user's registry
+credentials (`--registry-auth-file`, environment credentials, or local registry
+auth). Environment credentials are used only when the repository registry matches
+their push target registry, or `REGISTRY_URL` when no push target is specified.
+It uses a manifest HEAD request with a GET fallback and submits
+`ref:tag@digest`, preserving the requested tag. If resolution fails, it warns and
+submits the original reference. Already pinned references need no lookup. Short
+names without an explicit registry host are submitted unchanged so the cluster's
+search registries determine where to pull them.
+
+The Build API validates and preserves this reference without contacting the
+repository registry or loading image pull secrets. The kubelet pulls the
+repository volume using the node's registry trust, credentials, and mirror
+configuration. To select immutable content explicitly, supply a digest reference
+such as `quay.io/myorg/my-rpms:v1@sha256:<64 hex characters>`; the tag remains
+visible but the digest selects the content.
+
+`status.ociRepoImagesUsed` records the submitted references. If the kubelet reports
+the mounted image reference, the controller records that value instead. The
+`ImageVolumeWithDigest` feature gate is optional.
+
+Secure builds (including reproducible builds) cannot use OCI repositories:
+Hermeto rejects their local `file://` RPM URLs during lockfile conversion, before
+they can be included in the reproducible sources archive. Both the Build API and
+CRD validation reject this combination, including `ScheduledImageBuild` templates,
+even when the repository reference is pinned to a digest.
+
 ## Step 1: Download RPMs and Build the OCI Image
 
 Use AIB's `download` command to resolve your manifest and fetch all RPMs, then
@@ -111,13 +138,17 @@ caib image build-dev manifest.aib.yml \
 - Only one OCI repo image is supported per build. Multiple `--extra-repo oci:`
   entries will be rejected.
 - `--local-repo` and `--extra-repo oci:` are mutually exclusive.
-- The image must be pullable from the build cluster. If using a private registry,
-  configure an image pull secret on the namespace.
+- The image must be pullable from the build cluster. The kubelet pulls the repo
+  image using the build pod's image pull secrets. For a private registry, link a
+  pull secret to the `ado-build` service account, or rely on the cluster global
+  pull secret. Private CAs and registry mirrors require node registry
+  configuration.
 
 ## How It Works
 
 1. **CLI** parses `--extra-repo oci:<ref>` or `--local-repo <ref>` and sends the
-   OCI image reference to the Build API.
+   OCI image reference to the Build API after attempting client-side digest
+   resolution.
 
 2. **Build API** resolves the reference into a DNF `extra_repos` custom
    definition with `baseurl=file:///extra-repos/oci-repo`. If `--local-repo` was
