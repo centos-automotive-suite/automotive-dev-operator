@@ -338,6 +338,47 @@ func TestCreateBuildPipelineRunFlashAuthWorkspace(t *testing.T) {
 	}
 }
 
+func TestCreateBuildPipelineRunOCIRepoProvenance(t *testing.T) {
+	build := planTestBuild()
+	build.Spec.AIB.Manifest = "name: test\n"
+	ref := "quay.io/org/rpms@sha256:" + strings.Repeat("a", 64)
+	build.Spec.AIB.OCIRepoImages = []string{ref}
+	build.Spec.SecretRef = "registry-creds"
+	r := flashPipelineTestReconciler(t, build, nil)
+	if err := r.createBuildPipelineRun(t.Context(), build); err != nil {
+		t.Fatal(err)
+	}
+	fresh := &automotivev1alpha1.ImageBuild{}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(build), fresh); err != nil {
+		t.Fatal(err)
+	}
+	if refs := fresh.Status.OCIRepoImagesUsed; len(refs) != 1 || refs[0] != ref {
+		t.Fatalf("OCI repository provenance = %v, want %q", refs, ref)
+	}
+	run := &tektonv1.PipelineRun{}
+	if err := r.Get(t.Context(), types.NamespacedName{Name: fresh.Status.PipelineRunName, Namespace: build.Namespace}, run); err != nil {
+		t.Fatal(err)
+	}
+	volumes := run.Spec.TaskRunTemplate.PodTemplate.Volumes
+	if len(volumes) != 1 || volumes[0].Image == nil || volumes[0].Image.Reference != ref {
+		t.Fatalf("pipeline image volumes = %+v, want %q", volumes, ref)
+	}
+	if err := r.updateStatus(t.Context(), fresh, phaseFailed, "test failure"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(build), fresh); err != nil {
+		t.Fatal(err)
+	}
+	if refs := fresh.Status.OCIRepoImagesUsed; len(refs) != 1 || refs[0] != ref {
+		t.Fatalf("failed build lost repository provenance: %v", refs)
+	}
+	copy := fresh.DeepCopy()
+	copy.Status.OCIRepoImagesUsed[0] = "changed"
+	if fresh.Status.OCIRepoImagesUsed[0] != ref {
+		t.Fatal("deep copy shares repository provenance")
+	}
+}
+
 func TestInvalidManifestFailsBeforeFlashSecretWrite(t *testing.T) {
 	build := flashPipelineTestBuild()
 	build.Spec.AIB.Lockfile = "not-json"

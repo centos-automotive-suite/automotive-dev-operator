@@ -540,6 +540,12 @@ spec:
                   by the controller.
                 format: int64
                 type: integer
+              ociRepoImagesUsed:
+                description: OCIRepoImagesUsed contains the digest-pinned RPM repository
+                  images mounted for the build.
+                items:
+                  type: string
+                type: array
               phase:
                 description: Phase represents the current phase of the build
                 enum:
