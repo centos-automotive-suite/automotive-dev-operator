@@ -20,6 +20,28 @@ Two CLI flags control this:
 
 Both flags accept an OCI image reference (e.g. `quay.io/myorg/my-rpms:latest`).
 
+Before submission, `caib` attempts to resolve tags using the user's registry
+credentials (`--registry-auth-file`, environment credentials, or local registry
+auth). It uses a manifest HEAD request with a GET fallback and submits
+`ref:tag@digest`, preserving the requested tag. If resolution fails, it warns and
+submits the original reference. Already pinned references need no lookup.
+
+The Build API validates and preserves this reference without contacting the
+repository registry or loading image pull secrets. The kubelet pulls the
+repository volume using the node's registry trust, credentials, and mirror
+configuration. To select immutable content explicitly, supply a digest reference
+such as `quay.io/myorg/my-rpms:v1@sha256:<64 hex characters>`; the tag remains
+visible but the digest selects the content.
+
+`status.ociRepoImagesUsed` records the submitted references. If the kubelet reports
+the mounted image reference, the controller records that value instead. The
+`ImageVolumeWithDigest` feature gate is optional.
+
+Reproducible builds require digest-pinned OCI repository references, including
+builds created directly or by a `ScheduledImageBuild`. However, RPMs from these
+local repositories currently fail Hermeto's HTTP(S)-only lockfile conversion
+before they can be included in the reproducible sources archive.
+
 ## Step 1: Download RPMs and Build the OCI Image
 
 Use AIB's `download` command to resolve your manifest and fetch all RPMs, then
@@ -117,7 +139,8 @@ caib image build-dev manifest.aib.yml \
 ## How It Works
 
 1. **CLI** parses `--extra-repo oci:<ref>` or `--local-repo <ref>` and sends the
-   OCI image reference to the Build API.
+   OCI image reference to the Build API after attempting client-side digest
+   resolution.
 
 2. **Build API** resolves the reference into a DNF `extra_repos` custom
    definition with `baseurl=file:///extra-repos/oci-repo`. If `--local-repo` was

@@ -462,3 +462,57 @@ func TestLegacyFlashCancellationMessage(t *testing.T) {
 		t.Fatalf("cancellation result: %+v", ib.Status.TerminalResult)
 	}
 }
+
+func TestOCIRepoProvenanceFromBuildPod(t *testing.T) {
+	ref := "quay.io/org/rpms:v1"
+	reported := "quay.io/org/rpms@sha256:" + strings.Repeat("b", 64)
+	for _, tc := range []struct {
+		name, spec, reported, stage string
+		missingPod, init            bool
+	}{
+		{name: "default cluster", spec: ref},
+		{name: "pinned input", spec: ref + "@sha256:" + strings.Repeat("a", 64)},
+		{name: "node digest", spec: ref, reported: reported},
+		{name: "bare node digest", spec: ref, reported: "sha256:" + strings.Repeat("b", 64)},
+		{name: "init container", spec: ref, reported: reported, init: true},
+		{name: "deleted pod", spec: ref, missingPod: true},
+		{name: "other task ignored", spec: ref, reported: reported, stage: "flash-image"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ib := terminalBuild()
+			ib.Spec.Flash = nil
+			ib.Spec.AIB = &api.AIBSpec{OCIRepoImages: []string{tc.spec}}
+			stage := tc.stage
+			if stage == "" {
+				stage = "build-image"
+			}
+			tr := resultTask(stage, "Succeeded", nil)
+			tr.Status.PodName = "build-pod"
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: tr.Status.PodName, Namespace: ib.Namespace}}
+			status := corev1.ContainerStatus{Name: "step-build-image", VolumeMounts: []corev1.VolumeMountStatus{{Name: "oci-repo", VolumeStatus: &corev1.VolumeStatus{Image: &corev1.ImageVolumeStatus{ImageRef: tc.reported}}}}}
+			if tc.init {
+				pod.Status.InitContainerStatuses = []corev1.ContainerStatus{status}
+			} else {
+				pod.Status.ContainerStatuses = []corev1.ContainerStatus{status}
+			}
+			objects := []client.Object{ib, tr, resultPipeline(ib, "Succeeded", tr)}
+			if !tc.missingPod {
+				objects = append(objects, pod)
+			}
+			r := newTestReconciler(objects...)
+			if err := r.collectResults(t.Context(), ib, true); err != nil {
+				t.Fatal(err)
+			}
+			want := tc.spec
+			if tc.reported != "" && stage == "build-image" {
+				want = tc.reported
+			}
+			if got := ib.Status.OCIRepoImagesUsed; len(got) != 1 || got[0] != want {
+				t.Fatalf("provenance = %v, want %q", got, want)
+			}
+			if ib.Spec.GetOCIRepoImages()[0] != tc.spec {
+				t.Fatal("provenance changed input spec")
+			}
+		})
+	}
+}

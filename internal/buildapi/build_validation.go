@@ -19,6 +19,9 @@ import (
 var digestPinnedRef = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
 
 func validateBuildRequest(req *buildcontract.BuildRequest) error {
+	if err := validateOCIRepoImages(req.OCIRepoImages); err != nil {
+		return err
+	}
 	if !buildcontract.ValidBuilderCachePolicy(req.BuilderCachePolicy) {
 		return fmt.Errorf("invalid builderCachePolicy %q: must be validate or reuse", req.BuilderCachePolicy)
 	}
@@ -75,6 +78,13 @@ func validateBuildRequest(req *buildcontract.BuildRequest) error {
 
 	if req.Reproducible && !req.SecureBuild {
 		return fmt.Errorf("reproducible builds require secureBuild to be true")
+	}
+	if req.Reproducible {
+		for _, ref := range req.OCIRepoImages {
+			if !digestPinnedRef.MatchString(strings.TrimSpace(ref)) {
+				return fmt.Errorf("reproducible builds require digest-pinned OCI repository images")
+			}
+		}
 	}
 	if req.SecureBuild && req.UseInternalRegistry {
 		return fmt.Errorf("secure builds cannot use the internal registry because required OCI referrers are unsupported; use an external referrer-capable registry")

@@ -10,6 +10,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	tekton "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -66,6 +67,9 @@ func (r *ImageBuildReconciler) collectResults(ctx context.Context, ib *api.Image
 	reader := client.Reader(r.Client)
 	if r.APIReader != nil {
 		reader = r.APIReader
+	}
+	if ib.Status.OCIRepoImagesUsed == nil {
+		ib.Status.OCIRepoImagesUsed = append([]string(nil), ib.Spec.GetOCIRepoImages()...)
 	}
 	if ib.Spec.IsFlashEnabled() && ib.Status.Flash == nil {
 		ib.Status.Flash = &api.FlashOutcomeStatus{Enabled: true, State: "NotStarted"}
@@ -130,6 +134,21 @@ func collectPipelineChild(
 		return nil
 	}
 	observeTask(&ib.Status, tr, child.PipelineTaskName)
+	if child.PipelineTaskName == tasks.PipelineTaskBuildImage && tr.Status.PodName != "" {
+		pod := &corev1.Pod{}
+		if err := reader.Get(ctx, types.NamespacedName{Namespace: ib.Namespace, Name: tr.Status.PodName}, pod); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		statuses := append(append([]corev1.ContainerStatus(nil), pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...)
+		for _, status := range statuses {
+			for _, mount := range status.VolumeMounts {
+				if mount.Name == tasks.OCIRepoVolumeName && mount.VolumeStatus != nil && mount.VolumeStatus.Image != nil && mount.VolumeStatus.Image.ImageRef != "" {
+					ib.Status.OCIRepoImagesUsed = []string{mount.VolumeStatus.Image.ImageRef}
+					return nil
+				}
+			}
+		}
+	}
 	return nil
 }
 

@@ -1150,6 +1150,7 @@ func (h *Handler) runManifestBuild(ctx context.Context, cmd *cobra.Command, mani
 	}
 	defer cleanup()
 	req.HasLocalFiles = len(localRefs) > 0
+	h.pinOCIRepoImages(ctx, &req)
 
 	resp, err := api.CreateBuild(ctx, req)
 	if err != nil {
