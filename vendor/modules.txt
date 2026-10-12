@@ -299,7 +299,7 @@ github.com/docker/go-units
 # github.com/dustin/go-humanize v1.1.0
 ## explicit; go 1.21
 github.com/dustin/go-humanize
-# github.com/emicklei/go-restful/v3 v3.13.0
+# github.com/emicklei/go-restful/v3 v3.14.0
 ## explicit; go 1.13
 github.com/emicklei/go-restful/v3
 github.com/emicklei/go-restful/v3/log
