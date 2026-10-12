@@ -43,8 +43,8 @@ func TestInvalidOCIRepoRejectedBeforeWorkspaceResolution(t *testing.T) {
 		secure             bool
 	}{
 		{name: "empty reference", ref: " ", message: "OCI repo image ref is empty"},
-		{name: "secure tag", ref: "quay.io/org/rpms:v1", secure: true, message: "secure builds do not support OCI repository images"},
-		{name: "secure digest", ref: "quay.io/org/rpms@sha256:" + strings.Repeat("a", 64), secure: true, message: "secure builds do not support OCI repository images"},
+		{name: "secure tag", ref: "quay.io/org/rpms:v1", secure: true, message: "secure builds require digest-pinned OCI repository images"},
+		{name: "secure invalid digest", ref: "quay.io/org/rpms@sha256:" + strings.Repeat("a", 63), secure: true, message: "invalid OCI repo image ref"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := newTestServer(t, nil)
@@ -287,7 +287,7 @@ func TestResolveOCIRepoImages_ExtraRepoNoPriority(t *testing.T) {
 	}
 }
 
-func TestSecureBuildRejectsOCIRepo(t *testing.T) {
+func TestSecureBuildRequiresPinnedOCIRepo(t *testing.T) {
 	for _, tc := range []struct {
 		name, ref                     string
 		secure, reproducible, invalid bool
@@ -295,9 +295,9 @@ func TestSecureBuildRejectsOCIRepo(t *testing.T) {
 		{name: "ordinary tag", ref: "quay.io/org/rpms:v1"},
 		{name: "ordinary digest", ref: "quay.io/org/rpms:v1@sha256:" + strings.Repeat("a", 64)},
 		{name: "secure tag", ref: "quay.io/org/rpms:v1", secure: true, invalid: true},
-		{name: "secure digest", ref: "quay.io/org/rpms:v1@sha256:" + strings.Repeat("a", 64), secure: true, invalid: true},
+		{name: "secure digest", ref: "quay.io/org/rpms:v1@sha256:" + strings.Repeat("a", 64), secure: true},
 		{name: "reproducible tag", ref: "quay.io/org/rpms:v1", secure: true, reproducible: true, invalid: true},
-		{name: "reproducible digest", ref: "quay.io/org/rpms:v1@sha256:" + strings.Repeat("a", 64), secure: true, reproducible: true, invalid: true},
+		{name: "reproducible digest", ref: "quay.io/org/rpms:v1@sha256:" + strings.Repeat("a", 64), secure: true, reproducible: true},
 		{name: "secure without repositories", secure: true},
 		{name: "reproducible without repositories", secure: true, reproducible: true},
 	} {
@@ -310,7 +310,7 @@ func TestSecureBuildRejectsOCIRepo(t *testing.T) {
 			if (err != nil) != tc.invalid {
 				t.Fatalf("validation = %v", err)
 			}
-			if tc.invalid && !strings.Contains(err.Error(), "secure builds do not support OCI repository images") {
+			if tc.invalid && !strings.Contains(err.Error(), "secure builds require digest-pinned OCI repository images") {
 				t.Fatalf("unclear validation error: %v", err)
 			}
 		})

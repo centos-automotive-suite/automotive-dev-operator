@@ -41,11 +41,25 @@ visible but the digest selects the content.
 the mounted image reference, the controller records that value instead. The
 `ImageVolumeWithDigest` feature gate is optional.
 
-Secure builds (including reproducible builds) cannot use OCI repositories:
-Hermeto rejects their local `file://` RPM URLs during lockfile conversion, before
-they can be included in the reproducible sources archive. Both the Build API and
-CRD validation reject this combination, including `ScheduledImageBuild` templates,
-even when the repository reference is pinned to a digest.
+Secure builds (including reproducible builds) require OCI repository references
+pinned to a SHA-256 digest (`^.+@sha256:[a-fA-F0-9]{64}$`). Both the Build API and
+CRD validation enforce this requirement, including `ScheduledImageBuild`
+templates. If the CLI cannot resolve a tag, secure submission fails; supply an
+explicit digest reference instead.
+
+Locked HTTP(S) RPMs are fetched by Hermeto. Locked local RPMs are handled by the
+build task: only `file://` URLs under `/extra-repos/oci-repo/` are accepted. Each
+file must resolve to a regular file inside that mount; symlink escapes and
+checksum mismatches fail the build. Verified local RPMs are copied into the
+osbuild content-addressed store and included in the sources archive. A lockfile
+containing only local RPMs skips Hermeto and still produces a CycloneDX SBOM.
+The SBOM includes local RPM components with name, version, architecture,
+checksum, and the `ado:oci-repo:image` property containing the submitted OCI
+repository reference and digest.
+
+Restoring sources verifies both HTTP(S) and local RPM checksums against the
+archived store and reuses the archived SBOM. The repository image is not mounted
+on restore, so the build does not require that image to remain in the registry.
 
 ## Step 1: Download RPMs and Build the OCI Image
 
@@ -121,6 +135,20 @@ caib image build manifest.aib.yml \
 
 Note: `--local-repo` does not need the `oci:` prefix.
 
+### Secure and reproducible builds
+
+Supply an immutable repository reference for secure builds:
+
+```bash
+caib image build manifest.aib.yml \
+  --secure --reproducible \
+  --local-repo quay.io/myorg/my-rpms:v1@sha256:<64-hex-digest> \
+  --push quay.io/myorg/automotive-os:v1
+```
+
+Replace `<64-hex-digest>` with the repository image's SHA-256 digest. The same
+requirement applies to `--extra-repo oci:` and schedule templates.
+
 ### Combining with a Git manifest
 
 Use a Git source for the manifest and an OCI image for application RPMs:
@@ -172,9 +200,11 @@ caib image build-dev manifest.aib.yml \
 
 3. **Controller** creates the PipelineRun with a volume in the PodTemplate:
    - With an OCI ref: an `ImageVolumeSource` with `pullPolicy: Always`
-   - Without: an `EmptyDir` placeholder (so the volume mount in the Task always
-     resolves)
+   - Without, or when restoring sources: an `EmptyDir` placeholder (so the
+     volume mount in the Task always resolves)
 
 4. **Tekton Task** has a read-only volume mount at `/extra-repos/oci-repo` on the
    `build-image` step. DNF reads the repo from that path during the osbuild/bootc
-   build.
+   build. For locked prefetch, the task sends only HTTP(S) entries to Hermeto,
+   copies and verifies local entries separately, and adds their OCI provenance
+   to the SBOM. Restore verification reads the archived store.

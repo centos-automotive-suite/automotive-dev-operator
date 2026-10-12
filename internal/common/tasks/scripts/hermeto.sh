@@ -128,17 +128,18 @@ PYEOF
 }
 
 convert_aib_lock_to_hermeto() {
-  local aib_lock="$1" hermeto_lock="$2" rpm_map="$3"
+  local aib_lock="$1" hermeto_lock="$2" rpm_map="$3" local_map="${4:-$3.local.json}"
 
-  python3 - "$aib_lock" "$hermeto_lock" "$rpm_map" <<'PYEOF'
+  python3 - "$aib_lock" "$hermeto_lock" "$rpm_map" "$local_map" <<'PYEOF'
 import hashlib
 import json
 import pathlib
+import posixpath
 import re
 import sys
 import urllib.parse
 
-aib_lock_path, hermeto_lock_path, rpm_map_path = map(pathlib.Path, sys.argv[1:])
+aib_lock_path, hermeto_lock_path, rpm_map_path, local_map_path = map(pathlib.Path, sys.argv[1:])
 with aib_lock_path.open(encoding="utf-8") as lockfile:
     lock = json.load(lockfile)
 
@@ -150,6 +151,8 @@ if not isinstance(depsolves, dict) or not depsolves:
     raise SystemExit("AIB lockfile contains no depsolved RPM packages")
 
 by_arch = {}
+local_entries = {}
+rpm_arches = set()
 url_checksums = {}
 paths = {}
 url_paths = {}
@@ -171,7 +174,12 @@ for depsolve_key in sorted(depsolves):
             if not isinstance(url, str) or not url:
                 raise SystemExit(f"depsolve {depsolve_key} contains {kind} without a URL")
             parsed = urllib.parse.urlsplit(url)
-            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            is_local = parsed.scheme == "file"
+            if is_local:
+                path = posixpath.normpath(urllib.parse.unquote(parsed.path))
+                if parsed.netloc or not path.startswith("/extra-repos/oci-repo/"):
+                    raise SystemExit(f"file URL is outside OCI repository mount: {url}")
+            elif parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 raise SystemExit(f"Hermeto spike supports only HTTP(S) URLs: {url}")
             if parsed.query or parsed.fragment:
                 raise SystemExit(f"Hermeto spike does not support URL queries or fragments: {url}")
@@ -198,6 +206,21 @@ for depsolve_key in sorted(depsolves):
             if kind == "packages" and filename.endswith((".src.rpm", ".nosrc.rpm")):
                 raise SystemExit(f"Source RPM must be listed in source: {url}")
 
+            if kind != "module_metadata":
+                rpm_arches.add(arch)
+            if is_local:
+                item = {"url": url, "checksum": checksum, "kind": kind}
+                if kind != "module_metadata":
+                    fields = ("name", "evr") if kind == "source" else ("name", "evr", "arch")
+                    for field in fields:
+                        if not isinstance(entry.get(field), str) or not entry[field]:
+                            raise SystemExit(f"Local RPM has no usable {field}: {url}")
+                        item[field] = entry[field]
+                    if kind == "source":
+                        item["arch"] = "src"
+                local_entries[(arch, kind, checksum, url)] = item
+                continue
+
             repoid = entry.get("repoid")
             if kind == "module_metadata" and not repoid:
                 raise SystemExit(f"Module metadata requires repoid: {url}")
@@ -223,6 +246,8 @@ for depsolve_key in sorted(depsolves):
 arches = []
 rpm_map = []
 for arch, entries in sorted(by_arch.items()):
+    if not entries:
+        continue
     output = {"arch": arch}
     for (kind, repoid, checksum), entry in sorted(entries.items()):
         path = str(pathlib.Path("deps/rpm") / arch / repoid / pathlib.Path(entry["url"]).name)
@@ -233,11 +258,11 @@ for arch, entries in sorted(by_arch.items()):
             raise SystemExit(f"URL has conflicting repository destinations: {entry['url']}")
         output.setdefault(kind, []).append(entry)
         rpm_map.append({"checksum": checksum, "path": path, "url": entry["url"]})
-    if not (output.get("packages") or output.get("source")):
+    if arch not in rpm_arches:
         raise SystemExit(f"Architecture {arch} has no binary or source RPMs")
     arches.append(output)
 
-if not arches:
+if not rpm_arches:
     raise SystemExit("AIB lockfile contains no RPM packages")
 
 # JSON is valid YAML 1.2. Emitting it avoids adding a YAML library to the AIB image.
@@ -248,29 +273,48 @@ hermeto_lock = {
 }
 hermeto_lock_path.write_text(json.dumps(hermeto_lock, indent=2) + "\n", encoding="utf-8")
 rpm_map_path.write_text(json.dumps(rpm_map, indent=2) + "\n", encoding="utf-8")
+local_map_path.write_text(json.dumps(list(local_entries.values()), indent=2) + "\n", encoding="utf-8")
 PYEOF
 }
 
 map_hermeto_rpms_to_osbuild_store() {
-  local rpm_map="$1" hermeto_output="$2" store="$3" verify_only="${4:-false}"
+  map_locked_rpms_to_osbuild_store "$1" "$2" "$3" "${4:-false}" false
+}
 
-  python3 - "$rpm_map" "$hermeto_output" "$store" "$verify_only" <<'PYEOF'
+map_local_rpms_to_osbuild_store() {
+  map_locked_rpms_to_osbuild_store "$1" "" "$2" "${3:-false}" true
+}
+
+map_locked_rpms_to_osbuild_store() {
+  local rpm_map="$1" hermeto_output="$2" store="$3" verify_only="$4" local_rpms="$5"
+
+  python3 - "$rpm_map" "$hermeto_output" "$store" "$verify_only" "$local_rpms" <<'PYEOF'
 import hashlib
 import json
 import os
 import pathlib
 import shutil
 import sys
+import urllib.parse
 
 rpm_map_path, output_path, store_path = map(pathlib.Path, sys.argv[1:4])
 verify_only = sys.argv[4] == "true"
+local_rpms = sys.argv[5] == "true"
 entries = json.loads(rpm_map_path.read_text(encoding="utf-8"))
 store_path.mkdir(parents=True, exist_ok=True)
 
 for entry in entries:
-    source = store_path / entry["checksum"] if verify_only else output_path / entry["path"]
+    if verify_only:
+        source = store_path / entry["checksum"]
+    elif local_rpms:
+        parsed = urllib.parse.urlsplit(entry["url"])
+        source = pathlib.Path(urllib.parse.unquote(parsed.path)).resolve()
+        if parsed.scheme != "file" or parsed.netloc or not source.is_relative_to("/extra-repos/oci-repo"):
+            raise SystemExit(f"RPM is outside OCI repository mount: {entry['url']}")
+    else:
+        source = output_path / entry["path"]
     if not source.is_file():
-        raise SystemExit(f"Hermeto did not fetch {entry['url']} at {source}")
+        raise SystemExit(f"locked source is missing or not a regular file: {entry['url']} at {source}")
 
     algorithm, expected = entry["checksum"].split(":", 1)
     if algorithm not in {"sha256", "sha384", "sha512"}:
@@ -288,12 +332,69 @@ for entry in entries:
     destination = store_path / entry["checksum"]
     temporary = destination.with_name(destination.name + f".tmp.{os.getpid()}")
     try:
-        os.link(source, temporary)
+        if local_rpms:
+            shutil.copyfile(source, temporary)
+        else:
+            os.link(source, temporary)
     except OSError:
         shutil.copyfile(source, temporary)
     os.replace(temporary, destination)
 
 print(len({entry["checksum"] for entry in entries}))
+PYEOF
+}
+
+append_local_rpms_to_sbom() {
+  local local_map="$1" bom="$2" repo_image="$3"
+
+  python3 - "$local_map" "$bom" "$repo_image" <<'PYEOF'
+import json
+import pathlib
+import sys
+import urllib.parse
+
+map_path, bom_path = map(pathlib.Path, sys.argv[1:3])
+repo_image = sys.argv[3]
+entries = json.loads(map_path.read_text(encoding="utf-8"))
+if not any(entry["kind"] != "module_metadata" for entry in entries):
+    raise SystemExit(0)
+if bom_path.exists():
+    bom = json.loads(bom_path.read_text(encoding="utf-8"))
+else:
+    bom = {"bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1, "components": []}
+
+components = bom.setdefault("components", [])
+seen = {component.get("purl") for component in components}
+for entry in entries:
+    if entry["kind"] == "module_metadata":
+        continue
+    if not repo_image:
+        raise SystemExit("OCI repository image reference is required for local RPM SBOM provenance")
+    epoch, separator, version = entry["evr"].partition(":")
+    if not separator:
+        epoch, version = "", entry["evr"]
+    qualifiers = {
+        "arch": entry["arch"],
+        "download_url": entry["url"],
+        "checksum": entry["checksum"],
+    }
+    if epoch:
+        qualifiers["epoch"] = epoch
+    quote = lambda value: urllib.parse.quote(value, safe="")
+    purl = f"pkg:rpm/{quote(entry['name'])}@{quote(version)}?" + "&".join(
+        f"{key}={quote(value)}" for key, value in sorted(qualifiers.items())
+    )
+    if purl in seen:
+        continue
+    seen.add(purl)
+    components.append({
+        "type": "library", "name": entry["name"], "version": version.rsplit("-", 1)[0],
+        "purl": purl, "bom-ref": purl,
+        "properties": [
+            {"name": "ado:oci-repo:image", "value": repo_image},
+        ],
+    })
+bom_path.write_text(json.dumps(bom, indent=2) + "\n", encoding="utf-8")
 PYEOF
 }
 
@@ -347,10 +448,12 @@ prepare_locked_rpms_with_hermeto() {
     if [ "$require_locked" = "true" ] && aib_lock_has_rpms "$aib_lock"; then
       local verify_dir
       verify_dir=$(mktemp -d "$build_dir/verify-restored.XXXXXX")
-      convert_aib_lock_to_hermeto "$aib_lock" "$verify_dir/rpms.lock.yaml" "$verify_dir/map.json" \
+      convert_aib_lock_to_hermeto "$aib_lock" "$verify_dir/rpms.lock.yaml" "$verify_dir/map.json" "$verify_dir/local-map.json" \
         || fail "failed to validate restored lockfile"
       map_hermeto_rpms_to_osbuild_store "$verify_dir/map.json" "" "$build_dir/osbuild_store/sources/org.osbuild.files" true \
         || fail "restored sources do not match the lockfile"
+      map_local_rpms_to_osbuild_store "$verify_dir/local-map.json" "$build_dir/osbuild_store/sources/org.osbuild.files" true \
+        || fail "restored local sources do not match the lockfile"
       rm -rf "$verify_dir"
       [ -s "$restored_sbom" ] || fail "restored Hermeto SBOM is missing"
     fi
@@ -367,44 +470,53 @@ prepare_locked_rpms_with_hermeto() {
     return 0
   fi
 
-  command -v podman >/dev/null 2>&1 || fail "Hermeto RPM prefetch requires podman"
   command -v python3 >/dev/null 2>&1 || fail "Hermeto RPM prefetch requires python3"
 
   local input_dir="$build_dir/hermeto-input"
   local output_dir="$build_dir/hermeto-output"
   local hermeto_lock="$input_dir/rpms.lock.yaml"
   local rpm_map="$input_dir/aib-rpm-map.json"
+  local local_map="$input_dir/aib-local-rpm-map.json"
   local source_store="$build_dir/osbuild_store/sources/org.osbuild.files"
   rm -rf "$input_dir" "$output_dir"
   mkdir -p "$input_dir" "$output_dir"
   chmod 0755 "$input_dir"
   chmod 0777 "$output_dir"
 
-  convert_aib_lock_to_hermeto "$aib_lock" "$hermeto_lock" "$rpm_map" \
+  convert_aib_lock_to_hermeto "$aib_lock" "$hermeto_lock" "$rpm_map" "$local_map" \
     || fail "failed to convert AIB lockfile for Hermeto"
 
-  echo "Fetching locked RPMs with Hermeto image $HERMETO_IMAGE"
-  local -a certificate_args=()
-  if [ -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem ]; then
-    certificate_args=(
-      -e SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
-      -v /etc/pki/ca-trust:/etc/pki/ca-trust:ro
-    )
-  fi
-  podman run --rm --network=host \
-    "${certificate_args[@]}" \
-    -v "$input_dir:/source:ro,Z" \
-    -v "$output_dir:/output:Z" \
-    "$HERMETO_IMAGE" \
-    fetch-deps --source /source --output /output rpm \
-    || fail "Hermeto RPM fetch failed"
+  local mapped_count=0 local_count
+  if python3 -c 'import json, sys; sys.exit(not json.load(open(sys.argv[1])))' "$rpm_map"; then
+    command -v podman >/dev/null 2>&1 || fail "Hermeto RPM prefetch requires podman"
+    echo "Fetching locked RPMs with Hermeto image $HERMETO_IMAGE"
+    local -a certificate_args=()
+    if [ -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem ]; then
+      certificate_args=(
+        -e SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+        -v /etc/pki/ca-trust:/etc/pki/ca-trust:ro
+      )
+    fi
+    podman run --rm --network=host \
+      "${certificate_args[@]}" \
+      -v "$input_dir:/source:ro,Z" \
+      -v "$output_dir:/output:Z" \
+      "$HERMETO_IMAGE" \
+      fetch-deps --source /source --output /output rpm \
+      || fail "Hermeto RPM fetch failed"
 
-  local mapped_count
-  mapped_count=$(map_hermeto_rpms_to_osbuild_store "$rpm_map" "$output_dir" "$source_store") \
-    || fail "failed to map Hermeto RPMs into the osbuild source store"
-  [ -s "$output_dir/bom.json" ] || fail "Hermeto did not produce bom.json"
+    mapped_count=$(map_hermeto_rpms_to_osbuild_store "$rpm_map" "$output_dir" "$source_store") \
+      || fail "failed to map Hermeto RPMs into the osbuild source store"
+    [ -s "$output_dir/bom.json" ] || fail "Hermeto did not produce bom.json"
+  else
+    echo "AIB lockfile contains only local RPMs; skipping Hermeto"
+  fi
+  local_count=$(map_local_rpms_to_osbuild_store "$local_map" "$source_store") \
+    || fail "failed to map local RPMs into the osbuild source store"
+  append_local_rpms_to_sbom "$local_map" "$output_dir/bom.json" "${OCI_REPO_IMAGE:-}" \
+    || fail "failed to append local RPMs to the SBOM"
   cp "$output_dir/bom.json" "$restored_sbom"
   cp "$output_dir/bom.json" "$workspace_path/hermeto-rpm-bom.json"
   rm -rf "$input_dir" "$output_dir"
-  echo "Mapped $mapped_count verified RPM and metadata artifacts into the osbuild source store"
+  echo "Mapped $((mapped_count + local_count)) verified RPM and metadata artifacts into the osbuild source store"
 }

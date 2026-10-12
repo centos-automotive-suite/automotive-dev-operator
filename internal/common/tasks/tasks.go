@@ -67,6 +67,15 @@ func hermetoPrefetchParamSpec(config *BuildConfig) tektonv1.ParamSpec {
 	}
 }
 
+func ociRepoImageParamSpec() tektonv1.ParamSpec {
+	return tektonv1.ParamSpec{
+		Name:        "oci-repo-image",
+		Type:        tektonv1.ParamTypeString,
+		Description: "OCI RPM repository image reference for SBOM provenance",
+		Default:     &tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: ""},
+	}
+}
+
 func traceIDParamSpec() tektonv1.ParamSpec {
 	return tektonv1.ParamSpec{
 		Name:        "trace-id",
@@ -823,6 +832,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					},
 				},
 				hermetoPrefetchParamSpec(buildConfig),
+				ociRepoImageParamSpec(),
 				{
 					Name:        "secure-build",
 					Type:        tektonv1.ParamTypeString,
@@ -968,6 +978,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 						taskParamEnvVar("SECURE_BUILD", "secure-build"),
 						taskParamEnvVar("RESTORE_SOURCES_REF", "restore-sources-ref"),
 						taskParamEnvVar("HERMETO_IMAGE", "hermeto-image"),
+						taskParamEnvVar("OCI_REPO_IMAGE", "oci-repo-image"),
 						taskParamEnvVar("HERMETO_PREFETCH", "hermeto-prefetch"),
 						taskParamEnvVar("RESOLVE_ONLY", "resolve-only"),
 						taskParamEnvVar("INSECURE_REGISTRY", "insecure-registry"),
@@ -1278,6 +1289,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					Description: "Container image for yq helper steps",
 				},
 				hermetoPrefetchParamSpec(buildConfig),
+				ociRepoImageParamSpec(),
 				resolveOnlyParamSpec(),
 				{
 					Name: "hermeto-image",
@@ -1635,7 +1647,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 								"automotive-image-builder", "container-push", "build-disk-image",
 								"export-oci", "builder-image", "cluster-registry-route",
 								"container-ref", "rebuild-builder", "builder-cache-policy", "use-persistent-cache",
-								"yq-helper-image", "hermeto-image", "hermeto-prefetch", "resolve-only", "secure-build", "reproducible", "restore-sources-ref", "insecure-registry",
+								"yq-helper-image", "hermeto-image", "oci-repo-image", "hermeto-prefetch", "resolve-only", "secure-build", "reproducible", "restore-sources-ref", "insecure-registry",
 							),
 							traceIDPipelineParam(),
 						)...,

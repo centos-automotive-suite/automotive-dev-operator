@@ -12,7 +12,7 @@ import (
 )
 
 var _ = Describe("Secure builds with OCI repositories", func() {
-	It("rejects repositories on secure builds and schedule templates", func() {
+	It("requires pinned repositories on secure builds and schedule templates", func() {
 		ctx := context.Background()
 		tag := "quay.io/org/rpms:v1"
 		pinned := tag + "@sha256:" + strings.Repeat("a", 64)
@@ -37,8 +37,8 @@ var _ = Describe("Secure builds with OCI repositories", func() {
 			schedule := &api.ScheduledImageBuild{ObjectMeta: metav1.ObjectMeta{Name: tc.name, Namespace: "default"}, Spec: api.ScheduledImageBuildSpec{Schedule: "0 0 * * *", ImageBuildTemplate: api.ImageBuildTemplateSpec{Spec: spec}}}
 			for _, obj := range []client.Object{build, schedule} {
 				err := k8sClient.Create(ctx, obj)
-				if tc.secure && tc.ref != "" {
-					Expect(err).To(MatchError(ContainSubstring("secure builds do not support OCI repository images")))
+				if tc.secure && tc.ref == tag {
+					Expect(err).To(MatchError(ContainSubstring("secure builds require digest-pinned OCI repository images")))
 				} else {
 					Expect(err).NotTo(HaveOccurred())
 					DeferCleanup(func() { Expect(k8sClient.Delete(ctx, obj)).To(Succeed()) })
