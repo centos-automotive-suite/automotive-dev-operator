@@ -571,3 +571,26 @@ func TestFlashOCICredentialsServiceAccount(t *testing.T) {
 		})
 	}
 }
+
+func TestRestoreOCIRepositoryUsesArchivedSources(t *testing.T) {
+	build := planTestBuild()
+	ref := "quay.io/example/rpms:v1@sha256:" + strings.Repeat("a", 64)
+	build.Spec.AIB.OCIRepoImages = []string{ref}
+	build.Spec.RestoreSourcesRef = "quay.io/example/prior@sha256:" + strings.Repeat("b", 64)
+	run, err := newPipelineRun(pipelineRunInputs{build: build, operatorConfig: &automotivev1alpha1.OperatorConfig{}, manifestConfigMap: "manifest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := planParamValues(run)["oci-repo-image"]; got != ref {
+		t.Fatalf("repo param=%q", got)
+	}
+	for _, volume := range run.Spec.TaskRunTemplate.PodTemplate.Volumes {
+		if volume.Name == tasks.OCIRepoVolumeName {
+			if volume.Image != nil || volume.EmptyDir == nil {
+				t.Fatalf("restore depends on repository image: %+v", volume)
+			}
+			return
+		}
+	}
+	t.Fatal("missing repository placeholder")
+}

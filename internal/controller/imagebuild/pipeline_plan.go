@@ -121,7 +121,12 @@ func buildConfigFromOperatorConfig(operatorConfig *automotivev1alpha1.OperatorCo
 
 // baseParams builds the stable Tekton parameter set.
 func baseParams(imageBuild *automotivev1alpha1.ImageBuild, operatorConfig *automotivev1alpha1.OperatorConfig, exportFormat string, extraArgs []string, buildConfig *tasks.BuildConfig) []tektonv1.Param {
+	repoImage := ""
+	if refs := imageBuild.Spec.GetOCIRepoImages(); len(refs) > 0 {
+		repoImage = refs[0]
+	}
 	params := []tektonv1.Param{
+		stringParam("oci-repo-image", repoImage),
 		stringParam("arch", imageBuild.Spec.Architecture),
 		stringParam("distro", imageBuild.Spec.GetDistro()),
 		stringParam("target", imageBuild.Spec.GetTarget()),
@@ -327,7 +332,11 @@ func pipelineRunObject(imageBuild *automotivev1alpha1.ImageBuild, operatorConfig
 		podTemplate.RuntimeClassName = new(imageBuild.Spec.RuntimeClassName)
 	}
 	podTemplate.Volumes = append(podTemplate.Volumes, tasks.OCIVolumes(buildConfig)...)
-	podTemplate.Volumes = append(podTemplate.Volumes, ociRepoVolumes(imageBuild.Spec.GetOCIRepoImages())...)
+	repoImages := imageBuild.Spec.GetOCIRepoImages()
+	if imageBuild.Spec.RestoreSourcesRef != "" {
+		repoImages = nil
+	}
+	podTemplate.Volumes = append(podTemplate.Volumes, ociRepoVolumes(repoImages)...)
 	pipelineRunSpec := tektonv1.PipelineRunSpec{
 		Params:     params,
 		Workspaces: pipelineWorkspaces,

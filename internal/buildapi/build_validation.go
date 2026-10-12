@@ -22,8 +22,12 @@ func validateBuildRequest(req *buildcontract.BuildRequest) error {
 	if err := validateOCIRepoImages(req.OCIRepoImages); err != nil {
 		return err
 	}
-	if req.SecureBuild && len(req.OCIRepoImages) > 0 {
-		return fmt.Errorf("secure builds do not support OCI repository images: Hermeto requires HTTP(S) RPM URLs")
+	if req.SecureBuild {
+		for _, ref := range req.OCIRepoImages {
+			if !digestPinnedRef.MatchString(ref) {
+				return fmt.Errorf("secure builds require digest-pinned OCI repository images: %q", ref)
+			}
+		}
 	}
 	if !buildcontract.ValidBuilderCachePolicy(req.BuilderCachePolicy) {
 		return fmt.Errorf("invalid builderCachePolicy %q: must be validate or reuse", req.BuilderCachePolicy)
