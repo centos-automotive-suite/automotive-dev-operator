@@ -26,7 +26,7 @@ require (
 	k8s.io/apimachinery v0.37.1
 	k8s.io/apiserver v0.37.1
 	k8s.io/client-go v0.37.1
-	knative.dev/pkg v0.0.0-20260918182429-5dc1978f0042
+	knative.dev/pkg v0.0.0-20261013193643-0795cb87d2bd
 	oras.land/oras-go/v2 v2.6.2
 	sigs.k8s.io/controller-runtime v0.25.1
 )
@@ -221,7 +221,7 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0
 	golang.org/x/time v0.16.0 // indirect
-	golang.org/x/tools v0.50.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260921155816-b14227669459 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459 // indirect

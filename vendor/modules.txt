@@ -1346,7 +1346,7 @@ golang.org/x/text/unicode/norm
 # golang.org/x/time v0.16.0
 ## explicit; go 1.26.0
 golang.org/x/time/rate
-# golang.org/x/tools v0.50.0
+# golang.org/x/tools v0.51.0
 ## explicit; go 1.26.0
 golang.org/x/tools/cover
 golang.org/x/tools/go/ast/edge
@@ -1354,7 +1354,6 @@ golang.org/x/tools/go/ast/inspector
 golang.org/x/tools/go/gcexportdata
 golang.org/x/tools/go/packages
 golang.org/x/tools/go/types/objectpath
-golang.org/x/tools/internal/aliases
 golang.org/x/tools/internal/event
 golang.org/x/tools/internal/event/core
 golang.org/x/tools/internal/event/keys
@@ -2052,8 +2051,8 @@ k8s.io/utils/ptr
 k8s.io/utils/strings/slices
 k8s.io/utils/third_party/forked/golang/btree
 k8s.io/utils/trace
-# knative.dev/pkg v0.0.0-20260918182429-5dc1978f0042
-## explicit; go 1.25.0
+# knative.dev/pkg v0.0.0-20261013193643-0795cb87d2bd
+## explicit; go 1.26.0
 knative.dev/pkg/apis
 knative.dev/pkg/apis/duck
 knative.dev/pkg/apis/duck/ducktypes
