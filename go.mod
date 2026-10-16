@@ -27,7 +27,7 @@ require (
 	k8s.io/apiserver v0.37.1
 	k8s.io/client-go v0.37.1
 	knative.dev/pkg v0.0.0-20260918182429-5dc1978f0042
-	oras.land/oras-go/v2 v2.6.2
+	oras.land/oras-go/v2 v2.6.3
 	sigs.k8s.io/controller-runtime v0.25.1
 )
 
@@ -217,7 +217,7 @@ require (
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0
 	golang.org/x/time v0.16.0 // indirect
