@@ -838,7 +838,7 @@ github.com/secure-systems-lab/go-securesystemslib/signerverifier
 # github.com/shibumi/go-pathspec v1.3.0
 ## explicit; go 1.17
 github.com/shibumi/go-pathspec
-# github.com/shipwright-io/build v0.21.5
+# github.com/shipwright-io/build v0.21.9
 ## explicit; go 1.26.4
 github.com/shipwright-io/build/pkg/apis/build/v1alpha1
 github.com/shipwright-io/build/pkg/apis/build/v1beta1
@@ -1271,7 +1271,7 @@ golang.org/x/exp/slices
 ## explicit; go 1.26.0
 golang.org/x/mod/semver
 golang.org/x/mod/sumdb/note
-# golang.org/x/net v0.59.0
+# golang.org/x/net v0.60.0
 ## explicit; go 1.26.0
 golang.org/x/net/bpf
 golang.org/x/net/html
