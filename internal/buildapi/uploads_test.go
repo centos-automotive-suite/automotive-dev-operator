@@ -491,27 +491,91 @@ func TestUploadFiles_PathFieldTooLargeRejected(t *testing.T) {
 	}
 }
 
-func TestUploadFiles_TotalSizeEnforcedBeforePodCopy(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	fix.server.limits.MaxTotalUploadSize = 5
-	fix.server.limits.MaxUploadFileSize = 100
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = buildMultipartRequest(t, []multipartPart{
-		{"big.bin", "more-than-five-bytes"},
-	})
-
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("expected 413, got %d: %s", w.Code, w.Body.String())
+func TestUploadFiles_StreamingTotalSizeLimit(t *testing.T) {
+	tests := []struct {
+		name         string
+		parts        []multipartPart
+		wantStatus   int
+		wantUploaded map[string]string
+	}{
+		{
+			name:         "single file at limit",
+			parts:        []multipartPart{{"one.bin", "12345"}},
+			wantStatus:   http.StatusOK,
+			wantUploaded: map[string]string{"/workspace/shared/one.bin": "12345"},
+		},
+		{
+			name:         "multiple files below limit",
+			parts:        []multipartPart{{"one.bin", "12"}, {"two.bin", "34"}},
+			wantStatus:   http.StatusOK,
+			wantUploaded: map[string]string{"/workspace/shared/one.bin": "12", "/workspace/shared/two.bin": "34"},
+		},
+		{
+			name:         "multiple files at limit",
+			parts:        []multipartPart{{"one.bin", "12"}, {"two.bin", "345"}},
+			wantStatus:   http.StatusOK,
+			wantUploaded: map[string]string{"/workspace/shared/one.bin": "12", "/workspace/shared/two.bin": "345"},
+		},
+		{
+			name:       "single file over limit",
+			parts:      []multipartPart{{"one.bin", "123456"}},
+			wantStatus: http.StatusRequestEntityTooLarge,
+		},
+		{
+			name:         "multiple files over limit",
+			parts:        []multipartPart{{"one.bin", "123"}, {"two.bin", "456"}, {"three.bin", "7"}},
+			wantStatus:   http.StatusRequestEntityTooLarge,
+			wantUploaded: map[string]string{"/workspace/shared/one.bin": "123"},
+		},
 	}
-	if len(fix.uploaded) != 0 {
-		t.Fatalf("expected no files copied to pod, got %d", len(fix.uploaded))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			build := newTestImageBuild()
+			fix := setupUploadTest(t, build, newTestUploadPod())
+			fix.server.limits.MaxTotalUploadSize = 5
+			fix.server.limits.MaxUploadFileSize = 100
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = buildMultipartRequest(t, tt.parts)
+			// Bypass the Content-Length guard so the streamed file bytes enforce the limit.
+			c.Request.ContentLength = -1
+
+			fix.server.uploadFiles(c, "test-build")
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d: %s", w.Code, tt.wantStatus, w.Body.String())
+			}
+			if tt.wantStatus == http.StatusRequestEntityTooLarge {
+				var resp map[string]string
+				if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("decode error response: %v", err)
+				}
+				if got, want := resp["error"], "total upload size exceeded: maximum 5 bytes"; got != want {
+					t.Errorf("error = %q, want %q", got, want)
+				}
+			}
+			if len(fix.uploaded) != len(tt.wantUploaded) {
+				t.Errorf("copied files = %v, want %v", keysOf(fix.uploaded), tt.wantUploaded)
+			}
+			for path, want := range tt.wantUploaded {
+				if got, ok := fix.uploaded[path]; !ok || string(got) != want {
+					t.Errorf("copied file %q = %q (present: %t), want %q", path, got, ok, want)
+				}
+			}
+
+			updated := &automotivev1alpha1.ImageBuild{}
+			if err := fix.fakeK8s.Get(context.Background(), ctrlclient.ObjectKeyFromObject(build), updated); err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantStatus == http.StatusOK {
+				if got := updated.Annotations[labels.UploadsComplete]; got != labels.ValueTrue {
+					t.Errorf("UploadsComplete = %q, want %q", got, labels.ValueTrue)
+				}
+			} else if value, exists := updated.Annotations[labels.UploadsComplete]; exists {
+				t.Errorf("rejected upload marked complete: %q", value)
+			}
+		})
 	}
 }
 
