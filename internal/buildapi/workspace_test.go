@@ -6,25 +6,37 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/gin-gonic/gin"
-	"github.com/go-logr/logr"
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 )
 
 var _ = Describe("Workspace API", func() {
 	var (
-		server *APIServer
-		logger logr.Logger
+		server    *APIServer
+		authToken string
 	)
 
 	BeforeEach(func() {
 		gin.SetMode(gin.TestMode)
-		logger = logr.Discard()
-		server = NewAPIServer(":0", logger)
+		server = newTestServer(GinkgoT(), nil)
+		server.internalJWT = &internalJWTConfig{
+			issuer: "workspace-test", audience: "workspace-api", key: []byte("workspace-test-signing-key-32-bytes"),
+		}
+		server.lastAuthConfigCheck = time.Now()
+		server.router = server.createRouter()
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+			Issuer: server.internalJWT.issuer, Audience: jwt.ClaimStrings{server.internalJWT.audience},
+			Subject: "workspace-user", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		})
+		var err error
+		authToken, err = token.SignedString(server.internalJWT.key)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	AfterEach(func() {
@@ -75,23 +87,26 @@ var _ = Describe("Workspace API", func() {
 			req, err := http.NewRequest("POST", "/v1/workspaces", bytes.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+authToken)
 
 			w := httptest.NewRecorder()
 			server.router.ServeHTTP(w, req)
 
-			// 401 because no auth — but the route must exist (not 404)
-			Expect(w.Code).To(Equal(http.StatusUnauthorized))
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).To(MatchJSON(`{"error":"name is required"}`))
 		})
 
 		It("should reject invalid JSON", func() {
 			req, err := http.NewRequest("POST", "/v1/workspaces", bytes.NewReader([]byte("not json")))
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+authToken)
 
 			w := httptest.NewRecorder()
 			server.router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusUnauthorized))
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).To(MatchJSON(`{"error":"invalid JSON request"}`))
 		})
 	})
 
@@ -137,11 +152,13 @@ var _ = Describe("Workspace API", func() {
 			req, err := http.NewRequest("POST", "/v1/workspaces/my-app/exec", bytes.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+authToken)
 
 			w := httptest.NewRecorder()
 			server.router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusUnauthorized))
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).To(MatchJSON(`{"error":"command is required"}`))
 		})
 	})
 
@@ -151,11 +168,13 @@ var _ = Describe("Workspace API", func() {
 			req, err := http.NewRequest("POST", "/v1/workspaces/my-app/deploy", bytes.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+authToken)
 
 			w := httptest.NewRecorder()
 			server.router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusUnauthorized))
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).To(MatchJSON(`{"error":"at least one artifact mapping is required"}`))
 		})
 	})
 })
