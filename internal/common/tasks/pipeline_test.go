@@ -1,6 +1,9 @@
 package tasks
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -226,38 +229,6 @@ func TestGeneratePushTask_HasExpectedDigestParam(t *testing.T) {
 		}
 	}
 	t.Fatal("push task should have expected-artifact-digest param")
-}
-
-func TestCollectImagesScript_Format(t *testing.T) {
-	// Verify the finally task script reads from workspace files
-	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
-
-	for _, task := range pipeline.Spec.Finally {
-		if task.Name == "collect-images-result" {
-			if task.TaskSpec == nil {
-				t.Fatal("collect-images-result should have inline TaskSpec")
-			}
-			if len(task.TaskSpec.Steps) == 0 {
-				t.Fatal("collect-images-result should have steps")
-			}
-			script := task.TaskSpec.Steps[0].Script
-			if script == "" {
-				t.Fatal("collect step should have a script")
-			}
-			// Verify the script reads from workspace chain result files
-			if !strings.Contains(script, "CHAINS_DIR") {
-				t.Error("script should define CHAINS_DIR for workspace result files")
-			}
-			if !strings.Contains(script, "$CHAINS_DIR/container/url") {
-				t.Error("script should read container URL from workspace")
-			}
-			if !strings.Contains(script, "$CHAINS_DIR/disk/url") {
-				t.Error("script should read disk URL from workspace")
-			}
-			return
-		}
-	}
-	t.Fatal("pipeline should have collect-images-result task")
 }
 
 func TestInsecureRegistryParam_Pipeline(t *testing.T) {
@@ -823,27 +794,85 @@ func TestPipeline_S3AuthWorkspace_Optional(t *testing.T) {
 
 // TestImagesResultFormat verifies the image@digest format Chains expects
 func TestImagesResultFormat(t *testing.T) {
-	// Simulate what the collect-images script produces
-	containerURL := "registry.example.com/img:v1"
-	containerDigest := "sha256:abc123"
-	diskURL := "registry.example.com/disk:v1"
-	diskDigest := "sha256:def456"
-
-	result := containerURL + "@" + containerDigest + "\n" + diskURL + "@" + diskDigest
-
-	lines := strings.Split(result, "\n")
-	if len(lines) != 2 {
-		t.Errorf("expected 2 image lines, got %d", len(lines))
+	pipeline := GenerateTektonPipeline("test-pipeline", "test-ns", &BuildConfig{})
+	var script string
+	for _, task := range pipeline.Spec.Finally {
+		if task.Name == "collect-images-result" && task.TaskSpec != nil && len(task.TaskSpec.Steps) == 1 {
+			script = task.TaskSpec.Steps[0].Script
+		}
 	}
-	for _, line := range lines {
-		parts := strings.SplitN(line, "@", 2)
-		if len(parts) != 2 {
-			t.Errorf("line %q should contain exactly one '@' separator", line)
-			continue
-		}
-		if !strings.HasPrefix(parts[1], "sha256:") {
-			t.Errorf("digest %q should start with sha256:", parts[1])
-		}
+	if script == "" {
+		t.Fatal("pipeline missing collect-images-result script")
+	}
+
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{
+			name: "container and disk",
+			files: map[string]string{
+				"container/url": "registry.example.com/img:v1", "container/digest": "sha256:abc123",
+				"disk/url": "registry.example.com/disk:v1", "disk/digest": "sha256:def456",
+			},
+			want: "registry.example.com/img:v1@sha256:abc123\nregistry.example.com/disk:v1@sha256:def456",
+		},
+		{
+			name:  "container only",
+			files: map[string]string{"container/url": "registry.example.com/img:v1", "container/digest": "sha256:abc123"},
+			want:  "registry.example.com/img:v1@sha256:abc123",
+		},
+		{
+			name:  "disk only",
+			files: map[string]string{"disk/url": "registry.example.com/disk:v1", "disk/digest": "sha256:def456"},
+			want:  "registry.example.com/disk:v1@sha256:def456",
+		},
+		{name: "no published artifacts"},
+		{
+			name:  "incomplete results",
+			files: map[string]string{"container/url": "registry.example.com/img:v1", "disk/digest": "sha256:def456"},
+		},
+		{
+			name: "empty results",
+			files: map[string]string{
+				"container/url": "", "container/digest": "sha256:abc123",
+				"disk/url": "registry.example.com/disk:v1", "disk/digest": "",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			workspace := filepath.Join(dir, "shared workspace")
+			for name, content := range tc.files {
+				path := filepath.Join(workspace, ".chains", name)
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result := filepath.Join(dir, "images result")
+			// Supply the workspace mount and Tekton result path; execute the
+			// generated script's artifact selection and formatting unchanged.
+			rendered := strings.NewReplacer(
+				"/workspace/shared", "$TEST_WORKSPACE",
+				"$(results.IMAGES.path)", "$TEST_RESULT",
+			).Replace(script)
+			cmd := exec.Command("sh", "-c", rendered)
+			cmd.Env = append(os.Environ(), "TEST_WORKSPACE="+workspace, "TEST_RESULT="+result)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("collect images failed: %v\n%s", err, out)
+			}
+			got, err := os.ReadFile(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("IMAGES = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
