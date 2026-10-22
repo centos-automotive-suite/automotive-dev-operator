@@ -40,9 +40,11 @@ func fullVersion() string {
 func newRootCmd() *cobra.Command {
 	state := newRuntimeState()
 	rootCmd := &cobra.Command{
-		Use:     "caib",
-		Short:   "Cloud Automotive Image Builder",
-		Version: fullVersion(),
+		Use:           "caib",
+		Short:         "Cloud Automotive Image Builder",
+		Version:       fullVersion(),
+		SilenceErrors: true, // main prints errors once, including actionable hints.
+		SilenceUsage:  true, // Full flag listings belong in --help.
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			f := strings.ToLower(strings.TrimSpace(state.Output.Format))
 			if !validOutputFormats[f] {
@@ -90,6 +92,10 @@ func newRootCmd() *cobra.Command {
 		authcmd.NewAuthCmd(),
 		workspace.NewWorkspaceCmd(&state.Output.Format),
 	)
+	configureCompletions(rootCmd)
+	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return fmt.Errorf("%w\nSee '%s --help' for usage", err, cmd.CommandPath())
+	})
 
 	return rootCmd
 }

@@ -78,6 +78,35 @@ caib image build-dev manifest.aib.yml \
   -o ./output/disk.qcow2
 ```
 
+## Help and Shell Completion
+
+`caib image --help` groups commands by task. `caib image build --help` starts
+with recipes for downloading a disk, publishing a bootc image, and building
+and flashing a board, followed by flags grouped by purpose. The `build-dev`
+and `disk` commands use the same flag groups.
+
+Enable completion in your current shell:
+
+```bash
+# Bash (requires the bash-completion package)
+source <(caib completion bash)
+
+# Zsh (after enabling compinit)
+source <(caib completion zsh)
+```
+
+Run `caib completion --help` to choose a shell, then
+`caib completion <shell> --help` for installation instructions.
+Completion suggests formats, architectures, configured targets, image build
+names, container build names, and workspace names. For example, press Tab after
+`caib image build --target ` or `caib workspace shell `.
+
+Server-backed suggestions use `--server`, `CAIB_SERVER`, or the saved endpoint
+from `caib login`. They use `--token` or `CAIB_TOKEN`, a valid cached login for
+the saved endpoint, or a token already stored in kubeconfig. Requests time out
+after one second and return no suggestions if the server or authentication fails;
+completion does not start a login flow or run kubeconfig credential plugins.
+
 ## Flag Inference
 
 Many flags are automatically inferred from context:
