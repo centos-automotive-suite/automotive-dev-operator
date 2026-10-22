@@ -140,6 +140,7 @@ func builderCacheTestScript(t *testing.T, entrypoint, dir string) string {
 	t.Helper()
 	body := builderCacheHarness + builderCacheScript
 	if entrypoint == "build" {
+		body += shellFunctions(t, buildImageScript, "stop_workspace_sampler() {", "workspace_peak_bytes() {")
 		body += shellFunctions(t, buildImageScript, "cleanup() {", "fail() {")
 		body += shellFunctions(t, buildImageScript, "BOOTC_CONTAINER_NAME=", "\nprepare_builder_if_needed() {")
 		body += shellFunctions(t, buildImageScript, "prepare_builder_if_needed() {", "\nprepare_builder_if_needed\n") + "\nprepare_builder_if_needed\n"

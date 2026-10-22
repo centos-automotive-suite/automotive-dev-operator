@@ -41,6 +41,10 @@ FINAL_NAME=""
 AIB_BUILD_NETWORK_DISABLED=false
 AIB_SOURCE_PREFETCH_REQUIRED=false
 BUILDER_AUTH_FILE=""
+WORKSPACE_PEAK_FILE="/tmp/workspace-peak-bytes"
+WORKSPACE_SAMPLER_PID=""
+NETWORK_RX_START=""
+CONTAINER_IMAGE_BYTES=""
 
 cleanup() {
   local status=$?
@@ -53,6 +57,7 @@ cleanup() {
     kill "$AIB_METADATA_PID" 2>/dev/null || true
     wait "$AIB_METADATA_PID" 2>/dev/null || true
   fi
+  stop_workspace_sampler
   [ -z "$RESTORE_TMPDIR" ] || rm -rf "$RESTORE_TMPDIR"
   [ -z "$CONTAINER_OCI_DIR" ] || rm -rf "$CONTAINER_OCI_DIR"
   [ -z "${BUILDER_AUTH_FILE:-}" ] || rm -f "$BUILDER_AUTH_FILE"
@@ -72,6 +77,105 @@ validate_boolean() {
     true|false) ;;
     *) fail "$name must be true or false, got '$value'" ;;
   esac
+}
+
+# Build cost measurements. A value that cannot be measured is reported as
+# null, never zero, so a gate can tell "not measured" from "nothing used".
+filesystem_used_bytes() {
+  df -B1 --output=used "$1" 2>/dev/null | awk 'NR == 2 && $1 ~ /^[0-9]+$/ { print $1 }'
+}
+
+# /sys is the host's (hostPath mount), but /proc/net follows this pod's network
+# namespace. Only the default-route interface carries downloads; loopback and
+# bridges for nested containers would count the same bytes again.
+network_rx_bytes() {
+  local proc_net="$1" iface
+  iface=$(awk '$2 == "00000000" { print $1; exit }' "$proc_net/route" 2>/dev/null)
+  [ -n "$iface" ] || iface=$(awk '$1 ~ /^0+$/ && $2 == "00" && $10 != "lo" { print $10; exit }' "$proc_net/ipv6_route" 2>/dev/null)
+  [ -n "$iface" ] || return 0
+  sed 's/:/ /' "$proc_net/dev" | awk -v iface="$iface" '$1 == iface { print $2; exit }'
+}
+
+# Scratch space is released before the build ends, so sample the workspace
+# volume for its peak rather than reading usage once at the end.
+start_workspace_sampler() {
+  local used
+  used=$(filesystem_used_bytes "$WORKSPACE_PATH")
+  [ -n "$used" ] || return 0
+  printf '%s' "$used" > "$WORKSPACE_PEAK_FILE"
+  (
+    local peak="$used"
+    while sleep 5; do
+      used=$(filesystem_used_bytes "$WORKSPACE_PATH")
+      if [ -n "$used" ] && [ "$used" -gt "$peak" ]; then
+        peak="$used"
+        printf '%s' "$peak" > "$WORKSPACE_PEAK_FILE.tmp" && mv "$WORKSPACE_PEAK_FILE.tmp" "$WORKSPACE_PEAK_FILE"
+      fi
+    done
+  ) >/dev/null 2>&1 &
+  WORKSPACE_SAMPLER_PID=$!
+}
+
+stop_workspace_sampler() {
+  if [ -n "$WORKSPACE_SAMPLER_PID" ]; then
+    kill "$WORKSPACE_SAMPLER_PID" 2>/dev/null || true
+    wait "$WORKSPACE_SAMPLER_PID" 2>/dev/null || true
+    WORKSPACE_SAMPLER_PID=""
+  fi
+}
+
+workspace_peak_bytes() {
+  local peak used
+  peak=$(cat "$WORKSPACE_PEAK_FILE" 2>/dev/null)
+  [[ "$peak" =~ ^[0-9]+$ ]] || return 0
+  used=$(filesystem_used_bytes "$WORKSPACE_PATH")
+  if [ -n "$used" ] && [ "$used" -gt "$peak" ]; then
+    peak="$used"
+  fi
+  printf '%s' "$peak"
+}
+
+# Compressed size of what artifact-filename names: the disk when one was
+# built, otherwise the pushed container. FINAL_NAME is set by finalize_artifact:
+#   <name>.raw.gz etc.   a compressed disk file in $WORKSPACE_PATH
+#   <name>.tar.gz        whose parts may instead be in "$WORKSPACE_PATH/<name>.tar.gz-parts"
+#   container:<ref>      only a container was pushed
+# Part .size files record uncompressed sizes and are not counted. Always
+# returns 0 so a failed measurement is reported as null, not a build failure.
+artifact_bytes() {
+  local size="" total=0 part
+  case "$FINAL_NAME" in
+    "") return 0 ;;
+    container:*) size="${CONTAINER_IMAGE_BYTES:-}" ;;
+    *)
+      if [ -d "$WORKSPACE_PATH/${FINAL_NAME}-parts" ]; then
+        for part in "$WORKSPACE_PATH/${FINAL_NAME}-parts"/*; do
+          [[ "$part" == *.size ]] && continue
+          size=$($GET_SIZE_CMD "$part" 2>/dev/null) || return 0
+          [[ "$size" =~ ^[0-9]+$ ]] || return 0
+          total=$((total + size))
+        done
+        size=$total
+      else
+        size=$($GET_SIZE_CMD "$WORKSPACE_PATH/$FINAL_NAME" 2>/dev/null) || return 0
+      fi ;;
+  esac
+  if [[ "$size" =~ ^[0-9]+$ ]]; then printf '%s' "$size"; fi
+  return 0
+}
+
+# What a pull downloads besides the manifest: the config and layers it lists.
+oci_image_bytes() {
+  python3 -c 'import json,sys,pathlib; d=pathlib.Path(sys.argv[1]); e=json.loads((d/"index.json").read_text())["manifests"][0]; m=json.loads((d/"blobs"/e["digest"].replace(":","/")).read_text()); print(m["config"]["size"]+sum(l["size"] for l in m["layers"]))' "$1" 2>/dev/null || true
+}
+
+json_number_or_null() {
+  if [[ "$1" =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf 'null'; fi
+}
+
+build_timing_json() {
+  printf '{"setup_s":%d,"build_s":%d,"post_build_s":%d,"total_s":%d,"artifact_bytes":%s,"downloaded_bytes":%s,"peak_workspace_bytes":%s}' \
+    "$1" "$2" "$3" "$4" "$(json_number_or_null "$5")" "$(json_number_or_null "$6")" "$(json_number_or_null "$7")"
 }
 
 validate_config() {
@@ -117,6 +221,8 @@ validate_config() {
 }
 
 validate_config
+start_workspace_sampler
+NETWORK_RX_START=$(network_rx_bytes /proc/net)
 
 NEEDS_DISK=false
 case "$BUILD_MODE" in
@@ -752,6 +858,7 @@ prepare_container_image() {
   log_elapsed "Container copy to OCI" "$prepare_start" "$copy_done"
 
   annotate_oci_image "$CONTAINER_OCI_DIR"
+  CONTAINER_IMAGE_BYTES=$(oci_image_bytes "$CONTAINER_OCI_DIR")
   log_elapsed "Container annotation" "$copy_done"
   CONTAINER_IMAGE_DIGEST=$(skopeo inspect --format '{{.Digest}}' "oci:${CONTAINER_OCI_DIR}:latest")
   [ -n "$CONTAINER_IMAGE_DIGEST" ] || fail "prepared container has no digest"
@@ -1096,9 +1203,20 @@ BUILD_END_TIME=$(date +%s)
 log_elapsed "Post-build phase" "$AIB_END_TIME" "$BUILD_END_TIME"
 log_elapsed "Total build-image step" "$BUILD_START_TIME" "$BUILD_END_TIME"
 
-BUILD_TIMING=$(printf '{"setup_s":%d,"build_s":%d,"post_build_s":%d,"total_s":%d}' \
+stop_workspace_sampler
+NETWORK_RX_END=$(network_rx_bytes /proc/net)
+DOWNLOADED_BYTES=""
+if [[ "$NETWORK_RX_START" =~ ^[0-9]+$ && "$NETWORK_RX_END" =~ ^[0-9]+$ ]] && [ "$NETWORK_RX_END" -ge "$NETWORK_RX_START" ]; then
+  DOWNLOADED_BYTES=$((NETWORK_RX_END - NETWORK_RX_START))
+fi
+
+BUILD_TIMING=$(build_timing_json \
   "$((AIB_INVOKE_TIME - BUILD_START_TIME))" \
   "$((AIB_END_TIME - AIB_INVOKE_TIME))" \
   "$((BUILD_END_TIME - AIB_END_TIME))" \
-  "$((BUILD_END_TIME - BUILD_START_TIME))")
+  "$((BUILD_END_TIME - BUILD_START_TIME))" \
+  "$(artifact_bytes)" \
+  "$DOWNLOADED_BYTES" \
+  "$(workspace_peak_bytes)")
+echo "Build timing and cost: $BUILD_TIMING"
 write_result build-timing "$BUILD_TIMING"

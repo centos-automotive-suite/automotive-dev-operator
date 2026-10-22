@@ -51,6 +51,9 @@ func observeTask(status *api.ImageBuildStatus, tr *tekton.TaskRun, stage string)
 		if value := terminal.TaskResult(tr, "builder-image"); value != "" {
 			status.BuilderImageUsed = value
 		}
+		if timing, ok := parseBuildTiming(terminal.TaskResult(tr, "build-timing")); ok {
+			status.Cost = timing.cost()
+		}
 	case pipelineTaskPushDisk:
 		addArtifact(status, "disk", terminal.TaskResult(tr, "IMAGE_URL"), terminal.TaskResult(tr, "IMAGE_DIGEST"))
 	case "push-disk-artifact-s3":

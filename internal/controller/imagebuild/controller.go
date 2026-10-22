@@ -1952,11 +1952,42 @@ func taskRunFailureMessage(taskRun *tektonv1.TaskRun, fallback string) string {
 }
 
 // extractProvenance extracts build provenance information from PipelineRun results
-// buildTiming holds the timing breakdown written by build_image.sh.
+// buildTiming holds the timing and cost breakdown written by build_image.sh.
 type buildTiming struct {
-	SetupS     float64 `json:"setup_s"`
-	BuildS     float64 `json:"build_s"`
-	PostBuildS float64 `json:"post_build_s"`
+	SetupS             float64 `json:"setup_s"`
+	BuildS             float64 `json:"build_s"`
+	PostBuildS         float64 `json:"post_build_s"`
+	ArtifactBytes      *int64  `json:"artifact_bytes"`
+	DownloadedBytes    *int64  `json:"downloaded_bytes"`
+	PeakWorkspaceBytes *int64  `json:"peak_workspace_bytes"`
+}
+
+func parseBuildTiming(value string) (buildTiming, bool) {
+	var timing buildTiming
+	if err := json.Unmarshal([]byte(value), &timing); err != nil {
+		return buildTiming{}, false
+	}
+	return timing, true
+}
+
+// cost returns nil when the build step measured nothing, as older task
+// definitions do. Negative values would fail status schema validation.
+func (t buildTiming) cost() *automotivev1alpha1.BuildCost {
+	measured := func(value *int64) *int64 {
+		if value == nil || *value < 0 {
+			return nil
+		}
+		return new(*value)
+	}
+	cost := &automotivev1alpha1.BuildCost{
+		ArtifactBytes:      measured(t.ArtifactBytes),
+		DownloadedBytes:    measured(t.DownloadedBytes),
+		PeakWorkspaceBytes: measured(t.PeakWorkspaceBytes),
+	}
+	if *cost == (automotivev1alpha1.BuildCost{}) {
+		return nil
+	}
+	return cost
 }
 
 // recordBuildMetrics records Prometheus metrics from a completed build.
@@ -1964,10 +1995,10 @@ func recordBuildMetrics(imageBuild *automotivev1alpha1.ImageBuild, pipelineRun *
 	mode := imageBuild.Spec.GetMode()
 	distro := imageBuild.Spec.GetDistro()
 	target := imageBuild.Spec.GetTarget()
-	format := imageBuild.Spec.GetExportFormat()
 	arch := imageBuild.Spec.Architecture
+	labels := buildMetricLabels(imageBuild, status)
 
-	BuildTotal.WithLabelValues(mode, distro, target, format, arch, status).Inc()
+	BuildTotal.WithLabelValues(labels...).Inc()
 
 	// Record wall-clock duration from CR timestamps
 	start := imageBuild.Status.StartTime
@@ -1976,10 +2007,10 @@ func recordBuildMetrics(imageBuild *automotivev1alpha1.ImageBuild, pipelineRun *
 	}
 	if end := buildCompletionTime(imageBuild); start != nil && end != nil {
 		duration := end.Sub(start.Time).Seconds()
-		BuildDuration.WithLabelValues(mode, distro, target, format, arch, status).Observe(duration)
+		BuildDuration.WithLabelValues(labels...).Observe(duration)
 	}
 
-	// Record phase-level timing from the build-timing Tekton result
+	// Record phase-level timing and cost from the build-timing Tekton result
 	if status != buildStatusSuccess || pipelineRun == nil {
 		return
 	}
@@ -1987,14 +2018,26 @@ func recordBuildMetrics(imageBuild *automotivev1alpha1.ImageBuild, pipelineRun *
 		if result.Name != "build-timing" {
 			continue
 		}
-		var timing buildTiming
-		if err := json.Unmarshal([]byte(result.Value.StringVal), &timing); err != nil {
+		timing, ok := parseBuildTiming(result.Value.StringVal)
+		if !ok {
 			break
 		}
-		labels := []string{mode, distro, target}
-		BuildPhaseDuration.WithLabelValues(append(labels, "setup")...).Observe(timing.SetupS)
-		BuildPhaseDuration.WithLabelValues(append(labels, "build")...).Observe(timing.BuildS)
-		BuildPhaseDuration.WithLabelValues(append(labels, "post_build")...).Observe(timing.PostBuildS)
+		phaseLabels := []string{mode, distro, target}
+		BuildPhaseDuration.WithLabelValues(append(phaseLabels, "setup")...).Observe(timing.SetupS)
+		BuildPhaseDuration.WithLabelValues(append(phaseLabels, "build")...).Observe(timing.BuildS)
+		BuildPhaseDuration.WithLabelValues(append(phaseLabels, "post_build")...).Observe(timing.PostBuildS)
+		if cost := timing.cost(); cost != nil {
+			costLabels := []string{mode, distro, target, artifactFormat(imageBuild), arch}
+			if cost.ArtifactBytes != nil {
+				BuildArtifactBytes.WithLabelValues(costLabels...).Observe(float64(*cost.ArtifactBytes))
+			}
+			if cost.DownloadedBytes != nil {
+				BuildDownloadedBytes.WithLabelValues(costLabels...).Observe(float64(*cost.DownloadedBytes))
+			}
+			if cost.PeakWorkspaceBytes != nil {
+				BuildPeakWorkspaceBytes.WithLabelValues(costLabels...).Observe(float64(*cost.PeakWorkspaceBytes))
+			}
+		}
 		break
 	}
 }

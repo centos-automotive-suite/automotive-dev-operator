@@ -110,6 +110,8 @@ finish_aib_metadata_capture() { :; }
 emit_progress() { :; }
 log_elapsed() { :; }
 annotate_oci_image() { echo sha256:final > "$TEST_DIR/oci.digest"; }
+oci_image_bytes() { :; }
+stop_workspace_sampler() { :; }
 wait_for_test_file() {
   local i
   for ((i=0; i<200; i++)); do

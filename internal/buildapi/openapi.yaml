@@ -558,6 +558,8 @@ components:
           description: When the build completed (RFC 3339)
           format: date-time
           type: string
+        cost:
+          $ref: '#/components/schemas/BuildCost'
         containerImage:
           description: Container image reference for the built image
           type: string
@@ -867,6 +869,29 @@ components:
           type: string
         requestedBy:
           type: string
+      type: object
+    BuildCost:
+      description: >-
+        Resources consumed by the build step. A field is absent when the step
+        could not measure it, which is distinct from zero. Measurements remain
+        available if a later push or flash stage fails. Check phase for the
+        overall build outcome.
+      properties:
+        artifactBytes:
+          description: Compressed size of the exported artifact as published, the disk image when one was built, otherwise the container image. Not the number of bytes written to a device.
+          format: int64
+          minimum: 0
+          type: integer
+        downloadedBytes:
+          description: Bytes the build pod received over the network.
+          format: int64
+          minimum: 0
+          type: integer
+        peakWorkspaceBytes:
+          description: Peak used space on the build workspace volume.
+          format: int64
+          minimum: 0
+          type: integer
       type: object
     FlashOutcomeStatus:
       description: FlashOutcomeStatus excludes device credentials and command configuration.

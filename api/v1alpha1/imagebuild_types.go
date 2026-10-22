@@ -325,6 +325,27 @@ type S3Export struct {
 	InsecureSkipTLSVerify bool `json:"insecureSkipTLSVerify,omitempty"`
 }
 
+// BuildCost records resources consumed by the build step. A field is absent
+// when the step could not measure it, which is distinct from zero.
+// Measurements remain available if a later push or flash stage fails.
+// Consumers must also check Phase for the overall build outcome.
+type BuildCost struct {
+	// ArtifactBytes is the compressed size of the exported artifact as published:
+	// the disk image when one was built, otherwise the container image. It is
+	// not the number of bytes written to a device.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ArtifactBytes *int64 `json:"artifactBytes,omitempty"`
+	// DownloadedBytes is the number of bytes the build pod received over the network.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	DownloadedBytes *int64 `json:"downloadedBytes,omitempty"`
+	// PeakWorkspaceBytes is the peak used space on the build workspace volume.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	PeakWorkspaceBytes *int64 `json:"peakWorkspaceBytes,omitempty"`
+}
+
 // ImageBuildStatus defines the observed state of ImageBuild
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.terminalResult) || has(self.terminalResult)",message="terminal result cannot be removed"
 type ImageBuildStatus struct {
@@ -348,6 +369,10 @@ type ImageBuildStatus struct {
 	Flash *FlashOutcomeStatus `json:"flash,omitempty"`
 	// +optional
 	TerminalResult *BuildTerminalResult `json:"terminalResult,omitempty"`
+	// Cost records what the build step consumed, even if a later push or flash
+	// stage fails. Check Phase for the overall build outcome.
+	// +optional
+	Cost *BuildCost `json:"cost,omitempty"`
 	// ObservedGeneration is the most recent generation observed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`

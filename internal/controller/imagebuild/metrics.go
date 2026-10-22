@@ -31,6 +31,9 @@ const (
 var (
 	lastBuildSuccessTimestamp atomic.Int64
 
+	// costBuckets spans 32MiB to 16GiB, covering cached downloads through full disk images.
+	costBuckets = prometheus.ExponentialBuckets(32<<20, 2, 10)
+
 	// BuildDuration tracks the total build duration in seconds.
 	BuildDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -53,6 +56,42 @@ var (
 			Buckets:   []float64{1, 5, 10, 30, 60, 120, 180, 240, 300, 600},
 		},
 		[]string{"mode", "distro", "target", "phase"},
+	)
+
+	// BuildArtifactBytes tracks the size of exported build artifacts.
+	BuildArtifactBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "artifact_bytes",
+			Help:      "Compressed size of the artifact exported by a successful build in bytes",
+			Buckets:   costBuckets,
+		},
+		[]string{"mode", "distro", "target", "format", "arch"},
+	)
+
+	// BuildDownloadedBytes tracks network bytes received by the build step.
+	BuildDownloadedBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "downloaded_bytes",
+			Help:      "Bytes received over the network by the build step of a successful build",
+			Buckets:   costBuckets,
+		},
+		[]string{"mode", "distro", "target", "format", "arch"},
+	)
+
+	// BuildPeakWorkspaceBytes tracks peak used space on the build workspace volume.
+	BuildPeakWorkspaceBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "peak_workspace_bytes",
+			Help:      "Peak used space on the build workspace volume during a successful build in bytes",
+			Buckets:   costBuckets,
+		},
+		[]string{"mode", "distro", "target", "format", "arch"},
 	)
 
 	// BuildTotal counts completions observed after the leader's initial replay.
@@ -132,6 +171,9 @@ func init() {
 	metrics.Registry.MustRegister(
 		BuildDuration,
 		BuildPhaseDuration,
+		BuildArtifactBytes,
+		BuildDownloadedBytes,
+		BuildPeakWorkspaceBytes,
 		BuildTotal,
 		ActiveBuilds,
 		RetainedBuilds,
@@ -207,6 +249,15 @@ func buildMetricStatus(b *automotivev1alpha1.ImageBuild) string {
 
 func buildMetricLabels(b *automotivev1alpha1.ImageBuild, status string) []string {
 	return []string{b.Spec.GetMode(), b.Spec.GetDistro(), b.Spec.GetTarget(), b.Spec.GetExportFormat(), b.Spec.Architecture, status}
+}
+
+// artifactFormat names what the build exported. A bootc build without a disk
+// still carries a disk export format in its spec, which it never produced.
+func artifactFormat(b *automotivev1alpha1.ImageBuild) string {
+	if b.Spec.GetMode() == "bootc" && !b.Spec.GetBuildDiskImage() {
+		return "container"
+	}
+	return b.Spec.GetExportFormat()
 }
 
 func buildCompletionTime(b *automotivev1alpha1.ImageBuild) *metav1.Time {

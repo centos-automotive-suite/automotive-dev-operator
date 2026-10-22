@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync/atomic"
 	"testing"
 
@@ -147,6 +148,32 @@ func TestGetBuildTokenRequiresRecordedArtifact(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGetBuildReportsCost(t *testing.T) {
+	cost := &api.BuildCost{ArtifactBytes: new(int64(734003200)), DownloadedBytes: new(int64(0))}
+	build := &api.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "build", Namespace: "test-ns"},
+		Status:     api.ImageBuildStatus{Phase: "Completed", Cost: cost},
+	}
+	server, _ := newRegistryTokenTestServer(t, build)
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/builds/build", nil)
+	server.getBuild(ctx, "build")
+	if response.Code != http.StatusOK {
+		t.Fatalf("response: %d %s", response.Code, response.Body)
+	}
+	var body struct {
+		Cost map[string]any `json:"cost"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"artifactBytes": float64(734003200), "downloadedBytes": float64(0)}
+	if !reflect.DeepEqual(body.Cost, want) {
+		t.Fatalf("cost = %v, want %v", body.Cost, want)
 	}
 }
 

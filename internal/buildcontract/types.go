@@ -335,6 +335,7 @@ type BuildResponse struct {
 	ExternalID         string                        `json:"externalId,omitempty"`
 	Artifacts          []ArtifactStatus              `json:"artifacts,omitempty"`
 	Flash              *FlashOutcomeStatus           `json:"flash,omitempty"`
+	Cost               *BuildCost                    `json:"cost,omitempty"`
 	Notification       *NotificationStatus           `json:"notification,omitempty"`
 	Name               string                        `json:"name"`
 	Phase              string                        `json:"phase"`

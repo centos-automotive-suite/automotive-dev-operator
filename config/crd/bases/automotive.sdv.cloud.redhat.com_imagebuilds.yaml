@@ -489,6 +489,32 @@ spec:
                   - type
                   type: object
                 type: array
+              cost:
+                description: |-
+                  Cost records what the build step consumed, even if a later push or flash
+                  stage fails. Check Phase for the overall build outcome.
+                properties:
+                  artifactBytes:
+                    description: |-
+                      ArtifactBytes is the compressed size of the exported artifact as published:
+                      the disk image when one was built, otherwise the container image. It is
+                      not the number of bytes written to a device.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  downloadedBytes:
+                    description: DownloadedBytes is the number of bytes the build
+                      pod received over the network.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  peakWorkspaceBytes:
+                    description: PeakWorkspaceBytes is the peak used space on the
+                      build workspace volume.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               discoveredCommit:
                 description: DiscoveredCommit pins the revision found before the workspace
                   PVC is used.

@@ -2,6 +2,7 @@ package imagebuild
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -78,7 +79,7 @@ func TestPipelineTerminalArtifacts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ib := terminalBuild()
 			stages := []string{"build-image", "push-disk-artifact", "push-disk-artifact-s3", "flash-image"}
-			values := []map[string]string{{"IMAGE_URL": "registry/container", "IMAGE_DIGEST": digest}, {"IMAGE_URL": "registry/disk"}, {"S3_URL": "s3://bucket/image"}, {"lease-id": "lease-42"}}
+			values := []map[string]string{{"IMAGE_URL": "registry/container", "IMAGE_DIGEST": digest, "build-timing": `{"artifact_bytes":700,"downloaded_bytes":800,"peak_workspace_bytes":900}`}, {"IMAGE_URL": "registry/disk"}, {"S3_URL": "s3://bucket/image"}, {"lease-id": "lease-42"}}
 			children := []*tekton.TaskRun{}
 			for i, stage := range stages {
 				reason := "Succeeded"
@@ -117,6 +118,13 @@ func TestPipelineTerminalArtifacts(t *testing.T) {
 			}
 			if ib.Status.Phase != want || result.Phase != want || !result.CompletedAt.Equal(pr.Status.CompletionTime) {
 				t.Fatalf("terminal status: %+v", ib.Status)
+			}
+			wantCost := &api.BuildCost{ArtifactBytes: new(int64(700)), DownloadedBytes: new(int64(800)), PeakWorkspaceBytes: new(int64(900))}
+			if tc.failed == "build-image" {
+				wantCost = nil
+			}
+			if !reflect.DeepEqual(ib.Status.Cost, wantCost) {
+				t.Fatalf("cost = %+v, want %+v", ib.Status.Cost, wantCost)
 			}
 			if tc.count > 0 && result.Artifacts[0].Digest != digest {
 				t.Fatal("lost available digest")
@@ -310,6 +318,37 @@ func TestCancellationWaitsForExecution(t *testing.T) {
 			}
 			if ib.Status.TerminalResult == nil || ib.Status.TerminalResult.Phase != phaseCancelled {
 				t.Fatalf("no cancelled result: %+v", ib.Status)
+			}
+		})
+	}
+}
+
+// A gate must distinguish "nothing downloaded" from "not measured", so zero is
+// recorded and anything unmeasured or invalid stays absent.
+func TestBuildCostFromBuildTask(t *testing.T) {
+	for _, tc := range []struct {
+		name, timing string
+		want         *api.BuildCost
+	}{
+		{"measured", `{"setup_s":2,"build_s":90,"post_build_s":8,"total_s":100,"artifact_bytes":734003200,"downloaded_bytes":0,"peak_workspace_bytes":4294967296}`,
+			&api.BuildCost{ArtifactBytes: new(int64(734003200)), DownloadedBytes: new(int64(0)), PeakWorkspaceBytes: new(int64(4294967296))}},
+		{"unmeasured", `{"setup_s":2,"build_s":90,"post_build_s":8,"total_s":100,"artifact_bytes":734003200,"downloaded_bytes":null,"peak_workspace_bytes":-1}`,
+			&api.BuildCost{ArtifactBytes: new(int64(734003200))}},
+		{"timing without cost", `{"setup_s":2,"build_s":90,"post_build_s":8,"total_s":100}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ib := terminalBuild()
+			ib.Spec.Flash = nil
+			build := resultTask("build-image", "Succeeded", map[string]string{"build-timing": tc.timing})
+			pr := resultPipeline(ib, "Succeeded", build)
+			r := newTestReconciler(ib, pr, build)
+			if _, err := r.checkBuildProgress(context.Background(), ib); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(ib.Status.Cost, tc.want) {
+				got, _ := json.Marshal(ib.Status.Cost)
+				want, _ := json.Marshal(tc.want)
+				t.Fatalf("cost = %s, want %s", got, want)
 			}
 		})
 	}

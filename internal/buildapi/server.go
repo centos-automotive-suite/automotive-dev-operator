@@ -1741,6 +1741,7 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 
 	writeJSON(c, http.StatusOK, buildcontract.BuildResponse{
 		ExternalID: build.Spec.ExternalID, Artifacts: storedArtifacts(build), Flash: storedFlash(build),
+		Cost:               build.Status.Cost,
 		Notification:       notificationStatus,
 		GitSource:          build.Spec.GetGitSource(),
 		SourceCommit:       build.Status.SourceCommit,

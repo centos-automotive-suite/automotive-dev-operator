@@ -35,6 +35,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - ado-metrics-reader
+  resources:
+  - clusterroles
+  verbs:
+  - bind
+- apiGroups:
   - route.openshift.io
   resources:
   - routes

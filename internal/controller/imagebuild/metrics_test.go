@@ -374,6 +374,60 @@ func TestRecordBuildMetrics_PhaseDurations(t *testing.T) {
 	}
 }
 
+func TestRecordBuildMetrics_Cost(t *testing.T) {
+	labels := []string{"bootc", "autosd", "cost-target", "qcow2", "arm64"}
+	for _, tc := range []struct {
+		name      string
+		histogram *prometheus.HistogramVec
+		count     uint64
+		sum       float64
+	}{
+		{"artifact", BuildArtifactBytes, 1, 700},
+		{"fully cached download", BuildDownloadedBytes, 1, 0},
+		{"unmeasured peak", BuildPeakWorkspaceBytes, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			beforeCount := histogramCount(tc.histogram, labels...)
+			beforeSum := histogramSum(tc.histogram, labels...)
+			start := metav1.NewTime(time.Now().Add(-time.Minute))
+			end := metav1.Now()
+			ib := newImageBuild("bootc", "cost-target", "qcow2", "arm64", &start, &end)
+			ib.Spec.Export.BuildDiskImage = true
+			pr := pipelineRunWithTiming(`{"setup_s":1,"build_s":2,"post_build_s":3,"total_s":6,"artifact_bytes":700,"downloaded_bytes":0,"peak_workspace_bytes":null}`)
+
+			recordBuildMetrics(ib, pr, buildStatusSuccess)
+
+			if got := histogramCount(tc.histogram, labels...) - beforeCount; got != tc.count {
+				t.Errorf("sample count increment = %v, want %v", got, tc.count)
+			}
+			if got := histogramSum(tc.histogram, labels...) - beforeSum; got != tc.sum {
+				t.Errorf("sample sum increment = %v, want %v", got, tc.sum)
+			}
+		})
+	}
+}
+
+// A bootc build without a disk still carries a disk export format in its spec;
+// filing its container size there would mix it with real disk sizes.
+func TestRecordBuildMetrics_ContainerOnlyCostFormat(t *testing.T) {
+	containerLabels := []string{"bootc", "autosd", "container-target", "container", "arm64"}
+	diskLabels := []string{"bootc", "autosd", "container-target", "raw", "arm64"}
+	beforeContainer := histogramCount(BuildArtifactBytes, containerLabels...)
+	beforeDisk := histogramCount(BuildArtifactBytes, diskLabels...)
+	start := metav1.NewTime(time.Now().Add(-time.Minute))
+	end := metav1.Now()
+	ib := newImageBuild("bootc", "container-target", "raw", "arm64", &start, &end)
+
+	recordBuildMetrics(ib, pipelineRunWithTiming(`{"setup_s":1,"build_s":2,"post_build_s":3,"total_s":6,"artifact_bytes":252283191}`), buildStatusSuccess)
+
+	if got := histogramCount(BuildArtifactBytes, containerLabels...) - beforeContainer; got != 1 {
+		t.Errorf("container sample count increment = %v, want 1", got)
+	}
+	if got := histogramCount(BuildArtifactBytes, diskLabels...) - beforeDisk; got != 0 {
+		t.Errorf("raw disk sample count increment = %v, want 0", got)
+	}
+}
+
 func TestRecordBuildMetrics_NoPhaseDurationsOnFailure(t *testing.T) {
 	labels := []string{"package", "autosd", "x86", "setup"}
 	beforeCount := histogramCount(BuildPhaseDuration, labels...)

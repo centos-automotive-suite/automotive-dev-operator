@@ -15,3 +15,4 @@ func (c BuildCallback) GoString() string { return c.String() }
 type ArtifactStatus = automotivev1alpha1.ArtifactStatus
 type FlashOutcomeStatus = automotivev1alpha1.FlashOutcomeStatus
 type NotificationStatus = automotivev1alpha1.NotificationStatus
+type BuildCost = automotivev1alpha1.BuildCost
