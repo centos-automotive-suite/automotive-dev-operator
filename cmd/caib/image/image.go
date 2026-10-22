@@ -255,7 +255,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVar(&opts.Build.LocalRepo, "local-repo", "", "OCI image with RPM repo to use as primary package source (preferred over network repos)")
 	buildDevCmd.Flags().StringVar(&opts.Build.Workspace, "workspace", "", "workspace name for build caching and lease forwarding")
 	buildDevCmd.Flags().IntVar(&opts.Output.Timeout, "timeout", 60, "timeout in minutes")
-	buildDevCmd.Flags().BoolVarP(&opts.Output.Wait, "wait", "w", false, "wait for build to complete")
+	buildDevCmd.Flags().BoolVarP(&opts.Output.Wait, "wait", "w", true, "wait for build to complete")
 	buildDevCmd.Flags().BoolVarP(&opts.Output.FollowLogs, "follow", "f", false, "follow build logs (shows full log output instead of progress bar)")
 	// Jumpstarter flash options
 	buildDevCmd.Flags().BoolVar(&opts.Flash.AfterBuild, "flash", false, "flash the image to device after build completes")

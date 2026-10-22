@@ -178,7 +178,7 @@ func (h *Handler) validateBootcBuildFlags() error {
 		h.opts.Build.BuildDiskImage = true
 	}
 	if err := h.validateRegistryFlags("--push-disk",
-		fmt.Sprintf("caib image build -m %s --push-disk %s", h.opts.Build.Manifest, h.opts.Registry.ExportOCI)); err != nil {
+		fmt.Sprintf("caib image build %s --push-disk %s", h.opts.Build.Manifest, h.opts.Registry.ExportOCI)); err != nil {
 		return err
 	}
 

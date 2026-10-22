@@ -91,10 +91,15 @@ Many flags are automatically inferred from context:
 | `--disk` | Implied by `-o`, `--push-disk`, or `--flash` |
 | `--client` | Auto-detected from `~/.config/jumpstarter/` |
 | `--extra-args` | Prepended from OperatorConfig target defaults (user args appended) |
-| `--follow` | Defaults to `true` for build commands, `false` for flash |
-| `--wait` | Defaults to `false` for build commands, `true` for flash and workspace |
+| `--follow` | Defaults to `false` for `image build`, `image build-dev`, `image disk`, and `image flash`; use `--follow` for full logs instead of progress |
+| `--wait` | Defaults to `true` for `image build`, `image build-dev`, `image flash`, and workspace create/start; `false` for `image disk` |
 
 For example, `--target ride4_sa8775p_sx_r3` automatically sets `--arch arm64`, `--format simg`, and adds `--separate-partitions` to extra-args. Explicitly setting a flag always overrides the inferred value.
+
+For `image build`, `image build-dev`, and `image disk`, requesting `--follow`,
+`--output`, or `--flash` requires waiting, even with `--wait=false`. To submit
+without waiting, use `--wait=false` without these options, then reconnect with
+`caib image logs <build-name>`.
 
 ## Commands
 
@@ -137,8 +142,8 @@ caib image build <manifest.aib.yml> [flags]
 | `--aib-image` | `quay.io/.../automotive-image-builder:1.3.5` | AIB container image |
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--timeout` | `60` | Timeout in minutes |
-| `-w`, `--wait` | `false` | Wait for build to complete |
-| `-f`, `--follow` | `true` | Follow build logs |
+| `-w`, `--wait` | `true` | Wait for build to complete |
+| `-f`, `--follow` | `false` | Follow build logs instead of showing progress |
 | `--internal-registry` | `false` | Push to OpenShift internal registry (no credentials needed) |
 | `--image-name` | (build name) | Override image name in internal registry |
 | `--image-tag` | (build name) | Override tag in internal registry |
@@ -256,7 +261,7 @@ caib image disk <container-ref> [flags]
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `false` | Wait for build to complete |
-| `-f`, `--follow` | `true` | Follow build logs |
+| `-f`, `--follow` | `false` | Follow build logs instead of showing progress |
 | `--flash` | `false` | Flash image to device after build completes (via Jumpstarter) |
 | `--client` | (auto-detected) | Path to Jumpstarter client config file |
 | `--exporter` | | Direct exporter selector (alternative to `--target` lookup) |
@@ -320,8 +325,8 @@ caib image build-dev <manifest.aib.yml> [flags]
 | `--extra-repo` | | Serve RPMs from workspace as extra repo (`workspace:path`, repeatable) |
 | `--workspace` | | Workspace name for build caching and lease forwarding |
 | `--timeout` | `60` | Timeout in minutes |
-| `-w`, `--wait` | `false` | Wait for build to complete |
-| `-f`, `--follow` | `true` | Follow build logs |
+| `-w`, `--wait` | `true` | Wait for build to complete |
+| `-f`, `--follow` | `false` | Follow build logs instead of showing progress |
 | `--flash` | `false` | Flash image to device after build completes (via Jumpstarter) |
 | `--client` | (auto-detected) | Path to Jumpstarter client config file |
 | `--exporter` | | Direct exporter selector (alternative to `--target` lookup) |

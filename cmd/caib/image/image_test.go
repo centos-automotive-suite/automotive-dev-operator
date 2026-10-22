@@ -35,7 +35,7 @@ func TestImageCommandOutputDefaults(t *testing.T) {
 		{name: "build", timeout: 60, wait: true},
 		{name: "resolve", timeout: 30},
 		{name: "disk", timeout: 60},
-		{name: "build-dev", timeout: 60},
+		{name: "build-dev", timeout: 60, wait: true},
 		{name: "flash", timeout: -1, wait: true},
 		{name: "prepare-reseal", timeout: 120, follow: true},
 	} {
@@ -57,17 +57,21 @@ func TestImageCommandOutputDefaults(t *testing.T) {
 			}
 		})
 	}
-	build := find("build")
-	for name, value := range map[string]string{"timeout": "7", "wait": "false", "follow": "true"} {
-		if err := build.Flags().Set(name, value); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := cmd.PersistentPreRunE(build, nil); err != nil {
-		t.Fatal(err)
-	}
-	if output.Timeout != 7 || output.Wait || !output.FollowLogs {
-		t.Fatalf("explicit output flags were overwritten: %+v", output)
+	for _, name := range []string{"build", "build-dev"} {
+		t.Run(name+"/explicit flags", func(t *testing.T) {
+			build := find(name)
+			for flag, value := range map[string]string{"timeout": "7", "wait": "false", "follow": "true"} {
+				if err := build.Flags().Set(flag, value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := cmd.PersistentPreRunE(build, nil); err != nil {
+				t.Fatal(err)
+			}
+			if output.Timeout != 7 || output.Wait || !output.FollowLogs {
+				t.Fatalf("explicit output flags were overwritten: %+v", output)
+			}
+		})
 	}
 }
 

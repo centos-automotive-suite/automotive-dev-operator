@@ -86,7 +86,7 @@ Examples:
   # Sync source, build, and deploy
   caib workspace sync my-app ./src
   caib workspace exec my-app -- make -j4
-  caib workspace deploy my-app --artifact /workspace/src/build/app --dest /usr/local/bin/app`,
+  caib workspace deploy my-app --artifact /workspace/src/build/app:/usr/local/bin/app`,
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			if strings.TrimSpace(serverURL) == "" {
 				serverURL = config.DefaultServerWithDerive()

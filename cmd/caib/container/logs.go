@@ -44,13 +44,11 @@ func newLogsCmd() *cobra.Command {
 		Short: "Follow logs of a container build",
 		Long: `Follow the log output of an active or completed container build.
 
+Use the build name printed by 'caib container build' to reconnect later.
+
 Examples:
   # Follow logs of an active container build
-  caib container logs my-build-20250101-120000
-
-  # List container builds first, then follow one
-  caib container list
-  caib container logs <build-name>`,
+  caib container logs my-build-20250101-120000`,
 		Args: cobra.ExactArgs(1),
 		Run:  runContainerLogs,
 	}
