@@ -964,10 +964,11 @@ If no directory is specified, the current directory is used.
 
 ### workspace exec
 
-Execute a command in the workspace pod. Everything after `--` is the command.
+Execute a command in the workspace pod, starting in `/workspace/src`. Everything after `--` is passed as literal arguments. The CLI exits with the remote command's exit status; stream failures also produce a nonzero exit.
 
 ```bash
 caib workspace exec <name> -- <command...>
+caib workspace exec <name> --script <local-file>
 ```
 
 **Examples:**
@@ -975,7 +976,16 @@ caib workspace exec <name> -- <command...>
 ```bash
 caib workspace exec my-app -- make -j4
 caib workspace exec my-app -- cargo build --release
+
+# Use an explicit shell for expansion inside the workspace. Single quotes keep
+# the local shell from running nproc (including on macOS).
+caib workspace exec my-app -- sh -c 'make -j$(nproc --ignore=2)'
+
+# Upload a local script and run it with Bash and set -euo pipefail.
+caib workspace exec my-app --script build.sh
 ```
+
+For multiple build steps, put them in `build.sh`. Script mode stops on a failed command, an unset variable, or a failed pipeline, so a failed source RPM build prevents subsequent `rpmbuild` commands from running. Shell operators such as `&&`, pipes, and substitutions require an explicit `sh -c '...'` or a script; a single quoted command string is no longer split into arguments.
 
 ### workspace shell
 

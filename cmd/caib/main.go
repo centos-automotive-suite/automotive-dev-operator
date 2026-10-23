@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -19,6 +20,10 @@ func main() {
 	rootCmd := newRootCmd()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, caibcommon.FormatError(err))
+		var exitErr interface{ ExitCode() int }
+		if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 && exitErr.ExitCode() < 256 {
+			os.Exit(exitErr.ExitCode())
+		}
 		os.Exit(1)
 	}
 }

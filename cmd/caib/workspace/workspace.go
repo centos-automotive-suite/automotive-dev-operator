@@ -236,21 +236,35 @@ Examples:
 }
 
 func newExecCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "exec <name> -- <command...>",
+	cmd := &cobra.Command{
+		Use:   "exec <name> [--script <file>] [-- <command...>]",
 		Short: "Execute a command in a workspace",
 		Long: `Execute a command in the workspace pod and stream the output.
 
 Everything after -- is passed as the command to execute inside the workspace.
+Arguments are preserved literally. Use sh -c for shell syntax, or --script to
+upload a local script and run it with Bash and set -euo pipefail.
 
 Examples:
   caib workspace exec my-app -- make -j4
   caib workspace exec my-app -- cargo build --release
-  caib workspace exec my-app -- ls -la /workspace/src`,
-		Args:               cobra.MinimumNArgs(1),
-		DisableFlagParsing: false,
-		Run:                runExec,
+  caib workspace exec my-app -- sh -c 'make -j$(nproc --ignore=2)'
+  caib workspace exec my-app --script build.sh`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if err := cobra.MinimumNArgs(1)(cmd, args); err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("script") {
+				return cobra.ExactArgs(1)(cmd, args)
+			}
+			return cobra.MinimumNArgs(2)(cmd, args)
+		},
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE:          runExec,
 	}
+	cmd.Flags().String("script", "", "upload and run a local Bash script with set -euo pipefail")
+	return cmd
 }
 
 func newShellCmd() *cobra.Command {
@@ -765,21 +779,36 @@ func tarTrackedFiles(baseDir string, files []string, w io.Writer) error {
 	return nil
 }
 
-func runExec(_ *cobra.Command, args []string) {
-	requireServer()
+func runExec(cmd *cobra.Command, args []string) error {
+	if serverURL == "" {
+		return caibcommon.ServerURLRequiredError("caib workspace --server <server-url>")
+	}
 	name := args[0]
 
-	// Everything after the workspace name (or after --) is the command
-	cmdParts := args[1:]
-	if len(cmdParts) == 0 {
-		handleError(fmt.Errorf("no command specified; use: caib workspace exec <name> -- <command>"))
+	req := buildcontract.WorkspaceExecRequest{}
+	if cmd.Flags().Changed("script") {
+		scriptPath, err := cmd.Flags().GetString("script")
+		if err != nil {
+			return err
+		}
+		script, err := os.ReadFile(scriptPath)
+		if err != nil {
+			return fmt.Errorf("read script: %w", err)
+		}
+		if strings.TrimSpace(string(script)) == "" {
+			return fmt.Errorf("script is empty")
+		}
+		req.Script = string(script)
+	} else {
+		quoted := make([]string, len(args)-1)
+		for i, arg := range args[1:] {
+			quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+		}
+		req.Command = strings.Join(quoted, " ")
 	}
-	command := strings.Join(cmdParts, " ")
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	req := buildcontract.WorkspaceExecRequest{Command: command}
 
 	var body io.ReadCloser
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
@@ -791,11 +820,11 @@ func runExec(_ *cobra.Command, args []string) {
 		return nil
 	})
 	if err != nil {
-		handleError(fmt.Errorf("exec failed: %w", err))
+		return fmt.Errorf("exec failed: %w", err)
 	}
 	defer func() { _ = body.Close() }()
 
-	streamToStdout(body)
+	return streamToStdout(body)
 }
 
 func runShell(_ *cobra.Command, args []string) {
@@ -910,7 +939,9 @@ func runDeploy(_ *cobra.Command, args []string) {
 	}
 	defer func() { _ = body.Close() }()
 
-	streamToStdout(body)
+	if err := streamToStdout(body); err != nil {
+		handleError(err)
+	}
 }
 
 func waitForRunning(name string) {
@@ -1029,15 +1060,16 @@ func handleError(err error) {
 	os.Exit(1)
 }
 
-func streamToStdout(r io.Reader) {
+func streamToStdout(r io.Reader) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		clilog.Infoln(scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "stream error: %v\n", err)
+		return fmt.Errorf("stream error: %w", err)
 	}
+	return nil
 }
 
 // progressReader wraps an io.Reader and renders an upload progress bar

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,7 @@ import (
 	kscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -638,8 +641,12 @@ func (a *APIServer) execWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	if strings.TrimSpace(req.Command) == "" {
+	if strings.TrimSpace(req.Command) == "" && strings.TrimSpace(req.Script) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "command is required"})
+		return
+	}
+	if req.Command != "" && req.Script != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "command and script are mutually exclusive"})
 		return
 	}
 
@@ -659,12 +666,33 @@ func (a *APIServer) execWorkspace(c *gin.Context, name string) {
 		return
 	}
 
+	c.Header("Trailer", buildcontract.WorkspaceExecExitCodeTrailer)
 	setupLogStreamHeaders(c)
 
+	// The pod executor requests stdin, so send EOF even for commands without input.
+	var stdin io.Reader = strings.NewReader("")
 	cmd := []string{"/bin/sh", "-c", "cd /workspace/src && " + req.Command}
-	if err := execInPod(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, c.Writer); err != nil {
+	if req.Script != "" {
+		cmd = []string{"/bin/bash", "-c", `set -euo pipefail
+cd /workspace/src
+script=$(mktemp)
+trap 'rm -f -- "$script"' EXIT
+cat > "$script"
+/bin/bash -euo pipefail "$script"`}
+		stdin = strings.NewReader(req.Script)
+	}
+	w := newFlushWriter(c.Writer)
+	err = a.exec.stream(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, stdin, w, w)
+	exitCode := 0
+	if err != nil {
+		exitCode = 1
+		var exitErr kexec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitStatus() > 0 && exitErr.ExitStatus() < 256 {
+			exitCode = exitErr.ExitStatus()
+		}
 		_, _ = fmt.Fprintf(c.Writer, "\n[exec failed: %v]\n", err)
 	}
+	c.Header(buildcontract.WorkspaceExecExitCodeTrailer, strconv.Itoa(exitCode))
 }
 
 var wsUpgrader = websocket.Upgrader{

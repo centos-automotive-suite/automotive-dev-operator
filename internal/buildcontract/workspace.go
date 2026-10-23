@@ -30,8 +30,12 @@ type WorkspaceResponse struct {
 
 // WorkspaceExecRequest is the payload to execute a command in a workspace.
 type WorkspaceExecRequest struct {
-	Command string `json:"command"`
+	Command string `json:"command,omitempty"`
+	Script  string `json:"script,omitempty"`
 }
+
+// WorkspaceExecExitCodeTrailer carries the exit status after the output stream ends.
+const WorkspaceExecExitCodeTrailer = "X-Caib-Exit-Code"
 
 // SyncPlanRequest is the manifest sent by the client to compute a sync diff.
 type SyncPlanRequest struct {
