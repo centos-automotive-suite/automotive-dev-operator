@@ -1063,13 +1063,21 @@ func (a *APIServer) resolveLeaseFromBuild(ctx context.Context, k8sClient client.
 	return build.Status.LeaseID, nil
 }
 
+// tarExtractCmd extracts the uploaded tar stream into destDir, ignoring the
+// uploader's original uid/gid/mode: the destination pod's SCC-assigned uid
+// range rejects a chown to an arbitrary uid baked into the tar headers
+// (tar fails with "Cannot change ownership ...: Invalid argument").
+func tarExtractCmd(destDir string) []string {
+	return []string{"/bin/sh", "-c", fmt.Sprintf("tar --no-same-owner --no-same-permissions -xv -C %q", destDir)}
+}
+
 func copyToPod(ctx context.Context, restCfg *rest.Config, namespace, podName, containerName string, body io.Reader, destDir string) error {
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return fmt.Errorf("creating clientset: %w", err)
 	}
 
-	cmd := []string{"/bin/sh", "-c", fmt.Sprintf("tar -xv -C %q", destDir)}
+	cmd := tarExtractCmd(destDir)
 	execReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
