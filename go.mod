@@ -157,7 +157,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/arch v0.31.0 // indirect
+	golang.org/x/arch v0.32.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	gopkg.in/go-jose/go-jose.v2 v2.6.3 // indirect
@@ -200,7 +200,7 @@ require (
 	github.com/prometheus/common v0.71.0 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/pflag v1.0.10
 	github.com/tektoncd/pipeline v1.16.0
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
