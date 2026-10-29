@@ -1297,7 +1297,7 @@ golang.org/x/net/websocket
 ## explicit; go 1.26.0
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
-# golang.org/x/sync v0.23.0
+# golang.org/x/sync v0.24.0
 ## explicit; go 1.26.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
@@ -2073,8 +2073,8 @@ knative.dev/pkg/observability/tracing
 knative.dev/pkg/ptr
 knative.dev/pkg/tracker
 knative.dev/pkg/webhook/resourcesemantics
-# oras.land/oras-go/v2 v2.6.2
-## explicit; go 1.25.0
+# oras.land/oras-go/v2 v2.7.0
+## explicit; go 1.26.0
 oras.land/oras-go/v2/content
 oras.land/oras-go/v2/errdef
 oras.land/oras-go/v2/internal/cas
