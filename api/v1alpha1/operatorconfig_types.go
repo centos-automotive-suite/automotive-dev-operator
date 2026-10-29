@@ -511,6 +511,51 @@ type WorkspacesConfig struct {
 	// +optional
 	AutoPauseTimeoutMinutes int32 `json:"autoPauseTimeoutMinutes,omitempty"`
 
+	// RunDefaultTimeoutMinutes bounds commands without a per-run timeout.
+	// +kubebuilder:default=120
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1440
+	// +optional
+	RunDefaultTimeoutMinutes int32 `json:"runDefaultTimeoutMinutes,omitempty"`
+
+	// RunMaxTimeoutMinutes caps per-run timeout requests, up to 24 hours.
+	// +kubebuilder:default=1440
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1440
+	// +optional
+	RunMaxTimeoutMinutes int32 `json:"runMaxTimeoutMinutes,omitempty"`
+
+	// RunRetentionDays retains terminal runs for this many days, up to 30.
+	// +kubebuilder:default=7
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=30
+	// +optional
+	RunRetentionDays int32 `json:"runRetentionDays,omitempty"`
+
+	// RunMaxRecords bounds retained terminal runs, evicting the oldest first.
+	// Live runs are never evicted or counted against this limit.
+	// +kubebuilder:default=1000
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000
+	// +optional
+	RunMaxRecords int32 `json:"runMaxRecords,omitempty"`
+
+	// RunMaxLogSizeMiB bounds each retained log tail; commands continue when full.
+	// The effective cap cannot exceed the workspace's completed-log budget.
+	// +kubebuilder:default=100
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	RunMaxLogSizeMiB int32 `json:"runMaxLogSizeMiB,omitempty"`
+
+	// RunCompletedLogBudgetMiB bounds completed logs, additionally capped at 10%
+	// of the workspace PVC. Oldest terminal logs are evicted first; their result
+	// records remain until the age or record count limit is reached. Live logs
+	// are never evicted.
+	// +kubebuilder:default=1024
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	RunCompletedLogBudgetMiB int32 `json:"runCompletedLogBudgetMiB,omitempty"`
+
 	// ImagePullSecrets is a list of secret references for pulling private workspace images
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`

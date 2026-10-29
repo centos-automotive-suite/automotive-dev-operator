@@ -191,6 +191,32 @@ func TestAIBAggregateSizeValidation(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunRetentionSchemaBounds(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(getCRDPath(), "automotive.sdv.cloud.redhat.com_operatorconfigs.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var crd CRDSchema
+	if err := yaml.Unmarshal(data, &crd); err != nil {
+		t.Fatal(err)
+	}
+	workspaces := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties.Spec.Properties["workspaces"].(map[string]any)
+	properties := workspaces["properties"].(map[string]any)
+	for _, tc := range []struct {
+		field        string
+		defaultValue int
+		maximum      int
+	}{
+		{"runRetentionDays", 7, 30},
+		{"runMaxRecords", 1000, 1000},
+	} {
+		field, ok := properties[tc.field].(map[string]any)
+		if !ok || field["default"] != tc.defaultValue || field["minimum"] != 1 || field["maximum"] != tc.maximum {
+			t.Errorf("%s schema lacks bounded retention: %+v", tc.field, field)
+		}
+	}
+}
+
 func compareFields(t *testing.T, typeName string, goFields, crdFields []string) {
 	t.Helper()
 

@@ -53,4 +53,7 @@ if [ -f /jumpstarter/client.yaml ]; then
   jmp config client use workspace || true
 fi
 
-exec sleep infinity
+# Durable run supervisors and background command children become PID 1's
+# responsibility after their parents exit. Reap them instead of accumulating
+# zombies for the lifetime of the workspace.
+exec catatonit -- sleep infinity

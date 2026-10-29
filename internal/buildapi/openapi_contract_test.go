@@ -27,6 +27,7 @@ func TestOpenAPIContract(t *testing.T) {
 	}
 	schemas := document["components"].(map[string]any)["schemas"].(map[string]any)
 	for name, typ := range map[string]reflect.Type{
+		"WorkspaceRunRequest": reflect.TypeFor[buildcontract.WorkspaceRunRequest](), "WorkspaceRun": reflect.TypeFor[buildcontract.WorkspaceRun](),
 		"BuildRequest": reflect.TypeFor[buildcontract.BuildRequest](), "BuildResponse": reflect.TypeFor[buildcontract.BuildResponse](), "BuildListItem": reflect.TypeFor[buildcontract.BuildListItem](),
 		"FlashRequest": reflect.TypeFor[buildcontract.FlashRequest](), "FlashResponse": reflect.TypeFor[buildcontract.FlashResponse](), "FlashListItem": reflect.TypeFor[buildcontract.FlashListItem](),
 		"BuildCallback": reflect.TypeFor[buildcontract.BuildCallback](), "ArtifactStatus": reflect.TypeFor[buildcontract.ArtifactStatus](),

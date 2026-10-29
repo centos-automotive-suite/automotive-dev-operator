@@ -79,6 +79,9 @@ jobs:
             exit 1
           fi
 
+      - name: Install workspace init for process lifecycle tests
+        run: sudo apt-get update && sudo apt-get install -y catatonit
+
       - name: Run unit tests
         run: make test
 

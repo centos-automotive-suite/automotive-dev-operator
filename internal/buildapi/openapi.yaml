@@ -224,8 +224,368 @@ paths:
                 type: string
           description: OK
       summary: Health check
+  /v1/workspaces/{name}/runs:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listWorkspaceRuns
+      summary: List retained workspace runs, newest first
+      description: Requires workspace ownership and a running workspace. Deleted or expired runs are omitted.
+      parameters:
+        - in: query
+          name: offset
+          description: Number of runs to skip
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 100
+      responses:
+        "200":
+          description: Retained runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WorkspaceRun'
+        "400":
+          description: Invalid pagination
+        "401":
+          description: Authentication required
+        "404":
+          description: Workspace not found or owned by another user
+        "409":
+          description: Start the workspace to access retained runs
+        "422":
+          description: Unreadable run record, or the image cannot execute the helper (Python 3.12 or newer required)
+    post:
+      operationId: createWorkspaceRun
+      summary: Start a durable workspace command
+      description: |
+        Requires workspace ownership and a running workspace. The command runs
+        in /workspace/src independently of the HTTP request. An optional client
+        ID makes retries idempotent; reuse with a different command or requested
+        timeout returns 409. IDs are single-use: generate a fresh ID for each new
+        command. Deleted or expired IDs return 410 for a 24-hour retry window;
+        idempotency is no longer guaranteed after that window. The operator controls timeout defaults/caps, log retention and
+        storage budgets. Only timeoutSeconds may be overridden per run.
+        By default commands time out after 2 hours (maximum 24 hours), keep the
+        last 100 MiB of output and expire after 7 days. At most the newest 1,000
+        terminal records are retained; operators can lower this cap and configure
+        retention up to 30 days. Live runs do not count against the record cap.
+        Completed logs are pruned oldest first to a budget of min(1 GiB, 10% of
+        the PVC); live runs are
+        never evicted. Budget eviction removes only logs, sets logsEvicted and
+        retains status and exit code until the age or record count limit is reached.
+        The per-log cap cannot exceed the completed-log budget. Pruning runs during creation and
+        after completion. Unreadable records are skipped by collection operations.
+        Newer record versions expose only their stable lifecycle envelope. They
+        remain listable, participate in activity checks and, when finished, can
+        be deleted or pruned by age/count. Their payloads are never rewritten and
+        their logs are excluded from log-budget eviction. An invalid newer
+        envelope reports Unknown and prevents auto-pause and deletion without
+        blocking unrelated runs. Reusing a newer record's ID returns 409.
+        The helper program and request
+        data use pod exec stdin, keeping command contents out of exec request URLs.
+        Stale runs report Interrupted even when persisting that transition fails.
+        The request body is limited to 128 KiB and the command to 65536 bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceRunRequest'
+      responses:
+        "202":
+          description: Run accepted, or the existing run for an idempotent retry
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRun'
+        "400":
+          description: Invalid command, ID, timeout, or request body
+        "401":
+          description: Authentication required
+        "404":
+          description: Workspace not found or owned by another user
+        "409":
+          description: Workspace is stopped, or ID belongs to another command, timeout or unsupported record version
+        "410":
+          description: Run ID was deleted or expired; use a new ID for a new command
+        "422":
+          description: Unreadable run record, or the image cannot execute the helper (Python 3.12 or newer required)
+        "502":
+          description: Pod operation failed; retry creation with the same ID
+        "503":
+          description: Could not read operator limits or reserve workspace activity; retry with the same ID
+  /v1/workspaces/{name}/runs/{run}:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: run
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getWorkspaceRun
+      summary: Get a workspace command's retained result
+      description: |
+        Requires workspace ownership. Start a stopped workspace to read its
+        retained records. Runs whose supervisor or container disappeared are
+        reported as Interrupted without inventing an exit code.
+        Newer formats return lifecycle metadata with a compatibility message;
+        their command, exit code, timeout and log metadata are unavailable.
+        For a stale newer supervisor, finishedAt uses the record's modification
+        time as a stable retention timestamp, not the exact crash time.
+        An invalid newer envelope reports Unknown with no timestamps.
+      responses:
+        "200":
+          description: Run status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRun'
+        "401":
+          description: Authentication required
+        "404":
+          description: Workspace or run not found, or workspace not owned
+        "409":
+          description: Start the workspace to access retained runs
+        "410":
+          description: Run was deleted or expired
+        "422":
+          description: Unreadable run record, or the image cannot execute the run helper
+    delete:
+      operationId: deleteWorkspaceRun
+      summary: Delete a terminal or unreadable run and its retained log
+      description: |
+        Requires workspace ownership and a running workspace. Directories with
+        unreadable or missing records can be deleted. Readable live runs cannot
+        be deleted; cancel and wait for completion first. Repeated deletion is
+        safe during the 24-hour tombstone window. A small ID tombstone protects
+        retried creation during that window, then expires. IDs are single-use.
+        Newer records may be deleted only when their stable envelope confirms
+        they are terminal or their supervisor identity is no longer live.
+        Invalid newer envelopes cannot be deleted.
+      responses:
+        "204":
+          description: Run deleted, or already deleted
+        "401":
+          description: Authentication required
+        "404":
+          description: Workspace or run not found, or workspace not owned
+        "409":
+          description: Run is live, its newer envelope is invalid, or workspace must be started
+        "422":
+          description: Unreadable run record, or the image cannot execute the run helper
+  /v1/workspaces/{name}/runs/{run}/logs:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: run
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: workspaceRunLogs
+      summary: Read or follow resumable command output
+      description: |
+        Requires workspace ownership and a running workspace. Contains only
+        combined stdout/stderr bytes, with no banners or heartbeat text. Resume
+        after disconnect by adding bytes received to the X-Log-Offset response
+        header. Offsets are absolute, including bytes discarded by log rotation.
+        Requests below logStartOffset start at logStartOffset. If the retained
+        tail advances past a slow reader during a response, the stream ends with
+        X-Log-Error; reconnect to obtain the new starting offset.
+        Without follow this returns a snapshot. With follow it ends when the run
+        finishes or reaches X-Log-Stream-Seconds (currently at most 40 seconds,
+        also bounded by the configured log stream duration); reconnect to
+        continue and GET the run to determine its status and exit code. Budget
+        eviction leaves an empty log with logStartOffset equal to logBytes and
+        preserves the result record.
+        An error after headers is reported by the X-Log-Error trailer. Final
+        metadata is available in X-Run-Status and X-Run-Exit-Code trailers.
+        Unsupported record formats return 409 before starting the stream.
+      parameters:
+        - in: query
+          name: follow
+          allowEmptyValue: true
+          description: Follow new output; an empty value means true
+          schema:
+            type: boolean
+            default: false
+        - in: query
+          name: offset
+          description: Absolute byte offset from the start of command output
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Raw log bytes
+          headers:
+            X-Log-Offset:
+              description: Actual absolute starting offset, at least the current logStartOffset
+              schema:
+                type: integer
+                format: int64
+            X-Log-Stream-Seconds:
+              description: Server-side stream cap in seconds; clients should allow a grace period before reconnecting
+              schema:
+                type: number
+                minimum: 0
+                exclusiveMinimum: true
+          content:
+            text/plain:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid offset, follow value, or run ID
+        "401":
+          description: Authentication required
+        "404":
+          description: Workspace or run not found, or workspace not owned
+        "409":
+          description: Workspace must be started or logs require a compatible operator
+        "410":
+          description: Run was deleted or expired
+        "416":
+          description: Offset exceeds the available log bytes
+        "422":
+          description: Unreadable run record, or the image cannot execute the run helper
+  /v1/workspaces/{name}/runs/{run}/cancel:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: run
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: cancelWorkspaceRun
+      summary: Cancel a workspace command and its process group
+      description: |
+        Requires workspace ownership and a running workspace. Records a durable
+        cancellation request. The supervisor sends SIGTERM, escalating to
+        SIGKILL after five seconds. Poll the run for its final result. Repeated
+        cancellation is safe and does not change an already completed result.
+        Newer record formats return 409 without modifying the record.
+      responses:
+        "200":
+          description: Cancellation requested, or run already finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRun'
+        "401":
+          description: Authentication required
+        "404":
+          description: Workspace or run not found, or workspace not owned
+        "409":
+          description: Workspace must be started or cancellation requires a compatible operator
+        "410":
+          description: Run was deleted or expired
+        "422":
+          description: Unreadable run record, or the image cannot execute the run helper
 components:
   schemas:
+    WorkspaceRunRequest:
+      type: object
+      required: [command]
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{0,63}$'
+          description: Optional single-use idempotency ID; generated when omitted. Reuse only to retry the same command. Deleted IDs are protected for 24 hours.
+        command:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          description: Shell command, limited to 65536 bytes and containing no NUL
+        timeoutSeconds:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 86400
+          description: Positive command timeout within the operator cap; omitted or zero uses the operator default (normally 7200 seconds)
+    WorkspaceRun:
+      type: object
+      description: |
+        Newer record formats expose only lifecycle metadata with a compatibility
+        message. Empty command and zero timeout/log fields are placeholders, not
+        payload metadata. Unknown indicates an invalid newer envelope; it prevents
+        auto-pause and has no timestamps or exit code.
+      required: [id, command, status, logBytes, logStartOffset, logTruncated, logsEvicted, timeoutSeconds]
+      properties:
+        id:
+          type: string
+        command:
+          type: string
+        status:
+          type: string
+          enum: [Starting, Running, Cancelling, Succeeded, Failed, Cancelled, Interrupted, TimedOut, Unknown]
+        exitCode:
+          type: integer
+          description: Omitted while live, interrupted without a recorded result, or when the record format is unsupported; a supported timeout records 124
+        startedAt:
+          type: string
+          format: date-time
+          description: Omitted when a newer record's envelope is invalid
+        finishedAt:
+          type: string
+          format: date-time
+        logBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Absolute end offset (total bytes produced), including discarded bytes
+        logStartOffset:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Absolute offset of the first retained byte
+        logTruncated:
+          type: boolean
+          description: Earlier output was discarded by the log cap or completed-log budget
+        logsEvicted:
+          type: boolean
+          description: Completed-log budget removed output; status and exit code remain until retention expires
+        timeoutSeconds:
+          type: integer
+          format: int64
+          description: Effective timeout fixed when the run was created
+        message:
+          type: string
     ArtifactStatus:
       description: ArtifactStatus describes an output actually published by a build stage.
       properties:
