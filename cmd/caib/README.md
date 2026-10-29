@@ -329,7 +329,7 @@ caib image build-dev <manifest.aib.yml> [flags]
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--define-file` | | Load defines from YAML dictionary file (repeatable) |
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |
-| `--extra-repo` | | Serve RPMs from workspace as extra repo (`workspace:path`, repeatable) |
+| `--extra-repo` | | Serve RPMs from a directory under `/workspace/export` as an extra repo (`workspace:/workspace/export/<dir>`, repeatable) |
 | `--workspace` | | Workspace name for build caching and lease forwarding |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `true` | Wait for build to complete |

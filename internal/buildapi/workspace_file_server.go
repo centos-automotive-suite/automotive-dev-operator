@@ -1,7 +1,13 @@
 package buildapi
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"strconv"
+	"strings"
+
+	"k8s.io/client-go/rest"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
 )
@@ -52,10 +58,33 @@ for fd in (0, 1, 2):
 server.serve_forever()
 `
 
+// workspaceFileServerArgs runs the file server for root on port. -I keeps
+// modules in the exec's working directory, such as an http.py, from replacing
+// the standard library.
+func workspaceFileServerArgs(port int, root string) []string {
+	return []string{"python3", "-I", "-c", workspaceFileServerPython, strconv.Itoa(port), root}
+}
+
 // workspaceFileServerCommand starts the file server for the workspace export
 // root. The child redirects its stdio to /dev/null so the exec returns once
 // the launcher exits.
 func workspaceFileServerCommand() []string {
-	return []string{"python3", "-c", workspaceFileServerPython,
-		strconv.Itoa(workspaceFileServerPort), workspacemanifest.WorkspaceExportRoot}
+	return workspaceFileServerArgs(workspaceFileServerPort, workspacemanifest.WorkspaceExportRoot)
+}
+
+// startWorkspaceFileServer makes sure the workspace pod serves
+// /workspace/export on workspaceFileServerPort. It is safe to call for every
+// build: a running server is left alone. On failure, the error carries the
+// launcher's last line of output, which says why.
+func startWorkspaceFileServer(ctx context.Context, restCfg *rest.Config, namespace, podName string) error {
+	var out bytes.Buffer
+	err := podExecForWorkspaceFileServer(ctx, restCfg, namespace, podName, workspaceContainerName, workspaceFileServerCommand(), &out)
+	if err == nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if reason := strings.TrimSpace(lines[len(lines)-1]); reason != "" {
+		return fmt.Errorf("%w: %s", err, reason)
+	}
+	return err
 }

@@ -58,22 +58,16 @@ type execCall struct {
 	cmd     []string
 }
 
-// stubExtraRepoExec replaces the pod-exec entry point used by resolveExtraRepos
-// with a recorder, so tests can assert exactly how many servers were started
-// (and that none were started on a rejected request) without a live cluster.
+// stubExtraRepoExec replaces the pod-exec entry point used to start workspace
+// file servers with a recorder, so tests can assert exactly how many servers
+// were started (and that none were started on a rejected request) without a
+// live cluster.
 func stubExtraRepoExec(t *testing.T) *[]execCall {
 	t.Helper()
 	// Pin the namespace so fixtures and the lookup target the same namespace
 	// regardless of BUILD_API_NAMESPACE or an in-pod service-account file.
 	t.Setenv("BUILD_API_NAMESPACE", "default")
-	orig := podExecForExtraRepos
-	calls := &[]execCall{}
-	podExecForExtraRepos = func(_ context.Context, _ *rest.Config, _, podName, _ string, cmd []string, _ io.Writer) error {
-		*calls = append(*calls, execCall{podName: podName, cmd: cmd})
-		return nil
-	}
-	t.Cleanup(func() { podExecForExtraRepos = orig })
-	return calls
+	return stubWorkspaceFileServerExec(t, nil)
 }
 
 // A build submitted by one user must not reach into another user's workspace
@@ -83,7 +77,7 @@ func TestResolveExtraRepos_RejectsUnownedWorkspace(t *testing.T) {
 	k8sClient := newFakeClient(ws, pod)
 	calls := stubExtraRepoExec(t)
 	a := &APIServer{}
-	req := &buildcontract.BuildRequest{ExtraRepos: []string{"alice-ws:/workspace/rpms"}}
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{"alice-ws:/workspace/export/rpms"}}
 
 	err := a.resolveExtraRepos(context.Background(), k8sClient, nil, "bob", req)
 	if err == nil {
@@ -104,7 +98,7 @@ func TestResolveExtraRepos_UnownedIndistinguishableFromMissing(t *testing.T) {
 	a := &APIServer{}
 	const name = "shadow-ws"
 	newReq := func() *buildcontract.BuildRequest {
-		return &buildcontract.BuildRequest{ExtraRepos: []string{name + ":/workspace/rpms"}}
+		return &buildcontract.BuildRequest{ExtraRepos: []string{name + ":/workspace/export/rpms"}}
 	}
 
 	// Case 1: workspace does not exist.
@@ -144,7 +138,7 @@ func TestResolveExtraRepos_LookupFailureIsSentinel(t *testing.T) {
 		},
 	}).Build()
 	a := &APIServer{}
-	req := &buildcontract.BuildRequest{ExtraRepos: []string{"any-ws:/workspace/rpms"}}
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{"any-ws:/workspace/export/rpms"}}
 
 	err := a.resolveExtraRepos(context.Background(), k8sClient, nil, "bob", req)
 	if err == nil {
@@ -167,7 +161,7 @@ func TestResolveExtraRepos_AllOrNothing(t *testing.T) {
 	calls := stubExtraRepoExec(t)
 	a := &APIServer{}
 	req := &buildcontract.BuildRequest{
-		ExtraRepos: []string{"bob-ws:/workspace/rpms", "alice-ws:/workspace/rpms"},
+		ExtraRepos: []string{"bob-ws:/workspace/export/rpms", "alice-ws:/workspace/export/rpms"},
 	}
 
 	err := a.resolveExtraRepos(context.Background(), k8sClient, nil, "bob", req)
@@ -189,7 +183,7 @@ func TestResolveExtraRepos_AllowsOwnedRunningWorkspace(t *testing.T) {
 	k8sClient := newFakeClient(ws, pod)
 	calls := stubExtraRepoExec(t)
 	a := &APIServer{log: logr.Discard()}
-	req := &buildcontract.BuildRequest{ExtraRepos: []string{"bob-ws:/workspace/rpms"}}
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{"bob-ws:/workspace/export/rpms"}}
 
 	err := a.resolveExtraRepos(context.Background(), k8sClient, nil, "bob", req)
 	if err != nil {
@@ -201,8 +195,11 @@ func TestResolveExtraRepos_AllowsOwnedRunningWorkspace(t *testing.T) {
 	if (*calls)[0].podName != "bob-ws-pod" {
 		t.Fatalf("exec targeted pod %q, want %q", (*calls)[0].podName, "bob-ws-pod")
 	}
+	if !reflect.DeepEqual((*calls)[0].cmd, workspaceFileServerCommand()) {
+		t.Fatalf("exec cmd = %q, want the workspace file server", (*calls)[0].cmd)
+	}
 
-	want := `extra_repos=[{"id":"workspace-bob-ws","baseurl":"http://10.0.0.1:8080"}]`
+	want := `extra_repos=[{"id":"workspace-bob-ws","baseurl":"http://10.0.0.1:9090/rpms"}]`
 	found := false
 	for _, d := range req.CustomDefs {
 		if d == want {
@@ -211,5 +208,79 @@ func TestResolveExtraRepos_AllowsOwnedRunningWorkspace(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("CustomDefs missing %q, got %#v", want, req.CustomDefs)
+	}
+}
+
+// workspace: repos are served by the workspace file server, which serves only
+// /workspace/export, so other paths are rejected before any server starts.
+func TestResolveExtraRepos_RejectsPathOutsideExport(t *testing.T) {
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	calls := stubExtraRepoExec(t)
+	a := &APIServer{log: logr.Discard()}
+	for _, p := range []string{"/workspace/rpms", "/workspace/export/../.ssh", "/workspace/exported", "rpms", "/tmp/rpms"} {
+		req := &buildcontract.BuildRequest{ExtraRepos: []string{"bob-ws:" + p}}
+		err := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), nil, "bob", req)
+		if err == nil || !strings.Contains(err.Error(), "under /workspace/export") {
+			t.Errorf("%s: err = %v, want an error asking to move the repo under /workspace/export", p, err)
+		}
+		if len(req.CustomDefs) != 0 {
+			t.Errorf("%s: CustomDefs = %#v, want none", p, req.CustomDefs)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("expected no exec calls on rejection, got %d", len(*calls))
+	}
+}
+
+// Repos in one workspace share its file server: it is started once, and each
+// repo gets its own path and a distinct repo ID.
+func TestResolveExtraRepos_SharesServerPerWorkspace(t *testing.T) {
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	calls := stubExtraRepoExec(t)
+	a := &APIServer{log: logr.Discard()}
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{
+		"bob-ws:/workspace/export/kernel",
+		"bob-ws:/workspace/export/my tools/",
+		"bob-ws:/workspace/export",
+	}}
+
+	if err := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), nil, "bob", req); err != nil {
+		t.Fatalf("resolveExtraRepos: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("exec calls = %d, want 1 per workspace", len(*calls))
+	}
+	want := `extra_repos=[` +
+		`{"id":"workspace-bob-ws","baseurl":"http://10.0.0.1:9090/kernel"},` +
+		`{"id":"workspace-bob-ws-2","baseurl":"http://10.0.0.1:9090/my%20tools"},` +
+		`{"id":"workspace-bob-ws-3","baseurl":"http://10.0.0.1:9090/"}]`
+	if len(req.CustomDefs) == 0 || req.CustomDefs[0] != want {
+		t.Fatalf("CustomDefs = %#v, want first entry %s", req.CustomDefs, want)
+	}
+}
+
+// If the file server cannot start, the build is rejected with the launcher's
+// reason instead of pointing DNF at a dead URL.
+func TestResolveExtraRepos_ServerFailureRejectsBuild(t *testing.T) {
+	t.Setenv("BUILD_API_NAMESPACE", "default")
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	orig := podExecForWorkspaceFileServer
+	podExecForWorkspaceFileServer = func(_ context.Context, _ *rest.Config, _, _, _ string, _ []string, out io.Writer) error {
+		_, _ = io.WriteString(out, "Traceback ...\nPermissionError: [Errno 13] Permission denied: '/workspace/export'\n")
+		return errors.New("command terminated with exit code 1")
+	}
+	t.Cleanup(func() { podExecForWorkspaceFileServer = orig })
+	a := &APIServer{log: logr.Discard()}
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{"bob-ws:/workspace/export/rpms"}}
+
+	err := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), nil, "bob", req)
+	if err == nil || !strings.Contains(err.Error(), "PermissionError: [Errno 13] Permission denied") {
+		t.Fatalf("err = %v, want the launcher's reason", err)
+	}
+	if strings.Contains(err.Error(), "Traceback") {
+		t.Errorf("err = %q, want only the last line of the launcher's output", err)
+	}
+	if len(req.CustomDefs) != 0 {
+		t.Fatalf("CustomDefs = %#v, want none", req.CustomDefs)
 	}
 }

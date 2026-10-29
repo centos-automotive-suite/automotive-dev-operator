@@ -1,14 +1,12 @@
 package buildapi
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -764,49 +762,49 @@ func (a *APIServer) setupInternalRegistryBuild(
 // nothing about the cluster is leaked to the client.
 var errWorkspaceLookup = errors.New("failed to look up workspace")
 
-// podExecForExtraRepos is the exec entry point used by resolveExtraRepos.
-// It is a package variable so tests can observe/stub exec calls without a
-// live cluster.
-var podExecForExtraRepos = podExec
-
-// resolveExtraRepos processes --extra-repo flags (workspace:path pairs), starts HTTP
-// servers in the workspace pods, and injects the repos into the image and build
-// depsolver CustomDefs. Every referenced workspace is validated (ownership,
-// running, pod IP) before any server is started, so an unauthorized or invalid
-// entry rejects the whole request before any exec occurs.
+// resolveExtraRepos processes --extra-repo flags (workspace:path pairs), serves
+// each repo from its workspace's file server, and injects the repos into the
+// image and build depsolver CustomDefs. Repos must be under /workspace/export,
+// the only directory the file server serves. Every referenced workspace is
+// validated (ownership, running, pod IP) before any server is started, so an
+// unauthorized or invalid entry rejects the whole request before any exec
+// occurs.
 func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, requester string, req *buildcontract.BuildRequest) error {
 	if len(req.ExtraRepos) == 0 {
 		return nil
 	}
 
 	namespace := resolveNamespace()
-	basePort := 8080
 
 	type repoEntry struct {
 		ID      string `json:"id"`
 		BaseURL string `json:"baseurl"`
 	}
 
-	// resolvedRepo carries everything needed to start a server, gathered in a
+	// resolvedRepo carries everything needed to serve a repo, gathered in a
 	// validation pass that completes before any side effects run.
 	type resolvedRepo struct {
-		wsName   string
-		podName  string
-		podIP    string
-		repoPath string
-		port     int
+		wsName  string
+		podName string
+		podIP   string
+		urlPath string
 	}
 	resolved := make([]resolvedRepo, 0, len(req.ExtraRepos))
 
-	// validate every entry (ownership, running, pod IP). No side
+	// validate every entry (path, ownership, running, pod IP). No side
 	// effects here, so a later unauthorized/invalid entry rejects the request
 	// before any server is started.
-	for i, entry := range req.ExtraRepos {
+	for _, entry := range req.ExtraRepos {
 		parts := strings.SplitN(entry, ":", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return fmt.Errorf("invalid --extra-repo %q: must be workspace-name:/path", entry)
 		}
 		wsName, repoPath := parts[0], parts[1]
+		urlPath, ok := workspacemanifest.ExportURLPath(repoPath)
+		if !ok {
+			return fmt.Errorf("invalid --extra-repo %q: only %s is served to builds: move the repo under %s and pass %s:%s/<dir>",
+				entry, workspacemanifest.WorkspaceExportRoot, workspacemanifest.WorkspaceExportRoot, wsName, workspacemanifest.WorkspaceExportRoot)
+		}
 
 		// Look up the workspace
 		ws := &automotivev1alpha1.Workspace{}
@@ -841,32 +839,34 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 		}
 
 		resolved = append(resolved, resolvedRepo{
-			wsName:   wsName,
-			podName:  ws.Status.PodName,
-			podIP:    podIP,
-			repoPath: repoPath,
-			port:     basePort + i,
+			wsName:  wsName,
+			podName: ws.Status.PodName,
+			podIP:   podIP,
+			urlPath: urlPath,
 		})
 	}
 
-	// start HTTP servers and build the repo list now that every entry
-	// has passed validation. Note this is not transactional: if an exec fails
-	// partway through, servers started for earlier entries keep running.
+	// start each workspace's file server once and build the repo list now
+	// that every entry has passed validation. Repos from the same workspace
+	// get numbered IDs so they don't collide.
+	started := make(map[string]bool, len(resolved))
+	perWorkspace := make(map[string]int, len(resolved))
 	repos := make([]repoEntry, 0, len(resolved))
 	for _, r := range resolved {
-		// Start HTTP server in the workspace (background, fire-and-forget).
-		// Redirect shell's own FDs first so runc exec doesn't block waiting for SPDY pipes.
-		cmd := []string{"/bin/sh", "-c",
-			fmt.Sprintf("exec 0</dev/null 1>/dev/null 2>/dev/null; cd %s && python3 -m http.server %d &", shellQuote(r.repoPath), r.port)}
-		if err := podExecForExtraRepos(ctx, restCfg, namespace, r.podName, workspaceContainerName, cmd, io.Discard); err != nil {
-			return fmt.Errorf("starting HTTP server in workspace %q: %w", r.wsName, err)
+		if !started[r.podName] {
+			if err := startWorkspaceFileServer(ctx, restCfg, namespace, r.podName); err != nil {
+				return fmt.Errorf("starting file server in workspace %q: %w", r.wsName, err)
+			}
+			started[r.podName] = true
 		}
 
-		repoURL := fmt.Sprintf("http://%s:%d", r.podIP, r.port)
-		repos = append(repos, repoEntry{
-			ID:      fmt.Sprintf("workspace-%s", r.wsName),
-			BaseURL: repoURL,
-		})
+		perWorkspace[r.wsName]++
+		id := "workspace-" + r.wsName
+		if n := perWorkspace[r.wsName]; n > 1 {
+			id = fmt.Sprintf("%s-%d", id, n)
+		}
+		repoURL := fmt.Sprintf("http://%s:%d%s", r.podIP, workspaceFileServerPort, r.urlPath)
+		repos = append(repos, repoEntry{ID: id, BaseURL: repoURL})
 		a.log.Info("Extra repo configured", "workspace", r.wsName, "url", repoURL)
 	}
 
@@ -1034,9 +1034,8 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 		if restCfg != nil {
 			pod := &corev1.Pod{}
 			if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ws.Status.PodName}, pod); err == nil && pod.Status.PodIP != "" {
-				var out bytes.Buffer
-				if err := podExecForWorkspaceFileServer(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, workspaceFileServerCommand(), &out); err != nil {
-					a.log.Error(err, "Failed to start workspace file server", "workspace", wsName, "output", strings.TrimSpace(out.String()))
+				if err := startWorkspaceFileServer(ctx, restCfg, namespace, ws.Status.PodName); err != nil {
+					a.log.Error(err, "Failed to start workspace file server", "workspace", wsName)
 				} else {
 					wsURL := fmt.Sprintf("http://%s:%d", pod.Status.PodIP, workspaceFileServerPort)
 					req.CustomDefs = append(req.CustomDefs, fmt.Sprintf("workspace_url=%s", wsURL))

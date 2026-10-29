@@ -68,8 +68,10 @@ func TestResolveWorkspaceForBuild_ServesOnlyExportDir(t *testing.T) {
 	if call.podName != pod.Name {
 		t.Errorf("exec pod = %q, want %q", call.podName, pod.Name)
 	}
-	if len(call.cmd) < 4 || call.cmd[0] != "python3" || call.cmd[1] != "-c" {
-		t.Fatalf("cmd = %q, want python3 -c <server> ...", call.cmd)
+	// -I keeps modules in the exec's working directory from shadowing the
+	// standard library.
+	if len(call.cmd) < 5 || !slices.Equal(call.cmd[:3], []string{"python3", "-I", "-c"}) {
+		t.Fatalf("cmd = %q, want python3 -I -c <server> ...", call.cmd)
 	}
 	if got := call.cmd[len(call.cmd)-2:]; !slices.Equal(got, []string{"9090", "/workspace/export"}) {
 		t.Errorf("cmd port/root = %q, want [9090 /workspace/export]", got)
@@ -136,15 +138,20 @@ func freeTCPPort(t *testing.T) int {
 	return port
 }
 
-// launchWorkspaceFileServer runs the embedded launcher the way the build API
-// does, against a temp root and port.
+// runWorkspaceFileServerLauncher runs the launcher the way the build API does,
+// against a temp root and port, from working directory dir.
+func runWorkspaceFileServerLauncher(t *testing.T, dir string, port int, root string) ([]byte, error) {
+	t.Helper()
+	args := workspaceFileServerArgs(port, root)
+	cmd := exec.Command(args[0], args[1:]...) //nolint:gosec // fixed script, test-only args
+	cmd.Dir = dir
+	cmd.WaitDelay = 5 * time.Second
+	return cmd.CombinedOutput()
+}
+
 func launchWorkspaceFileServer(t *testing.T, port int, root string) {
 	t.Helper()
-	cmd := exec.Command("python3", "-c", workspaceFileServerPython, //nolint:gosec // fixed script, test-only args
-		strconv.Itoa(port), root)
-	cmd.WaitDelay = 5 * time.Second
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+	if out, err := runWorkspaceFileServerLauncher(t, t.TempDir(), port, root); err != nil {
 		t.Fatalf("launcher failed: %v\n%s", err, out)
 	}
 }
@@ -276,5 +283,22 @@ func TestWorkspaceFileServerPython_RelaunchKeepsRunningServer(t *testing.T) {
 	}
 	if code, body := httpGet(t, port, "/ok.txt"); code != http.StatusOK || body != "ok" {
 		t.Errorf("GET /ok.txt after relaunch = %d %q, want 200 \"ok\"", code, body)
+	}
+}
+
+// TestWorkspaceFileServerPython_IgnoresModulesInWorkingDir checks that a
+// module in the exec's working directory cannot replace the standard library.
+func TestWorkspaceFileServerPython_IgnoresModulesInWorkingDir(t *testing.T) {
+	requireFileServerHost(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "http.py"), []byte("raise SystemExit('shadowed')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	export := filepath.Join(t.TempDir(), "export")
+	port := freeTCPPort(t)
+	killFileServersOnCleanup(t, export)
+
+	if out, err := runWorkspaceFileServerLauncher(t, dir, port, export); err != nil {
+		t.Fatalf("launcher failed with http.py in its working directory: %v\n%s", err, out)
 	}
 }

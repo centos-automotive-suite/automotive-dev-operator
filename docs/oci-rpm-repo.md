@@ -172,7 +172,7 @@ OCI repos can be combined with workspace-served repos in the same build:
 ```bash
 caib image build-dev manifest.aib.yml \
   --mode image --format qcow2 \
-  --extra-repo my-ws:/path/to/rpms \
+  --extra-repo my-ws:/workspace/export/rpms \
   --extra-repo oci:quay.io/myorg/my-rpms:latest \
   -o ./disk.qcow2
 ```
