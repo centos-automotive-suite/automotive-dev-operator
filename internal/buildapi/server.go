@@ -1,6 +1,7 @@
 package buildapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	_ "embed"
@@ -982,7 +983,7 @@ type workspaceBuildResolution struct {
 // - Finds the workspace or auto-creates it if it doesn't exist
 // - Creates/finds a build-cache PVC for osbuild checkpoint persistence
 // - Forwards the workspace's lease if the build has flash enabled but no explicit lease
-// - Starts an HTTP file server in the workspace pod and injects workspace_url as a custom define
+// - Serves /workspace/export over HTTP from the workspace pod and injects workspace_url as a custom define
 func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, restCfg *rest.Config, namespace, wsName, requester string, req *buildcontract.BuildRequest) (workspaceBuildResolution, error) {
 	var res workspaceBuildResolution
 	operatorConfig, _ := a.deps.loadOperatorConfig(ctx, k8sClient, namespace)
@@ -1025,21 +1026,19 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 		req.FlashLeaseName = ws.Spec.LeaseID
 	}
 
-	// Start file server in workspace pod and inject workspace_url for manifest use
-	// (e.g. add_files: [{path: /usr/bin/foo, url: $workspace_url/my-binary}])
+	// Serve /workspace/export from the workspace pod and inject workspace_url for manifest use
+	// (e.g. add_files: [{path: /usr/bin/foo, url: $workspace_url/my-binary}] fetches
+	// /workspace/export/my-binary)
 	if ws.Status.Phase == phaseRunning && ws.Status.PodName != "" {
 		res.Running = true
 		if restCfg != nil {
 			pod := &corev1.Pod{}
 			if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ws.Status.PodName}, pod); err == nil && pod.Status.PodIP != "" {
-				const wsFileServerPort = 9090
-				// Redirect shell's own FDs first so runc exec doesn't block waiting for SPDY pipes.
-				cmd := []string{"/bin/sh", "-c",
-					fmt.Sprintf("exec 0</dev/null 1>/dev/null 2>/dev/null; python3 -m http.server %d -d /workspace &", wsFileServerPort)}
-				if err := podExec(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
-					a.log.Error(err, "Failed to start workspace file server", "workspace", wsName)
+				var out bytes.Buffer
+				if err := podExecForWorkspaceFileServer(ctx, restCfg, namespace, ws.Status.PodName, workspaceContainerName, workspaceFileServerCommand(), &out); err != nil {
+					a.log.Error(err, "Failed to start workspace file server", "workspace", wsName, "output", strings.TrimSpace(out.String()))
 				} else {
-					wsURL := fmt.Sprintf("http://%s:%d", pod.Status.PodIP, wsFileServerPort)
+					wsURL := fmt.Sprintf("http://%s:%d", pod.Status.PodIP, workspaceFileServerPort)
 					req.CustomDefs = append(req.CustomDefs, fmt.Sprintf("workspace_url=%s", wsURL))
 					a.log.Info("Workspace file server started", "workspace", wsName, "url", wsURL)
 					res.FileURL = wsURL

@@ -231,7 +231,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVarP(&opts.Build.Target, "target", "t", "", "target platform (default: from manifest, or qemu)")
 	buildDevCmd.Flags().StringVarP(&opts.Build.Architecture, "arch", "a", opts.GetDefaultArch(), "architecture (amd64, arm64)")
 	buildDevCmd.Flags().StringVar(&opts.Build.Mode, "mode", "package", "build mode: image (ostree) or package (package-based)")
-	buildDevCmd.Flags().StringVar(&opts.Build.ExportFormat, "format", "", "export format: qcow2, raw, simg, etc.")
+	buildDevCmd.Flags().StringVar(&opts.Build.ExportFormat, "format", "", "export format: qcow2, raw, simg")
 	buildDevCmd.Flags().StringVarP(&opts.Output.Dir, "output", "o", "", "download artifact to file from registry (uses --internal-registry when no --push given)")
 	buildDevCmd.Flags().StringVar(&opts.Build.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
 	buildDevCmd.Flags().StringVar(&opts.Registry.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
@@ -355,6 +355,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 		extractForSigningCmd,
 		injectSignedCmd,
 	)
+	configureHelp(cmd)
 
 	return cmd
 }
@@ -384,7 +385,7 @@ The generated lockfile records exact RPM URLs and checksums and can be passed
 to caib image build-dev with --lockfile. The CLI downloads the resulting lockfile.`,
 		Example: `  caib image resolve manifest.aib.yml --arch arm64 -o manifest.aib.lock
   caib image build-dev manifest.aib.yml --arch arm64 --lockfile manifest.aib.lock`,
-		Args: cobra.ExactArgs(1),
+		Args: manifestArgument("caib image resolve manifest.aib.yml"),
 		Run:  opts.RunResolve,
 	}
 }
@@ -403,18 +404,16 @@ func newBuildCmd(opts Options) *cobra.Command {
 
 Bootc images are immutable, atomically updatable OS images based on
 container technology. This is the recommended approach for production.
-With --git-url, the manifest path is relative to the repository root.
+With --git-url, the manifest path is relative to the repository root.`,
+		Example: `  # Download a disk image
+  caib image build manifest.aib.yml -o disk.qcow2
 
-Examples:
-  # Build and push container to registry
+  # Publish a bootc image to a registry
   caib image build manifest.aib.yml --push quay.io/org/my-os:v1
 
-  # Build container + create disk image
-  caib image build manifest.aib.yml --push quay.io/org/my-os:v1 --disk -o disk.qcow2
-
-  # Build a manifest from a Git commit (its adjacent <manifest>.lock is used when present)
-  caib image build images/my-os.aib.yml --git-url https://git.example.com/team/os.git --git-ref main --push quay.io/org/my-os:v1`,
-		Args: cobra.ExactArgs(1),
+  # Build and flash a board with a configured Jumpstarter target
+  caib image build manifest.aib.yml --internal-registry --flash --target j784s4evm`,
+		Args: manifestArgument("caib image build manifest.aib.yml -o disk.qcow2"),
 		Run:  opts.RunBuild,
 	}
 }
@@ -426,10 +425,8 @@ func newDiskCmd(opts Options) *cobra.Command {
 		Long: `Create a disk image from an existing bootc container in a registry.
 
 This uses 'aib to-disk-image' to convert a bootc container to a disk
-image that can be flashed onto hardware.
-
-Examples:
-  # Create disk image from container
+image that can be flashed onto hardware.`,
+		Example: `  # Create disk image from container
   caib image disk quay.io/org/my-os:v1 -o disk.qcow2 --format qcow2
 
   # Push disk as OCI artifact instead of downloading
@@ -446,10 +443,8 @@ func newBuildDevCmd(opts Options) *cobra.Command {
 		Long: `Build a disk image using ostree or package-based mode for development workflows.
 
 This creates standalone disk images without bootc container integration.
-With --git-url, the manifest path is relative to the repository root.
-
-Examples:
-  # Ostree-based image
+With --git-url, the manifest path is relative to the repository root.`,
+		Example: `  # Ostree-based image
   caib image build-dev manifest.aib.yml --mode image --format qcow2 -o disk.qcow2
 
   # Package-based image
@@ -457,7 +452,7 @@ Examples:
 
   # Build development image from Git
   caib image build-dev images/dev.aib.yml --git-url https://git.example.com/team/os.git --git-ref main --mode package -o disk.raw`,
-		Args: cobra.ExactArgs(1),
+		Args: manifestArgument("caib image build-dev manifest.aib.yml -o disk.qcow2"),
 		Run:  opts.RunBuildDev,
 	}
 }

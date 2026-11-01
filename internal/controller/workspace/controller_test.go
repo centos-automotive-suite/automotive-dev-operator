@@ -712,6 +712,29 @@ func TestBuildPod_PreservesWorkspaceConfig(t *testing.T) {
 	}
 }
 
+// Workspace users share a namespace, and every service account there can pull
+// from the internal registry, so a mounted token would let a workspace read
+// other users' build outputs. Nothing in the pod needs it.
+func TestBuildPod_DoesNotMountServiceAccountToken(t *testing.T) {
+	for _, image := range []string{"", "quay.io/example/custom:latest"} {
+		ws := &automotivev1alpha1.Workspace{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-ws", Namespace: "default"},
+			Spec: automotivev1alpha1.WorkspaceSpec{
+				Architecture: "amd64",
+				Image:        image,
+			},
+			Status: automotivev1alpha1.WorkspaceStatus{PVCName: "test-ws-workspace"},
+		}
+		pod := (&Reconciler{Scheme: newTestScheme()}).buildPod(ws, nil)
+		if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+			t.Errorf("image %q: AutomountServiceAccountToken = %v, want false", image, pod.Spec.AutomountServiceAccountToken)
+		}
+		if pod.Spec.ServiceAccountName != workspaceServiceAccountName {
+			t.Errorf("image %q: ServiceAccountName = %q, want %q", image, pod.Spec.ServiceAccountName, workspaceServiceAccountName)
+		}
+	}
+}
+
 func TestBuildPod_SecurityContext(t *testing.T) {
 	toolchainImage := automotivev1alpha1.DefaultToolchainImage
 	customImage := "quay.io/example/custom:latest"
@@ -807,5 +830,37 @@ func TestBuildPod_SecurityContext(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The build API serves /workspace/export to builds. The init container
+// prepares it for every image, owned like the other workspace dirs.
+func TestBuildPod_InitPreparesExportDir(t *testing.T) {
+	ws := &automotivev1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-ws", Namespace: "default"},
+		Spec: automotivev1alpha1.WorkspaceSpec{
+			Architecture: "amd64",
+			Image:        "quay.io/example/custom:latest",
+		},
+		Status: automotivev1alpha1.WorkspaceStatus{PVCName: "test-ws-workspace"},
+	}
+	pod := (&Reconciler{Scheme: newTestScheme()}).buildPod(ws, nil)
+	if len(pod.Spec.InitContainers) == 0 {
+		t.Fatal("expected an init container")
+	}
+	script := strings.ReplaceAll(strings.Join(pod.Spec.InitContainers[0].Command, " "), "\\\n", " ")
+	for _, prefix := range []string{"mkdir -p /workspace/src", "chown -R 1000:1000"} {
+		found := false
+		for line := range strings.SplitSeq(script, "\n") {
+			if strings.HasPrefix(line, prefix) {
+				found = true
+				if !strings.Contains(line+" ", " /workspace/export ") {
+					t.Errorf("%q does not include /workspace/export", line)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("init script has no %q statement", prefix)
+		}
 	}
 }

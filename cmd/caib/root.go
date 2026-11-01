@@ -40,9 +40,11 @@ func fullVersion() string {
 func newRootCmd() *cobra.Command {
 	state := newRuntimeState()
 	rootCmd := &cobra.Command{
-		Use:     "caib",
-		Short:   "Cloud Automotive Image Builder",
-		Version: fullVersion(),
+		Use:           "caib",
+		Short:         "Cloud Automotive Image Builder",
+		Version:       fullVersion(),
+		SilenceErrors: true, // main prints errors once, including actionable hints.
+		SilenceUsage:  true, // Full flag listings belong in --help.
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			f := strings.ToLower(strings.TrimSpace(state.Output.Format))
 			if !validOutputFormats[f] {
@@ -90,8 +92,28 @@ func newRootCmd() *cobra.Command {
 		authcmd.NewAuthCmd(),
 		workspace.NewWorkspaceCmd(&state.Output.Format),
 	)
+	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return fmt.Errorf("%w\nSee '%s --help' for usage", err, cmd.CommandPath())
+	})
+	addArgsHint(rootCmd)
 
 	return rootCmd
+}
+
+// SilenceUsage removes Cobra's flag dump from argument errors, so give them the
+// same pointer to --help that SetFlagErrorFunc adds to flag errors.
+func addArgsHint(cmd *cobra.Command) {
+	if validate := cmd.Args; validate != nil {
+		cmd.Args = func(c *cobra.Command, args []string) error {
+			if err := validate(c, args); err != nil {
+				return fmt.Errorf("%w\nSee '%s --help' for usage", err, c.CommandPath())
+			}
+			return nil
+		}
+	}
+	for _, child := range cmd.Commands() {
+		addArgsHint(child)
+	}
 }
 
 func newLoginCmd(insecure *bool) *cobra.Command {

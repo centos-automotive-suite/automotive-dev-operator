@@ -37,9 +37,9 @@ echo 'workspace:1001:64535' > /etc/subgid
 
 # Workspace directories owned by workspace user
 mkdir -p /workspace/src /workspace/cache /workspace/.cache /workspace/.ssh \
-         /workspace/.config /workspace/.local/share/containers
+         /workspace/.config /workspace/.local/share/containers /workspace/export
 chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.cache /workspace/.ssh \
-                   /workspace/.config /workspace/.local
+                   /workspace/.config /workspace/.local /workspace/export
 
 # Generate SSH key for deploy
 [ -f /workspace/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -f /workspace/.ssh/id_ed25519 -N '' -q

@@ -55,3 +55,19 @@ func TestBuildSyncDeleteScript(t *testing.T) {
 		t.Error("script must not mask failures with trailing true")
 	}
 }
+
+func TestTarExtractCmdStripsOwnership(t *testing.T) {
+	cmd := tarExtractCmd("/workspace/src/")
+	if len(cmd) != 3 || cmd[0] != "/bin/sh" || cmd[1] != "-c" {
+		t.Fatalf("unexpected command shape: %q", cmd)
+	}
+	script := cmd[2]
+	for _, want := range []string{"--no-same-owner", "--no-same-permissions"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("tar command missing %q, so extraction will try to chown/chmod to the uploader's uid/gid and fail with \"Invalid argument\" under OpenShift's restricted SCC range: %s", want, script)
+		}
+	}
+	if !strings.Contains(script, `-C "/workspace/src/"`) {
+		t.Errorf("tar command missing destination dir: %s", script)
+	}
+}

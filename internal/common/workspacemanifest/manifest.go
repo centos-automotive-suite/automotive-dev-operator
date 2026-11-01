@@ -12,6 +12,10 @@ import (
 
 const workspaceFSRoot = "/workspace"
 
+// WorkspaceExportRoot is the only workspace directory served to builds over
+// HTTP. file:///workspace/export/... URLs are rewritten to the server.
+const WorkspaceExportRoot = workspaceFSRoot + "/export"
+
 const (
 	hydrateKindPath = "path"
 	hydrateKindGlob = "glob"
@@ -41,7 +45,8 @@ func ExtractWorkspaceAddFiles(manifest string) (string, []WorkspaceHydrateRef, e
 // applyWorkspaceManifest rewrites POSIX workspace references in an AIB manifest
 // so the build pod can consume them without mounting the workspace PVC.
 //
-//   - file:///workspace/... repo/file URLs become http://<workspace>/...
+//   - file:///workspace/export/... repo/file URLs become http://<workspace>/...;
+//     other file:///workspace URLs are rejected because they are not served
 //   - add_files source_path / source_glob / source under /workspace become
 //     relative paths (src/...) for find_manifest.sh, and are returned as
 //     hydrate refs to copy onto the upload PVC
@@ -223,14 +228,20 @@ func rewriteWorkspaceFileURL(s, wsURL string) (string, bool, error) {
 	if !isCleanWorkspacePath(cleaned) {
 		return s, false, nil
 	}
+	if cleaned != WorkspaceExportRoot && !strings.HasPrefix(cleaned, WorkspaceExportRoot+"/") {
+		return s, true, fmt.Errorf("manifest references %s, but only %s is served to builds: move the files under %s and reference them as file://%s/<path>",
+			s, WorkspaceExportRoot, WorkspaceExportRoot, WorkspaceExportRoot)
+	}
 	if strings.TrimSpace(wsURL) == "" {
 		return s, true, fmt.Errorf("manifest references %s but the workspace HTTP server is not available (is the workspace running?)", s)
 	}
-	suffix := strings.TrimPrefix(cleaned, workspaceFSRoot)
+	suffix := strings.TrimPrefix(cleaned, WorkspaceExportRoot)
 	if suffix == "" {
 		suffix = "/"
 	}
-	return strings.TrimRight(wsURL, "/") + suffix, true, nil
+	// u.Path is decoded, so escape it again: a '#' or '?' in a file name must
+	// not become a fragment or query.
+	return strings.TrimRight(wsURL, "/") + (&url.URL{Path: suffix}).EscapedPath(), true, nil
 }
 
 func workspaceRelPath(p string) (rel, abs string, ok bool) {

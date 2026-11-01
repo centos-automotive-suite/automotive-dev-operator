@@ -15,7 +15,7 @@ name: sample
 content:
   repos:
     - id: local
-      baseurl: file:///workspace/src/bin
+      baseurl: file:///workspace/export/bin
   add_files:
     - path: /usr/bin/app
       source_path: /workspace/src/build/app
@@ -40,8 +40,8 @@ qm:
 	content := parsed["content"].(map[string]any)
 	repos := content["repos"].([]any)
 	repo := repos[0].(map[string]any)
-	if repo["baseurl"] != "http://10.0.0.5:9090/src/bin" {
-		t.Errorf("baseurl = %v, want http://10.0.0.5:9090/src/bin", repo["baseurl"])
+	if repo["baseurl"] != "http://10.0.0.5:9090/bin" {
+		t.Errorf("baseurl = %v, want http://10.0.0.5:9090/bin", repo["baseurl"])
 	}
 
 	addFiles := content["add_files"].([]any)
@@ -108,7 +108,7 @@ func TestApplyWorkspaceManifest_IgnoresNonWorkspaceFileURLs(t *testing.T) {
 }
 
 func TestApplyWorkspaceManifest_FileURLRequiresHTTP(t *testing.T) {
-	manifest := "content:\n  repos:\n    - baseurl: file:///workspace/src/bin\n"
+	manifest := "content:\n  repos:\n    - baseurl: file:///workspace/export/bin\n"
 	_, _, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "", true)
 	if err == nil {
 		t.Fatal("expected error when file:// workspace URL has no HTTP server")
@@ -189,8 +189,8 @@ func TestApplyWorkspaceManifest_PathTraversalNotRewritten(t *testing.T) {
 	}
 }
 
-func TestApplyWorkspaceManifest_WorkspaceRootRepoURL(t *testing.T) {
-	manifest := "content:\n  repos:\n    - baseurl: file:///workspace\n"
+func TestApplyWorkspaceManifest_ExportRootRepoURL(t *testing.T) {
+	manifest := "content:\n  repos:\n    - baseurl: file:///workspace/export\n"
 	got, refs, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
 	if err != nil {
 		t.Fatalf("workspacemanifest.ApplyWorkspaceManifest: %v", err)
@@ -209,7 +209,7 @@ func TestApplyWorkspaceManifest_WorkspaceRootRepoURL(t *testing.T) {
 }
 
 func TestApplyWorkspaceManifest_AddFilesURL(t *testing.T) {
-	manifest := "content:\n  add_files:\n    - path: /usr/bin/app\n      url: file:///workspace/src/app\n"
+	manifest := "content:\n  add_files:\n    - path: /usr/bin/app\n      url: file:///workspace/export/app\n"
 	got, refs, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
 	if err != nil {
 		t.Fatalf("workspacemanifest.ApplyWorkspaceManifest: %v", err)
@@ -219,11 +219,87 @@ func TestApplyWorkspaceManifest_AddFilesURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	url := parsed["content"].(map[string]any)["add_files"].([]any)[0].(map[string]any)["url"]
-	if url != "http://10.0.0.5:9090/src/app" {
-		t.Errorf("url = %v, want http://10.0.0.5:9090/src/app", url)
+	if url != "http://10.0.0.5:9090/app" {
+		t.Errorf("url = %v, want http://10.0.0.5:9090/app", url)
 	}
 	if len(refs) != 0 {
 		t.Errorf("url entries should not be hydrated, got %+v", refs)
+	}
+}
+
+// Only /workspace/export is served to builds. Any other file:///workspace URL
+// would 404 at build time, so reject it up front and say where to move it.
+// file URLs are percent-decoded when parsed, so the HTTP path must be escaped
+// again: an encoded '#' or '?' is part of the file name, not a fragment or query.
+func TestApplyWorkspaceManifest_EscapesRewrittenPath(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"file:///workspace/export/a%23b", "http://10.0.0.5:9090/a%23b"},
+		{"file:///workspace/export/a%3Fb", "http://10.0.0.5:9090/a%3Fb"},
+		{"file:///workspace/export/my%20app", "http://10.0.0.5:9090/my%20app"},
+		{"file:///workspace/export/100%25", "http://10.0.0.5:9090/100%25"},
+	} {
+		manifest := "content:\n  add_files:\n    - path: /usr/bin/app\n      url: " + tc.in + "\n"
+		got, _, err := workspacemanifest.ApplyWorkspaceManifest(manifest, "http://10.0.0.5:9090", true)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.in, err)
+		}
+		var parsed map[string]any
+		if err := yaml.Unmarshal([]byte(got), &parsed); err != nil {
+			t.Fatal(err)
+		}
+		url := parsed["content"].(map[string]any)["add_files"].([]any)[0].(map[string]any)["url"]
+		if url != tc.want {
+			t.Errorf("%s: url = %v, want %s", tc.in, url, tc.want)
+		}
+	}
+}
+
+func TestApplyWorkspaceManifest_RejectsFileURLOutsideExport(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+		wsURL    string
+	}{
+		{
+			name:     "repo under src",
+			manifest: "content:\n  repos:\n    - baseurl: file:///workspace/src/bin\n",
+			wsURL:    "http://10.0.0.5:9090",
+		},
+		{
+			name:     "add_files url to ssh key",
+			manifest: "content:\n  add_files:\n    - path: /root/key\n      url: file:///workspace/.ssh/id_ed25519\n",
+			wsURL:    "http://10.0.0.5:9090",
+		},
+		{
+			name:     "workspace root",
+			manifest: "content:\n  repos:\n    - baseurl: file:///workspace\n",
+			wsURL:    "http://10.0.0.5:9090",
+		},
+		{
+			name:     "traversal out of export",
+			manifest: "content:\n  repos:\n    - baseurl: file:///workspace/export/../.ssh\n",
+			wsURL:    "http://10.0.0.5:9090",
+		},
+		{
+			name:     "export name prefix",
+			manifest: "content:\n  repos:\n    - baseurl: file:///workspace/exported/bin\n",
+			wsURL:    "http://10.0.0.5:9090",
+		},
+		{
+			name:     "workspace not running",
+			manifest: "content:\n  repos:\n    - baseurl: file:///workspace/src/bin\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := workspacemanifest.ApplyWorkspaceManifest(tt.manifest, tt.wsURL, tt.wsURL != "")
+			if err == nil {
+				t.Fatal("expected error for file:///workspace URL outside /workspace/export")
+			}
+			if !strings.Contains(err.Error(), "move") || !strings.Contains(err.Error(), "/workspace/export") {
+				t.Errorf("error %q should tell the user to move the files under /workspace/export", err)
+			}
+		})
 	}
 }
 

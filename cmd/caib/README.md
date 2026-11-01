@@ -78,6 +78,13 @@ caib image build-dev manifest.aib.yml \
   -o ./output/disk.qcow2
 ```
 
+## Help
+
+`caib image --help` groups commands by task. `caib image build --help` starts
+with recipes for downloading a disk, publishing a bootc image, and building
+and flashing a board, followed by flags grouped by purpose. The `build-dev`
+and `disk` commands use the same flag groups.
+
 ## Flag Inference
 
 Many flags are automatically inferred from context:
