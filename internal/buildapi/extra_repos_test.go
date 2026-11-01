@@ -3,18 +3,23 @@ package buildapi
 import (
 	"context"
 	"errors"
-	"io"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -53,44 +58,54 @@ func runningWorkspace(name, owner string) (*automotivev1alpha1.Workspace, *corev
 	return ws, pod
 }
 
-type execCall struct {
-	podName string
-	cmd     []string
-}
-
-// stubExtraRepoExec replaces the pod-exec entry point used by resolveExtraRepos
-// with a recorder, so tests can assert exactly how many servers were started
-// (and that none were started on a rejected request) without a live cluster.
-func stubExtraRepoExec(t *testing.T) *[]execCall {
+// stubWorkspaceGrants points the API at a fake agent per workspace that mints
+// numbered grants, and records which workspace each grant came from, so tests
+// can count grants without a cluster.
+func stubWorkspaceGrants(t *testing.T) (*APIServer, *[]string) {
 	t.Helper()
 	// Pin the namespace so fixtures and the lookup target the same namespace
 	// regardless of BUILD_API_NAMESPACE or an in-pod service-account file.
 	t.Setenv("BUILD_API_NAMESPACE", "default")
-	orig := podExecForExtraRepos
-	calls := &[]execCall{}
-	podExecForExtraRepos = func(_ context.Context, _ *rest.Config, _, podName, _ string, cmd []string, _ io.Writer) error {
-		*calls = append(*calls, execCall{podName: podName, cmd: cmd})
-		return nil
+	var mu sync.Mutex
+	var grants []string
+	a := &APIServer{log: logr.Discard()}
+	a.deps.loadOperatorConfig = func(context.Context, client.Client, string) (*automotivev1alpha1.OperatorConfig, error) {
+		return nil, nil
 	}
-	t.Cleanup(func() { podExecForExtraRepos = orig })
-	return calls
+	a.deps.workspaceAgent = func(_ context.Context, _ client.Client, ws *automotivev1alpha1.Workspace) (*workspaceagent.Client, error) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/file-grants" || r.Header.Get("Authorization") != "Bearer secret" {
+				http.Error(w, `{"error":"unexpected request"}`, http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			grants = append(grants, ws.Name)
+			n := len(grants)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprintf(w, `{"token":"tok%d","expiresAt":"2030-01-01T00:00:00Z"}`, n)
+		}))
+		t.Cleanup(server.Close)
+		return workspaceagent.NewClient(server.URL, "secret", nil), nil
+	}
+	return a, &grants
 }
 
 // A build submitted by one user must not reach into another user's workspace
-// via --extra-repo. The request is rejected and no server is started.
+// via --extra-repo. The request is rejected and no grant is minted.
 func TestResolveExtraRepos_RejectsUnownedWorkspace(t *testing.T) {
 	ws, pod := runningWorkspace("alice-ws", "alice")
 	k8sClient := newFakeClient(ws, pod)
-	calls := stubExtraRepoExec(t)
-	a := &APIServer{}
-	req := &buildcontract.BuildRequest{ExtraRepos: []string{"alice-ws:/workspace/rpms"}}
+	a, grants := stubWorkspaceGrants(t)
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{"alice-ws:/workspace/export/rpms"}}
 
-	err := a.resolveExtraRepos(context.Background(), k8sClient, nil, "bob", req)
+	err := a.resolveExtraRepos(context.Background(), k8sClient, "bob", req)
 	if err == nil {
 		t.Fatal("expected ownership error, got nil")
 	}
-	if len(*calls) != 0 {
-		t.Fatalf("expected no exec calls on rejection, got %d", len(*calls))
+	if len(*grants) != 0 {
+		t.Fatalf("expected no grants on rejection, got %v", *grants)
 	}
 	if len(req.CustomDefs) != 0 {
 		t.Fatalf("expected no CustomDefs mutation on rejection, got %#v", req.CustomDefs)
@@ -100,22 +115,21 @@ func TestResolveExtraRepos_RejectsUnownedWorkspace(t *testing.T) {
 // The response must not reveal whether a workspace exists: an unowned workspace
 // and a missing one must produce byte-identical errors.
 func TestResolveExtraRepos_UnownedIndistinguishableFromMissing(t *testing.T) {
-	stubExtraRepoExec(t)
-	a := &APIServer{}
+	a, _ := stubWorkspaceGrants(t)
 	const name = "shadow-ws"
 	newReq := func() *buildcontract.BuildRequest {
-		return &buildcontract.BuildRequest{ExtraRepos: []string{name + ":/workspace/rpms"}}
+		return &buildcontract.BuildRequest{ExtraRepos: []string{name + ":/workspace/export/rpms"}}
 	}
 
 	// Case 1: workspace does not exist.
-	errMissing := a.resolveExtraRepos(context.Background(), newFakeClient(), nil, "bob", newReq())
+	errMissing := a.resolveExtraRepos(context.Background(), newFakeClient(), "bob", newReq())
 	if errMissing == nil {
 		t.Fatal("expected error for missing workspace, got nil")
 	}
 
 	// Case 2: workspace exists but is owned by someone else.
 	ws, pod := runningWorkspace(name, "alice")
-	errUnowned := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), nil, "bob", newReq())
+	errUnowned := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), "bob", newReq())
 	if errUnowned == nil {
 		t.Fatal("expected error for unowned workspace, got nil")
 	}
@@ -129,7 +143,7 @@ func TestResolveExtraRepos_UnownedIndistinguishableFromMissing(t *testing.T) {
 // A non-NotFound lookup failure (API-server/RBAC) must return the sentinel
 // error so applyExtraRepos maps it to a 500
 func TestResolveExtraRepos_LookupFailureIsSentinel(t *testing.T) {
-	stubExtraRepoExec(t)
+	a, _ := stubWorkspaceGrants(t)
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -143,10 +157,9 @@ func TestResolveExtraRepos_LookupFailureIsSentinel(t *testing.T) {
 			return errors.New(rawErr)
 		},
 	}).Build()
-	a := &APIServer{}
-	req := &buildcontract.BuildRequest{ExtraRepos: []string{"any-ws:/workspace/rpms"}}
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{"any-ws:/workspace/export/rpms"}}
 
-	err := a.resolveExtraRepos(context.Background(), k8sClient, nil, "bob", req)
+	err := a.resolveExtraRepos(context.Background(), k8sClient, "bob", req)
 	if err == nil {
 		t.Fatal("expected lookup error, got nil")
 	}
@@ -158,58 +171,143 @@ func TestResolveExtraRepos_LookupFailureIsSentinel(t *testing.T) {
 	}
 }
 
-// Validation is all-or-nothing with respect to exec: if a later entry is
-// unauthorized, no server is started for earlier authorized entries.
+// Validation is all-or-nothing: if a later entry is unauthorized, no grant is
+// minted for earlier authorized entries.
 func TestResolveExtraRepos_AllOrNothing(t *testing.T) {
 	bobWS, bobPod := runningWorkspace("bob-ws", "bob")
 	aliceWS, alicePod := runningWorkspace("alice-ws", "alice")
 	k8sClient := newFakeClient(bobWS, bobPod, aliceWS, alicePod)
-	calls := stubExtraRepoExec(t)
-	a := &APIServer{}
+	a, grants := stubWorkspaceGrants(t)
 	req := &buildcontract.BuildRequest{
-		ExtraRepos: []string{"bob-ws:/workspace/rpms", "alice-ws:/workspace/rpms"},
+		ExtraRepos: []string{"bob-ws:/workspace/export/rpms", "alice-ws:/workspace/export/rpms"},
 	}
 
-	err := a.resolveExtraRepos(context.Background(), k8sClient, nil, "bob", req)
+	err := a.resolveExtraRepos(context.Background(), k8sClient, "bob", req)
 	if err == nil {
 		t.Fatal("expected ownership error on second entry, got nil")
 	}
-	if len(*calls) != 0 {
-		t.Fatalf("expected no exec calls (pass 1 must reject before pass 2), got %d", len(*calls))
+	if len(*grants) != 0 {
+		t.Fatalf("expected no grants (pass 1 must reject before pass 2), got %v", *grants)
 	}
 	if len(req.CustomDefs) != 0 {
 		t.Fatalf("expected no CustomDefs mutation on rejection, got %#v", req.CustomDefs)
 	}
 }
 
-// The owner's own running workspace is accepted: exactly one server is started
-// and the repo is injected into CustomDefs.
+// The owner's own running workspace is accepted: the build gets one grant on
+// its agent, and the repo URL carries it.
 func TestResolveExtraRepos_AllowsOwnedRunningWorkspace(t *testing.T) {
 	ws, pod := runningWorkspace("bob-ws", "bob")
-	k8sClient := newFakeClient(ws, pod)
-	calls := stubExtraRepoExec(t)
-	a := &APIServer{log: logr.Discard()}
-	req := &buildcontract.BuildRequest{ExtraRepos: []string{"bob-ws:/workspace/rpms"}}
+	a, grants := stubWorkspaceGrants(t)
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{"bob-ws:/workspace/export/rpms"}}
 
-	err := a.resolveExtraRepos(context.Background(), k8sClient, nil, "bob", req)
-	if err != nil {
+	if err := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), "bob", req); err != nil {
 		t.Fatalf("expected owned workspace to be accepted, got %v", err)
 	}
-	if len(*calls) != 1 {
-		t.Fatalf("expected exactly 1 exec call, got %d", len(*calls))
+	if !reflect.DeepEqual(*grants, []string{"bob-ws"}) {
+		t.Fatalf("grants = %v, want one from bob-ws", *grants)
 	}
-	if (*calls)[0].podName != "bob-ws-pod" {
-		t.Fatalf("exec targeted pod %q, want %q", (*calls)[0].podName, "bob-ws-pod")
+	want := `extra_repos=[{"id":"workspace-bob-ws","baseurl":"http://10.0.0.1:9091/f/tok1/rpms"}]`
+	if !slices.Contains(req.CustomDefs, want) {
+		t.Fatalf("CustomDefs missing %q, got %#v", want, req.CustomDefs)
 	}
+}
 
-	want := `extra_repos=[{"id":"workspace-bob-ws","baseurl":"http://10.0.0.1:8080"}]`
-	found := false
-	for _, d := range req.CustomDefs {
-		if d == want {
-			found = true
+// The agent serves only /workspace/export, so other paths are rejected before
+// any grant is minted.
+func TestResolveExtraRepos_RejectsPathOutsideExport(t *testing.T) {
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	a, grants := stubWorkspaceGrants(t)
+	for _, p := range []string{"/workspace/rpms", "/workspace/export/../.ssh", "/workspace/exported", "rpms", "/tmp/rpms"} {
+		req := &buildcontract.BuildRequest{ExtraRepos: []string{"bob-ws:" + p}}
+		err := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), "bob", req)
+		if err == nil || !strings.Contains(err.Error(), "under /workspace/export") {
+			t.Errorf("%s: err = %v, want an error asking to move the repo under /workspace/export", p, err)
+		}
+		if len(req.CustomDefs) != 0 {
+			t.Errorf("%s: CustomDefs = %#v, want none", p, req.CustomDefs)
 		}
 	}
-	if !found {
-		t.Fatalf("CustomDefs missing %q, got %#v", want, req.CustomDefs)
+	if len(*grants) != 0 {
+		t.Fatalf("expected no grants on rejection, got %v", *grants)
+	}
+}
+
+// Repos in one workspace share one grant, and each repo gets its own path and
+// a distinct repo ID.
+func TestResolveExtraRepos_SharesGrantPerWorkspace(t *testing.T) {
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	a, grants := stubWorkspaceGrants(t)
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{
+		"bob-ws:/workspace/export/kernel",
+		"bob-ws:/workspace/export/my tools/",
+		"bob-ws:/workspace/export",
+	}}
+
+	if err := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), "bob", req); err != nil {
+		t.Fatalf("resolveExtraRepos: %v", err)
+	}
+	if len(*grants) != 1 {
+		t.Fatalf("grants = %v, want 1 per workspace", *grants)
+	}
+	want := `extra_repos=[` +
+		`{"id":"workspace-bob-ws","baseurl":"http://10.0.0.1:9091/f/tok1/kernel"},` +
+		`{"id":"workspace-bob-ws-2","baseurl":"http://10.0.0.1:9091/f/tok1/my%20tools"},` +
+		`{"id":"workspace-bob-ws-3","baseurl":"http://10.0.0.1:9091/f/tok1/"}]`
+	if len(req.CustomDefs) == 0 || req.CustomDefs[0] != want {
+		t.Fatalf("CustomDefs = %#v, want first entry %s", req.CustomDefs, want)
+	}
+}
+
+// If the agent cannot grant access, the build is rejected with its reason
+// instead of pointing DNF at a URL that won't open.
+func TestResolveExtraRepos_GrantFailureRejectsBuild(t *testing.T) {
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	a, _ := stubWorkspaceGrants(t)
+	a.deps.workspaceAgent = func(context.Context, client.Client, *automotivev1alpha1.Workspace) (*workspaceagent.Client, error) {
+		return nil, errors.New("reading the workspace agent token: secret not found")
+	}
+	req := &buildcontract.BuildRequest{ExtraRepos: []string{"bob-ws:/workspace/export/rpms"}}
+
+	err := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), "bob", req)
+	if err == nil || !strings.Contains(err.Error(), "secret not found") {
+		t.Fatalf("err = %v, want the agent's reason", err)
+	}
+	if len(req.CustomDefs) != 0 {
+		t.Fatalf("CustomDefs = %#v, want none", req.CustomDefs)
+	}
+}
+
+// A build in a running workspace gets workspace_url with its own grant.
+func TestResolveWorkspaceForBuild_GrantsExportToBuild(t *testing.T) {
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	a, grants := stubWorkspaceGrants(t)
+	req := &buildcontract.BuildRequest{}
+
+	res, err := a.resolveWorkspaceForBuild(context.Background(), newFakeClient(ws, pod), "default", "bob-ws", "bob", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantURL = "http://10.0.0.1:9091/f/tok1"
+	if !res.Running || res.FileURL != wantURL || !slices.Contains(req.CustomDefs, "workspace_url="+wantURL) {
+		t.Fatalf("resolution = %+v, CustomDefs = %#v; want workspace_url %s", res, req.CustomDefs, wantURL)
+	}
+	if len(*grants) != 1 {
+		t.Fatalf("grants = %v, want one per build", *grants)
+	}
+}
+
+// Build pods must be able to parse the grant URL on IPv6 clusters too.
+func TestGrantWorkspaceFilesBracketsIPv6PodIP(t *testing.T) {
+	ws, _ := runningWorkspace("bob-ws", "bob")
+	a, _ := stubWorkspaceGrants(t)
+	for _, tc := range []struct{ podIP, want string }{
+		{"10.0.0.1", "http://10.0.0.1:9091/f/tok1"},
+		{"fd00::5", "http://[fd00::5]:9091/f/tok2"},
+	} {
+		url, err := a.grantWorkspaceFiles(context.Background(), nil, ws, tc.podIP, time.Hour)
+		if err != nil || url != tc.want {
+			t.Errorf("grant URL for %s = %q, %v; want %q", tc.podIP, url, err, tc.want)
+		}
 	}
 }

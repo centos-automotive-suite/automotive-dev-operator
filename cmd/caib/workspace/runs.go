@@ -260,7 +260,8 @@ func followWorkspaceRun(ctx context.Context, api runClientCall, name, id string,
 			if streamErr == nil {
 				expectedDuration = body.StreamDuration
 				timer.Reset(expectedDuration + 5*time.Second)
-				started = time.Now()
+				// started stays at the request: the server's window opens
+				// before its headers arrive, so a full window must not look short.
 				if body.Offset > *offset {
 					_, _ = fmt.Fprintf(diagnostics, "Run %s: log truncated; resuming at byte %d (skipped %d bytes)\n", id, body.Offset, body.Offset-*offset)
 				}
@@ -302,10 +303,15 @@ func followWorkspaceRun(ctx context.Context, api runClientCall, name, id string,
 			if run.LogStartOffset > *offset {
 				return nil
 			}
+			// Output is progress, even when the stream then drops, so the
+			// reconnect starts with a fresh retry budget.
+			if received > 0 {
+				return nil
+			}
 			if streamErr != nil && !rotated {
 				return streamErr
 			}
-			if received == 0 && time.Since(started) < expectedDuration {
+			if time.Since(started) < expectedDuration {
 				return io.ErrUnexpectedEOF
 			}
 			return nil

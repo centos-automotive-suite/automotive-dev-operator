@@ -207,15 +207,51 @@ func TestFollowRunGivesUpWhenOnlyLogsFail(t *testing.T) {
 	}
 }
 
+func TestFollowRunOutputResetsRetries(t *testing.T) {
+	const drops = maxRunAttempts + 1
+	var streams atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/logs") {
+			streams.Add(1)
+			// Deliver a byte, then drop the connection mid-response.
+			w.Header().Set("Content-Length", "2")
+			_, _ = io.WriteString(w, "x")
+			return
+		}
+		if n := streams.Load(); n < drops {
+			_, _ = fmt.Fprintf(w, `{"status":"Running","logBytes":%d}`, n+1)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"status":"Succeeded","exitCode":0,"logBytes":%d}`, drops)
+	}))
+	defer server.Close()
+	api, err := buildapiclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var output bytes.Buffer
+	var offset int64
+	code, err := followWorkspaceRun(ctx, func(fn func(*buildapiclient.Client) error) error { return fn(api) }, "dev", "run", &offset, &output, io.Discard, time.Millisecond)
+	if err != nil || code != 0 || streams.Load() != drops || output.String() != strings.Repeat("x", drops) {
+		t.Fatalf("drops after output consumed retries: code=%d err=%v streams=%d output=%q", code, err, streams.Load(), output.String())
+	}
+}
+
 func TestFollowRunUsesServerStreamCapWithoutExhaustingRetries(t *testing.T) {
 	var streams atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/logs") {
 			streams.Add(1)
-			w.Header().Set("X-Log-Stream-Seconds", "0.01")
+			// Like the build API, the window starts when the request arrives,
+			// and the headers follow only once the agent has answered.
+			end := time.Now().Add(50 * time.Millisecond)
+			time.Sleep(30 * time.Millisecond)
+			w.Header().Set("X-Log-Stream-Seconds", "0.05")
 			w.WriteHeader(200)
 			w.(http.Flusher).Flush()
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(time.Until(end))
 			return
 		}
 		if streams.Load() > maxRunAttempts {

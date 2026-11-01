@@ -63,4 +63,4 @@ fi
 # Background children of shell sessions become PID 1's responsibility after
 # their parents exit. Reap them instead of accumulating zombies for the
 # lifetime of the workspace. The agent reaps orphans from runs itself.
-exec catatonit -- sleep infinity
+exec /usr/libexec/catatonit/catatonit -- sleep infinity

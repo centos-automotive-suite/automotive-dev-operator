@@ -11,9 +11,12 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
@@ -145,5 +148,88 @@ func TestAgentAccessRefusesAnotherWorkspacesObjects(t *testing.T) {
 	}
 	if err := r.ensureAgentAccess(context.Background(), ws); err == nil {
 		t.Fatal("the workspace adopted another workspace's agent token")
+	}
+}
+
+func TestAgentAccessUpdatesStalePolicyAndService(t *testing.T) {
+	ws, pvc, _ := runningWorkspace("agent-ws", "default")
+	ws.UID = "mine"
+	r, fc := newTestReconciler(ws, pvc)
+	ctx := context.Background()
+
+	policy := agentNetworkPolicy(ws.Namespace)
+	policy.Spec.Ingress = policy.Spec.Ingress[:1]
+	policy.Spec.Ingress[0].From = policy.Spec.Ingress[0].From[:1]
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: workspaceagent.ServiceName(ws.Name), Namespace: ws.Namespace},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.7",
+			Selector:  map[string]string{"old": "label"},
+			Ports:     []corev1.ServicePort{{Name: "agent", Port: 8443, Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	if err := controllerutil.SetControllerReference(ws, service, r.Scheme); err != nil {
+		t.Fatal(err)
+	}
+	for _, obj := range []client.Object{policy, service} {
+		if err := fc.Create(ctx, obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := r.ensureAgentAccess(ctx, ws); err != nil {
+		t.Fatal(err)
+	}
+
+	gotPolicy := &networkingv1.NetworkPolicy{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(policy), gotPolicy); err != nil {
+		t.Fatal(err)
+	}
+	if want := agentNetworkPolicy(ws.Namespace).Spec; !equality.Semantic.DeepEqual(gotPolicy.Spec, want) {
+		t.Errorf("policy spec = %+v, want %+v", gotPolicy.Spec, want)
+	}
+	gotService := &corev1.Service{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(service), gotService); err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(gotService.Spec.Selector, map[string]string{agentPodLabel: service.Name}) ||
+		len(gotService.Spec.Ports) != 1 || gotService.Spec.Ports[0].Port != workspaceagent.APIPort {
+		t.Errorf("service spec = %+v, want port %d selecting the workspace pod", gotService.Spec, workspaceagent.APIPort)
+	}
+	if gotService.Spec.ClusterIP != "10.0.0.7" {
+		t.Errorf("service clusterIP = %q, want the existing 10.0.0.7 kept", gotService.Spec.ClusterIP)
+	}
+}
+
+func TestAgentAccessLeavesCurrentObjectsAlone(t *testing.T) {
+	ws, pvc, _ := runningWorkspace("agent-ws", "default")
+	ws.UID = "mine"
+	r, fc := newTestReconciler(ws, pvc)
+	ctx := context.Background()
+	if err := r.ensureAgentAccess(ctx, ws); err != nil {
+		t.Fatal(err)
+	}
+	objects := []client.Object{
+		&networkingv1.NetworkPolicy{ObjectMeta: agentNetworkPolicy(ws.Namespace).ObjectMeta},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: workspaceagent.ServiceName(ws.Name), Namespace: ws.Namespace}},
+	}
+	versions := map[string]string{}
+	for _, obj := range objects {
+		if err := fc.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+			t.Fatal(err)
+		}
+		versions[obj.GetName()] = obj.GetResourceVersion()
+	}
+
+	if err := r.ensureAgentAccess(ctx, ws); err != nil {
+		t.Fatal(err)
+	}
+	for _, obj := range objects {
+		if err := fc.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+			t.Fatal(err)
+		}
+		if obj.GetResourceVersion() != versions[obj.GetName()] {
+			t.Errorf("%s was rewritten although it was current", obj.GetName())
+		}
 	}
 }

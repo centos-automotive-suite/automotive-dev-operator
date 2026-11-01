@@ -1,11 +1,9 @@
 package buildapi
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,35 +11,22 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspacerun"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/rest"
-	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// runWorkspaceOperation always separates protocol output from exec diagnostics.
-// Each operation is short; the detached supervisor owns the command lifetime.
-func (a *APIServer) runWorkspaceOperation(ctx context.Context, cfg *rest.Config, ws *automotivev1alpha1.Workspace, action string, args ...string) (workspacerun.Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var stdout, stderr bytes.Buffer
-	command, input := workspacerun.Command(action, args...)
-	err := a.exec.stream(ctx, cfg, ws.Namespace, ws.Status.PodName, workspaceContainerName,
-		command, strings.NewReader(input), &stdout, &stderr)
-	if err != nil {
-		return workspacerun.Result{}, wrapPodStreamError("workspace run "+action, err, &stderr)
-	}
-	var result workspacerun.Result
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return result, fmt.Errorf("invalid workspace run response: %w", err)
-	}
-	return result, nil
-}
+// workspaceAgentTimeout bounds every agent call except log streams.
+const workspaceAgentTimeout = 30 * time.Second
 
-func (a *APIServer) workspaceRunTarget(c *gin.Context, name string) (*automotivev1alpha1.Workspace, *rest.Config, bool) {
+// maxRunRequestBytes fits the largest command with every byte JSON-escaped
+// to six, as encoders do for '<', '>', '&' and control characters.
+const maxRunRequestBytes = 6*buildcontract.MaxWorkspaceRunCommandBytes + 4<<10
+
+// The build API stays the public face of runs: it authenticates users, checks
+// ownership and resolves limits, and the workspace's agent enforces them.
+func (a *APIServer) workspaceRunTarget(c *gin.Context, name string) (*automotivev1alpha1.Workspace, *workspaceagent.Client, bool) {
 	ws, err := a.getOwnedWorkspace(c, name)
 	if err != nil {
 		return nil, nil, false
@@ -50,35 +35,56 @@ func (a *APIServer) workspaceRunTarget(c *gin.Context, name string) (*automotive
 		c.JSON(http.StatusConflict, gin.H{"error": "start the workspace to access its runs and retained logs"})
 		return nil, nil, false
 	}
-	cfg, err := a.deps.getRESTConfigFromRequest(c)
+	kube, err := a.deps.getClientFromRequest(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes client"})
 		return nil, nil, false
 	}
-	return ws, cfg, true
+	agent, err := a.deps.workspaceAgent(c.Request.Context(), kube, ws)
+	if err != nil {
+		a.log.Error(err, "Workspace agent is not available", "workspace", name)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "workspace agent is not available; retry, or stop and start the workspace"})
+		return nil, nil, false
+	}
+	return ws, agent, true
 }
 
-func (a *APIServer) workspaceRunError(c *gin.Context, result workspacerun.Result, err error) bool {
-	if err != nil {
-		a.log.Error(err, "Workspace run operation failed")
-		code, message := workspaceRunExecFailure(err)
-		c.JSON(code, gin.H{"error": message})
+// workspaceRunError reports an agent failure with the agent's own status, and
+// a failure to reach the agent as a bad gateway, without the agent's address.
+func (a *APIServer) workspaceRunError(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	var agentErr *workspaceagent.Error
+	if errors.As(err, &agentErr) {
+		c.JSON(agentErr.Code, gin.H{"error": agentErr.Message})
 		return true
 	}
-	if result.Error != "" {
-		code := result.Code
-		if code < 400 || code > 599 {
-			code = http.StatusInternalServerError
-		}
-		c.JSON(code, gin.H{"error": result.Error})
-		return true
+	a.log.Error(err, "Workspace agent request failed")
+	c.JSON(http.StatusBadGateway, gin.H{"error": "workspace agent request failed; retry"})
+	return true
+}
+
+func contractRun(run workspaceagent.Run) buildcontract.WorkspaceRun {
+	return buildcontract.WorkspaceRun{
+		ID:             run.ID,
+		Command:        run.Command,
+		Status:         run.Status,
+		ExitCode:       run.ExitCode,
+		StartedAt:      run.StartedAt,
+		FinishedAt:     run.FinishedAt,
+		LogBytes:       run.LogBytes,
+		LogStartOffset: run.LogStartOffset,
+		LogTruncated:   run.LogTruncated,
+		LogsEvicted:    run.LogsEvicted,
+		TimeoutSeconds: run.TimeoutSeconds,
+		Message:        run.Message,
 	}
-	return false
 }
 
 func (a *APIServer) createWorkspaceRun(c *gin.Context, name string) {
 	var req buildcontract.WorkspaceRunRequest
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRunRequestBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
 		return
@@ -90,11 +96,11 @@ func (a *APIServer) createWorkspaceRun(c *gin.Context, name string) {
 	if req.ID == "" {
 		req.ID = uuid.NewString()
 	}
-	if !workspacerun.ValidID(req.ID) {
+	if !workspaceagent.ValidID(req.ID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run ID"})
 		return
 	}
-	ws, cfg, ok := a.workspaceRunTarget(c, name)
+	ws, agent, ok := a.workspaceRunTarget(c, name)
 	if !ok {
 		return
 	}
@@ -105,14 +111,16 @@ func (a *APIServer) createWorkspaceRun(c *gin.Context, name string) {
 	if !a.recordWorkspaceRunActivity(c, ws) {
 		return
 	}
-	// Finish the bounded launch handshake even if the initiating HTTP connection
-	// disappears. Retrying this ID returns the existing run, never another command.
-	result, err := a.runWorkspaceOperation(context.WithoutCancel(c.Request.Context()), cfg, ws, "create", req.ID, req.Command, options.JSON())
-	if a.workspaceRunError(c, result, err) {
+	// Finish the create even if the initiating HTTP connection disappears.
+	// Retrying this ID returns the existing run, never another command.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), workspaceAgentTimeout)
+	defer cancel()
+	run, err := agent.Create(ctx, workspaceagent.CreateRequest{ID: req.ID, Command: req.Command, Options: options})
+	if a.workspaceRunError(c, err) {
 		return
 	}
 	c.Header("Location", "/v1/workspaces/"+name+"/runs/"+req.ID)
-	c.JSON(http.StatusAccepted, result.Run)
+	c.JSON(http.StatusAccepted, contractRun(run))
 }
 
 // Reserve an inactivity window before launching. This must succeed, and must
@@ -126,41 +134,84 @@ func (a *APIServer) recordWorkspaceRunActivity(c *gin.Context, ws *automotivev1a
 	return true
 }
 
-func (a *APIServer) workspaceRunAction(c *gin.Context, name, action string) {
-	if !validWorkspaceRunParam(c) {
-		return
-	}
-	ws, cfg, ok := a.workspaceRunTarget(c, name)
-	if !ok {
-		return
-	}
-	result, err := a.runWorkspaceOperation(c.Request.Context(), cfg, ws, action, c.Param("run"))
-	if a.workspaceRunError(c, result, err) {
-		return
-	}
-	if action == "delete" {
-		c.Status(http.StatusNoContent)
-		return
-	}
-	c.JSON(http.StatusOK, result.Run)
-}
-
 func validWorkspaceRunParam(c *gin.Context) bool {
-	if !workspacerun.ValidID(c.Param("run")) {
+	if !workspaceagent.ValidID(c.Param("run")) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run ID"})
 		return false
 	}
 	return true
 }
 
+func (a *APIServer) workspaceRunAction(c *gin.Context, name string, action func(*workspaceagent.Client, context.Context, string) (workspaceagent.Run, error)) {
+	if !validWorkspaceRunParam(c) {
+		return
+	}
+	_, agent, ok := a.workspaceRunTarget(c, name)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), workspaceAgentTimeout)
+	defer cancel()
+	run, err := action(agent, ctx, c.Param("run"))
+	if a.workspaceRunError(c, err) {
+		return
+	}
+	c.JSON(http.StatusOK, contractRun(run))
+}
+
 func (a *APIServer) getWorkspaceRun(c *gin.Context, name string) {
-	a.workspaceRunAction(c, name, "get")
+	a.workspaceRunAction(c, name, (*workspaceagent.Client).Get)
 }
 
 func (a *APIServer) cancelWorkspaceRun(c *gin.Context, name string) {
-	a.workspaceRunAction(c, name, "cancel")
+	a.workspaceRunAction(c, name, (*workspaceagent.Client).Cancel)
 }
 
+func (a *APIServer) deleteWorkspaceRun(c *gin.Context, name string) {
+	if !validWorkspaceRunParam(c) {
+		return
+	}
+	_, agent, ok := a.workspaceRunTarget(c, name)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), workspaceAgentTimeout)
+	defer cancel()
+	if a.workspaceRunError(c, agent.Delete(ctx, c.Param("run"))) {
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (a *APIServer) listWorkspaceRuns(c *gin.Context, name string) {
+	offset, offsetErr := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, limitErr := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	if offsetErr != nil || limitErr != nil || offset < 0 || limit < 1 || limit > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be non-negative and limit must be between 1 and 100"})
+		return
+	}
+	_, agent, ok := a.workspaceRunTarget(c, name)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), workspaceAgentTimeout)
+	defer cancel()
+	runs, err := agent.List(ctx, offset, limit)
+	if a.workspaceRunError(c, err) {
+		return
+	}
+	result := make([]buildcontract.WorkspaceRun, 0, len(runs))
+	for _, run := range runs {
+		result = append(result, contractRun(run))
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+var workspaceLogTrailers = []string{"X-Log-Error", "X-Run-Status", "X-Run-Exit-Code"}
+
+// workspaceRunLogs relays the agent's log stream. With follow, one response
+// lasts until the run ends or the stream limit passes; the client resumes from
+// the bytes it received.
 func (a *APIServer) workspaceRunLogs(c *gin.Context, name string) {
 	if !validWorkspaceRunParam(c) {
 		return
@@ -178,102 +229,40 @@ func (a *APIServer) workspaceRunLogs(c *gin.Context, name string) {
 			return
 		}
 	}
-	ws, cfg, ok := a.workspaceRunTarget(c, name)
+	_, agent, ok := a.workspaceRunTarget(c, name)
 	if !ok {
 		return
 	}
 	duration := time.Duration(a.limits.MaxLogStreamDurationMinutes) * time.Minute
-	helperDuration := duration
-	if follow {
-		helperDuration = min(duration, 40*time.Second)
-	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), duration)
 	defer cancel()
-	// Check log format support before committing headers or interpreting offsets.
-	result, err := a.runWorkspaceOperation(ctx, cfg, ws, "log-info", c.Param("run"))
-	if a.workspaceRunError(c, result, err) {
+	// The agent checks the offset before it commits headers, so its errors
+	// arrive as ordinary responses.
+	resp, err := agent.Logs(ctx, c.Param("run"), offset, follow)
+	if a.workspaceRunError(c, err) {
 		return
 	}
-	if offset > result.Run.LogBytes {
-		c.JSON(http.StatusRequestedRangeNotSatisfiable, gin.H{"error": "offset exceeds available log bytes"})
-		return
-	}
-	offset = max(offset, result.Run.LogStartOffset)
+	defer func() { _ = resp.Body.Close() }()
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Header("Cache-Control", "no-store, no-transform")
 	c.Header("X-Accel-Buffering", "no")
 	c.Header("X-Content-Type-Options", "nosniff")
-	c.Header("X-Log-Offset", strconv.FormatInt(offset, 10))
-	c.Header("X-Log-Stream-Seconds", strconv.FormatFloat(helperDuration.Seconds(), 'f', -1, 64))
-	c.Header("Trailer", "X-Log-Error, X-Run-Status, X-Run-Exit-Code")
+	c.Header("X-Log-Offset", resp.Header.Get("X-Log-Offset"))
+	c.Header("X-Log-Stream-Seconds", strconv.FormatFloat(duration.Seconds(), 'f', -1, 64))
+	c.Header("Trailer", strings.Join(workspaceLogTrailers, ", "))
+	c.Status(http.StatusOK)
 	c.Writer.Flush()
-	var stderr bytes.Buffer
-	// One persistent pod exec streams raw bytes. Polling the local volume happens
-	// in the pod, and never holds a run lock while waiting for HTTP backpressure.
-	// The advertised cap bounds idle helpers even when a remote exec disconnect
-	// does not terminate its process. Clients allow a grace period beyond it.
-	command, input := workspacerun.Command("stream", c.Param("run"), strconv.FormatInt(offset, 10),
-		strconv.FormatInt(result.Run.LogBytes, 10), strconv.FormatBool(follow),
-		strconv.FormatFloat(helperDuration.Seconds(), 'f', -1, 64))
-	err = a.exec.stream(ctx, cfg, ws.Namespace, ws.Status.PodName, workspaceContainerName,
-		command, strings.NewReader(input), newFlushWriter(c.Writer), &stderr)
+	_, err = io.Copy(newFlushWriter(c.Writer), resp.Body)
 	if ctx.Err() != nil {
-		return
+		return // the client resumes from the bytes it received
 	}
 	if err != nil {
-		_, message := workspaceRunExecFailure(wrapPodStreamError("workspace log stream", err, &stderr))
-		c.Header("X-Log-Error", message)
+		c.Header("X-Log-Error", "workspace log stream was interrupted; reconnect to resume")
 		return
 	}
-	if err := json.Unmarshal(stderr.Bytes(), &result); err != nil {
-		c.Header("X-Log-Error", "invalid log stream result; reconnect to resume")
-		return
+	for _, name := range workspaceLogTrailers {
+		if value := resp.Trailer.Get(name); value != "" {
+			c.Header(name, value)
+		}
 	}
-	if result.Error != "" {
-		c.Header("X-Log-Error", result.Error)
-	}
-	c.Header("X-Run-Status", result.Run.Status)
-	if result.Run.ExitCode != nil {
-		c.Header("X-Run-Exit-Code", strconv.Itoa(*result.Run.ExitCode))
-	}
-}
-
-func workspaceRunExecFailure(err error) (int, string) {
-	detail := err.Error()
-	if len(detail) > 1024 {
-		detail = detail[len(detail)-1024:]
-	}
-	if k8serrors.IsForbidden(err) {
-		return http.StatusForbidden, "workspace execution is not permitted: " + detail
-	}
-	var exitError kexec.ExitError
-	if errors.As(err, &exitError) && (exitError.ExitStatus() == 126 || exitError.ExitStatus() == 127) {
-		return http.StatusUnprocessableEntity, "workspace run helper could not execute; the image requires an executable Python 3.12 or newer: " + detail
-	}
-	return http.StatusBadGateway, "workspace run operation failed: " + detail
-}
-
-func (a *APIServer) listWorkspaceRuns(c *gin.Context, name string) {
-	offset, offsetErr := strconv.ParseInt(c.DefaultQuery("offset", "0"), 10, 64)
-	limit, limitErr := strconv.ParseInt(c.DefaultQuery("limit", "100"), 10, 64)
-	if offsetErr != nil || limitErr != nil || offset < 0 || limit < 1 || limit > 100 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be non-negative and limit must be between 1 and 100"})
-		return
-	}
-	ws, cfg, ok := a.workspaceRunTarget(c, name)
-	if !ok {
-		return
-	}
-	result, err := a.runWorkspaceOperation(c.Request.Context(), cfg, ws, "list", strconv.FormatInt(offset, 10), strconv.FormatInt(limit, 10))
-	if a.workspaceRunError(c, result, err) {
-		return
-	}
-	if result.Runs == nil {
-		result.Runs = []buildcontract.WorkspaceRun{}
-	}
-	c.JSON(http.StatusOK, result.Runs)
-}
-
-func (a *APIServer) deleteWorkspaceRun(c *gin.Context, name string) {
-	a.workspaceRunAction(c, name, "delete")
 }

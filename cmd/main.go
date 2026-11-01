@@ -338,6 +338,9 @@ func main() {
 			Log:        ctrl.Log.WithName("controllers").WithName("Workspace"),
 			RestConfig: mgr.GetConfig(),
 			AgentImage: os.Getenv("OPERATOR_IMAGE"),
+			// Read agent tokens and the CA bundle from the API server, so a
+			// Secret or bundle created moments ago is already visible.
+			AgentReader: mgr.GetAPIReader(),
 		}
 		if err = workspaceReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "Workspace")

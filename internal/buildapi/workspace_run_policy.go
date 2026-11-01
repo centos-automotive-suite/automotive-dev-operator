@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspacerun"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,16 +13,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func (a *APIServer) workspaceRunOptions(c *gin.Context, ws *automotivev1alpha1.Workspace, requested int64) (workspacerun.Options, bool) {
+func (a *APIServer) workspaceRunOptions(c *gin.Context, ws *automotivev1alpha1.Workspace, requested int64) (workspaceagent.Options, bool) {
 	kube, err := a.deps.getClientFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "could not load workspace run limits"})
-		return workspacerun.Options{}, false
+		return workspaceagent.Options{}, false
 	}
 	config, err := a.deps.loadOperatorConfig(c.Request.Context(), kube, resolveNamespace())
 	if err != nil && !k8serrors.IsNotFound(err) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "could not load workspace run limits"})
-		return workspacerun.Options{}, false
+		return workspaceagent.Options{}, false
 	}
 	var settings *automotivev1alpha1.WorkspacesConfig
 	if config != nil {
@@ -35,13 +35,13 @@ func (a *APIServer) workspaceRunOptions(c *gin.Context, ws *automotivev1alpha1.W
 	capacity, err := resource.ParseQuantity(size)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "workspace PVC size is invalid"})
-		return workspacerun.Options{}, false
+		return workspaceagent.Options{}, false
 	}
 	if ws.Status.PVCName != "" {
 		var pvc corev1.PersistentVolumeClaim
 		if err := kube.Get(c.Request.Context(), client.ObjectKey{Namespace: ws.Namespace, Name: ws.Status.PVCName}, &pvc); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "could not read workspace PVC capacity"})
-			return workspacerun.Options{}, false
+			return workspaceagent.Options{}, false
 		}
 		if actual, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok && actual.Sign() > 0 {
 			capacity = actual
@@ -55,8 +55,14 @@ func (a *APIServer) workspaceRunOptions(c *gin.Context, ws *automotivev1alpha1.W
 	return options, true
 }
 
-func resolveWorkspaceRunOptions(settings *automotivev1alpha1.WorkspacesConfig, requested, pvcBytes int64) (workspacerun.Options, error) {
-	options := workspacerun.DefaultOptions()
+// defaultWorkspaceRunOptions are the run limits before OperatorConfig overrides.
+func defaultWorkspaceRunOptions() workspaceagent.Options {
+	return workspaceagent.Options{TimeoutSeconds: 2 * 60 * 60, MaxLogBytes: 100 << 20,
+		RetentionSeconds: 7 * 24 * 60 * 60, MaxRecords: 1000, CompletedLogBudgetBytes: 1 << 30}
+}
+
+func resolveWorkspaceRunOptions(settings *automotivev1alpha1.WorkspacesConfig, requested, pvcBytes int64) (workspaceagent.Options, error) {
+	options := defaultWorkspaceRunOptions()
 	maxTimeout := int64(24 * 60 * 60)
 	if settings != nil {
 		if settings.RunDefaultTimeoutMinutes > 0 {

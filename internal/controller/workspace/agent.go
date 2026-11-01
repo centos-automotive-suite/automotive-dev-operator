@@ -5,11 +5,16 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"maps"
+	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent/agentconn"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -40,8 +45,9 @@ const (
 
 // ensureAgentAccess creates what the build API needs to reach a workspace's
 // agent: a Service with a serving certificate, and a Secret with the bearer
-// token. Both belong to the workspace and are never replaced, so a running
-// agent keeps its token.
+// token, both owned by the workspace. The token is never replaced, so a
+// running agent keeps it. The Service's selector and ports, and the
+// namespace's agent NetworkPolicy, are kept at the operator's definitions.
 func (r *Reconciler) ensureAgentAccess(ctx context.Context, ws *automotivev1alpha1.Workspace) error {
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -60,8 +66,18 @@ func (r *Reconciler) ensureAgentAccess(ctx context.Context, ws *automotivev1alph
 			}},
 		},
 	}
-	if err := r.createOwned(ctx, ws, service); err != nil {
-		return fmt.Errorf("creating agent service: %w", err)
+	err := ensureOwned(ctx, r, ws, service, func(existing *corev1.Service) bool {
+		if maps.Equal(existing.Spec.Selector, service.Spec.Selector) &&
+			equality.Semantic.DeepEqual(existing.Spec.Ports, service.Spec.Ports) {
+			return false
+		}
+		// Only these two: the API server fills in the rest of the spec.
+		existing.Spec.Selector = service.Spec.Selector
+		existing.Spec.Ports = service.Spec.Ports
+		return true
+	})
+	if err != nil {
+		return fmt.Errorf("agent service: %w", err)
 	}
 
 	token := make([]byte, 32)
@@ -77,27 +93,138 @@ func (r *Reconciler) ensureAgentAccess(ctx context.Context, ws *automotivev1alph
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{workspaceagent.TokenKey: []byte(base64.RawURLEncoding.EncodeToString(token))},
 	}
-	if err := r.createOwned(ctx, ws, secret); err != nil {
+	if err := ensureOwned(ctx, r, ws, secret, nil); err != nil {
 		return fmt.Errorf("creating agent token: %w", err)
+	}
+
+	// Shared by every workspace in the namespace, so owned by none of them.
+	bundle := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name:        agentconn.CABundleConfigMap,
+		Namespace:   ws.Namespace,
+		Labels:      map[string]string{"app.kubernetes.io/managed-by": "automotive-dev-operator"},
+		Annotations: map[string]string{agentconn.InjectCABundleAnn: "true"},
+	}}
+	if err := ensureOwned(ctx, r, nil, bundle, nil); err != nil {
+		return fmt.Errorf("creating service CA bundle: %w", err)
+	}
+	policy := agentNetworkPolicy(ws.Namespace)
+	err = ensureOwned(ctx, r, nil, policy, func(existing *networkingv1.NetworkPolicy) bool {
+		if equality.Semantic.DeepEqual(existing.Spec, policy.Spec) {
+			return false
+		}
+		existing.Spec = policy.Spec
+		return true
+	})
+	if err != nil {
+		return fmt.Errorf("workspace network policy: %w", err)
 	}
 	return nil
 }
 
-func (r *Reconciler) createOwned(ctx context.Context, ws *automotivev1alpha1.Workspace, obj client.Object) error {
-	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err == nil {
-		// Never adopt another workspace's token or Service, including one a
-		// deleted workspace of the same name left for garbage collection.
-		if ws != nil && !metav1.IsControlledBy(obj, ws) {
-			return fmt.Errorf("%s already exists and belongs to another workspace", obj.GetName())
+// agentNetworkPolicy admits only the agent's ports into workspace pods: the
+// API from the build API and the workspace controller, and the file server
+// from image build pods, which Tekton labels with their ImageBuild. The
+// policy can't tell one user's builds from another's, which is why file URLs
+// carry a per-build grant.
+func agentNetworkPolicy(namespace string) *networkingv1.NetworkPolicy {
+	tcp := corev1.ProtocolTCP
+	port := func(p int32) []networkingv1.NetworkPolicyPort {
+		return []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: new(intstr.FromInt32(p))}}
+	}
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ado-workspace-agents",
+			Namespace: namespace,
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "automotive-dev-operator"},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{
+				"app.kubernetes.io/managed-by": "automotive-dev-operator",
+				"app.kubernetes.io/component":  "workspace",
+			}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{
+					Ports: port(workspaceagent.APIPort),
+					From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{
+						MatchExpressions: []metav1.LabelSelectorRequirement{{
+							Key:      "app.kubernetes.io/component",
+							Operator: metav1.LabelSelectorOpIn,
+							Values:   []string{"build-api", "build-controller"},
+						}},
+					}}, {PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+						"control-plane": "operator",
+					}}}},
+				},
+				{
+					Ports: port(workspaceagent.FilesPort),
+					From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{
+						MatchExpressions: []metav1.LabelSelectorRequirement{{
+							Key:      "automotive.sdv.cloud.redhat.com/imagebuild-name",
+							Operator: metav1.LabelSelectorOpExists,
+						}},
+					}}},
+				},
+			},
+		},
+	}
+}
+
+// ensureOwned creates obj, owned by ws when ws is not nil. When obj already
+// exists, update copies the fields the operator manages into it and reports
+// whether any changed; with a nil update the existing object is kept as is.
+func ensureOwned[T any, P interface {
+	*T
+	client.Object
+}](ctx context.Context, r *Reconciler, ws *automotivev1alpha1.Workspace, obj P, update func(existing P) bool) error {
+	existing := P(new(T))
+	err := r.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+	if k8serrors.IsNotFound(err) {
+		if ws != nil {
+			if err := controllerutil.SetControllerReference(ws, obj, r.Scheme); err != nil {
+				return err
+			}
 		}
+		return client.IgnoreAlreadyExists(r.Create(ctx, obj))
+	}
+	if err != nil {
+		return err
+	}
+	// Never adopt another workspace's token or Service, including one a
+	// deleted workspace of the same name left for garbage collection.
+	if ws != nil && !metav1.IsControlledBy(existing, ws) {
+		return fmt.Errorf("%s already exists and belongs to another workspace", obj.GetName())
+	}
+	if update == nil || !update(existing) {
 		return nil
-	} else if !k8serrors.IsNotFound(err) {
-		return err
 	}
-	if err := controllerutil.SetControllerReference(ws, obj, r.Scheme); err != nil {
-		return err
+	return r.Update(ctx, existing)
+}
+
+// isWorkspaceActive asks the workspace's agent whether live runs, terminals
+// or exec'd processes keep it from auto-pausing.
+func (r *Reconciler) isWorkspaceActive(ctx context.Context, ws *automotivev1alpha1.Workspace) (bool, error) {
+	connect := r.connectAgent
+	if connect == nil {
+		connect = func(ctx context.Context, ws *automotivev1alpha1.Workspace) (*workspaceagent.Client, error) {
+			reader := r.AgentReader
+			if reader == nil {
+				reader = r.Client
+			}
+			return agentconn.Connect(ctx, reader, ws)
+		}
 	}
-	return client.IgnoreAlreadyExists(r.Create(ctx, obj))
+	agent, err := connect(ctx, ws)
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	activity, err := agent.Activity(ctx)
+	if err != nil {
+		return false, fmt.Errorf("checking workspace activity: %w", err)
+	}
+	return activity.Active, nil
 }
 
 func agentLabels(ws *automotivev1alpha1.Workspace) map[string]string {

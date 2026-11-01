@@ -7,14 +7,16 @@ import (
 	"syscall"
 )
 
-// children owns all waiting in the process. One loop reaps every exited
-// child, including orphans reparented to a subreaper, and hands the status
-// of a started command to whoever started it. A second waiter, such as
-// os/exec's Cmd.Wait, would race the loop and lose exit statuses, so nothing
-// else in a process using this package may wait for children.
+// children owns waiting for started commands. One loop collects their exit
+// statuses and hands each to whoever started the command. Once the process
+// is a subreaper, the loop also reaps every other child, such as orphans of
+// runs; a second waiter, such as os/exec's Cmd.Wait, would then race it, so
+// the agent waits for nothing else. Until then it waits only for its own
+// commands, leaving other children to their own waiters.
 var children = struct {
 	sync.Mutex
 	once    sync.Once
+	orphans bool
 	waiting map[int]chan syscall.WaitStatus
 }{waiting: map[int]chan syscall.WaitStatus{}}
 
@@ -44,23 +46,44 @@ func reapChildren() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGCHLD)
 	for {
-		for {
-			var status syscall.WaitStatus
-			pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
-			if err == syscall.EINTR {
-				continue
-			}
-			if err != nil || pid <= 0 {
-				break
-			}
-			children.Lock()
-			if exited, ok := children.waiting[pid]; ok {
-				exited <- status
-				delete(children.waiting, pid)
-			}
-			children.Unlock()
+		children.Lock()
+		if children.orphans {
+			reapAny()
+		} else {
+			reapStarted()
 		}
+		children.Unlock()
 		<-signals
+	}
+}
+
+// reapAny collects every exited child. The caller holds children's lock.
+func reapAny() {
+	for {
+		var status syscall.WaitStatus
+		pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
+		if err == syscall.EINTR {
+			continue
+		}
+		if err != nil || pid <= 0 {
+			return
+		}
+		if exited, ok := children.waiting[pid]; ok {
+			exited <- status
+			delete(children.waiting, pid)
+		}
+	}
+}
+
+// reapStarted collects started commands that exited. The caller holds
+// children's lock.
+func reapStarted() {
+	for pid, exited := range children.waiting {
+		var status syscall.WaitStatus
+		if reaped, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil); err == nil && reaped == pid {
+			exited <- status
+			delete(children.waiting, pid)
+		}
 	}
 }
 
@@ -87,5 +110,8 @@ func BecomeSubreaper() error {
 	if _, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0); errno != 0 {
 		return errno
 	}
+	children.Lock()
+	children.orphans = true
+	children.Unlock()
 	return nil
 }

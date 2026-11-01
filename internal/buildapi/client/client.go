@@ -129,8 +129,7 @@ func (c *Client) doRequest(req *http.Request, action string, isOK func(statusCod
 	if isOK(resp.StatusCode) {
 		return resp, nil
 	}
-	// Leave room for JSON escaping around the run helper's 1 KiB diagnostic
-	// tail; truncating that response again can hide the exception's final line.
+	// Read enough to keep a JSON error message whole.
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	_ = resp.Body.Close()
 	response := newHTTPError(resp.StatusCode, "%s failed: %s: %s", action, resp.Status, string(b))

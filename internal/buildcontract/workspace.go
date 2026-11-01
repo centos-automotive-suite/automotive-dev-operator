@@ -57,7 +57,7 @@ type WorkspaceRun struct {
 	Command        string `json:"command"`
 	Status         string `json:"status"`
 	ExitCode       *int   `json:"exitCode,omitempty"`
-	StartedAt      string `json:"startedAt,omitempty"` // Unavailable if a newer record's envelope is invalid.
+	StartedAt      string `json:"startedAt"`
 	FinishedAt     string `json:"finishedAt,omitempty"`
 	LogBytes       int64  `json:"logBytes"`       // Absolute end offset, including discarded output.
 	LogStartOffset int64  `json:"logStartOffset"` // Absolute offset of the first retained byte.

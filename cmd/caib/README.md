@@ -329,7 +329,7 @@ caib image build-dev <manifest.aib.yml> [flags]
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--define-file` | | Load defines from YAML dictionary file (repeatable) |
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |
-| `--extra-repo` | | Serve RPMs from workspace as extra repo (`workspace:path`, repeatable) |
+| `--extra-repo` | | Serve RPMs from a directory under `/workspace/export` as an extra repo (`workspace:/workspace/export/<dir>`, repeatable) |
 | `--workspace` | | Workspace name for build caching and lease forwarding |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `true` | Wait for build to complete |
@@ -1041,7 +1041,7 @@ Commands default to a **2-hour timeout**, with a **24-hour maximum**. Use
 terminates the process group and records `TimedOut`, exit code **124**, and a
 message that the CLI prints to stderr.
 
-Output segments and results are stored in `/workspace/.runs/<id>/logs/` and
+Output segments and results are stored in `/workspace/.ado/runs/<id>/logs/` and
 `state.json` on the workspace PVC. Each log retains the **last 100 MiB** by
 default; reaching the cap never stops the command. `logStartOffset` identifies
 the first retained byte, `logBytes` is the absolute end offset (including
@@ -1077,48 +1077,20 @@ spec:
     runCompletedLogBudgetMiB: 1024  # Also capped at 10% of each PVC
 ```
 
-Manually stopping or replacing the pod interrupts
-live commands; after restart they report `Interrupted` with no exit code unless
-one was recorded. Start a stopped workspace before reading retained runs or logs.
-Workspace images must provide Python 3.12 or newer and Linux `/proc` for runs.
-The default toolchain uses catatonit as PID 1 to reap orphaned supervisors and
-children; custom images must provide an init that reaps children too.
-Custom toolchain images reusing `workspace-entrypoint.sh` must install `catatonit`.
-Existing pods need the updated toolchain image and a restart to receive this init change.
-Images without Python receive an actionable error for runs; their exec/terminal
-activity still participates in auto-pause detection. The helper uses isolated
-Python imports, so workspace files and `PYTHON*` variables cannot replace its
-standard library. The runner and request data travel over pod exec stdin, keeping
-commands and script contents out of Kubernetes exec request URLs.
-Run records use format version 1.
-All future versions must preserve a common envelope: `id`, `version`, `status`,
-`startedAt`, and terminal `finishedAt`.
-Envelope timestamps may use `Z` or an explicit UTC offset.
-The current status values and their live/terminal meanings are fixed. A live
-run's supervisor holds an exclusive `flock` on the run's `supervisor` file for its
-whole life; the kernel releases it however the process ends, so a live status
-without that lock reads as `Interrupted`. Records keep the same `state.json` and
-`supervisor` locations, root-then-run lock order and atomic replacement protocol,
-and each run owns its directory exclusively. Payload changes require a new version and readers
-for older versions; supervisors keep writing the version they started with.
+A workspace agent in each workspace pod owns every run. The operator copies it
+into the pod, so images need only `/bin/sh` and Linux `/proc`: no Python, and no
+init process to reap the background children that runs leave behind, since the
+agent collects them. Custom images start the agent from a postStart hook. The
+toolchain image's `workspace-entrypoint.sh` starts it once the workspace
+overlays are mounted, so a replacement `toolchainImage` must keep that
+entrypoint. A NetworkPolicy admits traffic into workspace pods only on the
+agent's ports, so a Service or Route pointed at a workspace gets no traffic.
+Following a log streams output as it is written until the run finishes.
 
-After a rollback, newer records still participate in activity checks and appear
-in `run list` and `run show` with a compatibility message. Finished records can be
-deleted or pruned by age and count. A stale supervisor appears as `Interrupted`
-without rewriting its newer record. Its `finishedAt` uses the `state.json`
-modification time as a stable retention timestamp, not the exact crash time.
-Logs, cancellation and retries using that record's ID return HTTP 409; fresh IDs
-still work. Newer log layouts are excluded
-from log-budget eviction until a compatible operator is restored. Command, exit
-code, timeout and log metadata are unavailable for these records; zero or empty
-fields in the response do not describe their payload. An invalid newer envelope
-appears as `Unknown`, without timestamps, and prevents auto-pause and deletion
-without blocking other runs. These entries sort after records with known start
-times. Older readers never rewrite newer records or their logs.
-Unreadable run records return an explicit error when inspected
-and are skipped by collection and activity checks. If the volume cannot persist
-an `Interrupted` transition, reads still report it and activity checks still
-allow auto-pause; a later read retries saving the transition.
+Stopping, replacing or restarting the workspace container interrupts live
+commands; afterwards they report `Interrupted` with no exit code. Start a stopped
+workspace before reading retained runs or logs. Unreadable run records return an
+explicit error when inspected, and can be deleted.
 
 API clients can use these owner-scoped endpoints:
 
@@ -1138,11 +1110,12 @@ eviction only removes logs and does not change the run's status. Resume logs by 
 bytes to the **`X-Log-Offset` response header**, which advances requests below
 `logStartOffset` to the retained tail. Omitting `follow`
 returns a snapshot; following ends on completion or at the cap announced in
-`X-Log-Stream-Seconds` (currently at most 40 seconds) and can be reopened. The CLI
-allows five seconds beyond that cap before reconnecting, with a 40-second cap
-as its fallback when the header is absent. Offsets beyond available output
-return HTTP 416.
-Follow uses a persistent pod exec. If rotation overtakes a reader, the response
+`X-Log-Stream-Seconds`, the build API's `maxLogStreamDurationMinutes` limit
+(two hours by default), and can be reopened. The CLI allows five seconds beyond
+that cap before reconnecting, with a 40-second cap as its fallback when the
+header is absent. Offsets beyond available output return HTTP 416.
+The build API relays each stream from the workspace agent over HTTPS. If
+rotation overtakes a reader, the response
 ends with an `X-Log-Error` trailer; reconnect to receive the new starting offset.
 Final `X-Run-Status` and `X-Run-Exit-Code` trailers supplement GET on the run.
 The `/exec` endpoint remains available for older clients and the CLI build flow.
