@@ -33,11 +33,11 @@ func parseFlags(name string, args []string) (config, error) {
 	flags.StringVar(&cfg.stateDir, "state-dir", "/workspace/.ado", "directory for the agent's lock, log and run records")
 	flags.StringVar(&cfg.workdir, "workdir", "/workspace/src", "working directory for commands")
 	flags.StringVar(&cfg.exportDir, "export-dir", "/workspace/export", "directory served to builds holding a file grant")
-	flags.StringVar(&cfg.listen, "listen", ":9443", "address of the agent API")
-	flags.StringVar(&cfg.filesListen, "files-listen", ":9091", "address of the file server for builds")
-	flags.StringVar(&cfg.tokenFile, "token-file", "/var/run/secrets/ado-agent/token", "file holding the API bearer token")
-	flags.StringVar(&cfg.certFile, "tls-cert", "", "serving certificate; plain HTTP when empty")
-	flags.StringVar(&cfg.keyFile, "tls-key", "", "serving certificate key")
+	flags.StringVar(&cfg.listen, "listen", fmt.Sprintf(":%d", workspaceagent.APIPort), "address of the agent API")
+	flags.StringVar(&cfg.filesListen, "files-listen", fmt.Sprintf(":%d", workspaceagent.FilesPort), "address of the file server for builds")
+	flags.StringVar(&cfg.tokenFile, "token-file", workspaceagent.TokenDir+"/"+workspaceagent.TokenKey, "file holding the API bearer token")
+	flags.StringVar(&cfg.certFile, "tls-cert", workspaceagent.TLSDir+"/tls.crt", "serving certificate; plain HTTP when empty")
+	flags.StringVar(&cfg.keyFile, "tls-key", workspaceagent.TLSDir+"/tls.key", "serving certificate key")
 	err := flags.Parse(args)
 	return cfg, err
 }

@@ -337,6 +337,7 @@ func main() {
 			Scheme:     mgr.GetScheme(),
 			Log:        ctrl.Log.WithName("controllers").WithName("Workspace"),
 			RestConfig: mgr.GetConfig(),
+			AgentImage: os.Getenv("OPERATOR_IMAGE"),
 		}
 		if err = workspaceReconciler.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "Workspace")

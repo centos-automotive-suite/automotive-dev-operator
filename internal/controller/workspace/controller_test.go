@@ -85,7 +85,8 @@ func runningWorkspace(name, namespace string) (*automotivev1alpha1.Workspace, *c
 			Namespace: namespace,
 		},
 		Status: corev1.PodStatus{
-			Phase: corev1.PodRunning,
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
 	return ws, pvc, pod
@@ -312,6 +313,32 @@ func TestReconcile_ContainerCreationFailure(t *testing.T) {
 	}
 }
 
+func TestReconcile_RecordsRestartsWhileReady(t *testing.T) {
+	ws, pvc, pod := runningWorkspace("healthy", "default")
+	ws.Spec.AutoPauseTimeoutMinutes = new(int32(0)) // only the restart count is under test
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:         containerName,
+		Ready:        true,
+		RestartCount: 4,
+		State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}
+
+	r, fc := newTestReconciler(ws, pvc, pod)
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace},
+	}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	got := &corev1.Pod{}
+	if err := fc.Get(context.Background(), client.ObjectKeyFromObject(pod), got); err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+	if got.Annotations[readyRestartsAnn] != "4" {
+		t.Errorf("annotation %s = %q, want %q", readyRestartsAnn, got.Annotations[readyRestartsAnn], "4")
+	}
+}
+
 func TestWorkspacePodStatus(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -323,7 +350,8 @@ func TestWorkspacePodStatus(t *testing.T) {
 		{
 			name: "running",
 			pod: &corev1.Pod{Status: corev1.PodStatus{
-				Phase: corev1.PodRunning,
+				Phase:      corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 				ContainerStatuses: []corev1.ContainerStatus{{
 					Name:  containerName,
 					State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
@@ -390,9 +418,84 @@ func TestWorkspacePodStatus(t *testing.T) {
 					}},
 				}},
 			}},
+			wantPhase:   phaseCreating,
+			wantReason:  automotivev1alpha1.WorkspaceReasonContainerRestarting,
+			wantMessage: "container toolchain: OOMKilled",
+		},
+		{
+			name: "main container keeps exiting",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:         containerName,
+					RestartCount: maxWorkspaceRestarts,
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+						Reason: "CrashLoopBackOff",
+					}},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 1,
+						Reason:   "Error",
+					}},
+				}},
+			}},
 			wantPhase:   phaseFailed,
 			wantReason:  automotivev1alpha1.WorkspaceReasonContainerExited,
-			wantMessage: "container toolchain: OOMKilled",
+			wantMessage: "container toolchain: restarted 3 times without becoming ready; last exit code 1 (Error)",
+		},
+		{
+			name: "restarts before the pod was last ready don't count",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{readyRestartsAnn: "3"}},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					ContainerStatuses: []corev1.ContainerStatus{{
+						Name:         containerName,
+						RestartCount: 5,
+						State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+							Reason: "CrashLoopBackOff",
+						}},
+					}},
+				},
+			},
+			wantPhase:   phaseCreating,
+			wantReason:  automotivev1alpha1.WorkspaceReasonContainerRestarting,
+			wantMessage: "container toolchain: CrashLoopBackOff",
+		},
+		{
+			name: "crash loop after the pod was ready",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{readyRestartsAnn: "3"}},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					ContainerStatuses: []corev1.ContainerStatus{{
+						Name:         containerName,
+						RestartCount: 3 + maxWorkspaceRestarts,
+						State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+							Reason: "CrashLoopBackOff",
+						}},
+						LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 1,
+							Reason:   "Error",
+						}},
+					}},
+				},
+			},
+			wantPhase:   phaseFailed,
+			wantReason:  automotivev1alpha1.WorkspaceReasonContainerExited,
+			wantMessage: "container toolchain: restarted 3 times without becoming ready; last exit code 1 (Error)",
+		},
+		{
+			name: "running before the agent answers",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  containerName,
+					State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				}},
+			}},
+			wantPhase:   phaseCreating,
+			wantReason:  automotivev1alpha1.WorkspaceReasonContainerStarting,
+			wantMessage: "container toolchain: waiting for the workspace agent",
 		},
 		{
 			name: "evicted pod uses pod failure details",
@@ -415,7 +518,8 @@ func TestWorkspacePodStatus(t *testing.T) {
 		{
 			name: "successful init container",
 			pod: &corev1.Pod{Status: corev1.PodStatus{
-				Phase: corev1.PodRunning,
+				Phase:      corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 				InitContainerStatuses: []corev1.ContainerStatus{{
 					Name: "workspace-init",
 					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{

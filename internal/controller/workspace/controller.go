@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspacerun"
 	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -54,6 +56,9 @@ type Reconciler struct {
 	Scheme     *runtime.Scheme
 	Log        logr.Logger
 	RestConfig *rest.Config
+	// AgentImage ships the workspace agent; the OperatorConfig's operator
+	// image when empty.
+	AgentImage string
 
 	clientset     kubernetes.Interface
 	clientsetErr  error
@@ -64,9 +69,10 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=workspaces/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=workspaces/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",namespace=system,resources=pods,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",namespace=system,resources=pods,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups="",namespace=system,resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",namespace=system,resources=services;secrets,verbs=get;list;watch;create
 
 // Reconcile handles Workspace CR changes.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {
@@ -106,7 +112,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 		return ctrl.Result{}, r.setStatus(ctx, ws, phaseStopped, reason, msg)
 	}
 
-	pod, err := r.ensurePod(ctx, ws, log)
+	// Before the pod: the service CA issues the certificate the pod mounts.
+	err = r.ensureAgentAccess(ctx, ws)
+	var pod *corev1.Pod
+	if err == nil {
+		pod, err = r.ensurePod(ctx, ws, log)
+	}
 	if err != nil {
 		if statusErr := r.setStatus(ctx, ws, "Failed", automotivev1alpha1.WorkspaceReasonPodCreationError, fmt.Sprintf("Pod error: %v", err)); statusErr != nil {
 			log.Error(statusErr, "failed to update status after pod error")
@@ -114,6 +125,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 		return ctrl.Result{}, err
 	}
 
+	if err := r.recordReadyRestarts(ctx, pod); err != nil {
+		return ctrl.Result{}, err
+	}
 	phase, reason, msg := workspacePodStatus(pod)
 
 	if err := r.setStatus(ctx, ws, phase, reason, msg); err != nil {
@@ -149,7 +163,7 @@ func workspacePodStatus(pod *corev1.Pod) (string, automotivev1alpha1.WorkspaceSt
 	var creatingReason automotivev1alpha1.WorkspaceStatusReason
 	creatingMessage := ""
 	for _, status := range pod.Status.InitContainerStatuses {
-		failed, reason, message := workspaceContainerStatus(status, true)
+		failed, reason, message := workspaceContainerStatus(status, true, 0)
 		if failed {
 			return phaseFailed, reason, message
 		}
@@ -159,7 +173,11 @@ func workspacePodStatus(pod *corev1.Pod) (string, automotivev1alpha1.WorkspaceSt
 		}
 	}
 	for _, status := range pod.Status.ContainerStatuses {
-		failed, reason, message := workspaceContainerStatus(status, false)
+		var readyRestarts int32
+		if status.Name == containerName {
+			readyRestarts = recordedRestarts(pod)
+		}
+		failed, reason, message := workspaceContainerStatus(status, false, readyRestarts)
 		if failed {
 			return phaseFailed, reason, message
 		}
@@ -176,10 +194,13 @@ func workspacePodStatus(pod *corev1.Pod) (string, automotivev1alpha1.WorkspaceSt
 		return phaseFailed, automotivev1alpha1.WorkspaceReasonPodExited, "pod: Pod exited unexpectedly"
 	}
 
-	if pod.Status.Phase == corev1.PodRunning {
-		if creatingMessage == "" {
+	if pod.Status.Phase == corev1.PodRunning && creatingMessage == "" {
+		// Readiness follows the agent's health check, so a workspace is
+		// Running only once its agent answers.
+		if podReady(pod) {
 			return "Running", "", ""
 		}
+		return phaseCreating, automotivev1alpha1.WorkspaceReasonContainerStarting, "container " + containerName + ": waiting for the workspace agent"
 	}
 
 	if creatingMessage != "" {
@@ -194,8 +215,60 @@ func workspacePodStatus(pod *corev1.Pod) (string, automotivev1alpha1.WorkspaceSt
 	return phaseCreating, "", ""
 }
 
-func workspaceContainerStatus(status corev1.ContainerStatus, initContainer bool) (bool, automotivev1alpha1.WorkspaceStatusReason, string) {
+func podReady(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// recordReadyRestarts saves the workspace container's restart count while
+// the pod is Ready, so a later crash loop counts only the restarts after it.
+func (r *Reconciler) recordReadyRestarts(ctx context.Context, pod *corev1.Pod) error {
+	if pod == nil || !podReady(pod) {
+		return nil
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name != containerName {
+			continue
+		}
+		value := strconv.Itoa(int(status.RestartCount))
+		if pod.Annotations[readyRestartsAnn] == value {
+			return nil
+		}
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[readyRestartsAnn] = value
+		return r.Patch(ctx, pod, patch)
+	}
+	return nil
+}
+
+// recordedRestarts returns the restart count saved when the pod was last
+// Ready, or 0 if it never was.
+func recordedRestarts(pod *corev1.Pod) int32 {
+	n, err := strconv.ParseInt(pod.Annotations[readyRestartsAnn], 10, 32)
+	if err != nil {
+		return 0
+	}
+	return int32(n)
+}
+
+func workspaceContainerStatus(status corev1.ContainerStatus, initContainer bool, readyRestarts int32) (bool, automotivev1alpha1.WorkspaceStatusReason, string) {
+	// The workspace container restarts in place, and fails the workspace only
+	// once it keeps exiting without becoming ready, such as a custom image
+	// whose entrypoint exits. The kubelet's count covers the pod's whole
+	// life, so restarts before the pod was last Ready don't count.
+	restarts := status.RestartCount - readyRestarts
+	restartsExhausted := !initContainer && restarts >= maxWorkspaceRestarts
 	if waiting := status.State.Waiting; waiting != nil {
+		if restartsExhausted && waiting.Reason == "CrashLoopBackOff" {
+			return true, automotivev1alpha1.WorkspaceReasonContainerExited, restartsMessage(status, restarts)
+		}
 		message := statusMessage("container "+status.Name, waiting.Reason, waiting.Message, "Waiting")
 		reason, failed := workspaceWaitingReason(waiting.Reason)
 		return failed, reason, message
@@ -205,9 +278,24 @@ func workspaceContainerStatus(status corev1.ContainerStatus, initContainer bool)
 			return false, "", ""
 		}
 		fallback := fmt.Sprintf("Exited with code %d", terminated.ExitCode)
-		return true, automotivev1alpha1.WorkspaceReasonContainerExited, statusMessage("container "+status.Name, terminated.Reason, terminated.Message, fallback)
+		message := statusMessage("container "+status.Name, terminated.Reason, terminated.Message, fallback)
+		if !initContainer && !restartsExhausted {
+			return false, automotivev1alpha1.WorkspaceReasonContainerRestarting, message
+		}
+		return true, automotivev1alpha1.WorkspaceReasonContainerExited, message
 	}
 	return false, "", ""
+}
+
+func restartsMessage(status corev1.ContainerStatus, restarts int32) string {
+	message := fmt.Sprintf("container %s: restarted %d times without becoming ready", status.Name, restarts)
+	if last := status.LastTerminationState.Terminated; last != nil {
+		message += fmt.Sprintf("; last exit code %d", last.ExitCode)
+		if last.Reason != "" {
+			message += " (" + last.Reason + ")"
+		}
+	}
+	return message
 }
 
 func statusMessage(subject, reason, message, fallback string) string {
@@ -490,11 +578,14 @@ chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.cache /workspace/
                    /workspace/.config /workspace/.local /workspace/export`
 
 	// For the toolchain image, run the entrypoint (handles user creation, overlayfs,
-	// subuid/subgid setup). For custom images, don't override Command so the
-	// image's own ENTRYPOINT/CMD runs — the init container already prepared the PVC.
+	// subuid/subgid setup), which starts the agent once the overlays are mounted.
+	// For custom images, don't override Command so the image's own
+	// ENTRYPOINT/CMD runs — the init container already prepared the PVC — and
+	// start the agent from a postStart hook.
 	var command []string
 	var workingDir string
-	if image == configuredImage {
+	toolchain := image == configuredImage
+	if toolchain {
 		command = []string{"/usr/local/bin/workspace-entrypoint.sh"}
 		workingDir = "/workspace"
 	}
@@ -557,8 +648,12 @@ chown -R 1000:1000 /workspace/src /workspace/cache /workspace/.cache /workspace/
 		NodeSelector:                  ws.Spec.NodeSelector,
 		Tolerations:                   wsConfig.GetTolerations(),
 		TerminationGracePeriodSeconds: ptr.To[int64](5),
-		RestartPolicy:                 corev1.RestartPolicyNever,
+		// A failed agent liveness probe restarts only the container. The
+		// agent emptyDir outlives the restart, though init containers don't
+		// run again.
+		RestartPolicy: corev1.RestartPolicyAlways,
 	}
+	agentPodSpec(&podSpec, ws, r.agentImage(operatorConfig), !toolchain)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -579,6 +674,7 @@ func workspacePodLabels(ws *automotivev1alpha1.Workspace, arch string) map[strin
 		"app.kubernetes.io/component":         "workspace",
 		automotivev1alpha1.LabelWorkspaceName: controllerutils.SanitizeLabelValue(ws.Name),
 		automotivev1alpha1.LabelArchitecture:  controllerutils.SanitizeLabelValue(arch),
+		agentPodLabel:                         workspaceagent.ServiceName(ws.Name),
 	}
 	if owner := controllerutils.SanitizeLabelValue(ws.Spec.Owner); owner != "" {
 		labels[automotivev1alpha1.LabelOwner] = owner

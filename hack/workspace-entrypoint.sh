@@ -53,7 +53,14 @@ if [ -f /jumpstarter/client.yaml ]; then
   jmp config client use workspace || true
 fi
 
-# Durable run supervisors and background command children become PID 1's
-# responsibility after their parents exit. Reap them instead of accumulating
-# zombies for the lifetime of the workspace.
+# Start the workspace agent once the user and overlays exist, so runs never
+# start against the image's files in place of the persisted ones. The
+# operator copies it into /ado; the image also runs outside the operator.
+if [ -x /ado/workspace-agent ]; then
+  /ado/workspace-agent start
+fi
+
+# Background children of shell sessions become PID 1's responsibility after
+# their parents exit. Reap them instead of accumulating zombies for the
+# lifetime of the workspace. The agent reaps orphans from runs itself.
 exec catatonit -- sleep infinity
