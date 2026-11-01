@@ -29,6 +29,10 @@ func (a *Agent) Handler(token string) http.Handler {
 	api.HandleFunc("GET /version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, VersionResponse{Protocol: ProtocolVersion})
 	})
+	api.HandleFunc("GET /activity", func(w http.ResponseWriter, _ *http.Request) {
+		activity, err := a.Activity()
+		writeResult(w, http.StatusOK, activity, err)
+	})
 	api.HandleFunc("POST /runs", a.handleCreate)
 	api.HandleFunc("GET /runs", a.handleList)
 	api.HandleFunc("GET /runs/{id}", func(w http.ResponseWriter, r *http.Request) {

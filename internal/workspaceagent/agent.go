@@ -70,6 +70,8 @@ type Agent struct {
 	workdir string
 	log     *slog.Logger
 	now     func() time.Time
+	procDir string
+	ptsDir  string
 
 	mu      sync.Mutex
 	records map[string]*record
@@ -102,6 +104,8 @@ func New(root, workdir string, log *slog.Logger) (*Agent, error) {
 		workdir: workdir,
 		log:     log,
 		now:     time.Now,
+		procDir: "/proc",
+		ptsDir:  "/dev/pts",
 		records: map[string]*record{},
 		broken:  map[string]error{},
 		live:    map[string]*run{},
