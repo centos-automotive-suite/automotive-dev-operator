@@ -24,7 +24,7 @@ const usage = `usage: workspace-agent start|serve [flags]
   serve  run the agent in the foreground`
 
 type config struct {
-	stateDir, workdir, listen, tokenFile, certFile, keyFile string
+	stateDir, workdir, exportDir, listen, filesListen, tokenFile, certFile, keyFile string
 }
 
 func parseFlags(name string, args []string) (config, error) {
@@ -32,7 +32,9 @@ func parseFlags(name string, args []string) (config, error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.StringVar(&cfg.stateDir, "state-dir", "/workspace/.ado", "directory for the agent's lock, log and run records")
 	flags.StringVar(&cfg.workdir, "workdir", "/workspace/src", "working directory for commands")
+	flags.StringVar(&cfg.exportDir, "export-dir", "/workspace/export", "directory served to builds holding a file grant")
 	flags.StringVar(&cfg.listen, "listen", ":9443", "address of the agent API")
+	flags.StringVar(&cfg.filesListen, "files-listen", ":9091", "address of the file server for builds")
 	flags.StringVar(&cfg.tokenFile, "token-file", "/var/run/secrets/ado-agent/token", "file holding the API bearer token")
 	flags.StringVar(&cfg.certFile, "tls-cert", "", "serving certificate; plain HTTP when empty")
 	flags.StringVar(&cfg.keyFile, "tls-key", "", "serving certificate key")
@@ -133,19 +135,37 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
-		Addr:              cfg.listen,
-		Handler:           agent.Handler(strings.TrimSpace(string(token))),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	log.Info("Workspace agent listening", "address", cfg.listen, "protocol", workspaceagent.ProtocolVersion)
-	if cfg.certFile == "" {
-		return server.ListenAndServe()
-	}
-	certs, err := workspaceagent.NewCertificateReloader(cfg.certFile, cfg.keyFile)
+	files, err := workspaceagent.NewFiles(cfg.exportDir, filepath.Join(cfg.stateDir, "file-grants.json"))
 	if err != nil {
 		return err
 	}
-	server.TLSConfig = &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12}
-	return server.ListenAndServeTLS("", "")
+	server := &http.Server{
+		Addr:              cfg.listen,
+		Handler:           agent.Handler(strings.TrimSpace(string(token)), files),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	// Plain HTTP: TLS would need the service CA in every build's DNF and
+	// image builder. The per-build grant token guards access instead.
+	fileServer := &http.Server{
+		Addr:              cfg.filesListen,
+		Handler:           files.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	errs := make(chan error, 2)
+	go func() { errs <- fileServer.ListenAndServe() }()
+	go func() {
+		if cfg.certFile == "" {
+			errs <- server.ListenAndServe()
+			return
+		}
+		certs, err := workspaceagent.NewCertificateReloader(cfg.certFile, cfg.keyFile)
+		if err != nil {
+			errs <- err
+			return
+		}
+		server.TLSConfig = &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12}
+		errs <- server.ListenAndServeTLS("", "")
+	}()
+	log.Info("Workspace agent listening", "api", cfg.listen, "files", cfg.filesListen, "protocol", workspaceagent.ProtocolVersion)
+	return <-errs
 }

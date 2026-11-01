@@ -299,7 +299,7 @@ func TestPruneLimitsRecordsAndLogBudget(t *testing.T) {
 
 func TestHandlerFollowsLogsUntilTheRunEnds(t *testing.T) {
 	a := newTestAgent(t)
-	server := httptest.NewServer(a.Handler("secret"))
+	server := httptest.NewServer(a.Handler("secret", nil))
 	defer server.Close()
 	create(t, a, "follow", "echo one; sleep 1; echo two", testOptions())
 
@@ -323,7 +323,7 @@ func TestHandlerFollowsLogsUntilTheRunEnds(t *testing.T) {
 }
 
 func TestHandlerRequiresToken(t *testing.T) {
-	server := httptest.NewServer(newTestAgent(t).Handler("secret"))
+	server := httptest.NewServer(newTestAgent(t).Handler("secret", nil))
 	defer server.Close()
 	for _, auth := range []string{"", "Bearer wrong"} {
 		req, _ := http.NewRequest(http.MethodGet, server.URL+"/runs", nil)

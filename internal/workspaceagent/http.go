@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // CreateRequest is the body of POST /runs.
@@ -22,10 +23,28 @@ type VersionResponse struct {
 
 const logReadBytes = 1 << 20
 
-// Handler serves the agent API. Every endpoint except /healthz requires
-// token as a bearer token.
-func (a *Agent) Handler(token string) http.Handler {
+// Handler serves the agent API, including grants for files when files is not
+// nil. Every endpoint except /healthz requires token as a bearer token.
+func (a *Agent) Handler(token string, files *Files) http.Handler {
 	api := http.NewServeMux()
+	if files != nil {
+		api.HandleFunc("POST /file-grants", func(w http.ResponseWriter, r *http.Request) {
+			var req GrantRequest
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+				writeError(w, apiError(http.StatusBadRequest, "invalid JSON request"))
+				return
+			}
+			grant, err := files.Grant(time.Duration(req.TTLSeconds) * time.Second)
+			writeResult(w, http.StatusCreated, grant, err)
+		})
+		api.HandleFunc("DELETE /file-grants/{token}", func(w http.ResponseWriter, r *http.Request) {
+			if err := files.Revoke(r.PathValue("token")); err != nil {
+				writeError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
 	api.HandleFunc("GET /version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, VersionResponse{Protocol: ProtocolVersion})
 	})
