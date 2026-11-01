@@ -1083,14 +1083,16 @@ activity still participates in auto-pause detection. The helper uses isolated
 Python imports, so workspace files and `PYTHON*` variables cannot replace its
 standard library. The runner and request data travel over pod exec stdin, keeping
 commands and script contents out of Kubernetes exec request URLs.
-Run records use format version 1; existing unversioned records use the same layout.
+Run records use format version 1.
 All future versions must preserve a common envelope: `id`, `version`, `status`,
-`startedAt`, the live supervisor's `pid` and `identity`, and terminal `finishedAt`.
+`startedAt`, and terminal `finishedAt`.
 Envelope timestamps may use `Z` or an explicit UTC offset.
-The current status values and their live/terminal meanings are fixed. Identity
-remains `[boot ID, PID namespace, process start time]`. Records keep the same
-`state.json` location, root-then-run lock order and atomic replacement protocol, and each run
-owns its directory exclusively. Payload changes require a new version and readers
+The current status values and their live/terminal meanings are fixed. A live
+run's supervisor holds an exclusive `flock` on the run's `supervisor` file for its
+whole life; the kernel releases it however the process ends, so a live status
+without that lock reads as `Interrupted`. Records keep the same `state.json` and
+`supervisor` locations, root-then-run lock order and atomic replacement protocol,
+and each run owns its directory exclusively. Payload changes require a new version and readers
 for older versions; supervisors keep writing the version they started with.
 
 After a rollback, newer records still participate in activity checks and appear

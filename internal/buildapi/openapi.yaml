@@ -384,7 +384,7 @@ paths:
         safe during the 24-hour tombstone window. A small ID tombstone protects
         retried creation during that window, then expires. IDs are single-use.
         Newer records may be deleted only when their stable envelope confirms
-        they are terminal or their supervisor identity is no longer live.
+        they are terminal or their supervisor is no longer running.
         Invalid newer envelopes cannot be deleted.
       responses:
         "204":

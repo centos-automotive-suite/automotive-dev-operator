@@ -5,11 +5,13 @@ package workspacerun
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -62,10 +64,12 @@ func TestRunRecordsPersistVersionOne(t *testing.T) {
 	}
 }
 
-func TestUnversionedRecordsRemainReadable(t *testing.T) {
+func TestSupervisorLockTracksRunLiveness(t *testing.T) {
 	root, call := localRunner(t)
-	filename := writeTerminalRun(t, root, "unversioned", time.Hour, []byte("old output"))
-	data, err := os.ReadFile(filename)
+	call("create", "locked", "sleep 30", DefaultOptions().JSON())
+	t.Cleanup(func() { call("cancel", "locked"); awaitRun(t, call, "locked") })
+	directory := filepath.Join(root, ".runs", "locked")
+	data, err := os.ReadFile(filepath.Join(directory, "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,19 +77,21 @@ func TestUnversionedRecordsRemainReadable(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	delete(state, "version")
-	data, err = json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
+	if _, ok := state["pid"]; ok || state["identity"] != nil {
+		t.Fatalf("liveness persisted as process identity: %s", data)
 	}
-	if err := os.WriteFile(filename, data, 0o600); err != nil {
-		t.Fatal(err)
+	// The launcher has exited; only the supervisor it forked holds the lock.
+	if !supervisorLockHeld(t, directory) {
+		t.Fatal("live supervisor does not hold its lock")
 	}
-	if got := call("get", "unversioned"); got.Code != 0 || got.Run.ExitCode == nil || *got.Run.ExitCode != 3 {
-		t.Fatalf("unversioned result lost during upgrade: %+v", got)
-	}
-	if got := streamRunLog(t, root, "unversioned", "0"); string(got.Bytes) != "old output" {
-		t.Fatalf("unversioned output lost during upgrade: %q", got.Bytes)
+	call("cancel", "locked")
+	awaitRun(t, call, "locked")
+	deadline := time.Now().Add(3 * time.Second)
+	for supervisorLockHeld(t, directory) {
+		if time.Now().After(deadline) {
+			t.Fatal("exited supervisor still holds its lock")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -136,12 +142,11 @@ func TestNewerRunRecordsDoNotBlockWorkspace(t *testing.T) {
 func TestNewerRunLivenessAndAmbiguousEnvelopes(t *testing.T) {
 	for _, tc := range []struct {
 		name, wantStatus string
-		active           bool
+		active, locked   bool
 		change           func(map[string]any)
 	}{
-		{name: "live", wantStatus: "Running", active: true},
-		{name: "reused PID", wantStatus: "Interrupted", change: func(state map[string]any) { state["identity"] = []string{"old-boot", "old-container", "old-process"} }},
-		{name: "missing PID", wantStatus: "Unknown", active: true, change: func(state map[string]any) { delete(state, "pid") }},
+		{name: "live", wantStatus: "Running", active: true, locked: true},
+		{name: "exited supervisor", wantStatus: "Interrupted"},
 		{name: "unknown status", wantStatus: "Unknown", active: true, change: func(state map[string]any) { state["status"] = "FutureStatus" }},
 		{name: "missing start", wantStatus: "Unknown", active: true, change: func(state map[string]any) { delete(state, "startedAt") }},
 		{name: "invalid finish", wantStatus: "Unknown", active: true, change: func(state map[string]any) { state["status"], state["finishedAt"] = "Succeeded", "not-a-date" }},
@@ -149,11 +154,13 @@ func TestNewerRunLivenessAndAmbiguousEnvelopes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root, call := localRunner(t)
 			state := newerEnvelope("future", "Running", time.Hour)
-			state["pid"], state["identity"] = os.Getpid(), currentProcessIdentity(t)
 			if tc.change != nil {
 				tc.change(state)
 			}
 			filename, record := writeNewerRun(t, root, state)
+			if tc.locked {
+				holdSupervisorLock(t, filepath.Dir(filename))
+			}
 			if got := call("active"); got.Code != 0 || got.Active != tc.active {
 				t.Fatalf("newer run liveness: %+v", got)
 			}
@@ -193,7 +200,7 @@ func TestNewerTerminalRecordsRespectRetentionAndCount(t *testing.T) {
 			}
 			old := newerEnvelope("old", "Failed", age)
 			if tc.stale {
-				old["status"], old["pid"], old["identity"] = "Running", os.Getpid(), []string{"old-boot", "old-container", "old-process"}
+				old["status"] = "Running"
 				delete(old, "finishedAt")
 			}
 			oldFilename, oldRecord := writeNewerRun(t, root, old)
@@ -215,9 +222,8 @@ func TestNewerTerminalRecordsRespectRetentionAndCount(t *testing.T) {
 				}
 			}
 			writeTerminalRun(t, root, "recent", time.Hour, nil)
-			live := newerEnvelope("live", "Running", 9*24*time.Hour)
-			live["pid"], live["identity"] = os.Getpid(), currentProcessIdentity(t)
-			filename, record := writeNewerRun(t, root, live)
+			filename, record := writeNewerRun(t, root, newerEnvelope("live", "Running", 9*24*time.Hour))
+			holdSupervisorLock(t, filepath.Dir(filename))
 			if got := call("create", "trigger", "sleep 30", options.JSON()); got.Code != 0 {
 				t.Fatalf("newer record blocked pruning: %+v", got)
 			}
@@ -244,22 +250,34 @@ func newerEnvelope(id, status string, age time.Duration) map[string]any {
 	return state
 }
 
-func currentProcessIdentity(t *testing.T) []string {
+// holdSupervisorLock stands in for a live supervisor until the test ends.
+func holdSupervisorLock(t *testing.T, directory string) {
 	t.Helper()
-	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	file, err := os.OpenFile(filepath.Join(directory, "supervisor"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	namespace, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/pid", os.Getpid()))
+	t.Cleanup(func() { _ = file.Close() })
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func supervisorLockHeld(t *testing.T, directory string) bool {
+	t.Helper()
+	file, err := os.Open(filepath.Join(directory, "supervisor"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", os.Getpid()))
+	defer func() { _ = file.Close() }()
+	err = syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EWOULDBLOCK) {
+		return true
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	fields := strings.Fields(string(stat)[strings.LastIndexByte(string(stat), ')')+1:])
-	return []string{strings.TrimSpace(string(boot)), namespace, fields[19]}
+	return false
 }
 
 func writeNewerRun(t *testing.T, root string, state map[string]any) (string, []byte) {

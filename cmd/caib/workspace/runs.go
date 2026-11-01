@@ -53,6 +53,8 @@ Examples:
 	cmd.Flags().Duration("timeout", 0, "command timeout, up to 24h (default: operator policy, normally 2h)")
 	cmd.Flags().String("script", "", "upload and run a local Bash script with set -euo pipefail")
 	cmd.MarkFlagsMutuallyExclusive("run", "script")
+	cmd.MarkFlagsMutuallyExclusive("run", "timeout")
+	cmd.MarkFlagsMutuallyExclusive("run", "detach")
 	return cmd
 }
 
@@ -62,13 +64,13 @@ func runExec(cmd *cobra.Command, args []string) {
 	offset, _ := cmd.Flags().GetInt64("offset")
 	detach, _ := cmd.Flags().GetBool("detach")
 	timeout, _ := cmd.Flags().GetDuration("timeout")
-	if cmd.Flags().Changed("timeout") && (timeout <= 0 || timeout%time.Second != 0 || timeout > 24*time.Hour || id != "") {
-		handleError(fmt.Errorf("--timeout must be a whole number of seconds between 1s and 24h, and cannot be used with --run"))
+	if cmd.Flags().Changed("timeout") && (timeout <= 0 || timeout%time.Second != 0 || timeout > 24*time.Hour) {
+		handleError(fmt.Errorf("--timeout must be a whole number of seconds between 1s and 24h"))
 	}
 	if offset < 0 || (id == "" && offset != 0) {
 		handleError(fmt.Errorf("--offset must be non-negative and requires --run"))
 	}
-	if (id == "" && len(args) < 2 && !cmd.Flags().Changed("script")) || (id != "" && (len(args) != 1 || detach)) {
+	if (id == "" && len(args) < 2 && !cmd.Flags().Changed("script")) || (id != "" && len(args) != 1) {
 		handleError(fmt.Errorf("specify a command, or use --run <id> to reattach"))
 	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

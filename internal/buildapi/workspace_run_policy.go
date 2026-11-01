@@ -14,16 +14,15 @@ import (
 )
 
 func (a *APIServer) workspaceRunOptions(c *gin.Context, ws *automotivev1alpha1.Workspace, requested int64) (workspacerun.Options, bool) {
-	options := workspacerun.DefaultOptions()
 	kube, err := a.deps.getClientFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "could not load workspace run limits"})
-		return options, false
+		return workspacerun.Options{}, false
 	}
 	config, err := a.deps.loadOperatorConfig(c.Request.Context(), kube, resolveNamespace())
 	if err != nil && !k8serrors.IsNotFound(err) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "could not load workspace run limits"})
-		return options, false
+		return workspacerun.Options{}, false
 	}
 	var settings *automotivev1alpha1.WorkspacesConfig
 	if config != nil {
@@ -36,19 +35,19 @@ func (a *APIServer) workspaceRunOptions(c *gin.Context, ws *automotivev1alpha1.W
 	capacity, err := resource.ParseQuantity(size)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "workspace PVC size is invalid"})
-		return options, false
+		return workspacerun.Options{}, false
 	}
 	if ws.Status.PVCName != "" {
 		var pvc corev1.PersistentVolumeClaim
 		if err := kube.Get(c.Request.Context(), client.ObjectKey{Namespace: ws.Namespace, Name: ws.Status.PVCName}, &pvc); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "could not read workspace PVC capacity"})
-			return options, false
+			return workspacerun.Options{}, false
 		}
 		if actual, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok && actual.Sign() > 0 {
 			capacity = actual
 		}
 	}
-	options, err = resolveWorkspaceRunOptions(settings, requested, capacity.Value())
+	options, err := resolveWorkspaceRunOptions(settings, requested, capacity.Value())
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return options, false

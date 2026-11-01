@@ -722,10 +722,7 @@ func (r *Reconciler) isWorkspaceActive(ctx context.Context, ws *automotivev1alph
 	if err != nil {
 		return false, err
 	}
-	var runs struct {
-		Active bool   `json:"active"`
-		Error  string `json:"error"`
-	}
+	var runs workspacerun.Result
 	if err := json.Unmarshal([]byte(output), &runs); err != nil {
 		return false, fmt.Errorf("invalid run activity response: %w", err)
 	}

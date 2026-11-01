@@ -22,7 +22,9 @@ func (c *Client) workspaceRunRequest(ctx context.Context, method, name, id, acti
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if c.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.authToken)
 	}
@@ -126,21 +128,10 @@ func (c *Client) WorkspaceRunLogs(ctx context.Context, name, id string, follow b
 
 // ListWorkspaceRuns returns retained runs, newest first, with bounded pagination.
 func (c *Client) ListWorkspaceRuns(ctx context.Context, name string, offset, limit int) ([]buildcontract.WorkspaceRun, error) {
-	req, err := c.workspaceRunRequest(ctx, http.MethodGet, name, "", "", nil)
-	if err != nil {
-		return nil, err
-	}
-	query := req.URL.Query()
-	query.Set("offset", strconv.Itoa(offset))
-	query.Set("limit", strconv.Itoa(limit))
-	req.URL.RawQuery = query.Encode()
-	resp, err := c.doRequest(req, "list workspace runs", statusIn(http.StatusOK))
-	if err != nil {
-		return nil, err
-	}
-	defer closeBody(resp)
+	query := url.Values{"offset": {strconv.Itoa(offset)}, "limit": {strconv.Itoa(limit)}}
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "runs")) + "?" + query.Encode()
 	var runs []buildcontract.WorkspaceRun
-	if err := json.NewDecoder(resp.Body).Decode(&runs); err != nil {
+	if err := c.listJSON(ctx, endpoint, "list workspace runs", &runs); err != nil {
 		return nil, err
 	}
 	return runs, nil

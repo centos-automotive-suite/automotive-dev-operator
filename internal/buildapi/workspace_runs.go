@@ -17,22 +17,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type workspaceRunResult struct {
-	Run   buildcontract.WorkspaceRun   `json:"run"`
-	Runs  []buildcontract.WorkspaceRun `json:"runs"`
-	Code  int                          `json:"code"`
-	Error string                       `json:"error"`
-}
-
 // runWorkspaceOperation always separates protocol output from exec diagnostics.
 // Each operation is short; the detached supervisor owns the command lifetime.
-func (a *APIServer) runWorkspaceOperation(ctx context.Context, cfg *rest.Config, ws *automotivev1alpha1.Workspace, action string, args ...string) (workspaceRunResult, error) {
+func (a *APIServer) runWorkspaceOperation(ctx context.Context, cfg *rest.Config, ws *automotivev1alpha1.Workspace, action string, args ...string) (workspacerun.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
@@ -40,9 +32,9 @@ func (a *APIServer) runWorkspaceOperation(ctx context.Context, cfg *rest.Config,
 	err := a.exec.stream(ctx, cfg, ws.Namespace, ws.Status.PodName, workspaceContainerName,
 		command, strings.NewReader(input), &stdout, &stderr)
 	if err != nil {
-		return workspaceRunResult{}, wrapPodStreamError("workspace run "+action, err, &stderr)
+		return workspacerun.Result{}, wrapPodStreamError("workspace run "+action, err, &stderr)
 	}
-	var result workspaceRunResult
+	var result workspacerun.Result
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		return result, fmt.Errorf("invalid workspace run response: %w", err)
 	}
@@ -66,7 +58,7 @@ func (a *APIServer) workspaceRunTarget(c *gin.Context, name string) (*automotive
 	return ws, cfg, true
 }
 
-func (a *APIServer) workspaceRunError(c *gin.Context, result workspaceRunResult, err error) bool {
+func (a *APIServer) workspaceRunError(c *gin.Context, result workspacerun.Result, err error) bool {
 	if err != nil {
 		a.log.Error(err, "Workspace run operation failed")
 		code, message := workspaceRunExecFailure(err)
@@ -127,14 +119,7 @@ func (a *APIServer) createWorkspaceRun(c *gin.Context, name string) {
 // conflict with a simultaneous stop decision; a best-effort activity update
 // could allow the pod to disappear between the readiness check and launch.
 func (a *APIServer) recordWorkspaceRunActivity(c *gin.Context, ws *automotivev1alpha1.Workspace) bool {
-	kube, err := a.deps.getClientFromRequest(c)
-	if err == nil {
-		patch := client.MergeFromWithOptions(ws.DeepCopy(), client.MergeFromWithOptimisticLock{})
-		now := metav1.Now()
-		ws.Status.LastActivityTime = &now
-		err = kube.Status().Patch(c.Request.Context(), ws, patch)
-	}
-	if err != nil {
+	if err := a.patchWorkspaceActivity(c, ws, client.MergeFromWithOptimisticLock{}); err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "could not record workspace activity; retry using the same run ID"})
 		return false
 	}
@@ -185,16 +170,12 @@ func (a *APIServer) workspaceRunLogs(c *gin.Context, name string) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be a non-negative byte offset"})
 		return
 	}
+	// A bare ?follow is present with an empty value and enables following.
 	followValue, follow := c.GetQuery("follow")
-	// Gin's GetQuery treats an empty query value as absent; ?follow is valid.
-	if c.Request.URL.Query().Has("follow") {
-		follow = true
-		if followValue != "" {
-			follow, err = strconv.ParseBool(followValue)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "follow must be a boolean"})
-				return
-			}
+	if followValue != "" {
+		if follow, err = strconv.ParseBool(followValue); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "follow must be a boolean"})
+			return
 		}
 	}
 	ws, cfg, ok := a.workspaceRunTarget(c, name)
@@ -202,9 +183,6 @@ func (a *APIServer) workspaceRunLogs(c *gin.Context, name string) {
 		return
 	}
 	duration := time.Duration(a.limits.MaxLogStreamDurationMinutes) * time.Minute
-	if duration <= 0 {
-		duration = 120 * time.Minute
-	}
 	helperDuration := duration
 	if follow {
 		helperDuration = min(duration, 40*time.Second)

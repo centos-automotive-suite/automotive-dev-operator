@@ -276,9 +276,9 @@ subprocess.run(json.loads(sys.argv[2]), input=sys.stdin.read(), text=True, check
 deadline = time.monotonic() + 5
 while time.monotonic() < deadline:
     state = json.loads((root / ".runs/reaping/state.json").read_text())
-    child = root / "child-pid"
-    if child.exists() and state["status"] == "Succeeded":
-        pids = [state["pid"], int(child.read_text())]
+    supervisor, child = root / "supervisor-pid", root / "child-pid"
+    if supervisor.exists() and child.exists() and state["status"] == "Succeeded":
+        pids = [int(supervisor.read_text()), int(child.read_text())]
         if all(not pathlib.Path(f"/proc/{pid}").exists() for pid in pids):
             print("reaped supervisor and child")
             sys.exit(0)
@@ -288,7 +288,7 @@ raise RuntimeError("orphan processes were not reaped: " + str(state))
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	root := t.TempDir()
-	argv, input := Command("create", "reaping", "sleep 30 & echo $! > child-pid; sleep 0.2", DefaultOptions().JSON())
+	argv, input := Command("create", "reaping", "echo $PPID > supervisor-pid; sleep 30 & echo $! > child-pid; sleep 0.2", DefaultOptions().JSON())
 	encodedArgv, err := json.Marshal(argv)
 	if err != nil {
 		t.Fatal(err)
@@ -538,7 +538,7 @@ func TestRunnerCancellationKillsTERMResistantDescendants(t *testing.T) {
 	}
 }
 
-func TestRunnerRecoversStaleIdentityWithoutInventingExitCode(t *testing.T) {
+func TestRunnerRecoversExitedSupervisorWithoutInventingExitCode(t *testing.T) {
 	root, call := localRunner(t)
 	call("create", "stale", "printf retained", DefaultOptions().JSON())
 	awaitRun(t, call, "stale")
@@ -551,8 +551,7 @@ func TestRunnerRecoversStaleIdentityWithoutInventingExitCode(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	state["status"], state["pid"] = "Running", os.Getpid()
-	state["identity"] = []string{"old-boot", "old-container", "old-process"}
+	state["status"] = "Running"
 	delete(state, "exitCode")
 	data, err = json.Marshal(state)
 	if err != nil {

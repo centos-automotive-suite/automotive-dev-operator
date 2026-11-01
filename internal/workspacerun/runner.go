@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"regexp"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 //go:embed runner.py
@@ -29,6 +31,16 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{TimeoutSeconds: 2 * 60 * 60, MaxLogBytes: 100 << 20,
 		RetentionSeconds: 7 * 24 * 60 * 60, MaxRecords: 1000, CompletedLogBudgetBytes: 1 << 30}
+}
+
+// Result is the runner's JSON response. A failed action sets Error, with an
+// HTTP status in Code.
+type Result struct {
+	Active bool                         `json:"active"`
+	Run    buildcontract.WorkspaceRun   `json:"run"`
+	Runs   []buildcontract.WorkspaceRun `json:"runs"`
+	Code   int                          `json:"code"`
+	Error  string                       `json:"error"`
 }
 
 // JSON encodes limits for the pod-side runner.

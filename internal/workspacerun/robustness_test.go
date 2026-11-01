@@ -98,7 +98,7 @@ func TestInterruptedRecordWriteFailureDoesNotBlockReadsOrLaunch(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	state["status"], state["pid"], state["identity"] = "Running", os.Getpid(), []string{"old-boot", "old-container", "old-process"}
+	state["status"] = "Running"
 	delete(state, "exitCode")
 	delete(state, "finishedAt")
 	data, err = json.Marshal(state)
@@ -304,7 +304,7 @@ Path.open = fill_volume
 
 func TestUnreadableRecordsDoNotBlockCollectionsOrLaunch(t *testing.T) {
 	root, call := localRunner(t)
-	for _, field := range []string{"truncated", "version", "finishedAt", "maxLogBytes", "exitCode", "message"} {
+	for _, field := range []string{"truncated", "version", "unversioned", "finishedAt", "maxLogBytes", "exitCode", "message"} {
 		filename := writeTerminalRun(t, root, strings.ToLower(field), time.Hour, nil)
 		data, err := os.ReadFile(filename)
 		if err != nil {
@@ -319,6 +319,8 @@ func TestUnreadableRecordsDoNotBlockCollectionsOrLaunch(t *testing.T) {
 			data = []byte(`{"id":`)
 		case "finishedAt":
 			delete(state, field)
+		case "unversioned":
+			delete(state, "version") // Every released record carries its format version.
 		default:
 			state[field] = []string{"wrong type"}
 		}

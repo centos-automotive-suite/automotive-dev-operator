@@ -275,7 +275,7 @@ func TestWorkspaceRunListDeleteAndTruncatedHTTPLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	for file, data := range map[string]string{
-		"state.json":                    `{"id":"tail","command":"make","status":"Failed","exitCode":7,"maxLogBytes":10,"timeoutSeconds":7200,"requestedTimeoutSeconds":0,"startedAt":"2026-01-01T00:00:00+00:00","finishedAt":"2026-01-01T00:01:00+00:00"}`,
+		"state.json":                    `{"version":1,"id":"tail","command":"make","status":"Failed","exitCode":7,"maxLogBytes":10,"timeoutSeconds":7200,"requestedTimeoutSeconds":0,"startedAt":"2026-01-01T00:00:00+00:00","finishedAt":"2026-01-01T00:01:00+00:00"}`,
 		"logs/00000000000000000000.log": "discarded last error",
 	} {
 		if err := os.WriteFile(filepath.Join(directory, file), []byte(data), 0o600); err != nil {
@@ -528,7 +528,7 @@ func TestWorkspaceRunLogSnapshotAndOffsets(t *testing.T) {
 	}
 	data := bytes.Repeat([]byte{'a', 0, 255, '\n'}, 40000)
 	for name, content := range map[string][]byte{
-		"state.json":                    []byte(`{"id":"large","command":"make","status":"Succeeded","exitCode":0,"maxLogBytes":104857600,"timeoutSeconds":7200,"requestedTimeoutSeconds":0,"startedAt":"2026-01-01T00:00:00+00:00","finishedAt":"2026-01-01T00:01:00+00:00"}`),
+		"state.json":                    []byte(`{"version":1,"id":"large","command":"make","status":"Succeeded","exitCode":0,"maxLogBytes":104857600,"timeoutSeconds":7200,"requestedTimeoutSeconds":0,"startedAt":"2026-01-01T00:00:00+00:00","finishedAt":"2026-01-01T00:01:00+00:00"}`),
 		"logs/00000000000000000000.log": data,
 	} {
 		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {

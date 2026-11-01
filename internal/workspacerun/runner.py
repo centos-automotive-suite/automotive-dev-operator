@@ -1,6 +1,5 @@
 """Durable workspace runs. Invoked through pod exec; no daemon is required."""
 
-import collections
 import contextlib
 import datetime
 import fcntl
@@ -20,13 +19,17 @@ WORKDIR = sys.argv[2]
 LIVE = ("Starting", "Running", "Cancelling")
 TERMINAL = ("Succeeded", "Failed", "Cancelled", "Interrupted", "TimedOut")
 TOMBSTONE_TTL = 24 * 60 * 60
-# All versions preserve the envelope: id, version, status, startedAt, live
-# supervisor pid/identity, and terminal finishedAt. LIVE/TERMINAL and identity's
-# encoding are fixed; new details belong in the versioned payload. Terminal
-# statuses never become live again. Keep state.json, root-then-run flock order,
-# atomic writes, and exclusive ownership of each run directory compatible.
-# Bump for incompatible payloads, retaining readers for older versions. Existing
-# supervisors keep writing their original format; older readers never rewrite it.
+RUN_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+INTERRUPTED = "The workspace container or run supervisor stopped before recording an exit code"
+# All versions preserve the envelope: id, version, status, startedAt, and
+# terminal finishedAt. A live run's supervisor holds an exclusive flock on the
+# run's supervisor file for its whole life, so any reader can check liveness
+# without understanding the record. LIVE/TERMINAL are fixed; new details belong
+# in the versioned payload. Terminal statuses never become live again. Keep
+# state.json, the supervisor lock, root-then-run flock order, atomic writes, and
+# exclusive ownership of each run directory compatible. Bump for incompatible
+# payloads, retaining readers for older versions. Existing supervisors keep
+# writing their original format; older readers never rewrite it.
 RECORD_VERSION = 1
 
 
@@ -40,15 +43,19 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-def identity(pid):
+def supervisor_alive(directory):
+    # The kernel releases the supervisor's lock however the process ends.
     try:
-        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-        if fields[0] == "Z":
-            return None
-        return [Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
-                os.readlink(f"/proc/{pid}/ns/pid"), fields[19]]
+        fd = os.open(directory / "supervisor", os.O_RDONLY)
     except FileNotFoundError:
-        return None
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
 
 
 def require_supported(state):
@@ -92,87 +99,72 @@ def missing_run(directory):
 
 def envelope(directory, state):
     if state["id"] != directory.name:
-        raise ValueError("invalid record identity")
+        raise ValueError("record ID does not match its directory")
     if state["status"] not in LIVE + TERMINAL:
         raise ValueError("invalid status")
-    keys = ("id", "version", "status", "startedAt")
-    for key in ("startedAt",) + (("finishedAt",) if state["status"] in TERMINAL else ()):
+    timestamps = ("startedAt", "finishedAt") if state["status"] in TERMINAL else ("startedAt",)
+    for key in timestamps:
         if datetime.datetime.fromisoformat(state[key]).tzinfo is None:
             raise ValueError(f"{key} must include a timezone")
-    if state["status"] in LIVE:
-        if type(state["pid"]) is not int or state["pid"] <= 0:
-            raise ValueError("invalid supervisor PID")
-        if not isinstance(state["identity"], list) or len(state["identity"]) != 3 or not all(isinstance(value, str) for value in state["identity"]):
-            raise ValueError("invalid supervisor identity")
-        keys += ("pid", "identity")
-    else:
-        keys += ("finishedAt",)
-    return {key: state[key] for key in keys}
+    return {key: state[key] for key in ("id", "version", "status") + timestamps}
 
 
-def uncertain_newer_record(directory, version, error):
-    # Preserve visibility without allowing an ambiguous envelope to authorize
-    # auto-pause, deletion, or retention. This projection is never written back.
-    return dict(id=directory.name, version=version, status="Unknown",
-                message=f"Cannot determine run activity from its envelope: {error}")
+def read_newer(directory, state):
+    # Project only the envelope of a newer record. This projection is never
+    # written back.
+    version = state["version"]
+    try:
+        state = envelope(directory, state)
+        if state["status"] in LIVE and not supervisor_alive(directory):
+            # A read-only projection needs a stable retention timestamp.
+            # The last record write is a proxy, not the exact crash time.
+            finished_at = datetime.datetime.fromtimestamp(
+                (directory / "state.json").stat().st_mtime, datetime.timezone.utc).isoformat()
+            state.update(status="Interrupted", finishedAt=finished_at, message=INTERRUPTED)
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        # Preserve visibility without allowing an ambiguous envelope to authorize
+        # auto-pause, deletion, or retention.
+        return dict(id=directory.name, version=version, status="Unknown",
+                    message=f"Cannot determine run activity from its envelope: {error}")
+    return state
 
 
 def read_state(directory):
-    version = None
     try:
         state = json.loads((directory / "state.json").read_text())
         if not isinstance(state, dict):
             raise ValueError("invalid record")
-        # Unversioned records from before release have the version 1 layout.
-        version = state.setdefault("version", 1)
+        version = state["version"]
         if type(version) is not int or version < 1:
             raise ValueError("invalid record version")
-        common = envelope(directory, state)
-        if version != RECORD_VERSION:
-            state = common
-        else:
-            if not isinstance(state["command"], str):
-                raise ValueError("invalid command")
-            for key, minimum in (("maxLogBytes", 1), ("timeoutSeconds", 1), ("requestedTimeoutSeconds", 0)):
-                if type(state[key]) is not int or state[key] < minimum:
-                    raise ValueError(f"invalid {key}")
-            if state["status"] in TERMINAL and state["status"] != "Interrupted" and "exitCode" not in state:
-                raise ValueError("missing exit code")
-            if "exitCode" in state and (type(state["exitCode"]) is not int or not 0 <= state["exitCode"] <= 255):
-                raise ValueError("invalid exit code")
-            if not isinstance(state.get("message", ""), str):
-                raise ValueError("invalid message")
-            if type(state.get("logsEvicted", False)) is not bool:
-                raise ValueError("invalid logsEvicted")
-            if state.get("logsEvicted") and (state["status"] in LIVE or type(state["logBytes"]) is not int or state["logBytes"] < 0):
-                raise ValueError("invalid evicted log offsets")
+        if version > RECORD_VERSION:
+            return read_newer(directory, state)
+        envelope(directory, state)
+        if not isinstance(state["command"], str):
+            raise ValueError("invalid command")
+        for key, minimum in (("maxLogBytes", 1), ("timeoutSeconds", 1), ("requestedTimeoutSeconds", 0)):
+            if type(state[key]) is not int or state[key] < minimum:
+                raise ValueError(f"invalid {key}")
+        if state["status"] in TERMINAL and state["status"] != "Interrupted" and "exitCode" not in state:
+            raise ValueError("missing exit code")
+        if "exitCode" in state and (type(state["exitCode"]) is not int or not 0 <= state["exitCode"] <= 255):
+            raise ValueError("invalid exit code")
+        if not isinstance(state.get("message", ""), str):
+            raise ValueError("invalid message")
+        if type(state.get("logsEvicted", False)) is not bool:
+            raise ValueError("invalid logsEvicted")
+        if state.get("logsEvicted") and (state["status"] in LIVE or type(state["logBytes"]) is not int or state["logBytes"] < 0):
+            raise ValueError("invalid evicted log offsets")
     except FileNotFoundError:
         raise missing_run(directory) from None
     except (ValueError, KeyError, TypeError, OSError) as error:
-        if type(version) is int and version > RECORD_VERSION:
-            return uncertain_newer_record(directory, version, error)
         raise RunError(422, f"unreadable run record {directory.name}: {error}") from None
-    try:
-        stopped = state["status"] in LIVE and identity(state["pid"]) != state["identity"]
-        if stopped:
-            finished_at = now()
-            if version != RECORD_VERSION:
-                # A read-only projection needs a stable retention timestamp.
-                # The last record write is a proxy, not the exact crash time.
-                finished_at = datetime.datetime.fromtimestamp(
-                    (directory / "state.json").stat().st_mtime, datetime.timezone.utc).isoformat()
-    except OSError as error:
-        if version != RECORD_VERSION:
-            return uncertain_newer_record(directory, version, error)
-        raise
-    if stopped:
-        state.update(status="Interrupted", finishedAt=finished_at,
-                     message="The workspace container or run supervisor stopped before recording an exit code")
+    if state["status"] in LIVE and not supervisor_alive(directory):
+        state.update(status="Interrupted", finishedAt=now(), message=INTERRUPTED)
         # Reads must remain usable when the volume cannot persist recovery.
         # Launch and cancellation still require their explicit saves to succeed.
-        if version == RECORD_VERSION:
-            with contextlib.suppress(OSError):
-                save(directory, state)
+        with contextlib.suppress(OSError):
+            save(directory, state)
     return state
 
 
@@ -190,22 +182,22 @@ def log_window(directory, state):
     return max(0, end - state["maxLogBytes"]), end, chunks
 
 
-def public(directory, state):
-    private = ("version", "pid", "identity", "maxLogBytes", "requestedTimeoutSeconds")
+def public(directory, state, window=None):
+    private = ("version", "maxLogBytes", "requestedTimeoutSeconds")
     result = {key: value for key, value in state.items() if key not in private}
     if state["version"] != RECORD_VERSION:
         note = f"Run uses newer record format {state['version']}; only lifecycle metadata is available. Command, exit code, logs and cancellation require a compatible operator."
         message = result.get("message", "").rstrip(". ")
         result["message"] = message + ". " + note if message else note
         return result
-    start, end, _ = log_window(directory, state)
+    start, end, _ = window or log_window(directory, state)
     result.update(logBytes=end, logStartOffset=start, logTruncated=start > 0,
                   logsEvicted=state.get("logsEvicted", False))
     return result
 
 
-def read_log(directory, state, offset, length=1024 * 1024):
-    start, end, chunks = log_window(directory, state)
+def read_log(window, offset, length=1024 * 1024):
+    start, end, chunks = window
     if offset < 0 or offset > end:
         raise RunError(416, "offset exceeds available log bytes")
     offset = max(offset, start)
@@ -235,27 +227,28 @@ class LogWriter:
         self.directory.mkdir(exist_ok=True)
         self.limit = limit
         self.chunk_size = min(1024 * 1024, limit)
-        self.chunks = collections.deque()
+        self.oldest = 0
         self.position = 0
         self.output = None
 
+    def segment(self, first):
+        return self.directory / f"{first:020d}.log"
+
     def write(self, data):
         while data:
-            first = self.position // self.chunk_size * self.chunk_size
-            file = self.directory / f"{first:020d}.log"
-            count = min(len(data), self.chunk_size - (self.position - first))
-            if not self.chunks or self.chunks[-1][0] != first:
+            room = self.chunk_size - self.position % self.chunk_size
+            if self.output is None or room == self.chunk_size:
                 if self.output is not None:
                     self.output.close()
-                self.output = file.open("ab", buffering=0)
-                self.chunks.append((first, file))
-            count = self.output.write(data[:count])
+                self.output = self.segment(self.position).open("ab", buffering=0)
+            count = self.output.write(data[:room])
             if count == 0:
                 raise OSError("log write made no progress")
             self.position += count
             data = data[count:]
-            while self.chunks and self.chunks[0][0] + self.chunk_size <= self.position - self.limit:
-                self.chunks.popleft()[1].unlink()
+            while self.oldest + self.chunk_size <= self.position - self.limit:
+                self.segment(self.oldest).unlink()
+                self.oldest += self.chunk_size
 
     def close(self):
         if self.output is not None:
@@ -263,10 +256,10 @@ class LogWriter:
         # Trim the partial leading segment once, on completion, so completed
         # logs fit the budget even when the per-log cap equals that budget.
         start = max(0, self.position - self.limit)
-        if self.chunks and self.chunks[0][0] < start:
-            first, file = self.chunks[0]
-            tail = file.read_bytes()[start - first:]
-            (self.directory / f"{start:020d}.log").write_bytes(tail)
+        if self.oldest < start:
+            file = self.segment(self.oldest)
+            tail = file.read_bytes()[start - self.oldest:]
+            self.segment(start).write_bytes(tail)
             file.unlink()
 
 
@@ -394,7 +387,6 @@ def erase(directory):
 
 def evict_logs(directory):
     state = read_state(directory)
-    require_supported(state)
     if state["status"] in LIVE:
         return
     _, end, _ = log_window(directory, state)
@@ -408,7 +400,7 @@ def evict_logs(directory):
 
 def visible_runs():
     for directory in ROOT.glob("*/"):
-        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", directory.name):
+        if not RUN_ID.fullmatch(directory.name):
             continue
         if not (directory / "state.json").is_file():
             continue
@@ -430,16 +422,17 @@ def prune(options):
         if state["status"] not in TERMINAL:
             continue
         finished = datetime.datetime.fromisoformat(state["finishedAt"]).timestamp()
-        terminal.append((finished, directory))
+        terminal.append((finished, directory, state))
+    # Terminal records only change under the collection lock held here.
+    terminal.sort(key=lambda run: run[:2])
     retained = []
     total = 0
     excess = len(terminal) - options["maxRecords"]
-    for index, (finished, directory) in enumerate(sorted(terminal)):
+    for index, (finished, directory, state) in enumerate(terminal):
         with locked(directory):
             if finished < cutoff or index < excess:
                 erase(directory)
             else:
-                state = read_state(directory)
                 if state["version"] != RECORD_VERSION:
                     continue  # Unknown log layouts cannot participate in budget eviction.
                 _, _, chunks = log_window(directory, state)
@@ -464,8 +457,11 @@ def launch(directory, run_id, command, options, collection_lock):
                 raise RunError(409, "run ID already belongs to a different command or timeout")
             return public(directory, state)
         (directory / "logs").mkdir(exist_ok=True)
+        # Hold the liveness lock before the record exists. The forked supervisor
+        # shares it, so it stays held after this launcher exits.
+        supervisor = (directory / "supervisor").open("a")
+        fcntl.flock(supervisor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = dict(version=RECORD_VERSION, id=run_id, command=command, status="Starting", startedAt=now(),
-                     pid=os.getpid(), identity=identity(os.getpid()),
                      timeoutSeconds=options["timeoutSeconds"], maxLogBytes=options["maxLogBytes"],
                      requestedTimeoutSeconds=options["requestedTimeoutSeconds"])
         save(directory, state)
@@ -481,7 +477,7 @@ def launch(directory, run_id, command, options, collection_lock):
                     with open(os.devnull, "r+b", buffering=0) as null:
                         for fd in (0, 1, 2):
                             os.dup2(null.fileno(), fd)
-                    state.update(status="Running", pid=os.getpid(), identity=identity(os.getpid()))
+                    state["status"] = "Running"
                     save(directory, state)
                 except BaseException as error:
                     # The launcher still holds the run lock and records the cause.
@@ -501,6 +497,7 @@ def launch(directory, run_id, command, options, collection_lock):
             reply = os.read(read_fd, 4096)
         finally:
             os.close(read_fd)
+            supervisor.close()
         if reply != b"1":
             # The command never started, so it must not read as interrupted.
             # A retry with the same ID returns this result instead of a 500.
@@ -521,18 +518,17 @@ def active_runs():
 
 def stream_log(directory, offset, end, follow, duration):
     deadline = time.monotonic() + duration
-    result = {}
     while True:
         with locked(directory):
             state = read_state(directory)
-            require_supported(state)
-            run = public(directory, state)
+            window = log_window(directory, state)
+            run = public(directory, state, window)
             # Never silently skip bytes mid-response. Reconnect with a new
             # X-Log-Offset header when rotation overtakes a slow reader.
             if offset < run["logStartOffset"]:
                 result = {"run": run, "error": "log tail advanced; reconnect to resume", "code": 409}
                 break
-            actual, data = read_log(directory, state, offset)
+            actual, data = read_log(window, offset)
             if not follow:
                 data = data[:max(0, end - actual)]
         if data:
@@ -564,7 +560,7 @@ def main():
         offset, limit = int(sys.argv[4]), int(sys.argv[5])
         return {"runs": runs[offset:offset + limit]}
     run_id = sys.argv[4]
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", run_id):
+    if not RUN_ID.fullmatch(run_id):
         raise RunError(400, "invalid run ID")
     directory = ROOT / run_id
     if action == "create":
@@ -572,7 +568,7 @@ def main():
         ROOT.mkdir(parents=True, exist_ok=True)
         with locked(ROOT) as collection_lock:
             if tombstoned(run_id):
-                raise RunError(410, "run was deleted or expired; use a new ID for a new command")
+                raise missing_run(directory)
             if not (directory / "state.json").exists():
                 prune(options)
             return {"run": launch(directory, run_id, sys.argv[5], options, collection_lock)}
@@ -602,9 +598,9 @@ try:
     result = main()
     if result is not None:
         print(json.dumps(result), flush=True)
-except RunError as error:
-    output = sys.stderr if sys.argv[3] == "stream" else sys.stdout
-    print(json.dumps({"code": error.code, "error": str(error)}), file=output, flush=True)
 except Exception as error:
-    output = sys.stderr if sys.argv[3] == "stream" else sys.stdout
-    print(json.dumps({"code": 500, "error": f"{type(error).__name__}: {error}"}), file=output, flush=True)
+    if isinstance(error, RunError):
+        response = {"code": error.code, "error": str(error)}
+    else:
+        response = {"code": 500, "error": f"{type(error).__name__}: {error}"}
+    print(json.dumps(response), file=sys.stderr if sys.argv[3] == "stream" else sys.stdout, flush=True)

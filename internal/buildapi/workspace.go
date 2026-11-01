@@ -416,15 +416,19 @@ func (a *APIServer) touchWorkspaceActivity(c *gin.Context, ws *automotivev1alpha
 	if ws.Spec.Stopped {
 		return
 	}
+	_ = a.patchWorkspaceActivity(c, ws)
+}
+
+// patchWorkspaceActivity sets LastActivityTime on the workspace status to now.
+func (a *APIServer) patchWorkspaceActivity(c *gin.Context, ws *automotivev1alpha1.Workspace, opts ...client.MergeFromOption) error {
 	k8sClient, err := a.deps.getClientFromRequest(c)
 	if err != nil {
-		return
+		return err
 	}
-
+	patch := client.MergeFromWithOptions(ws.DeepCopy(), opts...)
 	now := metav1.Now()
-	patch := client.MergeFrom(ws.DeepCopy())
 	ws.Status.LastActivityTime = &now
-	_ = k8sClient.Status().Patch(c.Request.Context(), ws, patch)
+	return k8sClient.Status().Patch(c.Request.Context(), ws, patch)
 }
 
 func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
