@@ -13,11 +13,12 @@ type ActivityResponse struct {
 	LiveRuns      int  `json:"liveRuns"`
 	Terminals     int  `json:"terminals"`
 	ExecProcesses int  `json:"execProcesses"`
+	SyncPlans     int  `json:"syncPlans"`
 }
 
 // Activity reports what keeps the workspace from auto-pausing: live runs,
-// open terminals, and processes started through pod exec, such as shells and
-// syncs.
+// open terminals, sync plans, and processes started through pod exec, such
+// as shells and sync uploads.
 func (a *Agent) Activity() (ActivityResponse, error) {
 	a.mu.Lock()
 	var result ActivityResponse
@@ -34,7 +35,8 @@ func (a *Agent) Activity() (ActivityResponse, error) {
 	if result.ExecProcesses, err = countExecProcesses(a.procDir, os.Getpid()); err != nil {
 		return result, err
 	}
-	result.Active = result.LiveRuns+result.Terminals+result.ExecProcesses > 0
+	result.SyncPlans = int(a.planning.Load())
+	result.Active = result.LiveRuns+result.Terminals+result.ExecProcesses+result.SyncPlans > 0
 	return result, nil
 }
 

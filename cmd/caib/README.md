@@ -962,6 +962,9 @@ caib workspace stop <name>
 ### workspace sync
 
 Upload a local directory to the workspace's `/workspace/src/` path. Only git-tracked files are synced, with delta support (only changed files are uploaded).
+The workspace agent compares each file's SHA-256 with the workspace's copy. If it
+cannot, for example because a workspace file is unreadable, the CLI says why and
+uploads every file; with `--delete` it stops instead.
 
 ```bash
 caib workspace sync <name> [directory]
@@ -1078,7 +1081,7 @@ spec:
 ```
 
 A workspace agent in each workspace pod owns every run. The operator copies it
-into the pod, so images need only `/bin/sh` and Linux `/proc`: no Python, and no
+into the pod, so runs need only `/bin/sh` and Linux `/proc`: no Python, and no
 init process to reap the background children that runs leave behind, since the
 agent collects them. Custom images start the agent from a postStart hook. The
 toolchain image's `workspace-entrypoint.sh` starts it once the workspace
