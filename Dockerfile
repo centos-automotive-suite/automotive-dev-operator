@@ -10,6 +10,7 @@ COPY go.sum go.sum
 COPY vendor/ vendor/
 COPY cmd/main.go cmd/main.go
 COPY cmd/build-api/main.go cmd/build-api/main.go
+COPY cmd/workspace-agent/main.go cmd/workspace-agent/main.go
 COPY api/ api/
 COPY internal/ internal/
 
@@ -21,6 +22,8 @@ ENV CGO_ENABLED=0
 ENV GOCACHE=/workspace/.cache
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o manager cmd/main.go
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o build-api cmd/build-api/main.go
+# Static, so it runs in any workspace image, including ones without glibc.
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o workspace-agent cmd/workspace-agent/main.go
 
 FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi10/ubi-minimal:latest
 
@@ -41,6 +44,7 @@ COPY LICENSE /licenses/LICENSE
 WORKDIR /
 COPY --from=builder /workspace/manager .
 COPY --from=builder /workspace/build-api .
+COPY --from=builder /workspace/workspace-agent .
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

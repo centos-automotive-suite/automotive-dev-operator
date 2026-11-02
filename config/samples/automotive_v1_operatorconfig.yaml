@@ -7,6 +7,16 @@ metadata:
   name: config
   namespace: automotive-dev-operator-system
 spec:
+  # Optional: durable workspace command limits (shown with their defaults).
+  # Only the command timeout can be overridden per run.
+  # workspaces:
+  #   runDefaultTimeoutMinutes: 120
+  #   runMaxTimeoutMinutes: 1440
+  #   runRetentionDays: 7  # Maximum 30 days
+  #   runMaxRecords: 1000  # Maximum 1,000 terminal records
+  #   runMaxLogSizeMiB: 100
+  #   runCompletedLogBudgetMiB: 1024  # Also capped at 10% of each workspace PVC
+
   # OSBuilds configuration for OS build operations
   osBuilds:
     # Enable Tekton tasks for OS builds

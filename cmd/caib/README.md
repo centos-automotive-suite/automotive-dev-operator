@@ -329,7 +329,7 @@ caib image build-dev <manifest.aib.yml> [flags]
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--define-file` | | Load defines from YAML dictionary file (repeatable) |
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |
-| `--extra-repo` | | Serve RPMs from workspace as extra repo (`workspace:path`, repeatable) |
+| `--extra-repo` | | Serve RPMs from a directory under `/workspace/export` as an extra repo (`workspace:/workspace/export/<dir>`, repeatable) |
 | `--workspace` | | Workspace name for build caching and lease forwarding |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `true` | Wait for build to complete |
@@ -971,7 +971,11 @@ If no directory is specified, the current directory is used.
 
 ### workspace exec
 
-Execute a command in the workspace pod, starting in `/workspace/src`. Everything after `--` is passed as literal arguments. The CLI exits with the remote command's exit status; stream failures also produce a nonzero exit.
+Execute a durable command in `/workspace/src`. Everything after `--` is passed
+as literal arguments. Output streams to stdout, and the CLI returns the command's
+exit code. Temporary network failures automatically reconnect at the last
+received byte. Requests use exponential backoff (1–8 seconds) and give up after
+six consecutive failures, printing the run ID and a resume command.
 
 ```bash
 caib workspace exec <name> -- <command...>
@@ -983,6 +987,7 @@ caib workspace exec <name> --script <local-file>
 ```bash
 caib workspace exec my-app -- make -j4
 caib workspace exec my-app -- cargo build --release
+caib workspace exec my-app --timeout 4h -- make -j4
 
 # Use an explicit shell for expansion inside the workspace. Single quotes keep
 # the local shell from running nproc (including on macOS).
@@ -990,9 +995,130 @@ caib workspace exec my-app -- sh -c 'make -j$(nproc --ignore=2)'
 
 # Upload a local script and run it with Bash and set -euo pipefail.
 caib workspace exec my-app --script build.sh
+
+# Start without following; prints the run ID
+caib workspace exec my-app --detach -- make -j4
+
+# Reattach after closing the terminal (replays the retained output)
+caib workspace exec my-app --run <run-id>
+
+# Resume from a known byte offset
+caib workspace exec my-app --run <run-id> --offset 4096
 ```
 
-For multiple build steps, put them in `build.sh`. Script mode stops on a failed command, an unset variable, or a failed pipeline, so a failed source RPM build prevents subsequent `rpmbuild` commands from running. Shell operators such as `&&`, pipes, and substitutions require an explicit `sh -c '...'` or a script; a single quoted command string is no longer split into arguments.
+For multiple build steps, put them in `build.sh`. Script mode stops on a failed
+command, an unset variable, or a failed pipeline. Shell operators such as `&&`,
+pipes, and substitutions require an explicit `sh -c '...'` or a script; a single
+quoted command string is not split into arguments.
+
+The encoded command, including shell quoting and script contents, is limited to
+64 KiB. For larger scripts, sync the file to the workspace and execute it there:
+`caib workspace exec my-app -- bash -euo pipefail ./build.sh`.
+
+Ctrl-C detaches and prints resume and cancel commands. It leaves the remote
+command running until completion, cancellation or timeout. To recover a lost ID,
+inspect the result, stop a command, or remove a completed run:
+
+```bash
+caib workspace run list my-app
+caib workspace run show my-app <run-id>
+caib workspace run cancel my-app <run-id>
+caib workspace run delete my-app <run-id>
+```
+
+List and show return JSON containing status, absolute log offsets, timestamps,
+and exit code when available. List supports `--offset` and `--limit` (1–100),
+ordered newest first. Delete accepts terminal runs and directories with unreadable
+or missing records, so corrupt records can be removed through the API. Readable
+live runs must be cancelled first. Cancellation first sends SIGTERM, then SIGKILL
+after five seconds if needed. Runs own their process group; background children
+are stopped when the command finishes. Processes that create their own session
+are outside that group.
+
+Live runs count as activity and prevent auto-pause even with no attached client.
+Commands default to a **2-hour timeout**, with a **24-hour maximum**. Use
+`--timeout` to request a different duration within the operator's cap. Expiry
+terminates the process group and records `TimedOut`, exit code **124**, and a
+message that the CLI prints to stderr.
+
+Output segments and results are stored in `/workspace/.ado/runs/<id>/logs/` and
+`state.json` on the workspace PVC. Each log retains the **last 100 MiB** by
+default; reaching the cap never stops the command. `logStartOffset` identifies
+the first retained byte, `logBytes` is the absolute end offset (including
+discarded bytes), and `logTruncated` reports whether earlier bytes were dropped.
+The CLI reports skipped bytes on stderr when resuming behind the retained tail.
+Live log storage has at most 1 MiB of segment overhead per run; completion trims
+that overhead. The per-log cap is also limited to the completed-log budget.
+
+Terminal runs expire after **7 days**, with at most the **newest 1,000 terminal
+records** retained. Operators can lower the record cap and configure retention
+up to **30 days**. Completed logs share a budget of
+**min(1 GiB, 10% of the PVC capacity)**. Creation and completion prune expired
+and excess records, oldest first, then remove the oldest completed logs until
+the budget is met. Log
+eviction sets `logsEvicted: true` and advances `logStartOffset` to `logBytes`;
+the result and exit code remain available until the age or record count limit
+is reached. Live runs are never evicted or counted against the record cap.
+Explicit deletion and retention leave a small ID tombstone
+for 24 hours to protect create retries, after which creation/completion can
+remove it. Use a fresh, single-use ID for each new command.
+
+Operators configure these defaults under `OperatorConfig.spec.workspaces`;
+only the timeout is configurable per run. Changes apply to newly created runs:
+
+```yaml
+spec:
+  workspaces:
+    runDefaultTimeoutMinutes: 120
+    runMaxTimeoutMinutes: 1440  # Cannot exceed 24 hours
+    runRetentionDays: 7  # Maximum 30 days
+    runMaxRecords: 1000  # Maximum 1,000 terminal records
+    runMaxLogSizeMiB: 100
+    runCompletedLogBudgetMiB: 1024  # Also capped at 10% of each PVC
+```
+
+A workspace agent in each workspace pod owns every run. The operator copies it
+into the pod, so images need only `/bin/sh` and Linux `/proc`: no Python, and no
+init process to reap the background children that runs leave behind, since the
+agent collects them. Custom images start the agent from a postStart hook. The
+toolchain image's `workspace-entrypoint.sh` starts it once the workspace
+overlays are mounted, so a replacement `toolchainImage` must keep that
+entrypoint. A NetworkPolicy admits traffic into workspace pods only on the
+agent's ports, so a Service or Route pointed at a workspace gets no traffic.
+Following a log streams output as it is written until the run finishes.
+
+Stopping, replacing or restarting the workspace container interrupts live
+commands; afterwards they report `Interrupted` with no exit code. Start a stopped
+workspace before reading retained runs or logs. Unreadable run records return an
+explicit error when inspected, and can be deleted.
+
+API clients can use these owner-scoped endpoints:
+
+| Request | Result |
+| --- | --- |
+| `POST /v1/workspaces/{name}/runs` | Accepts `{"command":"make -j4","id":"optional-client-id","timeoutSeconds":7200}` and returns the run with HTTP 202. |
+| `GET /v1/workspaces/{name}/runs?offset=0&limit=100` | Lists retained runs, newest first. |
+| `GET /v1/workspaces/{name}/runs/{id}` | Returns status and the recorded exit code. |
+| `GET /v1/workspaces/{name}/runs/{id}/logs?follow&offset=0` | Streams raw combined stdout/stderr from an absolute byte offset. |
+| `POST /v1/workspaces/{name}/runs/{id}/cancel` | Requests cancellation; repeated requests are safe. |
+| `DELETE /v1/workspaces/{name}/runs/{id}` | Deletes a terminal or unreadable run and its log; repeated requests are safe. |
+
+Reuse a client-supplied ID, command and requested timeout to retry creation after
+losing the response. A different payload with that ID returns HTTP 409; a
+deleted or expired ID returns 410 during its 24-hour tombstone window. Budget
+eviction only removes logs and does not change the run's status. Resume logs by adding the number of received
+bytes to the **`X-Log-Offset` response header**, which advances requests below
+`logStartOffset` to the retained tail. Omitting `follow`
+returns a snapshot; following ends on completion or at the cap announced in
+`X-Log-Stream-Seconds`, the build API's `maxLogStreamDurationMinutes` limit
+(two hours by default), and can be reopened. The CLI allows five seconds beyond
+that cap before reconnecting, with a 40-second cap as its fallback when the
+header is absent. Offsets beyond available output return HTTP 416.
+The build API relays each stream from the workspace agent over HTTPS. If
+rotation overtakes a reader, the response
+ends with an `X-Log-Error` trailer; reconnect to receive the new starting offset.
+Final `X-Run-Status` and `X-Run-Exit-Code` trailers supplement GET on the run.
+The `/exec` endpoint remains available for older clients and the CLI build flow.
 
 ### workspace shell
 

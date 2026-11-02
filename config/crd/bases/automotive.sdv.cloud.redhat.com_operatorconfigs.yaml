@@ -1205,6 +1205,57 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  runCompletedLogBudgetMiB:
+                    default: 1024
+                    description: |-
+                      RunCompletedLogBudgetMiB bounds completed logs, additionally capped at 10%
+                      of the workspace PVC. Oldest terminal logs are evicted first; their result
+                      records remain until the age or record count limit is reached. Live logs
+                      are never evicted.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  runDefaultTimeoutMinutes:
+                    default: 120
+                    description: RunDefaultTimeoutMinutes bounds commands without
+                      a per-run timeout.
+                    format: int32
+                    maximum: 1440
+                    minimum: 1
+                    type: integer
+                  runMaxLogSizeMiB:
+                    default: 100
+                    description: |-
+                      RunMaxLogSizeMiB bounds each retained log tail; commands continue when full.
+                      The effective cap cannot exceed the workspace's completed-log budget.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  runMaxRecords:
+                    default: 1000
+                    description: |-
+                      RunMaxRecords bounds retained terminal runs, evicting the oldest first.
+                      Live runs are never evicted or counted against this limit.
+                    format: int32
+                    maximum: 1000
+                    minimum: 1
+                    type: integer
+                  runMaxTimeoutMinutes:
+                    default: 1440
+                    description: RunMaxTimeoutMinutes caps per-run timeout requests,
+                      up to 24 hours.
+                    format: int32
+                    maximum: 1440
+                    minimum: 1
+                    type: integer
+                  runRetentionDays:
+                    default: 7
+                    description: RunRetentionDays retains terminal runs for this many
+                      days, up to 30.
+                    format: int32
+                    maximum: 30
+                    minimum: 1
+                    type: integer
                   storageClass:
                     description: |-
                       StorageClass specifies the storage class for workspace PVCs

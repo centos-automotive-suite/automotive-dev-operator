@@ -90,6 +90,12 @@ func (a *APIServer) registerWorkspaceRoutes(v1 *gin.RouterGroup) {
 		workspaceGroup.POST("/:name/sync/plan", a.wrapNamedHandler("sync plan workspace", a.syncPlanWorkspace))
 		workspaceGroup.POST("/:name/sync/delete", a.wrapNamedHandler("delete workspace files", a.syncDeleteWorkspace))
 		workspaceGroup.POST("/:name/exec", a.wrapNamedHandler("exec workspace", a.execWorkspace))
+		workspaceGroup.GET("/:name/runs", a.wrapNamedHandler("list workspace runs", a.listWorkspaceRuns))
+		workspaceGroup.DELETE("/:name/runs/:run", a.wrapNamedHandler("delete workspace run", a.deleteWorkspaceRun))
+		workspaceGroup.POST("/:name/runs", a.wrapNamedHandler("create workspace run", a.createWorkspaceRun))
+		workspaceGroup.GET("/:name/runs/:run", a.wrapNamedHandler("get workspace run", a.getWorkspaceRun))
+		workspaceGroup.GET("/:name/runs/:run/logs", a.wrapNamedHandler("workspace run logs", a.workspaceRunLogs))
+		workspaceGroup.POST("/:name/runs/:run/cancel", a.wrapNamedHandler("cancel workspace run", a.cancelWorkspaceRun))
 		workspaceGroup.GET("/:name/shell", a.wrapNamedHandler("shell workspace", a.shellWorkspace))
 		workspaceGroup.POST("/:name/deploy", a.wrapNamedHandler("deploy workspace", a.deployWorkspace))
 		workspaceGroup.PUT("/:name/lease", a.handleSetWorkspaceLease)
@@ -410,15 +416,19 @@ func (a *APIServer) touchWorkspaceActivity(c *gin.Context, ws *automotivev1alpha
 	if ws.Spec.Stopped {
 		return
 	}
+	_ = a.patchWorkspaceActivity(c, ws)
+}
+
+// patchWorkspaceActivity sets LastActivityTime on the workspace status to now.
+func (a *APIServer) patchWorkspaceActivity(c *gin.Context, ws *automotivev1alpha1.Workspace, opts ...client.MergeFromOption) error {
 	k8sClient, err := a.deps.getClientFromRequest(c)
 	if err != nil {
-		return
+		return err
 	}
-
+	patch := client.MergeFromWithOptions(ws.DeepCopy(), opts...)
 	now := metav1.Now()
-	patch := client.MergeFrom(ws.DeepCopy())
 	ws.Status.LastActivityTime = &now
-	_ = k8sClient.Status().Patch(c.Request.Context(), ws, patch)
+	return k8sClient.Status().Patch(c.Request.Context(), ws, patch)
 }
 
 func (a *APIServer) syncWorkspace(c *gin.Context, name string) {

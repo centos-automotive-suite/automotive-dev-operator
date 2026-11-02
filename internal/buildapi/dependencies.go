@@ -6,6 +6,8 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent/agentconn"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
@@ -20,6 +22,7 @@ type apiDependencies struct {
 	createInternalRegistrySecret func(context.Context, *rest.Config, string, string, int64) (string, error)
 	loadOperatorConfig           func(context.Context, client.Client, string) (*automotivev1alpha1.OperatorConfig, error)
 	loadTargetDefaults           func(context.Context, client.Client, string) (map[string]buildcontract.TargetDefaults, error)
+	workspaceAgent               func(context.Context, client.Client, *automotivev1alpha1.Workspace) (*workspaceagent.Client, error)
 }
 
 func defaultAPIDependencies() apiDependencies {
@@ -29,6 +32,9 @@ func defaultAPIDependencies() apiDependencies {
 		createInternalRegistrySecret: createInternalRegistrySecret,
 		loadOperatorConfig:           loadOperatorConfig,
 		loadTargetDefaults:           loadTargetDefaults,
+		workspaceAgent: func(ctx context.Context, kube client.Client, ws *automotivev1alpha1.Workspace) (*workspaceagent.Client, error) {
+			return agentconn.Connect(ctx, kube, ws)
+		},
 	}
 }
 

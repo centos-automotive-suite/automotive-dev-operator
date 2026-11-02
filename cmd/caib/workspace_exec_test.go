@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +32,7 @@ func TestWorkspaceExecHelperProcess(t *testing.T) {
 }
 
 func TestWorkspaceExecCLI(t *testing.T) {
-	const script = "make dist-srpm\nrpmbuild -bb kernel.spec\n"
+	const script = "[[ $- == *e* && $- == *u* ]] || exit 91\nshopt -qo pipefail || exit 92\nprintf 'script-ok\\n'\n"
 	scriptPath := filepath.Join(t.TempDir(), "build script.sh")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
@@ -54,24 +55,35 @@ func TestWorkspaceExecCLI(t *testing.T) {
 		{name: "script upload", args: []string{"--script", scriptPath}, status: "0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			requests := make(chan buildcontract.WorkspaceExecRequest, 1)
+			requests := make(chan buildcontract.WorkspaceRunRequest, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost || r.URL.Path != "/v1/workspaces/test-ws/exec" {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/workspaces/test-ws/runs":
+					var req buildcontract.WorkspaceRunRequest
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					requests <- req
+					w.WriteHeader(http.StatusAccepted)
+					_, _ = fmt.Fprintf(w, `{"id":%q,"status":"Running"}`, req.ID)
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/logs"):
+					_, _ = io.WriteString(w, "remote output\n")
+				case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/workspaces/test-ws/runs/"):
+					if tc.status == "" {
+						_, _ = io.WriteString(w, `{"status":"Interrupted","logBytes":14,"message":"pod stopped"}`)
+					} else {
+						status := "Succeeded"
+						if tc.status != "0" {
+							status = "Failed"
+						}
+						_, _ = fmt.Fprintf(w, `{"status":%q,"logBytes":14,"exitCode":%s}`, status, tc.status)
+					}
+				default:
 					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 					http.NotFound(w, r)
-					return
 				}
-				var req buildcontract.WorkspaceExecRequest
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					t.Error(err)
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-				requests <- req
-				w.Header().Set("Trailer", buildcontract.WorkspaceExecExitCodeTrailer)
-				_, _ = io.WriteString(w, "remote output\n")
-				w.(http.Flusher).Flush()
-				w.Header().Set(buildcontract.WorkspaceExecExitCodeTrailer, tc.status)
 			}))
 			defer server.Close()
 
@@ -86,8 +98,9 @@ func TestWorkspaceExecCLI(t *testing.T) {
 			case req := <-requests:
 				switch tc.name {
 				case "script upload":
-					if req.Script != script || req.Command != "" {
-						t.Errorf("script upload = %+v", req)
+					got, err := exec.Command("sh", "-c", req.Command).CombinedOutput()
+					if err != nil || string(got) != "script-ok\n" {
+						t.Errorf("uploaded script lost contents or strict Bash options: output=%q err=%v", got, err)
 					}
 				case "literal arguments", "explicit shell":
 					got, err := exec.Command("sh", "-c", req.Command).Output()
@@ -103,7 +116,7 @@ func TestWorkspaceExecCLI(t *testing.T) {
 					}
 				}
 			default:
-				t.Fatal("no exec request received")
+				t.Fatal("no run creation received")
 			}
 		})
 	}
@@ -113,6 +126,7 @@ func TestWorkspaceExecCLIValidation(t *testing.T) {
 	for _, args := range [][]string{
 		{},
 		{"--script", "missing.sh", "--", "echo", "ignored"},
+		{"--script", "missing.sh", "--run", "existing"},
 		{"--script", filepath.Join(t.TempDir(), "missing.sh")},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {

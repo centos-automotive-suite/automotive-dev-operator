@@ -72,7 +72,7 @@ RUN dnf install -y --setopt install_weak_deps=false --nodocs \
     diffutils findutils tar gzip xz cpio \
     rpm-build mock createrepo_c ccache \
     git rsync openssh-clients sshpass \
-    python3 python3-pip python3-pyyaml podman curl sudo vim \
+    python3 python3-pip python3-pyyaml podman catatonit curl sudo vim \
     && dnf clean all
 
 # Kernel RPM build dependencies (BuildRequires from kernel-automotive SRPM)

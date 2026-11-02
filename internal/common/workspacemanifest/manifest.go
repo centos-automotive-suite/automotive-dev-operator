@@ -228,20 +228,36 @@ func rewriteWorkspaceFileURL(s, wsURL string) (string, bool, error) {
 	if !isCleanWorkspacePath(cleaned) {
 		return s, false, nil
 	}
-	if cleaned != WorkspaceExportRoot && !strings.HasPrefix(cleaned, WorkspaceExportRoot+"/") {
+	urlPath, ok := ExportURLPath(cleaned)
+	if !ok {
 		return s, true, fmt.Errorf("manifest references %s, but only %s is served to builds: move the files under %s and reference them as file://%s/<path>",
 			s, WorkspaceExportRoot, WorkspaceExportRoot, WorkspaceExportRoot)
 	}
 	if strings.TrimSpace(wsURL) == "" {
 		return s, true, fmt.Errorf("manifest references %s but the workspace HTTP server is not available (is the workspace running?)", s)
 	}
+	return strings.TrimRight(wsURL, "/") + urlPath, true, nil
+}
+
+// ExportURLPath returns the escaped URL path at which the workspace file
+// server serves p, an absolute path under WorkspaceExportRoot; for example
+// /workspace/export/my rpms becomes /my%20rpms. ok is false for any other
+// path, including one that leaves the root through "..".
+func ExportURLPath(p string) (urlPath string, ok bool) {
+	if !path.IsAbs(p) {
+		return "", false
+	}
+	cleaned := path.Clean(p)
+	if cleaned != WorkspaceExportRoot && !strings.HasPrefix(cleaned, WorkspaceExportRoot+"/") {
+		return "", false
+	}
 	suffix := strings.TrimPrefix(cleaned, WorkspaceExportRoot)
 	if suffix == "" {
 		suffix = "/"
 	}
-	// u.Path is decoded, so escape it again: a '#' or '?' in a file name must
-	// not become a fragment or query.
-	return strings.TrimRight(wsURL, "/") + (&url.URL{Path: suffix}).EscapedPath(), true, nil
+	// Escape the decoded path: a '#' or '?' in a file name must not become a
+	// fragment or query.
+	return (&url.URL{Path: suffix}).EscapedPath(), true
 }
 
 func workspaceRelPath(p string) (rel, abs string, ok bool) {
