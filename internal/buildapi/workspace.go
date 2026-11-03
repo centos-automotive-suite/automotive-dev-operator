@@ -1,15 +1,12 @@
 package buildapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +16,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
@@ -43,38 +41,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// validateWorkspaceRelPath rejects empty, absolute, and path-traversal
-// relative paths. Names that contain ".." as a substring but are not
-// traversal (e.g. "notes..old") are allowed.
-func validateWorkspaceRelPath(p string) error {
-	if p == "" || strings.HasPrefix(p, "/") || strings.ContainsRune(p, 0) {
-		return fmt.Errorf("invalid path: %s", p)
-	}
-	cleaned := path.Clean(p)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-		return fmt.Errorf("invalid path: %s", p)
-	}
-	return nil
-}
-
-// buildSyncDeleteScript removes the given relative paths under /workspace/src
-// and prunes empty parent directories of those paths only.
-func buildSyncDeleteScript(files []string) string {
-	var b strings.Builder
-	b.WriteString("set -e\n")
-	b.WriteString("cd /workspace/src || exit 1\n")
-	for _, p := range files {
-		q := shellQuote(p)
-		fmt.Fprintf(&b, "rm -f -- %s\n", q)
-		fmt.Fprintf(&b, "dir=$(dirname -- %s)\n", q)
-		b.WriteString("while [ \"$dir\" != \".\" ] && [ \"$dir\" != \"/\" ]; do\n")
-		b.WriteString("  rmdir -- \"$dir\" 2>/dev/null || break\n")
-		b.WriteString("  dir=$(dirname -- \"$dir\")\n")
-		b.WriteString("done\n")
-	}
-	return b.String()
-}
-
 // registerWorkspaceRoutes registers the workspace API routes on the v1 group.
 func (a *APIServer) registerWorkspaceRoutes(v1 *gin.RouterGroup) {
 	workspaceGroup := v1.Group("/workspaces")
@@ -88,7 +54,6 @@ func (a *APIServer) registerWorkspaceRoutes(v1 *gin.RouterGroup) {
 		workspaceGroup.POST("/:name/stop", a.wrapNamedHandler("stop workspace", a.stopWorkspace))
 		workspaceGroup.POST("/:name/sync", a.wrapNamedHandler("sync workspace", a.syncWorkspace))
 		workspaceGroup.POST("/:name/sync/plan", a.wrapNamedHandler("sync plan workspace", a.syncPlanWorkspace))
-		workspaceGroup.POST("/:name/sync/delete", a.wrapNamedHandler("delete workspace files", a.syncDeleteWorkspace))
 		workspaceGroup.POST("/:name/exec", a.wrapNamedHandler("exec workspace", a.execWorkspace))
 		workspaceGroup.GET("/:name/runs", a.wrapNamedHandler("list workspace runs", a.listWorkspaceRuns))
 		workspaceGroup.DELETE("/:name/runs/:run", a.wrapNamedHandler("delete workspace run", a.deleteWorkspaceRun))
@@ -431,148 +396,42 @@ func (a *APIServer) patchWorkspaceActivity(c *gin.Context, ws *automotivev1alpha
 	return k8sClient.Status().Patch(c.Request.Context(), ws, patch)
 }
 
+// syncWorkspace relays a sync upload, its request and then a tar stream, to
+// the workspace's agent, which applies it.
 func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
-	ws, err := a.getOwnedWorkspace(c, name)
-	if err != nil {
-		return
-	}
-	if ws.Status.Phase != phaseRunning {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
-		return
-	}
-	a.touchWorkspaceActivity(c, ws)
-
-	namespace := ws.Namespace
-	podName := ws.Status.PodName
-
-	restCfg, err := a.deps.getRESTConfigFromRequest(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
-		return
-	}
-
-	// Spool the tar stream to a temp file so that EOF propagates cleanly to
-	// the SPDY executor, without buffering the entire upload in memory.
-	const maxSyncSize int64 = 512 << 20 // 512 MiB
-	tmpFile, err := os.CreateTemp("", "workspace-sync-*.tar")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp file for upload"})
-		return
-	}
-	defer func() { _ = os.Remove(tmpFile.Name()) }()
-	defer func() { _ = tmpFile.Close() }()
-
-	written, err := io.Copy(tmpFile, io.LimitReader(c.Request.Body, maxSyncSize+1))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read upload: %v", err)})
-		return
-	}
-	if written > maxSyncSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("upload exceeds maximum size of %d MiB", maxSyncSize>>20)})
-		return
-	}
-	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rewind temp file"})
-		return
-	}
-
-	destDir := "/workspace/src/"
-	clean := c.Query("clean") == labels.ValueTrue
-	if clean {
-		// Extract into a sidecar directory first so a failed upload leaves
-		// the existing /workspace/src tree intact.
-		prepCmd := []string{"/bin/sh", "-c", "rm -rf /workspace/src.next && mkdir -p /workspace/src.next"}
-		if err := podExec(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, prepCmd, io.Discard); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to prepare clean sync: %v", err)})
-			return
-		}
-		destDir = "/workspace/src.next/"
-	}
-
-	if err := copyToPod(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, tmpFile, destDir); err != nil {
-		if clean {
-			_ = podExec(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName,
-				[]string{"/bin/sh", "-c", "rm -rf /workspace/src.next"}, io.Discard)
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to sync files: %v", err)})
-		return
-	}
-
-	if clean {
-		swapCmd := []string{"/bin/sh", "-c", "set -e; rm -rf /workspace/src.old; mv /workspace/src /workspace/src.old; mv /workspace/src.next /workspace/src; rm -rf /workspace/src.old"}
-		if err := podExec(c.Request.Context(), restCfg, namespace, podName, workspaceContainerName, swapCmd, io.Discard); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to replace workspace after clean sync: %v", err)})
-			return
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "files synced"})
+	a.relaySync(c.Request.Context(), c, name, (*workspaceagent.Client).SyncUpload)
 }
 
 // syncPlanTimeout bounds a sync plan. The agent hashes every listed file, so
 // it gets far longer than other agent calls.
 const syncPlanTimeout = 10 * time.Minute
 
-// syncPlanWorkspace relays a sync plan between the client and the
-// workspace's agent without decoding either: the agent validates the
-// manifest and enforces its size limit, and decoding it here would cost the
-// build API many times its size in memory.
 func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
-	_, agent, ok := a.runningWorkspaceAgent(c, name)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), syncPlanTimeout)
+	defer cancel()
+	a.relaySync(ctx, c, name, (*workspaceagent.Client).PlanSync)
+}
+
+// relaySync passes the client's request body to the workspace's agent, and
+// the agent's response back, without decoding either: the agent validates
+// each request and enforces its size limit, and decoding or spooling a
+// manifest or upload here would cost the build API memory or disk in
+// proportion to it.
+func (a *APIServer) relaySync(
+	ctx context.Context, c *gin.Context, name string,
+	call func(*workspaceagent.Client, context.Context, io.Reader) (*http.Response, error),
+) {
+	ws, agent, ok := a.runningWorkspaceAgent(c, name)
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), syncPlanTimeout)
-	defer cancel()
-	resp, err := agent.PlanSync(ctx, c.Request.Body)
+	a.touchWorkspaceActivity(c, ws)
+	resp, err := call(agent, ctx, c.Request.Body)
 	if a.workspaceAgentError(c, err) {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	c.DataFromReader(http.StatusOK, resp.ContentLength, "application/json; charset=utf-8", resp.Body, nil)
-}
-
-func (a *APIServer) syncDeleteWorkspace(c *gin.Context, name string) {
-	var req buildcontract.SyncDeleteRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
-		return
-	}
-	if len(req.Files) == 0 {
-		c.JSON(http.StatusOK, gin.H{"message": "nothing to delete"})
-		return
-	}
-
-	for _, p := range req.Files {
-		if err := validateWorkspaceRelPath(p); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-	}
-
-	ws, err := a.getOwnedWorkspace(c, name)
-	if err != nil {
-		return
-	}
-	if ws.Status.Phase != phaseRunning {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
-		return
-	}
-	a.touchWorkspaceActivity(c, ws)
-
-	restCfg, err := a.deps.getRESTConfigFromRequest(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
-		return
-	}
-
-	cmd := []string{"/bin/sh", "-c", buildSyncDeleteScript(req.Files)}
-	if err := podExec(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, io.Discard); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to delete files: %v", err)})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("%d file(s) deleted", len(req.Files))})
 }
 
 func (a *APIServer) execWorkspace(c *gin.Context, name string) {
@@ -1002,48 +861,6 @@ func (a *APIServer) resolveLeaseFromBuild(ctx context.Context, k8sClient client.
 		return "", fmt.Errorf("ImageBuild %q has no lease ID (was --flash used?)", buildName)
 	}
 	return build.Status.LeaseID, nil
-}
-
-// tarExtractCmd extracts the uploaded tar stream into destDir, ignoring the
-// uploader's original uid/gid/mode: the destination pod's SCC-assigned uid
-// range rejects a chown to an arbitrary uid baked into the tar headers
-// (tar fails with "Cannot change ownership ...: Invalid argument").
-func tarExtractCmd(destDir string) []string {
-	return []string{"/bin/sh", "-c", fmt.Sprintf("tar --no-same-owner --no-same-permissions -xv -C %q", destDir)}
-}
-
-func copyToPod(ctx context.Context, restCfg *rest.Config, namespace, podName, containerName string, body io.Reader, destDir string) error {
-	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return fmt.Errorf("creating clientset: %w", err)
-	}
-
-	cmd := tarExtractCmd(destDir)
-	execReq := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: containerName,
-			Command:   cmd,
-			Stdin:     true,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, kscheme.ParameterCodec)
-
-	executor, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, execReq.URL())
-	if err != nil {
-		return fmt.Errorf("creating executor: %w", err)
-	}
-
-	var stdout, stderr bytes.Buffer
-	streamOpts := remotecommand.StreamOptions{Stdin: body, Stdout: &stdout, Stderr: &stderr}
-	if err := executor.StreamWithContext(ctx, streamOpts); err != nil {
-		if stderr.Len() > 0 {
-			return fmt.Errorf("%w: %s", err, stderr.String())
-		}
-		return err
-	}
-	return nil
 }
 
 // flushWriter wraps an http.ResponseWriter and flushes after every Write,

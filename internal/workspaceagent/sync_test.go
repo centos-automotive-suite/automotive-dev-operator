@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -92,16 +93,31 @@ func TestPlanSyncListsFilesOnlyTheWorkspaceHas(t *testing.T) {
 	}
 }
 
+// An upload in progress keeps its files in the staging directory, which a
+// delete must not touch.
+// Nothing at the staging path is the client's, and a delete rejects the
+// reserved name, so listing a file a run left there would fail the sync.
+func TestPlanSyncSkipsTheStagingPath(t *testing.T) {
+	for _, staged := range []string{syncStaging + "/partial", syncStaging} {
+		a := newTestAgent(t)
+		writeTree(t, a.workdir, map[string]string{"kept.txt": "kept", staged: "half"})
+		plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"kept.txt": sha("kept")}, IncludeDeleted: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Deleted) != 0 {
+			t.Errorf("with %s: deleted = %q, want nothing", staged, plan.Deleted)
+		}
+	}
+}
+
 // With includeDeleted, an empty manifest would list every workspace file for
 // deletion.
 func TestPlanSyncRejectsAnEmptyManifest(t *testing.T) {
 	a := newTestAgent(t)
 	writeTree(t, a.workdir, map[string]string{"a.txt": "a"})
 	_, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{}, IncludeDeleted: true})
-	var apiErr *Error
-	if !errors.As(err, &apiErr) || apiErr.Code != http.StatusBadRequest {
-		t.Errorf("err = %v, want a 400", err)
-	}
+	wantBadRequest(t, "an empty manifest", err)
 }
 
 func TestPlanSyncWithoutAWorkdirChangesEverything(t *testing.T) {
@@ -121,12 +137,9 @@ func TestPlanSyncWithoutAWorkdirChangesEverything(t *testing.T) {
 // sent as a/../b can't come back as deleted b.
 func TestPlanSyncRejectsInvalidPaths(t *testing.T) {
 	a := newTestAgent(t)
-	for _, name := range []string{"../escape", "/etc/passwd", "", "a/../../b", ".", "a/../b", "a//b", "a/", "a\x00b"} {
+	for _, name := range []string{"../escape", "/etc/passwd", "", "a/../../b", ".", "a/../b", "a//b", "a/", "a\x00b", ".caib-sync/x"} {
 		_, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{name: sha("x")}})
-		var apiErr *Error
-		if !errors.As(err, &apiErr) || apiErr.Code != http.StatusBadRequest {
-			t.Errorf("path %q: err = %v, want a 400", name, err)
-		}
+		wantBadRequest(t, fmt.Sprintf("%q", name), err)
 	}
 }
 
@@ -214,7 +227,7 @@ func TestPlanSyncStopsWhenCancelled(t *testing.T) {
 // the agent's limit is the one that applies.
 func TestSyncPlanRejectsAnOversizedBody(t *testing.T) {
 	a := newTestAgent(t)
-	body := strings.NewReader(`{"files":{"a":"` + strings.Repeat("0", MaxSyncPlanBytes) + `"}}`)
+	body := strings.NewReader(`{"files":{"a":"` + strings.Repeat("0", MaxSyncListBytes) + `"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/sync/plan", body)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()

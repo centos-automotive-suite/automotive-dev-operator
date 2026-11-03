@@ -16,9 +16,9 @@ import (
 	"syscall"
 )
 
-// MaxSyncPlanBytes bounds a sync plan request: about 200 bytes per file
-// leaves room for a few hundred thousand files.
-const MaxSyncPlanBytes = 64 << 20
+// MaxSyncListBytes bounds a request that lists files, a sync plan or delete:
+// about 200 bytes per file leaves room for a few hundred thousand files.
+const MaxSyncListBytes = 64 << 20
 
 // SyncPlanRequest is the body of POST /sync/plan: the client's files,
 // relative to the working directory, each with its SHA-256 in hex.
@@ -51,16 +51,15 @@ func (a *Agent) PlanSync(ctx context.Context, req SyncPlanRequest) (SyncPlanResp
 	if len(req.Files) == 0 {
 		return SyncPlanResponse{}, apiError(http.StatusBadRequest, "manifest is empty")
 	}
-	a.planning.Add(1)
-	defer a.planning.Add(-1)
+	a.syncing.Add(1)
+	defer a.syncing.Add(-1)
 	plan := SyncPlanResponse{IncludeDeleted: req.IncludeDeleted}
 	for name, want := range req.Files {
 		if err := ctx.Err(); err != nil {
 			return SyncPlanResponse{}, err
 		}
-		// Clean names only, so they match the names the listing reports.
-		if !fs.ValidPath(name) || name == "." || strings.ContainsRune(name, 0) {
-			return SyncPlanResponse{}, apiError(http.StatusBadRequest, "invalid path %q: must be a clean path relative to the workspace source directory", name)
+		if err := checkName(name); err != nil {
+			return SyncPlanResponse{}, err
 		}
 		got, err := hashFile(filepath.Join(a.workdir, filepath.FromSlash(name)))
 		if err != nil {
@@ -84,7 +83,8 @@ func (a *Agent) PlanSync(ctx context.Context, req SyncPlanRequest) (SyncPlanResp
 
 // workspaceOnly lists the files in workdir that files lacks. Like find -type f
 // -o -type l, it lists regular files and symlinks without following
-// symlinked directories.
+// symlinked directories. It skips the staging path, which belongs to uploads
+// whatever is there.
 func workspaceOnly(ctx context.Context, workdir fs.FS, files map[string]string) ([]string, error) {
 	var names []string
 	err := fs.WalkDir(workdir, ".", func(name string, entry fs.DirEntry, err error) error {
@@ -96,6 +96,12 @@ func workspaceOnly(ctx context.Context, workdir fs.FS, files map[string]string) 
 				return fs.SkipAll
 			}
 			return err
+		}
+		if name == syncStaging {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if kind := entry.Type(); kind.IsRegular() || kind == fs.ModeSymlink {
 			if _, ok := files[name]; !ok {
@@ -137,14 +143,40 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// checkName accepts only clean paths relative to the working directory, so
+// names match the ones a listing reports and a/../b can't stand for b, and
+// none in the staging directory, which uploads own.
+func checkName(name string) error {
+	if !fs.ValidPath(name) || name == "." || strings.ContainsRune(name, 0) {
+		return apiError(http.StatusBadRequest, "invalid path %q: must be a clean path relative to the workspace source directory", name)
+	}
+	if name == syncStaging || strings.HasPrefix(name, syncStaging+"/") {
+		return apiError(http.StatusBadRequest, "invalid path %q: %s is reserved for sync uploads", name, syncStaging)
+	}
+	return nil
+}
+
+// decodeFileList decodes a request that lists files into v. It must hold one
+// JSON value and nothing after it, so a malformed request is never acted on
+// in part.
+func decodeFileList(w http.ResponseWriter, r *http.Request, v any) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxSyncListBytes))
+	err := decoder.Decode(v)
+	if err == nil {
+		if _, err = decoder.Token(); errors.Is(err, io.EOF) {
+			return nil
+		}
+	}
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+		return apiError(http.StatusRequestEntityTooLarge, "file list exceeds %d MiB", MaxSyncListBytes>>20)
+	}
+	return apiError(http.StatusBadRequest, "invalid JSON request")
+}
+
 func (a *Agent) handleSyncPlan(w http.ResponseWriter, r *http.Request) {
 	var req SyncPlanRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxSyncPlanBytes)).Decode(&req); err != nil {
-		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			writeError(w, apiError(http.StatusRequestEntityTooLarge, "sync manifest exceeds %d MiB", MaxSyncPlanBytes>>20))
-			return
-		}
-		writeError(w, apiError(http.StatusBadRequest, "invalid JSON request"))
+	if err := decodeFileList(w, r, &req); err != nil {
+		writeError(w, err)
 		return
 	}
 	plan, err := a.PlanSync(r.Context(), req)

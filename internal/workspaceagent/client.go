@@ -50,7 +50,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	if body != nil {
+	if body != nil && !raw {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.http.Do(req)
@@ -92,6 +92,13 @@ func runPath(id string) string { return "/runs/" + url.PathEscape(id) }
 // whose body is the JSON SyncPlanResponse, for the caller to relay and close.
 func (c *Client) PlanSync(ctx context.Context, manifest io.Reader) (*http.Response, error) {
 	return c.request(ctx, http.MethodPost, "/sync/plan", manifest)
+}
+
+// SyncUpload sends body, a JSON SyncUploadRequest followed by a tar stream
+// for the agent to unpack, and returns the response whose body is the JSON
+// SyncUploadResponse, for the caller to relay and close.
+func (c *Client) SyncUpload(ctx context.Context, body io.Reader) (*http.Response, error) {
+	return c.request(ctx, http.MethodPost, "/sync/upload", body)
 }
 
 // Version returns the agent's protocol version.

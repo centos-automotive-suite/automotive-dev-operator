@@ -844,60 +844,24 @@ func (c *Client) SyncPlan(ctx context.Context, name string, req buildapi.SyncPla
 	return &plan, nil
 }
 
-// SyncWorkspace uploads a tar stream to a workspace.
-func (c *Client) SyncWorkspace(ctx context.Context, name string, body io.Reader) error {
+// SyncWorkspace uploads archive, a tar stream, to a workspace, and deletes
+// req.Delete from it as the upload applies. The workspace applies all of it
+// or none.
+func (c *Client) SyncWorkspace(ctx context.Context, name string, req buildapi.SyncUploadRequest, archive io.Reader) error {
+	head, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
 	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "sync"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, io.MultiReader(bytes.NewReader(head), archive))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	if c.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
-	}
-	resp, err := c.doRequest(req, "sync workspace", statusIn(http.StatusOK))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return nil
-}
-
-// SyncWorkspaceClean uploads a tar stream after clearing the destination directory.
-func (c *Client) SyncWorkspaceClean(ctx context.Context, name string, body io.Reader) error {
-	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "sync")) + "?clean=true"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	if c.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
-	}
-	resp, err := c.doRequest(req, "sync workspace (clean)", statusIn(http.StatusOK))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return nil
-}
-
-// SyncDelete removes the specified files from a workspace.
-func (c *Client) SyncDelete(ctx context.Context, name string, req buildapi.SyncDeleteRequest) error {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "sync", "delete"))
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Content-Type", "application/octet-stream")
 	if c.authToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
 	}
-	resp, err := c.doRequest(httpReq, "sync delete", statusIn(http.StatusOK))
+	resp, err := c.doRequest(httpReq, "sync workspace", statusIn(http.StatusOK))
 	if err != nil {
 		return err
 	}
