@@ -509,96 +509,27 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 	c.JSON(http.StatusOK, gin.H{"message": "files synced"})
 }
 
+// syncPlanTimeout bounds a sync plan. The agent hashes every listed file, so
+// it gets far longer than other agent calls.
+const syncPlanTimeout = 10 * time.Minute
+
+// syncPlanWorkspace relays a sync plan between the client and the
+// workspace's agent without decoding either: the agent validates the
+// manifest and enforces its size limit, and decoding it here would cost the
+// build API many times its size in memory.
 func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
-	var req buildcontract.SyncPlanRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+	_, agent, ok := a.runningWorkspaceAgent(c, name)
+	if !ok {
 		return
 	}
-	if len(req.Files) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "manifest is empty"})
+	ctx, cancel := context.WithTimeout(c.Request.Context(), syncPlanTimeout)
+	defer cancel()
+	resp, err := agent.PlanSync(ctx, c.Request.Body)
+	if a.workspaceAgentError(c, err) {
 		return
 	}
-
-	ws, err := a.getOwnedWorkspace(c, name)
-	if err != nil {
-		return
-	}
-	if ws.Status.Phase != phaseRunning {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
-		return
-	}
-
-	restCfg, err := a.deps.getRESTConfigFromRequest(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
-		return
-	}
-
-	// Build a shell script that hashes only the files the client cares about.
-	// This avoids scanning build artifacts or other untracked content.
-	var scriptBuf strings.Builder
-	scriptBuf.WriteString("cd /workspace/src || exit 1\n")
-	for relPath := range req.Files {
-		// Only hash regular files that exist; skip missing ones silently
-		fmt.Fprintf(&scriptBuf, "[ -f %s ] && sha256sum %s\n", shellQuote(relPath), shellQuote(relPath))
-	}
-	scriptBuf.WriteString("true\n") // ensure exit 0
-
-	var checksumBuf bytes.Buffer
-	cmd := []string{"/bin/sh", "-c", scriptBuf.String()}
-	if err := podExec(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, &checksumBuf); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to compute remote checksums: %v", err)})
-		return
-	}
-
-	// Parse remote checksums into map: relativePath -> hash
-	remote := make(map[string]string, len(req.Files))
-	for line := range strings.SplitSeq(checksumBuf.String(), "\n") {
-		// sha256sum output: "hash  path/to/file"
-		parts := strings.SplitN(strings.TrimSpace(line), "  ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		remote[parts[1]] = parts[0]
-	}
-
-	// Compare client manifest against remote
-	var changed []string
-	unchanged := 0
-	for path, localHash := range req.Files {
-		if remote[path] != localHash {
-			changed = append(changed, path)
-		} else {
-			unchanged++
-		}
-	}
-
-	var deleted []string
-	if req.IncludeDeleted {
-		var findBuf bytes.Buffer
-		findCmd := []string{"/bin/sh", "-c", "cd /workspace/src || exit 1; find . \\( -type f -o -type l \\) | sed 's|^\\./||'"}
-		if err := podExec(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, findCmd, &findBuf); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to list remote files: %v", err)})
-			return
-		}
-		for line := range strings.SplitSeq(findBuf.String(), "\n") {
-			p := strings.TrimSpace(line)
-			if p == "" || p == "." {
-				continue
-			}
-			if _, inManifest := req.Files[p]; !inManifest {
-				deleted = append(deleted, p)
-			}
-		}
-	}
-
-	c.JSON(http.StatusOK, buildcontract.SyncPlanResponse{
-		Changed:        changed,
-		Unchanged:      unchanged,
-		Deleted:        deleted,
-		IncludeDeleted: req.IncludeDeleted,
-	})
+	defer func() { _ = resp.Body.Close() }()
+	c.DataFromReader(http.StatusOK, resp.ContentLength, "application/json; charset=utf-8", resp.Body, nil)
 }
 
 func (a *APIServer) syncDeleteWorkspace(c *gin.Context, name string) {

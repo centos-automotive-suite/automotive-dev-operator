@@ -3,6 +3,7 @@ package buildapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -24,15 +25,17 @@ const workspaceAgentTimeout = 30 * time.Second
 // to six, as encoders do for '<', '>', '&' and control characters.
 const maxRunRequestBytes = 6*buildcontract.MaxWorkspaceRunCommandBytes + 4<<10
 
-// The build API stays the public face of runs: it authenticates users, checks
-// ownership and resolves limits, and the workspace's agent enforces them.
-func (a *APIServer) workspaceRunTarget(c *gin.Context, name string) (*automotivev1alpha1.Workspace, *workspaceagent.Client, bool) {
+// The build API stays the public face of runs and syncs: it authenticates
+// users, checks ownership and resolves limits, and the workspace's agent
+// enforces them. runningWorkspaceAgent returns the caller's running workspace
+// and a client for its agent, or writes the error response.
+func (a *APIServer) runningWorkspaceAgent(c *gin.Context, name string) (*automotivev1alpha1.Workspace, *workspaceagent.Client, bool) {
 	ws, err := a.getOwnedWorkspace(c, name)
 	if err != nil {
 		return nil, nil, false
 	}
 	if ws.Spec.Stopped || ws.Status.Phase != phaseRunning || ws.Status.PodName == "" {
-		c.JSON(http.StatusConflict, gin.H{"error": "start the workspace to access its runs and retained logs"})
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running; start it first", name)})
 		return nil, nil, false
 	}
 	kube, err := a.deps.getClientFromRequest(c)
@@ -49,9 +52,9 @@ func (a *APIServer) workspaceRunTarget(c *gin.Context, name string) (*automotive
 	return ws, agent, true
 }
 
-// workspaceRunError reports an agent failure with the agent's own status, and
+// workspaceAgentError reports an agent failure with the agent's own status, and
 // a failure to reach the agent as a bad gateway, without the agent's address.
-func (a *APIServer) workspaceRunError(c *gin.Context, err error) bool {
+func (a *APIServer) workspaceAgentError(c *gin.Context, err error) bool {
 	if err == nil {
 		return false
 	}
@@ -100,7 +103,7 @@ func (a *APIServer) createWorkspaceRun(c *gin.Context, name string) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run ID"})
 		return
 	}
-	ws, agent, ok := a.workspaceRunTarget(c, name)
+	ws, agent, ok := a.runningWorkspaceAgent(c, name)
 	if !ok {
 		return
 	}
@@ -116,7 +119,7 @@ func (a *APIServer) createWorkspaceRun(c *gin.Context, name string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), workspaceAgentTimeout)
 	defer cancel()
 	run, err := agent.Create(ctx, workspaceagent.CreateRequest{ID: req.ID, Command: req.Command, Options: options})
-	if a.workspaceRunError(c, err) {
+	if a.workspaceAgentError(c, err) {
 		return
 	}
 	c.Header("Location", "/v1/workspaces/"+name+"/runs/"+req.ID)
@@ -146,14 +149,14 @@ func (a *APIServer) workspaceRunAction(c *gin.Context, name string, action func(
 	if !validWorkspaceRunParam(c) {
 		return
 	}
-	_, agent, ok := a.workspaceRunTarget(c, name)
+	_, agent, ok := a.runningWorkspaceAgent(c, name)
 	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), workspaceAgentTimeout)
 	defer cancel()
 	run, err := action(agent, ctx, c.Param("run"))
-	if a.workspaceRunError(c, err) {
+	if a.workspaceAgentError(c, err) {
 		return
 	}
 	c.JSON(http.StatusOK, contractRun(run))
@@ -171,13 +174,13 @@ func (a *APIServer) deleteWorkspaceRun(c *gin.Context, name string) {
 	if !validWorkspaceRunParam(c) {
 		return
 	}
-	_, agent, ok := a.workspaceRunTarget(c, name)
+	_, agent, ok := a.runningWorkspaceAgent(c, name)
 	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), workspaceAgentTimeout)
 	defer cancel()
-	if a.workspaceRunError(c, agent.Delete(ctx, c.Param("run"))) {
+	if a.workspaceAgentError(c, agent.Delete(ctx, c.Param("run"))) {
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -190,14 +193,14 @@ func (a *APIServer) listWorkspaceRuns(c *gin.Context, name string) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be non-negative and limit must be between 1 and 100"})
 		return
 	}
-	_, agent, ok := a.workspaceRunTarget(c, name)
+	_, agent, ok := a.runningWorkspaceAgent(c, name)
 	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), workspaceAgentTimeout)
 	defer cancel()
 	runs, err := agent.List(ctx, offset, limit)
-	if a.workspaceRunError(c, err) {
+	if a.workspaceAgentError(c, err) {
 		return
 	}
 	result := make([]buildcontract.WorkspaceRun, 0, len(runs))
@@ -229,7 +232,7 @@ func (a *APIServer) workspaceRunLogs(c *gin.Context, name string) {
 			return
 		}
 	}
-	_, agent, ok := a.workspaceRunTarget(c, name)
+	_, agent, ok := a.runningWorkspaceAgent(c, name)
 	if !ok {
 		return
 	}
@@ -239,7 +242,7 @@ func (a *APIServer) workspaceRunLogs(c *gin.Context, name string) {
 	// The agent checks the offset before it commits headers, so its errors
 	// arrive as ordinary responses.
 	resp, err := agent.Logs(ctx, c.Param("run"), offset, follow)
-	if a.workspaceRunError(c, err) {
+	if a.workspaceAgentError(c, err) {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()

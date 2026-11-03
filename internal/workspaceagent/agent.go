@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -72,6 +73,8 @@ type Agent struct {
 	now     func() time.Time
 	procDir string
 	ptsDir  string
+	// planning counts sync plans in progress, which keep the workspace active.
+	planning atomic.Int32
 
 	mu      sync.Mutex
 	records map[string]*record

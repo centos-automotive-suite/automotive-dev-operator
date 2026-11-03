@@ -35,9 +35,10 @@ func NewClient(baseURL, token string, roots *x509.CertPool) *Client {
 	return &Client{base: strings.TrimRight(baseURL, "/"), token: token, http: &http.Client{Transport: transport}}
 }
 
+// request sends body as JSON, or as it is when it is already an io.Reader.
 func (c *Client) request(ctx context.Context, method, path string, body any) (*http.Response, error) {
-	var reader io.Reader
-	if body != nil {
+	reader, raw := body.(io.Reader)
+	if body != nil && !raw {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
@@ -86,6 +87,12 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 }
 
 func runPath(id string) string { return "/runs/" + url.PathEscape(id) }
+
+// PlanSync sends manifest, a JSON SyncPlanRequest, and returns the response
+// whose body is the JSON SyncPlanResponse, for the caller to relay and close.
+func (c *Client) PlanSync(ctx context.Context, manifest io.Reader) (*http.Response, error) {
+	return c.request(ctx, http.MethodPost, "/sync/plan", manifest)
+}
 
 // Version returns the agent's protocol version.
 func (c *Client) Version(ctx context.Context) (int, error) {

@@ -53,3 +53,18 @@ func TestActivityCountsRunsTerminalsAndExecProcesses(t *testing.T) {
 		t.Errorf("activity = %+v, want %+v", activity, want)
 	}
 }
+
+// A plan runs inside the agent, so no exec process stands for it.
+func TestActivityCountsSyncPlans(t *testing.T) {
+	a := newTestAgent(t)
+	a.procDir, a.ptsDir = t.TempDir(), t.TempDir()
+	a.planning.Add(1)
+
+	activity, err := a.Activity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (ActivityResponse{Active: true, SyncPlans: 1}); activity != want {
+		t.Errorf("activity = %+v, want %+v", activity, want)
+	}
+}
