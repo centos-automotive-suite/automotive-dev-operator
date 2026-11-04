@@ -28,15 +28,6 @@ type WorkspaceResponse struct {
 	LastActivity     string `json:"lastActivity,omitempty"`     // e.g., "2m ago", "just now"
 }
 
-// WorkspaceExecRequest is the payload to execute a command in a workspace.
-type WorkspaceExecRequest struct {
-	Command string `json:"command,omitempty"`
-	Script  string `json:"script,omitempty"`
-}
-
-// WorkspaceExecExitCodeTrailer carries the exit status after the output stream ends.
-const WorkspaceExecExitCodeTrailer = "X-Caib-Exit-Code"
-
 // MaxWorkspaceRunCommandBytes bounds the encoded shell command accepted by runs.
 const MaxWorkspaceRunCommandBytes = 64 << 10
 

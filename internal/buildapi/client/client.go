@@ -894,16 +894,6 @@ func (c *Client) workspaceStreamRequest(ctx context.Context, name, action string
 	return resp, nil
 }
 
-// ExecWorkspace executes a command in a workspace and returns the streaming output.
-// Reading the stream reports a nonzero exit or missing completion status as an error.
-func (c *Client) ExecWorkspace(ctx context.Context, name string, req buildapi.WorkspaceExecRequest) (io.ReadCloser, error) {
-	resp, err := c.workspaceStreamRequest(ctx, name, "exec", req)
-	if err != nil {
-		return nil, err
-	}
-	return &workspaceExecStream{ReadCloser: resp.Body, response: resp}, nil
-}
-
 // DeployWorkspace deploys an artifact from a workspace to a board and returns the streaming output.
 func (c *Client) DeployWorkspace(ctx context.Context, name string, req buildapi.WorkspaceDeployRequest) (io.ReadCloser, error) {
 	resp, err := c.workspaceStreamRequest(ctx, name, "deploy", req)

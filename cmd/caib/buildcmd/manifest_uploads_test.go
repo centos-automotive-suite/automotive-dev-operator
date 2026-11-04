@@ -1,7 +1,6 @@
 package buildcmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -75,14 +74,12 @@ func TestPrepareManifestUploads_LocalPaths(t *testing.T) {
 			h := NewHandler(Options{})
 			if tt.workspace {
 				h.opts.Build.Workspace = "test-workspace"
-				t.Setenv("CAIB_CLIENT_WORKSPACE_UPLOAD", "0")
 			}
 			req := &buildcontract.BuildRequest{Manifest: string(manifestBytes)}
-			refs, cleanup, err := h.prepareManifestUploads(context.Background(), nil, req, manifestPath)
+			refs, err := h.prepareManifestUploads(req, manifestPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer cleanup()
 			sharedDir := filepath.Join(root, "shared")
 			got := make(map[string]string, len(refs))
 			for _, ref := range refs {
@@ -169,10 +166,7 @@ func TestPrepareManifestUploads_PathCollisions(t *testing.T) {
 			manifest := fmt.Sprintf("content:\n  add_files:\n    - path: /etc/one\n      source_path: ../../files/app.conf\n    - path: /etc/two\n      source_path: %s\n", second)
 			h := NewHandler(Options{})
 			req := &buildcontract.BuildRequest{Manifest: manifest}
-			refs, cleanup, err := h.prepareManifestUploads(context.Background(), nil, req, filepath.Join(t.TempDir(), "image.aib.yml"))
-			if cleanup != nil {
-				defer cleanup()
-			}
+			refs, err := h.prepareManifestUploads(req, filepath.Join(t.TempDir(), "image.aib.yml"))
 			if sameFile && err != nil {
 				t.Fatal(err)
 			}
@@ -199,20 +193,29 @@ content:
     - path: /etc/remote
       url: https://example.com/data
 `
-	for _, upload := range []string{"0", "1"} {
-		t.Run("client workspace upload="+upload, func(t *testing.T) {
-			t.Setenv("CAIB_CLIENT_WORKSPACE_UPLOAD", upload)
-			h := &Handler{opts: Options{Build: &commandopts.Build{Workspace: "test-workspace"}}}
-			req := &buildcontract.BuildRequest{Manifest: manifest}
-			refs, cleanup, err := h.prepareManifestUploads(context.Background(), nil, req, "image.aib.yml")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cleanup()
-			if req.Manifest != manifest || len(refs) != 0 {
-				t.Fatalf("non-local references changed: manifest=%q refs=%v", req.Manifest, refs)
-			}
-		})
+	h := &Handler{opts: Options{Build: &commandopts.Build{Workspace: "test-workspace"}}}
+	req := &buildcontract.BuildRequest{Manifest: manifest}
+	refs, err := h.prepareManifestUploads(req, "image.aib.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Manifest != manifest || len(refs) != 0 {
+		t.Fatalf("non-local references changed: manifest=%q refs=%v", req.Manifest, refs)
+	}
+}
+
+// A --workspace build leaves /workspace add_files in the manifest for the
+// controller to copy from the workspace pod, so caib never reads them itself.
+func TestPrepareManifestUploads_LeavesWorkspaceFilesForHydrate(t *testing.T) {
+	manifest := "content:\n  add_files:\n    - path: /etc/app.conf\n      source_path: /workspace/src/app.conf\n"
+	h := &Handler{opts: Options{Build: &commandopts.Build{Workspace: "test-workspace"}}}
+	req := &buildcontract.BuildRequest{Manifest: manifest}
+	refs, err := h.prepareManifestUploads(req, "image.aib.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Manifest != manifest || len(refs) != 0 {
+		t.Fatalf("workspace files were not left for hydrate: manifest=%q refs=%v", req.Manifest, refs)
 	}
 }
 

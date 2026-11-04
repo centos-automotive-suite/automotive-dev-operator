@@ -114,11 +114,10 @@ func (h *Handler) resolveLockfile(ctx context.Context, cmd *cobra.Command, manif
 		return err
 	}
 	ApplyTargetDefaults(cmd, operatorConfig, &req)
-	refs, cleanup, err := h.prepareManifestUploads(ctx, api, &req, manifestPath)
+	refs, err := h.prepareManifestUploads(&req, manifestPath)
 	if err != nil {
 		return fmt.Errorf("prepare manifest uploads: %w", err)
 	}
-	defer cleanup()
 	req.HasLocalFiles = len(refs) > 0
 	resp, err := api.CreateBuild(ctx, req)
 	if err != nil {

@@ -1121,7 +1121,6 @@ The build API relays each stream from the workspace agent over HTTPS. If
 rotation overtakes a reader, the response
 ends with an `X-Log-Error` trailer; reconnect to receive the new starting offset.
 Final `X-Run-Status` and `X-Run-Exit-Code` trailers supplement GET on the run.
-The `/exec` endpoint remains available for older clients and the CLI build flow.
 
 ### workspace shell
 
