@@ -348,3 +348,34 @@ func TestHandlerRequiresToken(t *testing.T) {
 		t.Errorf("GET /healthz = %d, want 200 without a token", resp.StatusCode)
 	}
 }
+
+func TestExclusiveRunsWaitForTheLiveOne(t *testing.T) {
+	a := newTestAgent(t)
+	exclusive := testOptions()
+	exclusive.Exclusive = "deploy"
+	create(t, a, "first", "sleep 30", exclusive)
+
+	// A retry of the live run still returns it.
+	if run, created, err := a.Create("first", "sleep 30", exclusive); err != nil || created || run.ID != "first" {
+		t.Fatalf("retry of the live run: %+v created=%v err=%v", run, created, err)
+	}
+	_, _, err := a.Create("second", "true", exclusive)
+	wantCode(t, err, http.StatusConflict)
+	if err == nil || !strings.Contains(err.Error(), "first") {
+		t.Errorf("conflict does not name the live run: %v", err)
+	}
+	if _, err := a.Get("second"); err == nil {
+		t.Error("the refused run was recorded")
+	}
+	// Other runs, and runs with another key, are not affected.
+	create(t, a, "plain", "true", testOptions())
+	other := testOptions()
+	other.Exclusive = "other"
+	create(t, a, "other", "true", other)
+
+	if _, err := a.Cancel("first"); err != nil {
+		t.Fatal(err)
+	}
+	waitFinished(t, a, "first")
+	create(t, a, "second", "true", exclusive)
+}

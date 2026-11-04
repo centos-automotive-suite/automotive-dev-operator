@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"net/http"
 	"sort"
@@ -577,22 +576,13 @@ func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no Jumpstarter lease associated with this workspace"})
 		return
 	}
-	command := deployScript(ws.Spec.LeaseID, deployPort(req.ID), req.Artifacts)
+	command := deployScript(ws.Spec.LeaseID, req.Artifacts)
 	if len(command) > buildcontract.MaxWorkspaceRunCommandBytes {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "too many artifacts to deploy at once"})
 		return
 	}
-	a.startWorkspaceRun(c, name, ws, agent, workspaceagent.CreateRequest{ID: req.ID, Command: command}, 0)
-}
-
-// deployPort is the local port a deploy run forwards to the board, derived
-// from its run ID, so overlapping deploys in one workspace use their own
-// tunnels and, since the SSH ControlPath includes the port, their own SSH
-// connections. A retry of the same run ID gets the same port.
-func deployPort(runID string) int {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(runID))
-	return 20000 + int(h.Sum32()%10000)
+	// One deploy at a time: deploys share the tunnel's port and SSH connection.
+	a.startWorkspaceRun(c, name, ws, agent, workspaceagent.CreateRequest{ID: req.ID, Command: command, Options: workspaceagent.Options{Exclusive: "deploy"}}, 0)
 }
 
 // deployScript copies artifacts to the board over SSH. The board is behind the
@@ -600,14 +590,14 @@ func deployPort(runID string) int {
 // script forwards a local port to it through the lease first. The tunnel
 // belongs to the run: the agent stops the run's whole process group when the
 // script exits, so cancelling or timing out a deploy stops the tunnel too.
-func deployScript(leaseID string, port int, artifacts []buildcontract.ArtifactMapping) string {
+func deployScript(leaseID string, artifacts []buildcontract.ArtifactMapping) string {
 	var script strings.Builder
-	fmt.Fprintf(&script, "set -e\nPORT=%d\n", port)
-	script.WriteString(`SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 -o ControlMaster=auto -o ControlPath=/tmp/.ssh-mux-%r@%h:%p -o ControlPersist=60"
-SSH_CMD="ssh -p $PORT $SSH_OPTS"
+	script.WriteString(`set -e
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 -o ControlMaster=auto -o ControlPath=/tmp/.ssh-mux-%r@%h:%p -o ControlPersist=60"
+SSH_CMD="ssh -p 2222 $SSH_OPTS"
 SSH_KEY="-i /workspace/.ssh/id_ed25519"
 `)
-	script.WriteString("jmp shell --lease " + shellQuote(leaseID) + " -- j tcp forward-tcp --address 0.0.0.0 \"$PORT\" </dev/null >/dev/null 2>&1 &\n")
+	script.WriteString("jmp shell --lease " + shellQuote(leaseID) + " -- j tcp forward-tcp --address 0.0.0.0 2222 </dev/null >/dev/null 2>&1 &\n")
 	script.WriteString(`TUNNEL_PID=$!
 echo "Waiting for tunnel..."
 SSH_READY=false

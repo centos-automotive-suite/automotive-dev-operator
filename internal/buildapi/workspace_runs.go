@@ -121,6 +121,7 @@ func (a *APIServer) startWorkspaceRun(c *gin.Context, name string, ws *automotiv
 	if !a.recordWorkspaceRunActivity(c, ws) {
 		return
 	}
+	options.Exclusive = create.Options.Exclusive
 	create.Options = options
 	// Finish the create even if the initiating HTTP connection disappears.
 	// Retrying this ID returns the existing run, never another command.

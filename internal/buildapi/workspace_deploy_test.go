@@ -119,13 +119,8 @@ func TestWorkspaceDeployRunsTheTunnelAndRsyncInARun(t *testing.T) {
 	if len(traced) != 1 || !strings.Contains(traced[0], "rsync -avz") || !strings.Contains(traced[0], "/workspace/src/my app") {
 		t.Errorf("traced commands = %q, want only the rsync\n%s", traced, output)
 	}
-	port := strconv.Itoa(deployPort("deploy-1"))
-	if args, err := os.ReadFile(filepath.Join(tools, "jmp.args")); err != nil || !strings.Contains(string(args), "--lease lease-1") ||
-		!strings.HasSuffix(strings.TrimSpace(string(args)), " "+port) {
-		t.Errorf("tunnel args: %q, %v; want the lease and port %s", args, err, port)
-	}
-	if !strings.Contains(output, "[ssh -p "+port+" ") {
-		t.Errorf("rsync does not use the run's port %s:\n%s", port, output)
+	if args, err := os.ReadFile(filepath.Join(tools, "jmp.args")); err != nil || !strings.Contains(string(args), "--lease lease-1") {
+		t.Errorf("tunnel args: %q, %v", args, err)
 	}
 	pidText, err := os.ReadFile(filepath.Join(tools, "jmp.pid"))
 	if err != nil {
@@ -192,20 +187,32 @@ func TestWorkspaceDeployRejectsAnInvalidRunID(t *testing.T) {
 	}
 }
 
-// Deploys in one workspace can overlap. Each forwards its own port, which the
-// SSH ControlPath includes, so neither uses the other's tunnel or connection.
-func TestWorkspaceDeployRunsGetTheirOwnPort(t *testing.T) {
-	first, second := deployPort("deploy-1"), deployPort("deploy-2")
-	if first == second {
-		t.Fatalf("both runs got port %d", first)
+// A workspace deploys one run at a time: overlapping deploys would share the
+// tunnel's port and SSH connection.
+func TestWorkspaceDeployRefusesASecondDeployWhileOneRuns(t *testing.T) {
+	tools := fakeDeployTools(t, 0)
+	// ssh never connects, so the first deploy waits for the tunnel.
+	if err := os.WriteFile(filepath.Join(tools, "ssh"), []byte("#!/bin/sh\nexit 255\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for _, port := range []int{first, second, deployPort("a"), deployPort(strings.Repeat("z", 63))} {
-		if port < 20000 || port >= 30000 {
-			t.Errorf("port %d is outside 20000-29999", port)
-		}
+	api, _ := deployTestClient(t, "lease-1")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	artifacts := []buildcontract.ArtifactMapping{{Src: "/a", Dest: "/a"}}
+
+	if _, err := api.DeployWorkspace(ctx, "dev", buildcontract.WorkspaceDeployRequest{ID: "deploy-1", Artifacts: artifacts}); err != nil {
+		t.Fatal(err)
 	}
-	script := deployScript("lease-1", first, []buildcontract.ArtifactMapping{{Src: "/a", Dest: "/a"}})
-	if strings.Contains(script, "2222") || !strings.Contains(script, "%p") {
-		t.Errorf("script does not key the tunnel and ControlPath by port:\n%s", script)
+	_, err := api.DeployWorkspace(ctx, "dev", buildcontract.WorkspaceDeployRequest{ID: "deploy-2", Artifacts: artifacts})
+	var response buildapiclient.HTTPError
+	if !errors.As(err, &response) || response.HTTPStatusCode() != http.StatusConflict || !strings.Contains(err.Error(), "deploy-1") {
+		t.Fatalf("second deploy: %v, want a 409 naming deploy-1", err)
+	}
+	// Other runs still start.
+	if _, err := api.CreateWorkspaceRun(ctx, "dev", buildcontract.WorkspaceRunRequest{ID: "exec-1", Command: "true"}); err != nil {
+		t.Fatalf("exec during a deploy: %v", err)
+	}
+	if _, err := api.CancelWorkspaceRun(ctx, "dev", "deploy-1"); err != nil {
+		t.Fatal(err)
 	}
 }
