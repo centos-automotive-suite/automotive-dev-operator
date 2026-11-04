@@ -109,6 +109,16 @@ func TestWorkspaceDeployRunsTheTunnelAndRsyncInARun(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, output)
 		}
 	}
+	// Each rsync is traced as it runs, but not the wait for SSH or the cleanup.
+	var traced []string
+	for line := range strings.Lines(output) {
+		if strings.HasPrefix(line, "+") {
+			traced = append(traced, line)
+		}
+	}
+	if len(traced) != 1 || !strings.Contains(traced[0], "rsync -avz") || !strings.Contains(traced[0], "/workspace/src/my app") {
+		t.Errorf("traced commands = %q, want only the rsync\n%s", traced, output)
+	}
 	port := strconv.Itoa(deployPort("deploy-1"))
 	if args, err := os.ReadFile(filepath.Join(tools, "jmp.args")); err != nil || !strings.Contains(string(args), "--lease lease-1") ||
 		!strings.HasSuffix(strings.TrimSpace(string(args)), " "+port) {

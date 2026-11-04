@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -121,7 +122,7 @@ func followRunAndExit(ctx context.Context, stop func(), name, id string, offset 
 func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "run", Short: "List, inspect, cancel or delete durable workspace commands"}
 	for _, action := range []string{"show", "cancel", "delete"} {
-		cmd.AddCommand(&cobra.Command{
+		sub := &cobra.Command{
 			Use: action + " <workspace> <run-id>", Short: action + " a workspace run", Args: cobra.ExactArgs(2),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				requireServer()
@@ -145,9 +146,17 @@ func newRunCmd() *cobra.Command {
 				if action == "delete" {
 					return nil
 				}
+				if onlyCommand, _ := cmd.Flags().GetBool("command"); onlyCommand {
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSuffix(run.Command, "\n"))
+					return err
+				}
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(run)
 			},
-		})
+		}
+		if action == "show" {
+			sub.Flags().Bool("command", false, "print only the run's command, as it ran")
+		}
+		cmd.AddCommand(sub)
 	}
 	list := &cobra.Command{
 		Use: "list <workspace>", Short: "List retained runs, newest first", Args: cobra.ExactArgs(1),

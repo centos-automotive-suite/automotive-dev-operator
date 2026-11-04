@@ -1030,7 +1030,8 @@ caib workspace run delete my-app <run-id>
 ```
 
 List and show return JSON containing status, absolute log offsets, timestamps,
-and exit code when available. List supports `--offset` and `--limit` (1–100),
+and exit code when available. `show --command` prints only the command, one
+line per line of the script, as it ran. List supports `--offset` and `--limit` (1–100),
 ordered newest first. Delete accepts terminal runs and directories with unreadable
 or missing records, so corrupt records can be removed through the API. Readable
 live runs must be cancelled first. Cancellation first sends SIGTERM, then SIGKILL
@@ -1134,7 +1135,7 @@ caib workspace shell <name>
 
 Deploy artifacts from the workspace to a board via the workspace's Jumpstarter lease. Uses rsync for delta transfer.
 
-The deploy is a workspace run: it opens a Jumpstarter tunnel, rsyncs each artifact and exits with rsync's exit code. Interrupting the CLI detaches from it; reattach with `caib workspace exec <name> --run <id>` or stop it with `caib workspace run cancel <name> <id>`.
+The deploy is a workspace run: it opens a Jumpstarter tunnel, rsyncs each artifact, printing each rsync command as it runs, and stops at the first rsync that fails, exiting with its exit code. It exits with 1 if the tunnel stops or SSH is not ready within a minute, before any rsync runs. Interrupting the CLI detaches from it; reattach with `caib workspace exec <name> --run <id>` or stop it with `caib workspace run cancel <name> <id>`.
 
 ```bash
 caib workspace deploy <name> --artifact <src:dest> [--artifact ...]

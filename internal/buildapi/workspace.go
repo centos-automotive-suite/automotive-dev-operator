@@ -621,12 +621,13 @@ for i in $(seq 1 60); do
 done
 if [ "$SSH_READY" != "true" ]; then echo "Timed out waiting for SSH"; exit 1; fi
 echo "Tunnel ready"
+set -x
 `)
+	// The shell traces each rsync as it runs it, with its arguments expanded.
 	for _, artifact := range artifacts {
-		src, dest := shellQuote(artifact.Src), shellQuote(artifact.Dest)
-		script.WriteString("printf 'Deploying %s -> %s\\n' " + src + " " + dest + "\n")
-		script.WriteString("rsync -avz --chmod=+x -e \"$SSH_CMD $SSH_KEY\" " + src + " root@127.0.0.1:" + dest + "\n")
+		script.WriteString("rsync -avz --chmod=+x -e \"$SSH_CMD $SSH_KEY\" " + shellQuote(artifact.Src) + " root@127.0.0.1:" + shellQuote(artifact.Dest) + "\n")
 	}
+	script.WriteString("{ set +x; } 2>/dev/null\n")
 	fmt.Fprintf(&script, "echo \"Deploy complete: %d artifact(s)\"\n", len(artifacts))
 	script.WriteString("$SSH_CMD -O exit root@127.0.0.1 2>/dev/null || true\n")
 	return script.String()
