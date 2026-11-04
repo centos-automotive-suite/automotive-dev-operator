@@ -107,22 +107,30 @@ func (a *APIServer) createWorkspaceRun(c *gin.Context, name string) {
 	if !ok {
 		return
 	}
-	options, ok := a.workspaceRunOptions(c, ws, req.TimeoutSeconds)
+	a.startWorkspaceRun(c, name, ws, agent, workspaceagent.CreateRequest{ID: req.ID, Command: req.Command}, req.TimeoutSeconds)
+}
+
+// startWorkspaceRun resolves the run's limits, reserves workspace activity and
+// starts the run in the agent, then answers 202 with the run.
+func (a *APIServer) startWorkspaceRun(c *gin.Context, name string, ws *automotivev1alpha1.Workspace, agent *workspaceagent.Client,
+	create workspaceagent.CreateRequest, timeoutSeconds int64) {
+	options, ok := a.workspaceRunOptions(c, ws, timeoutSeconds)
 	if !ok {
 		return
 	}
 	if !a.recordWorkspaceRunActivity(c, ws) {
 		return
 	}
+	create.Options = options
 	// Finish the create even if the initiating HTTP connection disappears.
 	// Retrying this ID returns the existing run, never another command.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), workspaceAgentTimeout)
 	defer cancel()
-	run, err := agent.Create(ctx, workspaceagent.CreateRequest{ID: req.ID, Command: req.Command, Options: options})
+	run, err := agent.Create(ctx, create)
 	if a.workspaceAgentError(c, err) {
 		return
 	}
-	c.Header("Location", "/v1/workspaces/"+name+"/runs/"+req.ID)
+	c.Header("Location", "/v1/workspaces/"+name+"/runs/"+create.ID)
 	c.JSON(http.StatusAccepted, contractRun(run))
 }
 

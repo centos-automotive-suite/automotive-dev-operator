@@ -90,6 +90,7 @@ func runTestServer(t *testing.T, agentURL, owner string, stopped bool) (*APIServ
 	router.GET("/v1/workspaces/:name/runs/:run", a.wrapNamedHandler("get run", a.getWorkspaceRun))
 	router.GET("/v1/workspaces/:name/runs/:run/logs", a.wrapNamedHandler("run logs", a.workspaceRunLogs))
 	router.POST("/v1/workspaces/:name/runs/:run/cancel", a.wrapNamedHandler("cancel run", a.cancelWorkspaceRun))
+	router.POST("/v1/workspaces/:name/deploy", a.wrapNamedHandler("deploy", a.deployWorkspace))
 	return a, router
 }
 

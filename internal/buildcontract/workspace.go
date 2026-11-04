@@ -94,8 +94,10 @@ type ArtifactMapping struct {
 	Dest string `json:"dest"` // Path on the board
 }
 
-// WorkspaceDeployRequest is the payload to deploy artifacts to a board.
+// WorkspaceDeployRequest is the payload to deploy artifacts to a board. The
+// deploy runs as a workspace run with ID, so retrying a lost response with the
+// same ID returns that run instead of deploying again.
 type WorkspaceDeployRequest struct {
+	ID        string            `json:"id,omitempty"`
 	Artifacts []ArtifactMapping `json:"artifacts"`
-	Password  string            `json:"password,omitempty"` // SSH password for key injection (default: "password")
 }

@@ -1134,6 +1134,8 @@ caib workspace shell <name>
 
 Deploy artifacts from the workspace to a board via the workspace's Jumpstarter lease. Uses rsync for delta transfer.
 
+The deploy is a workspace run: it opens a Jumpstarter tunnel, rsyncs each artifact and exits with rsync's exit code. Interrupting the CLI detaches from it; reattach with `caib workspace exec <name> --run <id>` or stop it with `caib workspace run cancel <name> <id>`.
+
 ```bash
 caib workspace deploy <name> --artifact <src:dest> [--artifact ...]
 ```

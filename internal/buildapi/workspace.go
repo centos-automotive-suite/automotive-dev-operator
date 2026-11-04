@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,7 +25,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	kscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -546,125 +547,89 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 
 func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 	var req buildcontract.WorkspaceDeployRequest
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRunRequestBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
 		return
 	}
-
 	if len(req.Artifacts) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one artifact mapping is required"})
 		return
 	}
 	for i, a := range req.Artifacts {
-		if strings.TrimSpace(a.Src) == "" || strings.TrimSpace(a.Dest) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("artifact[%d]: src and dest are required", i)})
+		if strings.TrimSpace(a.Src) == "" || strings.TrimSpace(a.Dest) == "" || strings.ContainsRune(a.Src+a.Dest, 0) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("artifact[%d]: src and dest are required and must not contain NUL", i)})
 			return
 		}
 	}
-
-	ws, err := a.getOwnedWorkspace(c, name)
-	if err != nil {
+	if req.ID == "" {
+		req.ID = uuid.NewString()
+	}
+	if !workspaceagent.ValidID(req.ID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run ID"})
 		return
 	}
-	if ws.Status.Phase != phaseRunning {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
+	ws, agent, ok := a.runningWorkspaceAgent(c, name)
+	if !ok {
 		return
 	}
-	a.touchWorkspaceActivity(c, ws)
-
 	if ws.Spec.LeaseID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no Jumpstarter lease associated with this workspace"})
 		return
 	}
-
-	restCfg, err := a.deps.getRESTConfigFromRequest(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
+	command := deployScript(ws.Spec.LeaseID, deployPort(req.ID), req.Artifacts)
+	if len(command) > buildcontract.MaxWorkspaceRunCommandBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too many artifacts to deploy at once"})
 		return
 	}
+	a.startWorkspaceRun(c, name, ws, agent, workspaceagent.CreateRequest{ID: req.ID, Command: command}, 0)
+}
 
-	// Use jmp shell to forward a local TCP port to the board, then SSH/rsync through it.
-	// The board's IP is behind the Jumpstarter lab network and not directly routable
-	// from the workspace pod, so we must tunnel through Jumpstarter.
-	sshPassword := req.Password
-	if sshPassword == "" {
-		sshPassword = "password"
-	}
+// deployPort is the local port a deploy run forwards to the board, derived
+// from its run ID, so overlapping deploys in one workspace use their own
+// tunnels and, since the SSH ControlPath includes the port, their own SSH
+// connections. A retry of the same run ID gets the same port.
+func deployPort(runID string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(runID))
+	return 20000 + int(h.Sum32()%10000)
+}
 
-	// Ensure a Jumpstarter tunnel is running. The tunnel is a long-lived background
-	// process that persists across deploys. On first deploy it takes ~8s to start
-	// (lease acquisition + TCP forwarding); subsequent deploys reuse it (~0s).
-	//
-	// The tunnel runs in a separate exec from the deploy to avoid SPDY fd inheritance:
-	// background processes inherit SPDY pipe fds (even with >/dev/null redirects),
-	// keeping the stream open until the process exits. By splitting into two execs,
-	// phase 2 has zero background processes so its SPDY stream closes immediately.
-	// PID is exchanged via /tmp/.tunnel.pid (not stdout) because SPDY has a race
-	// condition where the stream closes before output is delivered for fast execs.
-	tunnelScript := fmt.Sprintf(
-		`SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3"
+// deployScript copies artifacts to the board over SSH. The board is behind the
+// Jumpstarter lab network and not routable from the workspace pod, so the
+// script forwards a local port to it through the lease first. The tunnel
+// belongs to the run: the agent stops the run's whole process group when the
+// script exits, so cancelling or timing out a deploy stops the tunnel too.
+func deployScript(leaseID string, port int, artifacts []buildcontract.ArtifactMapping) string {
+	var script strings.Builder
+	fmt.Fprintf(&script, "set -e\nPORT=%d\n", port)
+	script.WriteString(`SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 -o ControlMaster=auto -o ControlPath=/tmp/.ssh-mux-%r@%h:%p -o ControlPersist=60"
+SSH_CMD="ssh -p $PORT $SSH_OPTS"
 SSH_KEY="-i /workspace/.ssh/id_ed25519"
-
-# Reuse existing tunnel if it's alive and reachable
-if [ -f /tmp/.tunnel.pid ]; then
-  OLD_PID=$(cat /tmp/.tunnel.pid)
-  if kill -0 $OLD_PID 2>/dev/null && ssh -p 2222 $SSH_OPTS $SSH_KEY root@127.0.0.1 true 2>/dev/null; then
-    exit 0
-  fi
-  kill $OLD_PID 2>/dev/null; pkill -P $OLD_PID 2>/dev/null; sleep 1
-fi
-jmp shell --lease %s -- j tcp forward-tcp --address 0.0.0.0 2222 </dev/null >/dev/null 2>&1 &
-echo $! > /tmp/.tunnel.pid`,
-		shellQuote(ws.Spec.LeaseID))
-
-	tunnelCtx, tunnelCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-	defer tunnelCancel()
-	_ = podExec(tunnelCtx, restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName,
-		[]string{"/bin/sh", "-c", tunnelScript}, io.Discard)
-
-	// Phase 2: Deploy artifacts (streaming, no background processes).
-	// Reads tunnel PID from /tmp/.tunnel.pid. The tunnel is left running for reuse.
-	setupLogStreamHeaders(c)
-
-	// Build rsync commands for each artifact mapping
-	var rsyncCmds strings.Builder
-	for _, a := range req.Artifacts {
-		fmt.Fprintf(&rsyncCmds, "echo \"Deploying %s -> %s\"\n", a.Src, a.Dest)
-		fmt.Fprintf(&rsyncCmds, "rsync -avz --chmod=+x -e \"ssh -p $LOCAL_PORT $SSH_OPTS $SSH_KEY\" %s root@127.0.0.1:%s\n",
-			shellQuote(a.Src), shellQuote(a.Dest))
-	}
-
-	deployScript := fmt.Sprintf(
-		`set -e
-LOCAL_PORT=2222
-CTL_PATH="/tmp/.ssh-mux-%%r@%%h:%%p"
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 -o ControlMaster=auto -o ControlPath=$CTL_PATH -o ControlPersist=60"
-SSH_CMD="ssh -p $LOCAL_PORT $SSH_OPTS"
-SSH_KEY="-i /workspace/.ssh/id_ed25519"
-TUNNEL_PID=$(cat /tmp/.tunnel.pid 2>/dev/null)
-if [ -z "$TUNNEL_PID" ]; then echo "Failed to start Jumpstarter tunnel"; exit 1; fi
-
+`)
+	script.WriteString("jmp shell --lease " + shellQuote(leaseID) + " -- j tcp forward-tcp --address 0.0.0.0 \"$PORT\" </dev/null >/dev/null 2>&1 &\n")
+	script.WriteString(`TUNNEL_PID=$!
 echo "Waiting for tunnel..."
 SSH_READY=false
 for i in $(seq 1 60); do
   if ! kill -0 $TUNNEL_PID 2>/dev/null; then echo "Tunnel process died"; exit 1; fi
   if $SSH_CMD $SSH_KEY root@127.0.0.1 true 2>/dev/null; then SSH_READY=true; break; fi
-  if cat /workspace/.ssh/id_ed25519.pub | sshpass -p %s $SSH_CMD root@127.0.0.1 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys' 2>/dev/null; then
+  if sshpass -p password $SSH_CMD root@127.0.0.1 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys' </workspace/.ssh/id_ed25519.pub 2>/dev/null; then
     echo "SSH key injected"; SSH_READY=true; break
   fi
   sleep 1
 done
 if [ "$SSH_READY" != "true" ]; then echo "Timed out waiting for SSH"; exit 1; fi
 echo "Tunnel ready"
-%s
-echo "Deploy complete: %d artifact(s)"
-ssh -p $LOCAL_PORT -o ControlPath=$CTL_PATH -O exit root@127.0.0.1 2>/dev/null; true`,
-		shellQuote(sshPassword), rsyncCmds.String(), len(req.Artifacts))
-
-	cmd := []string{"/bin/sh", "-c", deployScript}
-	if err := execInPod(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, c.Writer); err != nil {
-		_, _ = fmt.Fprintf(c.Writer, "\n[deploy failed: %v]\n", err)
+`)
+	for _, artifact := range artifacts {
+		src, dest := shellQuote(artifact.Src), shellQuote(artifact.Dest)
+		script.WriteString("printf 'Deploying %s -> %s\\n' " + src + " " + dest + "\n")
+		script.WriteString("rsync -avz --chmod=+x -e \"$SSH_CMD $SSH_KEY\" " + src + " root@127.0.0.1:" + dest + "\n")
 	}
+	fmt.Fprintf(&script, "echo \"Deploy complete: %d artifact(s)\"\n", len(artifacts))
+	script.WriteString("$SSH_CMD -O exit root@127.0.0.1 2>/dev/null || true\n")
+	return script.String()
 }
 
 // buildWorkspaceResources constructs resource requirements from user input and config.
@@ -825,37 +790,4 @@ func (fw *flushWriter) Write(p []byte) (int, error) {
 		fw.flusher.Flush()
 	}
 	return n, err
-}
-
-// podExec runs a command in a pod, streaming stdout/stderr to the provided writer.
-func podExec(ctx context.Context, restCfg *rest.Config, namespace, podName, containerName string, cmd []string, out io.Writer) error {
-	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return fmt.Errorf("creating clientset: %w", err)
-	}
-
-	execReq := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: containerName,
-			Command:   cmd,
-			Stdin:     false,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, kscheme.ParameterCodec)
-
-	executor, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, execReq.URL())
-	if err != nil {
-		return fmt.Errorf("creating executor: %w", err)
-	}
-
-	return executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: out,
-		Stderr: out,
-	})
-}
-
-func execInPod(ctx context.Context, restCfg *rest.Config, namespace, podName, containerName string, cmd []string, w http.ResponseWriter) error {
-	return podExec(ctx, restCfg, namespace, podName, containerName, cmd, newFlushWriter(w))
 }

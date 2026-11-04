@@ -869,40 +869,6 @@ func (c *Client) SyncWorkspace(ctx context.Context, name string, req buildapi.Sy
 	return nil
 }
 
-// workspaceStreamRequest performs a POST with a JSON body and returns the streaming response.
-func (c *Client) workspaceStreamRequest(ctx context.Context, name, action string, reqBody any) (*http.Response, error) {
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), action))
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if action == "exec" {
-		httpReq.Header.Set("TE", "trailers")
-	}
-	if c.authToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
-	}
-	resp, err := c.doRequest(httpReq, action+" workspace", statusIn(http.StatusOK))
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
-
-// DeployWorkspace deploys an artifact from a workspace to a board and returns the streaming output.
-func (c *Client) DeployWorkspace(ctx context.Context, name string, req buildapi.WorkspaceDeployRequest) (io.ReadCloser, error) {
-	resp, err := c.workspaceStreamRequest(ctx, name, "deploy", req)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Body, nil
-}
-
 // ShellWorkspace opens an interactive shell via WebSocket.
 // Returns the raw WebSocket connection for the caller to read/write.
 func (c *Client) ShellWorkspace(ctx context.Context, name string) (*websocket.Conn, error) {
