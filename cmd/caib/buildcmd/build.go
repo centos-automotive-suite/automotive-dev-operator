@@ -1143,12 +1143,11 @@ func (h *Handler) runManifestBuild(ctx context.Context, cmd *cobra.Command, mani
 		return
 	}
 
-	localRefs, cleanup, refsErr := h.prepareManifestUploads(ctx, api, &req, manifestPath)
+	localRefs, refsErr := h.prepareManifestUploads(&req, manifestPath)
 	if refsErr != nil {
 		h.handleError(fmt.Errorf("manifest file reference error: %w", refsErr))
 		return
 	}
-	defer cleanup()
 	req.HasLocalFiles = len(localRefs) > 0
 	h.pinOCIRepoImages(ctx, &req)
 
@@ -1170,40 +1169,21 @@ func (h *Handler) runManifestBuild(ctx context.Context, cmd *cobra.Command, mani
 	h.finishBuild(ctx, api, resp.Name, h.opts.Output.Wait || h.opts.Output.FollowLogs || h.opts.Output.Dir != "" || h.opts.Flash.AfterBuild)
 }
 
-func nopWorkspaceCleanup() {}
-
-func (h *Handler) prepareManifestUploads(
-	ctx context.Context,
-	api *buildapiclient.Client,
-	req *buildcontract.BuildRequest,
-	manifestPath string,
-) ([]map[string]string, func(), error) {
+// prepareManifestUploads rewrites the manifest's local files to staged paths
+// and returns them for upload. In a --workspace build, /workspace paths stay
+// in the manifest: the controller copies them from the workspace pod onto the
+// build's volume.
+func (h *Handler) prepareManifestUploads(req *buildcontract.BuildRequest, manifestPath string) ([]map[string]string, error) {
 	if req.GitSource != nil {
-		return nil, nopWorkspaceCleanup, nil
+		return nil, nil
 	}
 	workspaceBuild := strings.TrimSpace(h.opts.Build.Workspace) != ""
 	rewritten, localRefs, err := common.PrepareLocalFileUploads(req.Manifest, filepath.Dir(manifestPath), workspaceBuild)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	req.Manifest = rewritten
-	if !workspaceBuild {
-		return localRefs, nopWorkspaceCleanup, nil
-	}
-	// CAIB_CLIENT_WORKSPACE_UPLOAD=0: send /workspace paths unchanged so the
-	// operator hydrate path can be tested (no client-side copy).
-	if os.Getenv("CAIB_CLIENT_WORKSPACE_UPLOAD") == "0" {
-		return localRefs, nopWorkspaceCleanup, nil
-	}
-	rewritten, wsRefs, cleanup, err := h.materializeWorkspaceFiles(ctx, api, strings.TrimSpace(h.opts.Build.Workspace), req.Manifest)
-	if err != nil {
-		return nil, nil, err
-	}
-	if cleanup == nil {
-		cleanup = nopWorkspaceCleanup
-	}
-	req.Manifest = rewritten
-	return append(localRefs, wsRefs...), cleanup, nil
+	return localRefs, nil
 }
 
 func (h *Handler) handleFileUploads(

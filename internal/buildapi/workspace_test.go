@@ -56,7 +56,6 @@ var _ = Describe("Workspace API", func() {
 			{"POST", "/v1/workspaces/my-app/stop"},
 			{"POST", "/v1/workspaces/my-app/sync"},
 			{"POST", "/v1/workspaces/my-app/sync/plan"},
-			{"POST", "/v1/workspaces/my-app/exec"},
 			{"POST", "/v1/workspaces/my-app/runs"},
 			{"GET", "/v1/workspaces/my-app/runs"},
 			{"DELETE", "/v1/workspaces/my-app/runs/run"},
@@ -152,9 +151,9 @@ var _ = Describe("Workspace API", func() {
 	})
 
 	Context("Exec Workspace", func() {
-		It("should reject request with missing command", func() {
-			body, _ := json.Marshal(buildcontract.WorkspaceExecRequest{})
-			req, err := http.NewRequest("POST", "/v1/workspaces/my-app/exec", bytes.NewReader(body))
+		// Commands go through runs on the workspace agent, not pod exec.
+		It("is not served", func() {
+			req, err := http.NewRequest("POST", "/v1/workspaces/my-app/exec", bytes.NewReader([]byte(`{"command":"true"}`)))
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+authToken)
@@ -162,8 +161,7 @@ var _ = Describe("Workspace API", func() {
 			w := httptest.NewRecorder()
 			server.router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(MatchJSON(`{"error":"command is required"}`))
+			Expect(w.Code).To(Equal(http.StatusNotFound))
 		})
 	})
 

@@ -3,12 +3,10 @@ package buildapi
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +25,6 @@ import (
 	kscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
-	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -54,7 +51,6 @@ func (a *APIServer) registerWorkspaceRoutes(v1 *gin.RouterGroup) {
 		workspaceGroup.POST("/:name/stop", a.wrapNamedHandler("stop workspace", a.stopWorkspace))
 		workspaceGroup.POST("/:name/sync", a.wrapNamedHandler("sync workspace", a.syncWorkspace))
 		workspaceGroup.POST("/:name/sync/plan", a.wrapNamedHandler("sync plan workspace", a.syncPlanWorkspace))
-		workspaceGroup.POST("/:name/exec", a.wrapNamedHandler("exec workspace", a.execWorkspace))
 		workspaceGroup.GET("/:name/runs", a.wrapNamedHandler("list workspace runs", a.listWorkspaceRuns))
 		workspaceGroup.DELETE("/:name/runs/:run", a.wrapNamedHandler("delete workspace run", a.deleteWorkspaceRun))
 		workspaceGroup.POST("/:name/runs", a.wrapNamedHandler("create workspace run", a.createWorkspaceRun))
@@ -432,67 +428,6 @@ func (a *APIServer) relaySync(
 	}
 	defer func() { _ = resp.Body.Close() }()
 	c.DataFromReader(http.StatusOK, resp.ContentLength, "application/json; charset=utf-8", resp.Body, nil)
-}
-
-func (a *APIServer) execWorkspace(c *gin.Context, name string) {
-	var req buildcontract.WorkspaceExecRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
-		return
-	}
-
-	if strings.TrimSpace(req.Command) == "" && strings.TrimSpace(req.Script) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "command is required"})
-		return
-	}
-	if req.Command != "" && req.Script != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "command and script are mutually exclusive"})
-		return
-	}
-
-	ws, err := a.getOwnedWorkspace(c, name)
-	if err != nil {
-		return
-	}
-	if ws.Status.Phase != phaseRunning {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
-		return
-	}
-	a.touchWorkspaceActivity(c, ws)
-
-	restCfg, err := a.deps.getRESTConfigFromRequest(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
-		return
-	}
-
-	c.Header("Trailer", buildcontract.WorkspaceExecExitCodeTrailer)
-	setupLogStreamHeaders(c)
-
-	// The pod executor requests stdin, so send EOF even for commands without input.
-	var stdin io.Reader = strings.NewReader("")
-	cmd := []string{"/bin/sh", "-c", "cd /workspace/src && " + req.Command}
-	if req.Script != "" {
-		cmd = []string{"/bin/bash", "-c", `set -euo pipefail
-cd /workspace/src
-script=$(mktemp)
-trap 'rm -f -- "$script"' EXIT
-cat > "$script"
-/bin/bash -euo pipefail "$script"`}
-		stdin = strings.NewReader(req.Script)
-	}
-	w := newFlushWriter(c.Writer)
-	err = a.exec.stream(c.Request.Context(), restCfg, ws.Namespace, ws.Status.PodName, workspaceContainerName, cmd, stdin, w, w)
-	exitCode := 0
-	if err != nil {
-		exitCode = 1
-		var exitErr kexec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitStatus() > 0 && exitErr.ExitStatus() < 256 {
-			exitCode = exitErr.ExitStatus()
-		}
-		_, _ = fmt.Fprintf(c.Writer, "\n[exec failed: %v]\n", err)
-	}
-	c.Header(buildcontract.WorkspaceExecExitCodeTrailer, strconv.Itoa(exitCode))
 }
 
 var wsUpgrader = websocket.Upgrader{

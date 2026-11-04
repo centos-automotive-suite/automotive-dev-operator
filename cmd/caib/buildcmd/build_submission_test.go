@@ -18,7 +18,6 @@ import (
 
 func TestManifestBuildSubmission(t *testing.T) {
 	t.Setenv("CAIB_SKIP_MANIFEST_VALIDATION", "1")
-	t.Setenv("CAIB_CLIENT_WORKSPACE_UPLOAD", "0")
 	t.Setenv("REGISTRY_URL", "registry.example")
 	t.Setenv("REGISTRY_USERNAME", "test-user")
 	t.Setenv("REGISTRY_PASSWORD", "test-password")
