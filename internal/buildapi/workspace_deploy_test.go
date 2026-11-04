@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -214,5 +215,28 @@ func TestWorkspaceDeployRefusesASecondDeployWhileOneRuns(t *testing.T) {
 	}
 	if _, err := api.CancelWorkspaceRun(ctx, "dev", "deploy-1"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A board that accepts the tunnel's connection but stalls the SSH handshake
+// makes every attempt slow; the wait must still end on time.
+func TestDeployScriptStopsWaitingForSSHOnTime(t *testing.T) {
+	tools := fakeDeployTools(t, 0)
+	for _, name := range []string{"ssh", "sshpass"} {
+		if err := os.WriteFile(filepath.Join(tools, name), []byte("#!/bin/sh\nsleep 3\nexit 255\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func(wait int) { deploySSHWaitSeconds = wait }(deploySSHWaitSeconds)
+	deploySSHWaitSeconds = 2
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", deployScript("lease-1", []buildcontract.ArtifactMapping{{Src: "/a", Dest: "/a"}}))
+	cmd.Dir = t.TempDir()
+	started := time.Now()
+	output, err := cmd.CombinedOutput()
+	if elapsed := time.Since(started); err == nil || elapsed > 15*time.Second || !strings.Contains(string(output), "Timed out waiting for SSH") {
+		t.Fatalf("after %v: %v\n%s", elapsed, err, output)
 	}
 }

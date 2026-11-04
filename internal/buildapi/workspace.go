@@ -585,6 +585,9 @@ func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 	a.startWorkspaceRun(c, name, ws, agent, workspaceagent.CreateRequest{ID: req.ID, Command: command, Options: workspaceagent.Options{Exclusive: "deploy"}}, 0)
 }
 
+// deploySSHWaitSeconds bounds how long a deploy waits for SSH to the board.
+var deploySSHWaitSeconds = 60
+
 // deployScript copies artifacts to the board over SSH. The board is behind the
 // Jumpstarter lab network and not routable from the workspace pod, so the
 // script forwards a local port to it through the lease first. The tunnel
@@ -601,7 +604,9 @@ SSH_KEY="-i /workspace/.ssh/id_ed25519"
 	script.WriteString(`TUNNEL_PID=$!
 echo "Waiting for tunnel..."
 SSH_READY=false
-for i in $(seq 1 60); do
+`)
+	fmt.Fprintf(&script, "DEADLINE=$(( $(date +%%s) + %d ))\n", deploySSHWaitSeconds)
+	script.WriteString(`while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if ! kill -0 $TUNNEL_PID 2>/dev/null; then echo "Tunnel process died"; exit 1; fi
   if $SSH_CMD $SSH_KEY root@127.0.0.1 true 2>/dev/null; then SSH_READY=true; break; fi
   if sshpass -p password $SSH_CMD root@127.0.0.1 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys' </workspace/.ssh/id_ed25519.pub 2>/dev/null; then
