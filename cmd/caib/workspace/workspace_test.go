@@ -1,14 +1,21 @@
 package workspace
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -694,34 +701,6 @@ func TestSyncPlanResponseDeletedField(t *testing.T) {
 	})
 }
 
-func TestSyncDeleteRequestValidation(t *testing.T) {
-	t.Run("valid relative paths", func(t *testing.T) {
-		req := buildcontract.SyncDeleteRequest{
-			Files: []string{"src/main.go", "pkg/util.go"},
-		}
-		if len(req.Files) != 2 {
-			t.Errorf("expected 2 files, got %d", len(req.Files))
-		}
-	})
-
-	t.Run("JSON round-trip preserves fields", func(t *testing.T) {
-		req := buildcontract.SyncDeleteRequest{
-			Files: []string{"a.go", "b/c.go"},
-		}
-		data, err := json.Marshal(req)
-		if err != nil {
-			t.Fatalf("marshal failed: %v", err)
-		}
-		var decoded buildcontract.SyncDeleteRequest
-		if err := json.Unmarshal(data, &decoded); err != nil {
-			t.Fatalf("unmarshal failed: %v", err)
-		}
-		if len(decoded.Files) != 2 {
-			t.Errorf("expected 2 files after round-trip, got %d", len(decoded.Files))
-		}
-	})
-}
-
 func TestSyncPlanRequestJSONIncludeDeleted(t *testing.T) {
 	t.Run("IncludeDeleted omitted when false", func(t *testing.T) {
 		req := buildcontract.SyncPlanRequest{
@@ -802,6 +781,20 @@ func TestAbortDeleteIfUnreadable(t *testing.T) {
 	if err := abortDeleteIfUnreadable(dir, files, manifest); err != nil {
 		t.Fatalf("IsNotExist should be allowed for --delete: %v", err)
 	}
+
+	// A path git still lists that is now a directory, or under one that is
+	// now a file, no longer exists as a file either: --delete must clear the
+	// workspace's copy so the upload can replace it.
+	if err := os.Mkdir(filepath.Join(dir, "now-a-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "now-a-file"), []byte("file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	changed := []string{"ok.txt", "now-a-dir", "now-a-file/old.c"}
+	if err := abortDeleteIfUnreadable(dir, changed, manifest); err != nil {
+		t.Fatalf("a path that changed between file and directory should be allowed for --delete: %v", err)
+	}
 }
 
 func TestFilterDeletedMissingLocal(t *testing.T) {
@@ -809,9 +802,17 @@ func TestFilterDeletedMissingLocal(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "ignored.log"), []byte("log"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// A workspace file where the client now has a directory, and one under a
+	// directory the client has replaced with a file, no longer exist locally.
+	if err := os.Mkdir(filepath.Join(dir, "now-a-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "now-a-file"), []byte("file"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
-	got := filterDeletedMissingLocal(dir, []string{"ignored.log", "stale.c", "also-gone.h"})
-	want := []string{"stale.c", "also-gone.h"}
+	got := filterDeletedMissingLocal(dir, []string{"ignored.log", "stale.c", "now-a-dir", "now-a-file/old.c", "also-gone.h"})
+	want := []string{"stale.c", "now-a-dir", "now-a-file/old.c", "also-gone.h"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -839,4 +840,86 @@ func TestSyncPlanResponseEchoesIncludeDeleted(t *testing.T) {
 	if decoded.IncludeDeleted {
 		t.Error("old server response must not look like it supports --delete")
 	}
+}
+
+// With --delete, stale files go with the upload, in one request, so an
+// upload the workspace rejects deletes nothing.
+func TestSyncWithDeleteSendsStaleFilesWithTheUpload(t *testing.T) {
+	dir := initTestGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "foo/bar"), []byte("bar"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls, req, uploaded := syncWithDelete(t, dir, `{"changed":["foo/bar"],"unchanged":0,"deleted":["foo"],"includeDeleted":true}`)
+	if want := []string{"/v1/workspaces/dev/sync/plan", "/v1/workspaces/dev/sync"}; !slices.Equal(calls, want) {
+		t.Errorf("calls = %q, want %q", calls, want)
+	}
+	if !slices.Equal(req.Delete, []string{"foo"}) {
+		t.Errorf("deletes = %q, want foo, which is now a directory", req.Delete)
+	}
+	if want := map[string]string{"foo/bar": "bar"}; !maps.Equal(uploaded, want) {
+		t.Errorf("uploaded = %q, want %q", uploaded, want)
+	}
+}
+
+// A sync that only deletes sends its deletes with an empty archive.
+func TestSyncThatOnlyDeletesSendsAnEmptyArchive(t *testing.T) {
+	dir := initTestGitRepo(t)
+	calls, req, uploaded := syncWithDelete(t, dir, `{"changed":[],"unchanged":1,"deleted":["stale"],"includeDeleted":true}`)
+	if want := []string{"/v1/workspaces/dev/sync/plan", "/v1/workspaces/dev/sync"}; !slices.Equal(calls, want) {
+		t.Errorf("calls = %q, want %q", calls, want)
+	}
+	if !slices.Equal(req.Delete, []string{"stale"}) || len(uploaded) != 0 {
+		t.Errorf("deletes = %q, uploaded = %q; want stale deleted and nothing uploaded", req.Delete, uploaded)
+	}
+}
+
+// syncWithDelete runs caib workspace sync --delete on dir against a server
+// that answers the plan with plan, and returns the paths called, and the
+// upload's request and files.
+func syncWithDelete(t *testing.T, dir, plan string) ([]string, buildcontract.SyncUploadRequest, map[string]string) {
+	t.Helper()
+	var mu sync.Mutex
+	var calls []string
+	var req buildcontract.SyncUploadRequest
+	uploaded := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/workspaces/dev/sync/plan" {
+			_, _ = io.WriteString(w, plan)
+			return
+		}
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&req); err != nil {
+			t.Errorf("the upload doesn't start with its request: %v", err)
+		}
+		reader := tar.NewReader(io.MultiReader(decoder.Buffered(), r.Body))
+		for {
+			hdr, err := reader.Next()
+			if err != nil {
+				if err != io.EOF {
+					t.Errorf("reading the upload: %v", err)
+				}
+				break
+			}
+			data, _ := io.ReadAll(reader)
+			uploaded[hdr.Name] = string(data)
+		}
+		_, _ = io.WriteString(w, `{"files":1,"deleted":1}`)
+	}))
+	defer server.Close()
+	oldServer, oldToken, oldDelete, oldTracked := serverURL, authToken, syncDelete, gitTrackedOnly
+	t.Cleanup(func() { serverURL, authToken, syncDelete, gitTrackedOnly = oldServer, oldToken, oldDelete, oldTracked })
+	serverURL, authToken, syncDelete, gitTrackedOnly = server.URL, "token", true, false
+
+	runSync(nil, []string{"dev", dir})
+
+	mu.Lock()
+	defer mu.Unlock()
+	return calls, req, uploaded
 }

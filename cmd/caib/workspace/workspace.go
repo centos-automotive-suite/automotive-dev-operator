@@ -9,8 +9,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -559,8 +561,9 @@ func runSync(_ *cobra.Command, args []string) {
 		}
 		// Fall back to full overlay sync — warn so users know why delta didn't work
 		fmt.Fprintf(os.Stderr, "Warning: sync plan unavailable (%v), uploading all files\n", err)
+		archive := buildArchive(absDir, files)
 		clilog.Infof("Syncing %d files to workspace %q...\n", len(files), name)
-		uploadFiles(name, absDir, files)
+		uploadArchive(name, buildcontract.SyncUploadRequest{}, archive)
 		return
 	}
 
@@ -576,41 +579,36 @@ func runSync(_ *cobra.Command, args []string) {
 		return
 	}
 
-	if len(plan.Changed) > 0 {
-		clilog.Infof("Syncing %d changed files to workspace %q (%d unchanged)...\n",
-			len(plan.Changed), name, plan.Unchanged)
-		uploadFiles(name, absDir, plan.Changed)
-	}
-
+	// The deletes go with the upload, so the workspace applies both or
+	// neither: a rejected upload leaves the stale files in place.
+	var req buildcontract.SyncUploadRequest
 	if syncDelete && len(plan.Deleted) > 0 {
 		for _, f := range plan.Deleted {
 			fmt.Fprintf(os.Stderr, "  delete: %s\n", f)
 		}
 		clilog.Infof("Removing %d stale file(s) from workspace %q...\n", len(plan.Deleted), name)
-		deleteReq := buildcontract.SyncDeleteRequest{Files: plan.Deleted}
-		err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
-			return client.SyncDelete(context.Background(), name, deleteReq)
-		})
-		if err != nil {
-			handleError(fmt.Errorf("failed to delete stale files: %w", err))
-		}
-		clilog.Infoln("Stale files removed")
+		req.Delete = plan.Deleted
 	}
+	if len(plan.Changed) > 0 {
+		clilog.Infof("Syncing %d changed files to workspace %q (%d unchanged)...\n",
+			len(plan.Changed), name, plan.Unchanged)
+	}
+	uploadArchive(name, req, buildArchive(absDir, plan.Changed))
 }
 
-func uploadFiles(name, absDir string, files []string) {
+func buildArchive(absDir string, files []string) []byte {
 	var buf bytes.Buffer
 	if err := tarTrackedFiles(absDir, files, &buf); err != nil {
 		handleError(fmt.Errorf("failed to create tar archive: %w", err))
 	}
+	return buf.Bytes()
+}
 
-	totalBytes := int64(buf.Len())
-	archive := buf.Bytes()
-
+func uploadArchive(name string, req buildcontract.SyncUploadRequest, archive []byte) {
 	var pr *progressReader
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
-		pr = newProgressReader(bytes.NewReader(archive), totalBytes)
-		err := client.SyncWorkspace(context.Background(), name, pr)
+		pr = newProgressReader(bytes.NewReader(archive), int64(len(archive)))
+		err := client.SyncWorkspace(context.Background(), name, req, pr)
 		pr.finish()
 		return err
 	})
@@ -649,18 +647,18 @@ func abortDeleteIfUnreadable(baseDir string, files []string, manifest map[string
 		if _, ok := manifest[rel]; ok {
 			continue
 		}
-		_, err := os.Lstat(filepath.Join(baseDir, rel))
-		if err == nil {
-			return fmt.Errorf("refusing --delete: %s exists locally but could not be hashed (aborting to avoid deleting the remote copy)", rel)
-		}
-		if !os.IsNotExist(err) {
+		gone, err := goneLocally(baseDir, rel)
+		if err != nil {
 			return fmt.Errorf("refusing --delete: %s: %w", rel, err)
+		}
+		if !gone {
+			return fmt.Errorf("refusing --delete: %s exists locally but could not be hashed (aborting to avoid deleting the remote copy)", rel)
 		}
 	}
 	return nil
 }
 
-// filterDeletedMissingLocal drops remote paths that still exist locally
+// filterDeletedMissingLocal drops remote files that still exist locally
 // (including gitignored files) so --delete matches "no longer exist locally".
 func filterDeletedMissingLocal(baseDir string, deleted []string) []string {
 	if len(deleted) == 0 {
@@ -668,12 +666,26 @@ func filterDeletedMissingLocal(baseDir string, deleted []string) []string {
 	}
 	out := make([]string, 0, len(deleted))
 	for _, rel := range deleted {
-		_, err := os.Lstat(filepath.Join(baseDir, rel))
-		if os.IsNotExist(err) {
+		if gone, err := goneLocally(baseDir, rel); err == nil && gone {
 			out = append(out, rel)
 		}
 	}
 	return out
+}
+
+// goneLocally reports whether rel no longer exists as a file in baseDir. A
+// directory at the path, or a file where the path needs a directory, counts
+// as gone: the workspace's copy must be deleted before the upload can
+// replace it.
+func goneLocally(baseDir, rel string) (bool, error) {
+	info, err := os.Lstat(filepath.Join(baseDir, rel))
+	if err == nil {
+		return info.IsDir(), nil
+	}
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return true, nil
+	}
+	return false, err
 }
 
 // gitListFiles returns files relative to dir. When trackedOnly is true, only

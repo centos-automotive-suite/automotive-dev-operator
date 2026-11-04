@@ -91,9 +91,10 @@ type SyncPlanResponse struct {
 	IncludeDeleted bool     `json:"includeDeleted,omitempty"` // echoed so clients can detect servers that ignore IncludeDeleted
 }
 
-// SyncDeleteRequest is the payload to delete files from a workspace.
-type SyncDeleteRequest struct {
-	Files []string `json:"files"` // relative paths under /workspace/src/ to remove
+// SyncUploadRequest starts the body of a sync upload, and the tar stream of
+// files to upload follows it.
+type SyncUploadRequest struct {
+	Delete []string `json:"delete,omitempty"` // relative paths under /workspace/src/ to remove as the upload applies
 }
 
 // ArtifactMapping maps a source path inside the workspace to a destination on the board.

@@ -73,8 +73,15 @@ type Agent struct {
 	now     func() time.Time
 	procDir string
 	ptsDir  string
-	// planning counts sync plans in progress, which keep the workspace active.
-	planning atomic.Int32
+	// syncing counts sync plans, uploads and deletes in progress, which keep
+	// the workspace active.
+	syncing atomic.Int32
+	// maxUpload bounds the body of a sync upload, and uploadIdle how long it
+	// may go without sending anything.
+	maxUpload  int64
+	uploadIdle time.Duration
+	// uploading lets one sync upload use the staging directory at a time.
+	uploading sync.Mutex
 
 	mu      sync.Mutex
 	records map[string]*record
@@ -103,16 +110,22 @@ func New(root, workdir string, log *slog.Logger) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{
-		root:    root,
-		workdir: workdir,
-		log:     log,
-		now:     time.Now,
-		procDir: "/proc",
-		ptsDir:  "/dev/pts",
-		records: map[string]*record{},
-		broken:  map[string]error{},
-		live:    map[string]*run{},
-		changed: make(chan struct{}),
+		root:       root,
+		workdir:    workdir,
+		log:        log,
+		now:        time.Now,
+		procDir:    "/proc",
+		ptsDir:     "/dev/pts",
+		maxUpload:  maxSyncUploadBytes,
+		uploadIdle: syncUploadIdle,
+		records:    map[string]*record{},
+		broken:     map[string]error{},
+		live:       map[string]*run{},
+		changed:    make(chan struct{}),
+	}
+	// An agent that died mid-upload left its staging directory behind.
+	if err := os.RemoveAll(filepath.Join(workdir, syncStaging)); err != nil {
+		log.Warn("Could not remove an interrupted sync upload", "error", err)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
