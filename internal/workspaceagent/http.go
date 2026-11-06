@@ -54,6 +54,7 @@ func (a *Agent) Handler(token string, files *Files) http.Handler {
 	})
 	api.HandleFunc("POST /sync/plan", a.handleSyncPlan)
 	api.HandleFunc("POST /sync/upload", a.handleSyncUpload)
+	api.HandleFunc("GET /shell", a.handleShell)
 	api.HandleFunc("POST /runs", a.handleCreate)
 	api.HandleFunc("GET /runs", a.handleList)
 	api.HandleFunc("GET /runs/{id}", func(w http.ResponseWriter, r *http.Request) {

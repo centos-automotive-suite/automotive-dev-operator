@@ -1125,7 +1125,7 @@ Final `X-Run-Status` and `X-Run-Exit-Code` trailers supplement GET on the run.
 
 ### workspace shell
 
-Open an interactive shell session in the workspace pod.
+Open an interactive `/bin/sh` in the workspace, started in `/workspace/src` like `caib workspace exec`, with a terminal that follows your terminal's size. The CLI exits with the shell's exit code. The shell ends when the connection drops; background jobs started with `nohup` keep running. For commands that must outlive the connection, use `caib workspace exec`.
 
 ```bash
 caib workspace shell <name>

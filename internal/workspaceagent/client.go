@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Client calls a workspace agent's API. A failure the agent reports is an
@@ -59,16 +61,34 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 	}
 	if resp.StatusCode >= 300 {
 		defer func() { _ = resp.Body.Close() }()
-		var failure struct {
-			Error string `json:"error"`
-		}
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		if json.Unmarshal(data, &failure) != nil || failure.Error == "" {
-			return nil, fmt.Errorf("workspace agent returned HTTP %d", resp.StatusCode)
-		}
-		return nil, &Error{Code: resp.StatusCode, Message: failure.Error}
+		return nil, responseError(resp)
 	}
 	return resp, nil
+}
+
+// responseError is the failure an agent response reports.
+func responseError(resp *http.Response) error {
+	var failure struct {
+		Error string `json:"error"`
+	}
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if json.Unmarshal(data, &failure) != nil || failure.Error == "" {
+		return fmt.Errorf("workspace agent returned HTTP %d", resp.StatusCode)
+	}
+	return &Error{Code: resp.StatusCode, Message: failure.Error}
+}
+
+// Shell opens an interactive shell in the workspace; see handleShell.
+func (c *Client) Shell(ctx context.Context) (*websocket.Conn, error) {
+	transport := c.http.Transport.(*http.Transport)
+	dialer := websocket.Dialer{Proxy: transport.Proxy, TLSClientConfig: transport.TLSClientConfig, HandshakeTimeout: 30 * time.Second}
+	conn, resp, err := dialer.DialContext(ctx, "ws"+strings.TrimPrefix(c.base, "http")+"/shell",
+		http.Header{"Authorization": {"Bearer " + c.token}})
+	if err != nil && resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+		return nil, responseError(resp)
+	}
+	return conn, err
 }
 
 func (c *Client) call(ctx context.Context, method, path string, body, out any) error {

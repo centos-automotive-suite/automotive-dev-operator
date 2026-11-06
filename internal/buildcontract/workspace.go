@@ -101,3 +101,12 @@ type WorkspaceDeployRequest struct {
 	ID        string            `json:"id,omitempty"`
 	Artifacts []ArtifactMapping `json:"artifacts"`
 }
+
+// WorkspaceShellSize sets the size of a workspace shell's terminal. On the
+// shell's websocket the client sends it as a text message and keystrokes as
+// binary messages; the shell's output arrives as binary messages, and its exit
+// code as the text of a normal close.
+type WorkspaceShellSize struct {
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
+}
