@@ -58,6 +58,26 @@ func (c *Client) CreateWorkspaceRun(ctx context.Context, name string, run buildc
 	return c.workspaceRunResult(req)
 }
 
+// DeployWorkspace starts a deploy of workspace artifacts to the board as a
+// workspace run, which WorkspaceRunLogs follows. Supply an ID to safely retry
+// after a lost response.
+func (c *Client) DeployWorkspace(ctx context.Context, name string, deploy buildcontract.WorkspaceDeployRequest) (*buildcontract.WorkspaceRun, error) {
+	body, err := json.Marshal(deploy)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := c.resolve(path.Join("/v1/workspaces", url.PathEscape(name), "deploy"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	return c.workspaceRunResult(req)
+}
+
 // GetWorkspaceRun retrieves the retained status, exit code and log byte count.
 func (c *Client) GetWorkspaceRun(ctx context.Context, name, id string) (*buildcontract.WorkspaceRun, error) {
 	req, err := c.workspaceRunRequest(ctx, http.MethodGet, name, id, "", nil)

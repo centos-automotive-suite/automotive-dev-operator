@@ -411,3 +411,23 @@ func TestWorkspaceExecInterruptPrintsResumeAndCancel(t *testing.T) {
 		t.Fatalf("interrupt: %v, cancellations=%d stderr=%q", err, cancellations.Load(), stderr.String())
 	}
 }
+
+func TestRunShowCommandPrintsTheCommandAsIs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/workspaces/dev/runs/deploy-1" {
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"id":"deploy-1","command":"set -e\nrsync 'a b' root@127.0.0.1:'/c'","status":"Succeeded"}`)
+	}))
+	defer server.Close()
+	cmd := NewWorkspaceCmd(nil)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"run", "show", "dev", "deploy-1", "--command", "--server", server.URL, "--token", "test-token"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "set -e\nrsync 'a b' root@127.0.0.1:'/c'\n"; out.String() != want {
+		t.Errorf("output = %q, want %q", out.String(), want)
+	}
+}

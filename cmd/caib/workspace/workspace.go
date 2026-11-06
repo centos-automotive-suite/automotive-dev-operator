@@ -3,7 +3,6 @@ package workspace
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -28,6 +27,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
 	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -262,7 +262,8 @@ func newDeployCmd() *cobra.Command {
 using the Jumpstarter lease associated with the workspace.
 
 Each --artifact flag takes a src:dest mapping. Both files and directories
-are supported (uses rsync under the hood).
+are supported (uses rsync under the hood). The deploy is a workspace run, so
+an interrupted deploy can be reattached with caib workspace exec --run.
 
 Examples:
   # Single file
@@ -837,8 +838,6 @@ func runDeploy(_ *cobra.Command, args []string) {
 	name := args[0]
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	artifacts := make([]buildcontract.ArtifactMapping, 0, len(artifactMappings))
 	for _, m := range artifactMappings {
 		parts := strings.SplitN(m, ":", 2)
@@ -848,33 +847,22 @@ func runDeploy(_ *cobra.Command, args []string) {
 		artifacts = append(artifacts, buildcontract.ArtifactMapping{Src: parts[0], Dest: parts[1]})
 	}
 
-	req := buildcontract.WorkspaceDeployRequest{
-		Artifacts: artifacts,
-	}
-
+	req := buildcontract.WorkspaceDeployRequest{ID: uuid.NewString(), Artifacts: artifacts}
 	if len(artifacts) == 1 {
 		clilog.Infof("Deploying %s -> %s\n", artifacts[0].Src, artifacts[0].Dest)
 	} else {
 		clilog.Infof("Deploying %d artifacts to board...\n", len(artifacts))
 	}
-
-	var body io.ReadCloser
-	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
-		r, cerr := client.DeployWorkspace(ctx, name, req)
-		if cerr != nil {
-			return cerr
-		}
-		body = r
-		return nil
+	clilog.Statusf("Run: %s (reattach: caib workspace exec %s --run %s)\n", req.ID, name, req.ID)
+	err := createRun(ctx, withRunClient, time.Second, func(ctx context.Context, client *buildapiclient.Client) error {
+		_, err := client.DeployWorkspace(ctx, name, req)
+		return err
 	})
 	if err != nil {
+		stop()
 		handleError(fmt.Errorf("deploy failed: %w", err))
 	}
-	defer func() { _ = body.Close() }()
-
-	if err := streamToStdout(body); err != nil {
-		handleError(err)
-	}
+	followRunAndExit(ctx, stop, name, req.ID, 0)
 }
 
 func waitForRunning(name string) {
@@ -991,18 +979,6 @@ func requireServer() {
 func handleError(err error) {
 	fmt.Fprintln(os.Stderr, caibcommon.FormatError(err))
 	os.Exit(1)
-}
-
-func streamToStdout(r io.Reader) error {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		clilog.Infoln(scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("stream error: %w", err)
-	}
-	return nil
 }
 
 // progressReader wraps an io.Reader and renders an upload progress bar

@@ -29,6 +29,9 @@ type Options struct {
 	RetentionSeconds        int64 `json:"retentionSeconds"`
 	MaxRecords              int64 `json:"maxRecords"`
 	CompletedLogBudgetBytes int64 `json:"completedLogBudgetBytes"`
+	// Exclusive, when set, refuses the run while another run with the same
+	// key is live, such as a second deploy sharing the first's tunnel port.
+	Exclusive string `json:"exclusive,omitempty"`
 }
 
 func (o Options) valid() bool {
@@ -248,6 +251,14 @@ func (a *Agent) Create(id, command string, options Options) (Run, bool, error) {
 	}
 	if a.tombstoned(id) {
 		return Run{}, false, apiError(http.StatusGone, "run was deleted or expired; use a new ID for a new command")
+	}
+	// After the retry check, so a retried create still finds its own run.
+	if options.Exclusive != "" {
+		for liveID, r := range a.live {
+			if r.options.Exclusive == options.Exclusive {
+				return Run{}, false, apiError(http.StatusConflict, "%s %s is still running; wait for it or cancel it", options.Exclusive, liveID)
+			}
+		}
 	}
 	a.pruneLocked(options)
 

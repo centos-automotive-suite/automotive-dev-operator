@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -94,18 +95,24 @@ func runExec(cmd *cobra.Command, args []string) {
 		fmt.Println(id)
 		return
 	}
+	followRunAndExit(ctx, stop, args[0], id, offset)
+}
+
+// followRunAndExit prints the run's output from offset and exits with its
+// exit code, or on interrupt, says how to resume or cancel it.
+func followRunAndExit(ctx context.Context, stop func(), name, id string, offset int64) {
 	var output io.Writer = os.Stdout
 	if clilog.IsQuiet() {
 		output = io.Discard
 	}
-	code, err := followWorkspaceRun(ctx, withRunClient, args[0], id, &offset, output, os.Stderr, time.Second)
+	code, err := followWorkspaceRun(ctx, withRunClient, name, id, &offset, output, os.Stderr, time.Second)
 	stop()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			fmt.Fprintf(os.Stderr, "Detached. Resume: caib workspace exec %s --run %s --offset %d\nCancel: caib workspace run cancel %s %s\n", args[0], id, offset, args[0], id)
+			fmt.Fprintf(os.Stderr, "Detached. Resume: caib workspace exec %s --run %s --offset %d\nCancel: caib workspace run cancel %s %s\n", name, id, offset, name, id)
 			os.Exit(130)
 		}
-		handleError(fmt.Errorf("run %s: %w; resume with caib workspace exec %s --run %s --offset %d", id, err, args[0], id, offset))
+		handleError(fmt.Errorf("run %s: %w; resume with caib workspace exec %s --run %s --offset %d", id, err, name, id, offset))
 	}
 	if code != 0 {
 		os.Exit(code)
@@ -115,7 +122,7 @@ func runExec(cmd *cobra.Command, args []string) {
 func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "run", Short: "List, inspect, cancel or delete durable workspace commands"}
 	for _, action := range []string{"show", "cancel", "delete"} {
-		cmd.AddCommand(&cobra.Command{
+		sub := &cobra.Command{
 			Use: action + " <workspace> <run-id>", Short: action + " a workspace run", Args: cobra.ExactArgs(2),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				requireServer()
@@ -139,9 +146,17 @@ func newRunCmd() *cobra.Command {
 				if action == "delete" {
 					return nil
 				}
+				if onlyCommand, _ := cmd.Flags().GetBool("command"); onlyCommand {
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSuffix(run.Command, "\n"))
+					return err
+				}
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(run)
 			},
-		})
+		}
+		if action == "show" {
+			sub.Flags().Bool("command", false, "print only the run's command, as it ran")
+		}
+		cmd.AddCommand(sub)
 	}
 	list := &cobra.Command{
 		Use: "list <workspace>", Short: "List retained runs, newest first", Args: cobra.ExactArgs(1),
@@ -172,18 +187,26 @@ func newRunCmd() *cobra.Command {
 }
 
 func startWorkspaceRun(ctx context.Context, api runClientCall, name string, req buildcontract.WorkspaceRunRequest, retryDelay time.Duration) error {
-	err := retryRunRequest(ctx, retryDelay, func() error {
-		requestCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
-		defer cancel()
-		return api(func(client *buildapiclient.Client) error {
-			_, err := client.CreateWorkspaceRun(requestCtx, name, req)
-			return err
-		})
+	err := createRun(ctx, api, retryDelay, func(ctx context.Context, client *buildapiclient.Client) error {
+		_, err := client.CreateWorkspaceRun(ctx, name, req)
+		return err
 	})
 	if buildapiclient.IsRouteNotFound(err) {
 		return fmt.Errorf("this server predates durable runs; upgrade the operator or use the caib version shipped with it: %w", err)
 	}
 	return err
+}
+
+// createRun retries a request that starts a run under a fixed ID, so a retry
+// after a lost response finds the same run.
+func createRun(ctx context.Context, api runClientCall, retryDelay time.Duration, create func(context.Context, *buildapiclient.Client) error) error {
+	return retryRunRequest(ctx, retryDelay, func() error {
+		requestCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+		defer cancel()
+		return api(func(client *buildapiclient.Client) error {
+			return create(requestCtx, client)
+		})
+	})
 }
 
 func transientRunError(err error) bool {
