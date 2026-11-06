@@ -56,7 +56,7 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = conn.Close() }()
-	conn.SetReadLimit(64 << 10)
+	conn.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
 
 	var writes sync.Mutex
 	output := make(chan struct{})
@@ -93,11 +93,22 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			if _, err := terminal.Write(data); err != nil {
-				return
-			}
+			// Once the shell ends, writes fail and drop the keystrokes; reading
+			// goes on so the client's close is still answered.
+			_, _ = terminal.Write(data)
 		}
 	}()
+	// stopOutput ends the output relay. A client that does not read is cut
+	// off, since nothing else would end a write to it.
+	stopOutput := func() {
+		_ = terminal.Close()
+		select {
+		case <-output:
+		case <-time.After(shellDrain):
+			_ = conn.Close()
+			<-output
+		}
+	}
 
 	select {
 	case status := <-exited:
@@ -105,8 +116,7 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 		case <-output:
 		case <-time.After(shellDrain):
 		}
-		_ = terminal.Close()
-		<-output
+		stopOutput()
 		writes.Lock()
 		_ = conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, strconv.Itoa(exitCode(status))), time.Now().Add(time.Second))
@@ -117,7 +127,7 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 		}
 	case <-input:
 		hangUp(terminal, pid, exited)
-		<-output
+		stopOutput()
 	}
 }
 

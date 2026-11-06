@@ -109,3 +109,30 @@ func TestShellRequiresTheToken(t *testing.T) {
 		t.Fatalf("shell without a token: %v %v", err, resp)
 	}
 }
+
+// After the shell exits, a client that stops reading must not keep the agent
+// writing to it forever: here a background job floods the terminal and the
+// client never reads.
+func TestShellGivesUpOnAClientThatStopsReading(t *testing.T) {
+	handler := newTestAgent(t).Handler("secret", nil)
+	returned := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+		close(returned)
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/shell",
+		http.Header{"Authorization": {"Bearer secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("yes & exit 2\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the shell handler is still writing to a client that does not read")
+	}
+}

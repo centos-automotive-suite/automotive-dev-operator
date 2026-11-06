@@ -110,3 +110,6 @@ type WorkspaceShellSize struct {
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
 }
+
+// MaxWorkspaceShellMessageBytes bounds each message on a shell's websocket.
+const MaxWorkspaceShellMessageBytes = 64 << 10

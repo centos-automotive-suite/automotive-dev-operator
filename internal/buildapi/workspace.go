@@ -451,11 +451,31 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 		return
 	}
 	defer func() { _ = conn.Close() }()
-	done := make(chan struct{}, 2)
-	go func() { relayMessages(shell, conn); done <- struct{}{} }()
-	go func() { relayMessages(conn, shell); done <- struct{}{} }()
-	<-done
+	conn.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
+	shell.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
+	input := make(chan struct{})
+	output := make(chan struct{})
+	go func() { defer close(input); relayMessages(shell, conn) }()
+	go func() { defer close(output); relayMessages(conn, shell) }()
+	// The shell's close carries its exit code, so wait for the shell's side
+	// even when the client's side ends first: input can fail because the
+	// shell just closed. The agent answers the close passed on to it, unless
+	// it is unreachable.
+	select {
+	case <-output:
+	case <-input:
+		select {
+		case <-output:
+		case <-time.After(shellCloseWait):
+			_ = shell.Close()
+			<-output
+		}
+	}
 }
+
+// shellCloseWait is how long the relay waits for the agent to close a shell
+// whose client went away.
+const shellCloseWait = 5 * time.Second
 
 // relayMessages copies messages from src to dst until src closes, then passes
 // its close on.

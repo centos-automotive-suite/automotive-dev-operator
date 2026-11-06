@@ -796,7 +796,8 @@ func runShell(_ *cobra.Command, args []string) {
 	}
 	restore := func() { _ = term.Restore(fd, oldState) }
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
+	// Ctrl-C reaches the shell as a keystroke; these come from elsewhere.
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-sigCh
 		restore()
@@ -837,10 +838,21 @@ func shellSession(conn *websocket.Conn, stdin io.Reader, stdout io.Writer, resiz
 		defer writes.Unlock()
 		return conn.WriteMessage(kind, data)
 	}
+	sendSize := func(size buildcontract.WorkspaceShellSize) error {
+		data, _ := json.Marshal(size)
+		return write(websocket.TextMessage, data)
+	}
+	// The shell gets the terminal's size before any keystrokes.
+	select {
+	case size := <-resizes:
+		if err := sendSize(size); err != nil {
+			return 0, fmt.Errorf("shell connection lost: %w", err)
+		}
+	default:
+	}
 	go func() {
 		for size := range resizes {
-			data, _ := json.Marshal(size)
-			if write(websocket.TextMessage, data) != nil {
+			if sendSize(size) != nil {
 				return
 			}
 		}
@@ -863,7 +875,9 @@ func shellSession(conn *websocket.Conn, stdin io.Reader, stdout io.Writer, resiz
 	for {
 		_, data, err := conn.ReadMessage()
 		if err == nil {
-			_, _ = stdout.Write(data)
+			if _, err := stdout.Write(data); err != nil {
+				return 0, fmt.Errorf("print shell output: %w", err)
+			}
 			continue
 		}
 		var closed *websocket.CloseError
@@ -875,7 +889,7 @@ func shellSession(conn *websocket.Conn, stdin io.Reader, stdout io.Writer, resiz
 		}
 		code, err := strconv.Atoi(closed.Text)
 		if err != nil {
-			return 0, nil
+			return 0, fmt.Errorf("shell ended without an exit code")
 		}
 		return code, nil
 	}

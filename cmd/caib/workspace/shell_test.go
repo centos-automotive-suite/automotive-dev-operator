@@ -3,25 +3,20 @@ package workspace
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
-// The session sends the terminal's size as text and keystrokes as binary,
-// prints what the shell prints, and ends with the shell's exit code.
-func TestShellSessionRelaysTheTerminalAndReturnsTheExitCode(t *testing.T) {
-	type message struct {
-		kind int
-		data string
-	}
-	got := make(chan []message, 1)
+// dialShellServer connects to a websocket server that serve answers.
+func dialShellServer(t *testing.T, serve func(*websocket.Conn)) *websocket.Conn {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err != nil {
@@ -29,64 +24,103 @@ func TestShellSessionRelaysTheTerminalAndReturnsTheExitCode(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		var messages []message
-		for len(messages) < 3 {
-			kind, data, err := conn.ReadMessage()
-			if err != nil {
-				t.Error(err)
-				break
-			}
-			messages = append(messages, message{kind, string(data)})
-		}
-		got <- messages
-		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("hello\r\n"))
-		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "7"))
+		serve(conn)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
 
-	resizes := make(chan buildcontract.WorkspaceShellSize, 2)
+func closeWith(conn *websocket.Conn, text string) {
+	_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, text))
+}
+
+// The session sends the terminal's size as text before any keystrokes, sends
+// keystrokes as binary, prints what the shell prints, and ends with the
+// shell's exit code.
+func TestShellSessionRelaysTheTerminalAndReturnsTheExitCode(t *testing.T) {
+	type message struct {
+		kind int
+		data string
+	}
+	size := func(cols, rows uint16) string {
+		data, _ := json.Marshal(buildcontract.WorkspaceShellSize{Cols: cols, Rows: rows})
+		return string(data)
+	}
+	resizes := make(chan buildcontract.WorkspaceShellSize, 1)
 	resizes <- buildcontract.WorkspaceShellSize{Cols: 80, Rows: 24}
-	resizes <- buildcontract.WorkspaceShellSize{Cols: 100, Rows: 30}
-	stdinR, stdinW := newBlockingPipe()
-	go func() {
-		// Type only after both sizes went out, so the order is fixed.
-		time.Sleep(200 * time.Millisecond)
-		_, _ = stdinW.Write([]byte("exit 7\r"))
-	}()
+	got := make(chan message, 3)
+	conn := dialShellServer(t, func(conn *websocket.Conn) {
+		for i := range 3 {
+			kind, data, err := conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			got <- message{kind, string(data)}
+			if i == 1 {
+				// A later resize follows the keystrokes.
+				resizes <- buildcontract.WorkspaceShellSize{Cols: 100, Rows: 30}
+			}
+		}
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("hello\r\n"))
+		closeWith(conn, "7")
+	})
+	// The user typed before the session started.
+	stdin := newBlockingPipe()
+	_, _ = stdin.Write([]byte("exit 7\r"))
+
 	var stdout bytes.Buffer
-	code, err := shellSession(conn, stdinR, &stdout, resizes)
+	code, err := shellSession(conn, stdin, &stdout, resizes)
 	if err != nil || code != 7 {
 		t.Fatalf("session = %d, %v; want exit code 7", code, err)
 	}
 	if stdout.String() != "hello\r\n" {
 		t.Errorf("stdout = %q", stdout.String())
 	}
-	size := func(cols, rows uint16) string {
-		data, _ := json.Marshal(buildcontract.WorkspaceShellSize{Cols: cols, Rows: rows})
-		return string(data)
+	for i, want := range []message{{websocket.TextMessage, size(80, 24)}, {websocket.BinaryMessage, "exit 7\r"}, {websocket.TextMessage, size(100, 30)}} {
+		if m := <-got; m != want {
+			t.Errorf("message %d = %+v, want %+v", i, m, want)
+		}
 	}
-	want := []message{{websocket.TextMessage, size(80, 24)}, {websocket.TextMessage, size(100, 30)}, {websocket.BinaryMessage, "exit 7\r"}}
-	if messages := <-got; len(messages) != 3 || messages[0] != want[0] || messages[1] != want[1] || messages[2] != want[2] {
-		t.Errorf("messages = %+v, want %+v", messages, want)
+}
+
+func TestShellSessionFailsWhenTheShellEndsWithoutAnExitCode(t *testing.T) {
+	conn := dialShellServer(t, func(conn *websocket.Conn) { closeWith(conn, "") })
+	if code, err := shellSession(conn, newBlockingPipe(), &bytes.Buffer{}, nil); err == nil {
+		t.Fatalf("session = %d, want an error", code)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("terminal gone") }
+
+func TestShellSessionFailsWhenItCannotPrint(t *testing.T) {
+	conn := dialShellServer(t, func(conn *websocket.Conn) {
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("output"))
+		closeWith(conn, "0")
+	})
+	if code, err := shellSession(conn, newBlockingPipe(), failingWriter{}, nil); err == nil {
+		t.Fatalf("session = %d, want the write error", code)
 	}
 }
 
 // newBlockingPipe stands in for a terminal: reads block until input arrives
 // and never see EOF while the session runs.
-func newBlockingPipe() (*blockingReader, *blockingReader) {
-	r := &blockingReader{data: make(chan []byte, 4)}
-	return r, r
+func newBlockingPipe() *blockingPipe {
+	return &blockingPipe{data: make(chan []byte, 4)}
 }
 
-type blockingReader struct{ data chan []byte }
+type blockingPipe struct{ data chan []byte }
 
-func (b *blockingReader) Read(p []byte) (int, error) { return copy(p, <-b.data), nil }
+func (b *blockingPipe) Read(p []byte) (int, error) { return copy(p, <-b.data), nil }
 
-func (b *blockingReader) Write(p []byte) (int, error) {
+func (b *blockingPipe) Write(p []byte) (int, error) {
 	b.data <- append([]byte(nil), p...)
 	return len(p), nil
 }
