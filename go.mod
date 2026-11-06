@@ -1,6 +1,6 @@
 module github.com/centos-automotive-suite/automotive-dev-operator
 
-go 1.26.5
+go 1.26.10
 
 require (
 	github.com/containers/image/v5 v5.36.2
@@ -63,7 +63,7 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
-	github.com/gin-contrib/sse v1.1.2 // indirect
+	github.com/gin-contrib/sse v1.2.0 // indirect
 	github.com/go-chi/chi/v5 v5.3.2 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/go-openapi/analysis v1.0.0 // indirect
