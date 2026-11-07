@@ -3,6 +3,7 @@ package buildapi
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,9 +23,6 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	kscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -434,114 +432,97 @@ var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(_ *http.Request) bool { return true },
 }
 
+// shellWorkspace relays the client's websocket to a shell in the workspace
+// agent.
 func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
-	ws, err := a.getOwnedWorkspace(c, name)
-	if err != nil {
-		return
-	}
-	if ws.Status.Phase != phaseRunning {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("workspace %q is not running (phase: %s)", name, ws.Status.Phase)})
+	ws, agent, ok := a.runningWorkspaceAgent(c, name)
+	if !ok {
 		return
 	}
 	a.touchWorkspaceActivity(c, ws)
-
-	namespace := ws.Namespace
-	podName := ws.Status.PodName
-
-	restCfg, err := a.deps.getRESTConfigFromRequest(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kubernetes config"})
+	shell, err := agent.Shell(c.Request.Context())
+	if a.workspaceAgentError(c, err) {
 		return
 	}
-
-	// Upgrade to WebSocket
-	wsConn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
+	defer func() { _ = shell.Close() }()
+	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		a.log.Error(err, "websocket upgrade failed", "workspace", name)
 		return
 	}
-	defer func() { _ = wsConn.Close() }()
-
-	clientset, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		_ = wsConn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "failed to create kubernetes client"))
-		return
+	defer func() { _ = conn.Close() }()
+	conn.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
+	shell.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
+	done := make(chan struct{})
+	defer close(done)
+	interval := a.shellPingInterval
+	if interval == 0 {
+		interval = defaultShellPingInterval
 	}
-
-	execReq := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: workspaceContainerName,
-			Command:   []string{"/bin/sh"},
-			Stdin:     true,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       true,
-		}, kscheme.ParameterCodec)
-
-	executor, err := remotecommand.NewSPDYExecutor(restCfg, http.MethodPost, execReq.URL())
-	if err != nil {
-		_ = wsConn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "failed to create executor"))
-		return
-	}
-
-	// Bridge: WebSocket <-> pod exec
-	stdinR, stdinW := io.Pipe()
-	stdoutR, stdoutW := io.Pipe()
-
-	// WS -> stdin pipe
+	pingClient(conn, interval, done)
 	go func() {
-		defer func() { _ = stdinW.Close() }()
+		relayMessages(shell, conn)
+		// The shell's close carries its exit code, so the relay to the client
+		// goes on after the client's side ends: input can fail because the
+		// shell just closed. The agent answers the close passed on to it,
+		// unless it is unreachable.
+		_ = shell.SetReadDeadline(time.Now().Add(shellCloseWait))
+	}()
+	relayMessages(conn, shell)
+}
+
+// shellCloseWait is how long the relay waits for the agent to close a shell
+// whose client went away.
+const shellCloseWait = 5 * time.Second
+
+// defaultShellPingInterval keeps an idle shell's connection under the
+// OpenShift router's idle timeout.
+const defaultShellPingInterval = 30 * time.Second
+
+// pingClient pings conn every interval until done, so proxies on the way to
+// the client don't drop an idle connection. A client that misses two pongs is
+// gone: its reads time out, which ends the relay. Call it before reading from
+// conn.
+func pingClient(conn *websocket.Conn, interval time.Duration, done <-chan struct{}) {
+	wait := 2*interval + interval/2
+	_ = conn.SetReadDeadline(time.Now().Add(wait))
+	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(wait)) })
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		for {
-			_, msg, rerr := wsConn.ReadMessage()
-			if rerr != nil {
+			select {
+			case <-done:
 				return
-			}
-			if _, werr := stdinW.Write(msg); werr != nil {
-				return
+			case <-ticker.C:
+				// A ping stuck behind output to a slow client is retried on
+				// the next tick.
+				_ = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(interval))
 			}
 		}
 	}()
+}
 
-	// stdout pipe -> WS
-	stdoutDone := make(chan struct{})
-	go func() {
-		defer close(stdoutDone)
-		buf := make([]byte, 4096)
-		for {
-			n, rerr := stdoutR.Read(buf)
-			if n > 0 {
-				if werr := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
-					return
-				}
+// relayMessages copies messages from src to dst until src closes, then passes
+// its close on.
+func relayMessages(dst, src *websocket.Conn) {
+	for {
+		kind, data, err := src.ReadMessage()
+		if err != nil {
+			message := websocket.FormatCloseMessage(websocket.CloseGoingAway, "")
+			var closed *websocket.CloseError
+			// The codes for a missing status or a dropped connection are not
+			// sent on the wire.
+			if errors.As(err, &closed) && closed.Code != websocket.CloseNoStatusReceived && closed.Code != websocket.CloseAbnormalClosure {
+				message = websocket.FormatCloseMessage(closed.Code, closed.Text)
 			}
-			if rerr != nil {
-				return
-			}
+			_ = dst.WriteControl(websocket.CloseMessage, message, time.Now().Add(time.Second))
+			return
 		}
-	}()
-
-	err = executor.StreamWithContext(c.Request.Context(), remotecommand.StreamOptions{
-		Stdin:  stdinR,
-		Stdout: stdoutW,
-		Stderr: stdoutW,
-		Tty:    true,
-	})
-	_ = stdoutW.Close()
-	<-stdoutDone
-
-	// Send a clean WebSocket close so the client doesn't see "unexpected EOF"
-	closeMsg := "shell exited"
-	closeCode := websocket.CloseNormalClosure
-	if err != nil {
-		a.log.Error(err, "shell session ended with error", "workspace", name)
-		closeMsg = fmt.Sprintf("shell error: %v", err)
-		closeCode = websocket.CloseInternalServerErr
+		if err := dst.WriteMessage(kind, data); err != nil {
+			return
+		}
 	}
-	_ = wsConn.WriteMessage(websocket.CloseMessage,
-		websocket.FormatCloseMessage(closeCode, closeMsg))
 }
 
 func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
