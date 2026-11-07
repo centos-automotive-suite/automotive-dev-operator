@@ -436,7 +436,7 @@ func TestSyncUploadReplacesWhatIsAtTheStagingPath(t *testing.T) {
 func TestNewClearsAnInterruptedUpload(t *testing.T) {
 	workdir := t.TempDir()
 	writeTree(t, workdir, map[string]string{syncStaging + "/partial": "half", "kept.txt": "kept"})
-	if _, err := New(filepath.Join(t.TempDir(), "runs"), workdir, slog.New(slog.DiscardHandler)); err != nil {
+	if _, err := New(filepath.Join(t.TempDir(), "runs"), workdir, t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	noTempFiles(t, workdir)

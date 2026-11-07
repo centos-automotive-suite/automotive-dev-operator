@@ -22,7 +22,7 @@ import (
 
 func syncTestRouter(t *testing.T, workdir string) *gin.Engine {
 	t.Helper()
-	agent, err := workspaceagent.New(filepath.Join(t.TempDir(), "runs"), workdir, slog.New(slog.DiscardHandler))
+	agent, err := workspaceagent.New(filepath.Join(t.TempDir(), "runs"), workdir, t.TempDir(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

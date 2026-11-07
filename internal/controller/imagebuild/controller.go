@@ -691,7 +691,14 @@ func (r *ImageBuildReconciler) workspaceHydrateFunc() hydrateFunc {
 	if r.hydrateFunc != nil {
 		return r.hydrateFunc
 	}
-	return buildapi.HydrateWorkspaceForImageBuild
+	// The agent's token is a Secret, which the cache doesn't hold.
+	agentReader := r.APIReader
+	if agentReader == nil {
+		agentReader = r.Client
+	}
+	return func(ctx context.Context, cfg *rest.Config, kube client.Client, build *automotivev1alpha1.ImageBuild) error {
+		return buildapi.HydrateWorkspaceForImageBuild(ctx, cfg, kube, agentReader, build)
+	}
 }
 
 func (r *ImageBuildReconciler) markWorkspaceHydrateDone(

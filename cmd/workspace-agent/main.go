@@ -24,7 +24,7 @@ const usage = `usage: workspace-agent start|serve [flags]
   serve  run the agent in the foreground`
 
 type config struct {
-	stateDir, workdir, exportDir, listen, filesListen, tokenFile, certFile, keyFile string
+	stateDir, workdir, exportDir, workspace, listen, filesListen, tokenFile, certFile, keyFile string
 }
 
 func parseFlags(name string, args []string) (config, error) {
@@ -33,6 +33,7 @@ func parseFlags(name string, args []string) (config, error) {
 	flags.StringVar(&cfg.stateDir, "state-dir", "/workspace/.ado", "directory for the agent's lock, log and run records")
 	flags.StringVar(&cfg.workdir, "workdir", "/workspace/src", "working directory for commands")
 	flags.StringVar(&cfg.exportDir, "export-dir", "/workspace/export", "directory served to builds holding a file grant")
+	flags.StringVar(&cfg.workspace, "workspace", "/workspace", "directory builds copy files from")
 	flags.StringVar(&cfg.listen, "listen", fmt.Sprintf(":%d", workspaceagent.APIPort), "address of the agent API")
 	flags.StringVar(&cfg.filesListen, "files-listen", fmt.Sprintf(":%d", workspaceagent.FilesPort), "address of the file server for builds")
 	flags.StringVar(&cfg.tokenFile, "token-file", workspaceagent.TokenDir+"/"+workspaceagent.TokenKey, "file holding the API bearer token")
@@ -131,7 +132,7 @@ func serve(args []string) error {
 	if strings.TrimSpace(string(token)) == "" {
 		return fmt.Errorf("token file %s is empty", cfg.tokenFile)
 	}
-	agent, err := workspaceagent.New(filepath.Join(cfg.stateDir, "runs"), cfg.workdir, log)
+	agent, err := workspaceagent.New(filepath.Join(cfg.stateDir, "runs"), cfg.workdir, cfg.workspace, log)
 	if err != nil {
 		return err
 	}

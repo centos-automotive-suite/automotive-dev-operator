@@ -8,9 +8,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -124,7 +121,7 @@ func (f *Files) Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		file, info, err := f.open(r.PathValue("path"))
+		file, info, err := openFile(f.root, r.PathValue("path"))
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -134,30 +131,4 @@ func (f *Files) Handler() http.Handler {
 		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 	})
 	return mux
-}
-
-// open resolves name under the root, following symlinks, and refuses any
-// real path outside it.
-func (f *Files) open(name string) (*os.File, os.FileInfo, error) {
-	root, err := filepath.EvalSymlinks(f.root)
-	if err != nil {
-		return nil, nil, err
-	}
-	real, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(path.Clean("/"+name))))
-	if err != nil {
-		return nil, nil, err
-	}
-	if real != root && !strings.HasPrefix(real, root+string(os.PathSeparator)) {
-		return nil, nil, os.ErrNotExist
-	}
-	file, err := os.Open(real)
-	if err != nil {
-		return nil, nil, err
-	}
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		_ = file.Close()
-		return nil, nil, os.ErrNotExist
-	}
-	return file, info, nil
 }

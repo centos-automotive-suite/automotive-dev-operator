@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"io/fs"
 	"strings"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent/agentconn"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -49,72 +51,24 @@ func permanentHydrateErrorf(format string, args ...any) error {
 	return &permanentHydrateError{err: fmt.Errorf(format, args...)}
 }
 
-const workspaceListPython = `import glob, json, os, sys
-root = sys.argv[1] if len(sys.argv) > 1 else "/workspace"
-real_root = os.path.realpath(root)
-refs = json.loads(sys.stdin.read())
-out = []
-missing = []
-escaped = []
-def within_root(p):
-    real = os.path.realpath(p)
-    return real == real_root or real.startswith(real_root + os.sep)
-def emit(src, dest):
-    if not within_root(src):
-        escaped.append(src)
-        return
-    out.append({"src": src, "dest": dest})
-for r in refs:
-    kind = r.get("kind", "path")
-    abs_path = r["absPath"]
-    rel_path = r.get("relPath", "")
-    if kind == "glob":
-        files = [m for m in glob.glob(abs_path, recursive=True) if os.path.isfile(m)]
-        if not files:
-            missing.append(abs_path)
-            continue
-        for m in files:
-            emit(m, os.path.relpath(m, root))
-        continue
-    if os.path.isdir(abs_path):
-        found = False
-        for dirpath, _, filenames in os.walk(abs_path):
-            for name in filenames:
-                p = os.path.join(dirpath, name)
-                if os.path.isfile(p):
-                    found = True
-                    emit(p, os.path.relpath(p, root))
-        if not found:
-            missing.append(abs_path)
-        continue
-    if os.path.isfile(abs_path):
-        dest = rel_path if rel_path else os.path.relpath(abs_path, root)
-        emit(abs_path, dest)
-        continue
-    missing.append(abs_path)
-if escaped:
-    sys.stderr.write("workspace files escape %s: %s\n" % (root, ", ".join(escaped)))
-    sys.exit(2)
-if missing:
-    sys.stderr.write("missing workspace files: %s\n" % ", ".join(missing))
-    sys.exit(1)
-sys.stdout.write(json.dumps(out))
-`
-
-type hydrateFile struct {
-	Src  string `json:"src"`
-	Dest string `json:"dest"`
-}
-
 // HydrateWorkspaceForImageBuild copies workspace add_files onto the build
-// upload pod (shared PVC) using the workspace-hydrate annotation.
-func HydrateWorkspaceForImageBuild(ctx context.Context, restCfg *rest.Config, k8sClient client.Client, imageBuild *automotivev1alpha1.ImageBuild) error {
-	return hydrateWorkspace(ctx, podExecutor{newExecutor: newPodExecExecutor}, restCfg, k8sClient, imageBuild)
+// upload pod (shared PVC) using the workspace-hydrate annotation. It reads the
+// files through the workspace's agent, with credentials it reads through
+// agentReader.
+func HydrateWorkspaceForImageBuild(ctx context.Context, restCfg *rest.Config, k8sClient client.Client, agentReader client.Reader, imageBuild *automotivev1alpha1.ImageBuild) error {
+	connect := func(ctx context.Context, ws *automotivev1alpha1.Workspace) (*workspaceagent.Client, error) {
+		return agentconn.Connect(ctx, agentReader, ws)
+	}
+	return hydrateWorkspace(ctx, podExecutor{newExecutor: newPodExecExecutor}, connect, restCfg, k8sClient, imageBuild)
 }
+
+// agentConnector returns a client for a workspace's agent.
+type agentConnector func(context.Context, *automotivev1alpha1.Workspace) (*workspaceagent.Client, error)
 
 func hydrateWorkspace(
 	ctx context.Context,
 	p podExecutor,
+	connect agentConnector,
 	restCfg *rest.Config,
 	k8sClient client.Client,
 	imageBuild *automotivev1alpha1.ImageBuild,
@@ -157,17 +111,36 @@ func hydrateWorkspace(
 	if ws.Status.Phase != phaseRunning || ws.Status.PodName == "" {
 		return fmt.Errorf("workspace %q is not running", wsName)
 	}
-
-	files, err := p.listWorkspaceHydrateFiles(ctx, restCfg, imageBuild.Namespace, ws.Status.PodName, refs)
+	agent, err := connect(ctx, ws)
 	if err != nil {
+		return fmt.Errorf("connecting to workspace %q: %w", wsName, err)
+	}
+
+	fileRefs := make([]workspaceagent.FileRef, 0, len(refs))
+	for _, ref := range refs {
+		fileRefs = append(fileRefs, workspaceagent.FileRef{Path: ref.RelPath, Glob: ref.Kind == hydrateKindGlob})
+	}
+	files, err := agent.ListFiles(ctx, fileRefs)
+	if err != nil {
+		err = fmt.Errorf("listing workspace files: %w", err)
+		// The agent rejects refs and reports missing files and links out of
+		// the workspace with a 4xx; retrying gets the same answer.
+		if apiErr, ok := errors.AsType[*workspaceagent.Error](err); ok && apiErr.Code >= 400 && apiErr.Code < 500 {
+			return &permanentHydrateError{err: err}
+		}
 		return err
 	}
 
 	uploadContainer := uploadPod.Spec.Containers[0].Name
-	for _, f := range files {
-		cleanDest, err := validateDestPath(f.Dest)
+	for _, name := range files {
+		// The user controls their workspace's agent, so check every name it
+		// returns.
+		if !fs.ValidPath(name) || name == "." {
+			return permanentHydrateErrorf("workspace agent returned an invalid file name %q", name)
+		}
+		cleanDest, err := validateDestPath(name)
 		if err != nil {
-			return permanentHydrateErrorf("workspace file %s: %w", f.Src, err)
+			return permanentHydrateErrorf("workspace file %s: %w", name, err)
 		}
 		destPath := "/workspace/shared/" + cleanDest
 		// Skip files already copied so a retried hydrate makes forward
@@ -180,13 +153,30 @@ func hydrateWorkspace(
 		if exists {
 			continue
 		}
-		if err := p.copyFileBetweenPods(
-			ctx, restCfg, imageBuild.Namespace,
-			ws.Status.PodName, workspaceContainerName, f.Src,
-			uploadPod.Name, uploadContainer, destPath,
-		); err != nil {
+		if err := copyWorkspaceFile(ctx, p, agent, name, restCfg, imageBuild.Namespace, uploadPod.Name, uploadContainer, destPath); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// copyWorkspaceFile streams the workspace file at name from the agent to
+// destPath on the upload pod, without buffering it.
+func copyWorkspaceFile(
+	ctx context.Context,
+	p podExecutor,
+	agent *workspaceagent.Client,
+	name string,
+	config *rest.Config,
+	namespace, podName, containerName, destPath string,
+) error {
+	body, err := agent.OpenFile(ctx, name)
+	if err != nil {
+		return fmt.Errorf("copy %s from workspace: %w", name, err)
+	}
+	defer func() { _ = body.Close() }()
+	if err := p.copyReaderToPod(ctx, config, namespace, podName, containerName, body, destPath); err != nil {
+		return fmt.Errorf("copy %s to upload pod: %w", destPath, err)
 	}
 	return nil
 }
@@ -205,79 +195,4 @@ func (p podExecutor) fileExistsOnPod(
 		return false, wrapPodStreamError("stat on upload pod", err, &stderr)
 	}
 	return strings.TrimSpace(stdout.String()) == "yes", nil
-}
-
-func (p podExecutor) listWorkspaceHydrateFiles(
-	ctx context.Context,
-	restCfg *rest.Config,
-	namespace, workspacePod string,
-	refs []workspacemanifest.WorkspaceHydrateRef,
-) ([]hydrateFile, error) {
-	payload, err := json.Marshal(refs)
-	if err != nil {
-		return nil, err
-	}
-	var stdout, stderr bytes.Buffer
-	cmd := []string{"python3", "-c", workspaceListPython, workspaceFSRoot}
-	if err := p.stream(ctx, restCfg, namespace, workspacePod, workspaceContainerName, cmd, bytes.NewReader(payload), &stdout, &stderr); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			err = fmt.Errorf("listing workspace files: %w (%s)", err, msg)
-		} else {
-			err = fmt.Errorf("listing workspace files: %w", err)
-		}
-		// Missing files and symlink escapes are deterministic: retrying the
-		// same refs will fail the same way, so fail the build immediately.
-		if strings.Contains(msg, "missing workspace files") ||
-			strings.Contains(msg, "escape "+workspaceFSRoot) {
-			return nil, &permanentHydrateError{err: err}
-		}
-		return nil, err
-	}
-	var files []hydrateFile
-	if err := json.Unmarshal(stdout.Bytes(), &files); err != nil {
-		return nil, fmt.Errorf("parsing workspace file list: %w", err)
-	}
-	return files, nil
-}
-
-// copyFileBetweenPods streams srcPath from the source pod to dstPath on the
-// destination pod through an io.Pipe so the operator never buffers the file.
-func (p podExecutor) copyFileBetweenPods(
-	ctx context.Context,
-	config *rest.Config,
-	namespace, srcPod, srcContainer, srcPath, dstPod, dstContainer, dstPath string,
-) error {
-	pr, pw := io.Pipe()
-	srcErrCh := make(chan error, 1)
-	go func() {
-		err := p.copyFileFromPodToWriter(ctx, config, namespace, srcPod, srcContainer, srcPath, pw)
-		_ = pw.CloseWithError(err)
-		srcErrCh <- err
-	}()
-
-	destErr := p.copyReaderToPod(ctx, config, namespace, dstPod, dstContainer, pr, dstPath)
-	_ = pr.Close()
-	srcErr := <-srcErrCh
-	if destErr != nil {
-		return fmt.Errorf("copy %s to upload pod: %w", dstPath, destErr)
-	}
-	if srcErr != nil {
-		return fmt.Errorf("copy %s from workspace: %w", srcPath, srcErr)
-	}
-	return nil
-}
-
-func (p podExecutor) copyFileFromPodToWriter(
-	ctx context.Context,
-	config *rest.Config,
-	namespace, podName, containerName, podPath string,
-	w io.Writer,
-) error {
-	cmd := []string{"/bin/sh", "-c", "cat -- \"$1\"", "--", podPath} //nolint:goconst // matches copyFileToPod
-	var stderr bytes.Buffer
-	// The pod executor always advertises Stdin; send an immediate EOF so
-	// cat does not hang waiting for a closed stream.
-	err := p.stream(ctx, config, namespace, podName, containerName, cmd, bytes.NewReader(nil), w, &stderr)
-	return wrapPodStreamError("copy from pod", err, &stderr)
 }
