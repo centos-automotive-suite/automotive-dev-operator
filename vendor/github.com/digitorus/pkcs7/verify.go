@@ -291,6 +291,12 @@ func (err *MessageDigestMismatchError) Error() string {
 }
 
 func getSignatureAlgorithm(digestEncryption, digest pkix.AlgorithmIdentifier) (x509.SignatureAlgorithm, error) {
+	if algorithm, ok := mlDSAAlgorithmForOID(digestEncryption.Algorithm); ok {
+		if algorithmIdentifierParametersPresent(digestEncryption.Parameters) {
+			return -1, fmt.Errorf("pkcs7: ML-DSA AlgorithmIdentifier parameters must be absent")
+		}
+		return algorithm.signatureAlgorithm, nil
+	}
 	switch {
 	case digestEncryption.Algorithm.Equal(OIDDigestAlgorithmECDSASHA1):
 		return x509.ECDSAWithSHA1, nil
@@ -300,6 +306,15 @@ func getSignatureAlgorithm(digestEncryption, digest pkix.AlgorithmIdentifier) (x
 		return x509.ECDSAWithSHA384, nil
 	case digestEncryption.Algorithm.Equal(OIDDigestAlgorithmECDSASHA512):
 		return x509.ECDSAWithSHA512, nil
+	case digestEncryption.Algorithm.Equal(OIDPublicKeyAlgorithmEC):
+		// Windows CNG and historical NSS versions have emitted the public-key
+		// algorithm OID in SignerInfo.signatureAlgorithm. RFC 5753 requires an
+		// ecdsa-with-SHA* OID, but accepting this legacy form is safe when the
+		// digest is explicit and the public key is still checked by x509.
+		if !algorithmIdentifierParametersAbsentOrNull(digestEncryption.Parameters) {
+			return -1, errors.New("pkcs7: id-ecPublicKey AlgorithmIdentifier parameters must be absent or NULL")
+		}
+		return getECDSASignatureAlgorithm(digest, digestEncryption.Algorithm)
 	case digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmRSA),
 		digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmRSASHA1),
 		digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmRSASHA256),
@@ -324,25 +339,104 @@ func getSignatureAlgorithm(digestEncryption, digest pkix.AlgorithmIdentifier) (x
 	case digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmECDSAP256),
 		digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmECDSAP384),
 		digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmECDSAP521):
-		switch {
-		case digest.Algorithm.Equal(OIDDigestAlgorithmSHA1):
-			return x509.ECDSAWithSHA1, nil
-		case digest.Algorithm.Equal(OIDDigestAlgorithmSHA256):
-			return x509.ECDSAWithSHA256, nil
-		case digest.Algorithm.Equal(OIDDigestAlgorithmSHA384):
-			return x509.ECDSAWithSHA384, nil
-		case digest.Algorithm.Equal(OIDDigestAlgorithmSHA512):
-			return x509.ECDSAWithSHA512, nil
-		default:
-			return -1, fmt.Errorf("pkcs7: unsupported digest %q for encryption algorithm %q",
-				digest.Algorithm.String(), digestEncryption.Algorithm.String())
-		}
+		return getECDSASignatureAlgorithm(digest, digestEncryption.Algorithm)
 	case digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmEDDSA25519):
 		return x509.PureEd25519, nil
+	case digestEncryption.Algorithm.Equal(OIDEncryptionAlgorithmRSAPSS):
+		return getRSAPSSSignatureAlgorithm(digestEncryption.Parameters, digest)
 	default:
 		return -1, fmt.Errorf("pkcs7: unsupported algorithm %q",
 			digestEncryption.Algorithm.String())
 	}
+}
+
+func getECDSASignatureAlgorithm(digest pkix.AlgorithmIdentifier, signatureOID asn1.ObjectIdentifier) (x509.SignatureAlgorithm, error) {
+	switch {
+	case digest.Algorithm.Equal(OIDDigestAlgorithmSHA1):
+		return x509.ECDSAWithSHA1, nil
+	case digest.Algorithm.Equal(OIDDigestAlgorithmSHA256):
+		return x509.ECDSAWithSHA256, nil
+	case digest.Algorithm.Equal(OIDDigestAlgorithmSHA384):
+		return x509.ECDSAWithSHA384, nil
+	case digest.Algorithm.Equal(OIDDigestAlgorithmSHA512):
+		return x509.ECDSAWithSHA512, nil
+	default:
+		return -1, fmt.Errorf("pkcs7: unsupported digest %q for signature algorithm %q",
+			digest.Algorithm.String(), signatureOID.String())
+	}
+}
+
+func algorithmIdentifierParametersPresent(parameters asn1.RawValue) bool {
+	return parameters.Class != 0 || parameters.Tag != 0 || parameters.IsCompound ||
+		len(parameters.Bytes) != 0 || len(parameters.FullBytes) != 0
+}
+
+// pssParameters reflects RSASSA-PSS-params (RFC 4055, section 3.1).
+type pssParameters struct {
+	Hash         pkix.AlgorithmIdentifier `asn1:"explicit,tag:0,optional"`
+	MGF          pkix.AlgorithmIdentifier `asn1:"explicit,tag:1,optional"`
+	SaltLength   int                      `asn1:"explicit,tag:2,optional,default:20"`
+	TrailerField int                      `asn1:"explicit,tag:3,optional,default:1"`
+}
+
+// getRSAPSSSignatureAlgorithm maps an RSASSA-PSS SignerInfo onto the x509 PSS
+// algorithms. crypto/x509 verifies PSS with MGF1 over the signature hash and a
+// salt as long as that hash, so only this profile is accepted (RFC 4056,
+// section 3.1). The SHA-1 defaults of absent parameters are rejected, and the
+// signer's digest algorithm must match the PSS hash.
+func getRSAPSSSignatureAlgorithm(parameters asn1.RawValue, digest pkix.AlgorithmIdentifier) (x509.SignatureAlgorithm, error) {
+	var params pssParameters
+	if rest, err := asn1.Unmarshal(parameters.FullBytes, &params); err != nil {
+		return -1, fmt.Errorf("pkcs7: invalid RSASSA-PSS parameters: %w", err)
+	} else if len(rest) != 0 {
+		return -1, errors.New("pkcs7: trailing data after RSASSA-PSS parameters")
+	}
+
+	var signatureAlgorithm x509.SignatureAlgorithm
+	var hashSize int
+	switch {
+	case params.Hash.Algorithm.Equal(OIDDigestAlgorithmSHA256):
+		signatureAlgorithm, hashSize = x509.SHA256WithRSAPSS, 32
+	case params.Hash.Algorithm.Equal(OIDDigestAlgorithmSHA384):
+		signatureAlgorithm, hashSize = x509.SHA384WithRSAPSS, 48
+	case params.Hash.Algorithm.Equal(OIDDigestAlgorithmSHA512):
+		signatureAlgorithm, hashSize = x509.SHA512WithRSAPSS, 64
+	default:
+		return -1, fmt.Errorf("pkcs7: unsupported RSASSA-PSS hash %q", params.Hash.Algorithm.String())
+	}
+
+	if !params.MGF.Algorithm.Equal(OIDMaskGenerationFunctionMGF1) {
+		return -1, fmt.Errorf("pkcs7: unsupported RSASSA-PSS mask generation function %q", params.MGF.Algorithm.String())
+	}
+	var mgfHash pkix.AlgorithmIdentifier
+	if rest, err := asn1.Unmarshal(params.MGF.Parameters.FullBytes, &mgfHash); err != nil || len(rest) != 0 {
+		return -1, errors.New("pkcs7: invalid RSASSA-PSS MGF1 parameters")
+	}
+	if !mgfHash.Algorithm.Equal(params.Hash.Algorithm) {
+		return -1, fmt.Errorf("pkcs7: RSASSA-PSS MGF1 hash %q differs from signature hash %q",
+			mgfHash.Algorithm.String(), params.Hash.Algorithm.String())
+	}
+	if params.SaltLength != hashSize {
+		return -1, fmt.Errorf("pkcs7: unsupported RSASSA-PSS salt length %d, want %d", params.SaltLength, hashSize)
+	}
+	if params.TrailerField != 1 {
+		return -1, fmt.Errorf("pkcs7: unsupported RSASSA-PSS trailer field %d", params.TrailerField)
+	}
+	if !digest.Algorithm.Equal(params.Hash.Algorithm) {
+		return -1, fmt.Errorf("pkcs7: digest algorithm %q differs from RSASSA-PSS hash %q",
+			digest.Algorithm.String(), params.Hash.Algorithm.String())
+	}
+	return signatureAlgorithm, nil
+}
+
+func algorithmIdentifierParametersAbsentOrNull(parameters asn1.RawValue) bool {
+	if !algorithmIdentifierParametersPresent(parameters) {
+		return true
+	}
+	if len(parameters.FullBytes) != 0 {
+		return len(parameters.FullBytes) == 2 && parameters.FullBytes[0] == 0x05 && parameters.FullBytes[1] == 0x00
+	}
+	return parameters.Class == 0 && parameters.Tag == asn1.TagNull && !parameters.IsCompound && len(parameters.Bytes) == 0
 }
 
 func getCertFromCertsByIssuerAndSerial(certs []*x509.Certificate, ias issuerAndSerial) *x509.Certificate {
