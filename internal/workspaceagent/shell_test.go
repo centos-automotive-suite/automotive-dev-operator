@@ -70,6 +70,19 @@ func TestShellRunsInATerminalOfTheClientsSizeAndReportsItsExitCode(t *testing.T)
 	}
 }
 
+// The shell's terminal is the client's, whatever terminal the agent's
+// environment names.
+func TestShellNamesAnXtermTerminal(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	conn := dialShell(t, newTestAgent(t))
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("echo \"term=$TERM count=$(env | grep -c ^TERM=)\"; exit\n")); err != nil {
+		t.Fatal(err)
+	}
+	if output, _ := readShell(t, conn); !strings.Contains(output, "term=xterm-256color count=1") {
+		t.Errorf("output lacks a single TERM=xterm-256color:\n%s", output)
+	}
+}
+
 func TestShellEndsWhenTheClientGoesAway(t *testing.T) {
 	a := newTestAgent(t)
 	conn := dialShell(t, a)

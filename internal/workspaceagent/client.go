@@ -21,9 +21,10 @@ import (
 // *Error with its HTTP status; any other error means the agent could not be
 // reached or answered badly.
 type Client struct {
-	base  string
-	token string
-	http  *http.Client
+	base   string
+	token  string
+	http   *http.Client
+	dialer *websocket.Dialer
 }
 
 // NewClient returns a client for the agent at baseURL that sends token. roots
@@ -34,7 +35,12 @@ func NewClient(baseURL, token string, roots *x509.CertPool) *Client {
 	// Callers build a client per request, so an idle connection would never
 	// be reused, only left open.
 	transport.DisableKeepAlives = true
-	return &Client{base: strings.TrimRight(baseURL, "/"), token: token, http: &http.Client{Transport: transport}}
+	return &Client{
+		base:   strings.TrimRight(baseURL, "/"),
+		token:  token,
+		http:   &http.Client{Transport: transport},
+		dialer: &websocket.Dialer{Proxy: transport.Proxy, TLSClientConfig: transport.TLSClientConfig, HandshakeTimeout: 30 * time.Second},
+	}
 }
 
 // request sends body as JSON, or as it is when it is already an io.Reader.
@@ -80,9 +86,7 @@ func responseError(resp *http.Response) error {
 
 // Shell opens an interactive shell in the workspace; see handleShell.
 func (c *Client) Shell(ctx context.Context) (*websocket.Conn, error) {
-	transport := c.http.Transport.(*http.Transport)
-	dialer := websocket.Dialer{Proxy: transport.Proxy, TLSClientConfig: transport.TLSClientConfig, HandshakeTimeout: 30 * time.Second}
-	conn, resp, err := dialer.DialContext(ctx, "ws"+strings.TrimPrefix(c.base, "http")+"/shell",
+	conn, resp, err := c.dialer.DialContext(ctx, "ws"+strings.TrimPrefix(c.base, "http")+"/shell",
 		http.Header{"Authorization": {"Bearer " + c.token}})
 	if err != nil && resp != nil {
 		defer func() { _ = resp.Body.Close() }()

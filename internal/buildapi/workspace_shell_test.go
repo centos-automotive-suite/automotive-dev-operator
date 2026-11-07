@@ -214,6 +214,43 @@ func TestWorkspaceShellRelaysTheCloseWhenInputFailsFirst(t *testing.T) {
 	}
 }
 
+// The relay waits for the agent to answer a close the client sent, since the
+// answer carries the exit code, but not forever.
+func TestWorkspaceShellGivesUpOnAnAgentThatDoesNotAnswer(t *testing.T) {
+	ended := make(chan error, 1)
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		conn.SetCloseHandler(func(int, string) error { return nil })
+		_, _, _ = conn.ReadMessage()
+		_, err = conn.NetConn().Read(make([]byte, 1))
+		ended <- err
+	}))
+	defer agent.Close()
+	_, router := runTestServer(t, agent.URL, "alice", false)
+	api := newRunClient(t, router)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	conn, err := api.ShellWorkspace(ctx, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ended:
+	case <-time.After(shellCloseWait + 5*time.Second):
+		t.Fatal("the relay stayed open for an agent that does not answer")
+	}
+}
+
 // startIdleShellAgent serves a shell that never says anything, and reports how
 // the build API's connection to it ended.
 func startIdleShellAgent(t *testing.T) (string, <-chan error) {

@@ -52,7 +52,6 @@ func TestShellSessionRelaysTheTerminalAndReturnsTheExitCode(t *testing.T) {
 		return string(data)
 	}
 	resizes := make(chan buildcontract.WorkspaceShellSize, 1)
-	resizes <- buildcontract.WorkspaceShellSize{Cols: 80, Rows: 24}
 	got := make(chan message, 3)
 	conn := dialShellServer(t, func(conn *websocket.Conn) {
 		for i := range 3 {
@@ -75,7 +74,7 @@ func TestShellSessionRelaysTheTerminalAndReturnsTheExitCode(t *testing.T) {
 	_, _ = stdin.Write([]byte("exit 7\r"))
 
 	var stdout bytes.Buffer
-	code, err := shellSession(conn, stdin, &stdout, resizes)
+	code, err := shellSession(conn, stdin, &stdout, buildcontract.WorkspaceShellSize{Cols: 80, Rows: 24}, resizes)
 	if err != nil || code != 7 {
 		t.Fatalf("session = %d, %v; want exit code 7", code, err)
 	}
@@ -91,7 +90,7 @@ func TestShellSessionRelaysTheTerminalAndReturnsTheExitCode(t *testing.T) {
 
 func TestShellSessionFailsWhenTheShellEndsWithoutAnExitCode(t *testing.T) {
 	conn := dialShellServer(t, func(conn *websocket.Conn) { closeWith(conn, "") })
-	if code, err := shellSession(conn, newBlockingPipe(), &bytes.Buffer{}, nil); err == nil {
+	if code, err := shellSession(conn, newBlockingPipe(), &bytes.Buffer{}, buildcontract.WorkspaceShellSize{Cols: 80, Rows: 24}, nil); err == nil {
 		t.Fatalf("session = %d, want an error", code)
 	}
 }
@@ -105,7 +104,7 @@ func TestShellSessionFailsWhenItCannotPrint(t *testing.T) {
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("output"))
 		closeWith(conn, "0")
 	})
-	if code, err := shellSession(conn, newBlockingPipe(), failingWriter{}, nil); err == nil {
+	if code, err := shellSession(conn, newBlockingPipe(), failingWriter{}, buildcontract.WorkspaceShellSize{Cols: 80, Rows: 24}, nil); err == nil {
 		t.Fatalf("session = %d, want the write error", code)
 	}
 }

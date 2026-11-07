@@ -771,13 +771,18 @@ func runShell(_ *cobra.Command, args []string) {
 	name := args[0]
 
 	fd := int(os.Stdin.Fd())
-	if !term.IsTerminal(fd) {
+	// The shell's terminal follows this one's size. Watching for resizes
+	// first means none is missed between reading the size and relaying.
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	size, err := terminalSize(fd)
+	if err != nil {
 		handleError(fmt.Errorf("stdin is not a terminal"))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var ws *websocket.Conn
-	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
+	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		conn, cerr := client.ShellWorkspace(ctx, name)
 		if cerr != nil {
 			return cerr
@@ -804,23 +809,16 @@ func runShell(_ *cobra.Command, args []string) {
 		os.Exit(1)
 	}()
 
-	// The shell's terminal follows this one's size.
-	resizes := make(chan buildcontract.WorkspaceShellSize, 1)
-	sendSize := func() {
-		if cols, rows, err := term.GetSize(fd); err == nil {
-			resizes <- buildcontract.WorkspaceShellSize{Cols: uint16(cols), Rows: uint16(rows)}
-		}
-	}
-	sendSize()
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
+	resizes := make(chan buildcontract.WorkspaceShellSize)
 	go func() {
 		for range winch {
-			sendSize()
+			if size, err := terminalSize(fd); err == nil {
+				resizes <- size
+			}
 		}
 	}()
 
-	code, err := shellSession(ws, os.Stdin, os.Stdout, resizes)
+	code, err := shellSession(ws, os.Stdin, os.Stdout, size, resizes)
 	restore()
 	if err != nil {
 		handleError(err)
@@ -828,10 +826,21 @@ func runShell(_ *cobra.Command, args []string) {
 	os.Exit(code)
 }
 
-// shellSession relays a terminal to a workspace shell until the shell ends,
-// and returns its exit code. The protocol is described at
+func terminalSize(fd int) (buildcontract.WorkspaceShellSize, error) {
+	cols, rows, err := term.GetSize(fd)
+	return buildcontract.WorkspaceShellSize{Cols: uint16(cols), Rows: uint16(rows)}, err
+}
+
+// shellSession relays a terminal of the given size to a workspace shell until
+// the shell ends, and returns its exit code. The protocol is described at
 // buildcontract.WorkspaceShellSize.
-func shellSession(conn *websocket.Conn, stdin io.Reader, stdout io.Writer, resizes <-chan buildcontract.WorkspaceShellSize) (int, error) {
+func shellSession(
+	conn *websocket.Conn,
+	stdin io.Reader,
+	stdout io.Writer,
+	size buildcontract.WorkspaceShellSize,
+	resizes <-chan buildcontract.WorkspaceShellSize,
+) (int, error) {
 	var writes sync.Mutex
 	write := func(kind int, data []byte) error {
 		writes.Lock()
@@ -843,12 +852,8 @@ func shellSession(conn *websocket.Conn, stdin io.Reader, stdout io.Writer, resiz
 		return write(websocket.TextMessage, data)
 	}
 	// The shell gets the terminal's size before any keystrokes.
-	select {
-	case size := <-resizes:
-		if err := sendSize(size); err != nil {
-			return 0, fmt.Errorf("shell connection lost: %w", err)
-		}
-	default:
+	if err := sendSize(size); err != nil {
+		return 0, fmt.Errorf("shell connection lost: %w", err)
 	}
 	go func() {
 		for size := range resizes {

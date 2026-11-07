@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
-	"sync"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,13 +35,11 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = terminal.Close() }()
-	env := os.Environ()
-	if os.Getenv("TERM") == "" {
-		env = append(env, "TERM=xterm-256color")
-	}
+	// The terminal is the client's, not one the agent's environment names.
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "TERM=") })
 	pid, exited, err := startProcess([]string{"/bin/sh"}, &syscall.ProcAttr{
 		Dir:   a.workdir,
-		Env:   env,
+		Env:   append(env, "TERM=xterm-256color"),
 		Files: []uintptr{tty.Fd(), tty.Fd(), tty.Fd()},
 		Sys:   &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0},
 	})
@@ -58,7 +57,8 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = conn.Close() }()
 	conn.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
 
-	var writes sync.Mutex
+	// The output relay is the only writer of data messages, and control
+	// messages may be written alongside it, so writes need no lock.
 	output := make(chan struct{})
 	go func() {
 		defer close(output)
@@ -66,10 +66,7 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, err := terminal.Read(buf)
 			if n > 0 {
-				writes.Lock()
-				werr := conn.WriteMessage(websocket.BinaryMessage, buf[:n])
-				writes.Unlock()
-				if werr != nil {
+				if conn.WriteMessage(websocket.BinaryMessage, buf[:n]) != nil {
 					return
 				}
 			}
@@ -117,10 +114,8 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(shellDrain):
 		}
 		stopOutput()
-		writes.Lock()
 		_ = conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, strconv.Itoa(exitCode(status))), time.Now().Add(time.Second))
-		writes.Unlock()
 		select {
 		case <-input:
 		case <-time.After(time.Second):
