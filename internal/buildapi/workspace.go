@@ -453,6 +453,13 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 	defer func() { _ = conn.Close() }()
 	conn.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
 	shell.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
+	done := make(chan struct{})
+	defer close(done)
+	interval := a.shellPingInterval
+	if interval == 0 {
+		interval = defaultShellPingInterval
+	}
+	pingClient(conn, interval, done)
 	input := make(chan struct{})
 	output := make(chan struct{})
 	go func() { defer close(input); relayMessages(shell, conn) }()
@@ -476,6 +483,34 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 // shellCloseWait is how long the relay waits for the agent to close a shell
 // whose client went away.
 const shellCloseWait = 5 * time.Second
+
+// defaultShellPingInterval keeps an idle shell's connection under the
+// OpenShift router's idle timeout.
+const defaultShellPingInterval = 30 * time.Second
+
+// pingClient pings conn every interval until done, so proxies on the way to
+// the client don't drop an idle connection. A client that misses two pongs is
+// gone: its reads time out, which ends the relay. Call it before reading from
+// conn.
+func pingClient(conn *websocket.Conn, interval time.Duration, done <-chan struct{}) {
+	wait := 2*interval + interval/2
+	_ = conn.SetReadDeadline(time.Now().Add(wait))
+	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(wait)) })
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				// A ping stuck behind output to a slow client is retried on
+				// the next tick.
+				_ = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(interval))
+			}
+		}
+	}()
+}
 
 // relayMessages copies messages from src to dst until src closes, then passes
 // its close on.

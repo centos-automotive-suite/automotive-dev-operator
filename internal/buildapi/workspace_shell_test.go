@@ -213,3 +213,91 @@ func TestWorkspaceShellRelaysTheCloseWhenInputFailsFirst(t *testing.T) {
 		<-typing
 	}
 }
+
+// startIdleShellAgent serves a shell that never says anything, and reports how
+// the build API's connection to it ended.
+func startIdleShellAgent(t *testing.T) (string, <-chan error) {
+	t.Helper()
+	ended := make(chan error, 1)
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				ended <- err
+				return
+			}
+		}
+	}))
+	t.Cleanup(agent.Close)
+	return agent.URL, ended
+}
+
+// Proxies such as the OpenShift router drop connections that carry nothing for
+// a while, so the build API pings an idle shell's client, and a client that
+// answers stays connected.
+func TestWorkspaceShellPingsAnIdleClient(t *testing.T) {
+	agentURL, agentEnded := startIdleShellAgent(t)
+	a, router := runTestServer(t, agentURL, "alice", false)
+	a.shellPingInterval = 50 * time.Millisecond
+	api := newRunClient(t, router)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	conn, err := api.ShellWorkspace(ctx, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	pings := make(chan struct{}, 100)
+	conn.SetPingHandler(func(data string) error {
+		pings <- struct{}{}
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(time.Second))
+	})
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	// Well past the time a client gets to answer a ping.
+	for i := range 10 {
+		select {
+		case <-pings:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("got %d pings, want 10", i)
+		}
+	}
+	select {
+	case err := <-agentEnded:
+		t.Fatalf("the shell ended while its client answered pings: %v", err)
+	default:
+	}
+}
+
+// A client that stops answering is gone, for instance a laptop that went to
+// sleep, so the build API closes its shell instead of keeping it forever.
+func TestWorkspaceShellEndsWhenTheClientStopsAnswering(t *testing.T) {
+	agentURL, agentEnded := startIdleShellAgent(t)
+	a, router := runTestServer(t, agentURL, "alice", false)
+	a.shellPingInterval = 50 * time.Millisecond
+	api := newRunClient(t, router)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	conn, err := api.ShellWorkspace(ctx, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	select {
+	case <-agentEnded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the shell outlived a client that stopped answering")
+	}
+}
