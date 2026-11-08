@@ -3,6 +3,7 @@ package workspace
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -387,7 +388,7 @@ func TestWorkspaceStatusError(t *testing.T) {
 	}
 }
 
-func TestProgressReaderQuietMode(t *testing.T) {
+func TestUploadProgressQuietMode(t *testing.T) {
 	t.Run("render suppressed in quiet mode", func(t *testing.T) {
 		clilog.SetQuiet(true)
 		defer clilog.SetQuiet(false)
@@ -396,9 +397,9 @@ func TestProgressReaderQuietMode(t *testing.T) {
 		r, w, _ := os.Pipe()
 		os.Stderr = w
 
-		pr := &progressReader{
+		pr := &uploadProgress{
 			total: 100,
-			read:  50,
+			sent:  50,
 			isTTY: false,
 		}
 		pr.render(50)
@@ -421,9 +422,9 @@ func TestProgressReaderQuietMode(t *testing.T) {
 		r, w, _ := os.Pipe()
 		os.Stderr = w
 
-		pr := &progressReader{
+		pr := &uploadProgress{
 			total: 100,
-			read:  25,
+			sent:  25,
 			isTTY: false,
 		}
 		pr.render(25)
@@ -449,9 +450,9 @@ func TestProgressReaderQuietMode(t *testing.T) {
 		r, w, _ := os.Pipe()
 		os.Stderr = w
 
-		pr := &progressReader{
+		pr := &uploadProgress{
 			total: 100,
-			read:  33,
+			sent:  33,
 			isTTY: false,
 		}
 		pr.render(33)
@@ -475,7 +476,7 @@ func TestProgressReaderQuietMode(t *testing.T) {
 		r, w, _ := os.Pipe()
 		os.Stderr = w
 
-		pr := &progressReader{
+		pr := &uploadProgress{
 			total: 100,
 			isTTY: true,
 		}
@@ -763,7 +764,7 @@ func TestTarTrackedFilesWarnsOnMissingFile(t *testing.T) {
 	os.Stderr = w
 
 	var buf bytes.Buffer
-	err := tarTrackedFiles(dir, []string{"exists.txt", "gone.txt"}, &buf)
+	err := tarTrackedFiles(dir, []string{"exists.txt", "gone.txt"}, &buf, io.Discard)
 
 	_ = w.Close()
 	os.Stderr = old
@@ -795,7 +796,7 @@ func TestTarTrackedFilesKeepsExactModificationTimes(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := tarTrackedFiles(dir, []string{"a.txt"}, &buf); err != nil {
+	if err := tarTrackedFiles(dir, []string{"a.txt"}, &buf, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	hdr, err := tar.NewReader(&buf).Next()
@@ -804,6 +805,111 @@ func TestTarTrackedFilesKeepsExactModificationTimes(t *testing.T) {
 	}
 	if !hdr.ModTime.Equal(at) {
 		t.Errorf("archived mtime = %v, want %v", hdr.ModTime, at)
+	}
+}
+
+// readStream returns the files in an upload's archive, a symlink as
+// "-> target".
+func readStream(t *testing.T, stream io.Reader) map[string]string {
+	t.Helper()
+	zr, err := zstd.NewReader(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	files := map[string]string{}
+	reader := tar.NewReader(zr)
+	for {
+		hdr, err := reader.Next()
+		if err == io.EOF {
+			return files
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Typeflag == tar.TypeSymlink {
+			files[hdr.Name] = "-> " + hdr.Linkname
+			continue
+		}
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[hdr.Name] = string(data)
+	}
+}
+
+// The archive is written from disk as the upload reads it, so a large one
+// costs no memory, and progress counts the files' bytes as they go.
+func TestStreamArchiveWritesTheFilesAsTheUploadReads(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"a.txt": "alpha", "dir/b.txt": "beta"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("a.txt", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	var progress bytes.Buffer
+	stream := streamArchive(dir, []string{"a.txt", "dir/b.txt", "link"}, &progress)
+	files := readStream(t, stream)
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"a.txt": "alpha", "dir/b.txt": "beta", "link": "-> a.txt"}; !maps.Equal(files, want) {
+		t.Errorf("archive = %q, want %q", files, want)
+	}
+	if progress.Len() != len("alpha")+len("beta") {
+		t.Errorf("progress counted %d bytes, want the files' 9", progress.Len())
+	}
+}
+
+// A file that can't be read fails the stream, so the workspace never takes a
+// cut archive for a whole one.
+func TestStreamArchiveFailsWhenAFileCannotBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any file")
+	}
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(secret, 0); err != nil {
+		t.Fatal(err)
+	}
+	stream := streamArchive(dir, []string{"secret"}, io.Discard)
+	defer func() { _ = stream.Close() }()
+	if _, err := io.ReadAll(stream); err == nil || !strings.Contains(err.Error(), "secret") {
+		t.Errorf("err = %v, want the failure to read secret", err)
+	}
+}
+
+// An upload that ends early, as when the workspace rejects it, stops the
+// writing.
+func TestStreamArchiveStopsWhenClosed(t *testing.T) {
+	dir := t.TempDir()
+	big := make([]byte, 4<<20)
+	if _, err := rand.Read(big); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "big"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stream := streamArchive(dir, []string{"big"}, io.Discard)
+	if _, err := io.ReadFull(stream, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- stream.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing the stream did not stop the writing")
 	}
 }
 
