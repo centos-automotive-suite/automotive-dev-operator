@@ -5,9 +5,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -624,23 +622,20 @@ func uploadArchive(name string, req buildcontract.SyncUploadRequest, archive []b
 	clilog.Infoln("Files synced")
 }
 
+// computeManifest returns the version of each file, which the plan compares
+// with the workspace's copy.
 func computeManifest(baseDir string, files []string) map[string]string {
 	manifest := make(map[string]string, len(files))
 	for _, relPath := range files {
-		absPath := filepath.Join(baseDir, relPath)
-		f, err := os.Open(absPath)
+		version, err := buildcontract.SyncFileVersion(filepath.Join(baseDir, relPath))
+		if err == nil && version == "" {
+			err = errors.New("not a regular file or symlink")
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: skipping %s: %v\n", relPath, err)
 			continue
 		}
-		h := sha256.New()
-		_, err = io.Copy(h, f)
-		_ = f.Close()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: skipping %s: %v\n", relPath, err)
-			continue
-		}
-		manifest[relPath] = hex.EncodeToString(h.Sum(nil))
+		manifest[relPath] = version
 	}
 	return manifest
 }
@@ -658,7 +653,7 @@ func abortDeleteIfUnreadable(baseDir string, files []string, manifest map[string
 			return fmt.Errorf("refusing --delete: %s: %w", rel, err)
 		}
 		if !gone {
-			return fmt.Errorf("refusing --delete: %s exists locally but could not be hashed (aborting to avoid deleting the remote copy)", rel)
+			return fmt.Errorf("refusing --delete: %s exists locally but could not be checked (aborting to avoid deleting the remote copy)", rel)
 		}
 	}
 	return nil
@@ -745,6 +740,10 @@ func tarTrackedFiles(baseDir string, files []string, w io.Writer) error {
 			return fmt.Errorf("creating tar header for %s: %w", relPath, err)
 		}
 		hdr.Name = relPath
+		// The workspace keeps the archive's modification times, which plans
+		// compare to the nanosecond. Without a format, tar rounds them to the
+		// second.
+		hdr.Format = tar.FormatPAX
 
 		if err := tw.WriteHeader(hdr); err != nil {
 			return fmt.Errorf("writing tar header for %s: %w", relPath, err)

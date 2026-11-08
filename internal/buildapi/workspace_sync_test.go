@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"log/slog"
 	"net/http"
@@ -81,10 +79,13 @@ func TestSyncPlanComesFromTheWorkspaceAgent(t *testing.T) {
 		}
 	}
 	api := newRunClient(t, syncTestRouter(t, workdir))
-	sum := sha256.Sum256([]byte("same"))
+	same, err := buildcontract.SyncFileVersion(filepath.Join(workdir, "same.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	plan, err := api.SyncPlan(context.Background(), "dev", buildcontract.SyncPlanRequest{
-		Files:          map[string]string{"same.txt": hex.EncodeToString(sum[:]), "new.txt": "00"},
+		Files:          map[string]string{"same.txt": same, "new.txt": "00"},
 		IncludeDeleted: true,
 	})
 	if err != nil {

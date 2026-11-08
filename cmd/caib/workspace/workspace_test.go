@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
@@ -640,6 +641,26 @@ func TestComputeManifestWarnsOnSkippedFiles(t *testing.T) {
 	}
 }
 
+// The manifest holds each file's version, which a plan compares without
+// reading the file, so making one reads none either.
+func TestComputeManifestDoesNotReadFiles(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(secret, 0); err != nil {
+		t.Fatal(err)
+	}
+	want, err := buildcontract.SyncFileVersion(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := computeManifest(dir, []string{"secret"})["secret"]; got != want {
+		t.Errorf("manifest has %q, want the version %q", got, want)
+	}
+}
+
 func TestNewSyncCmdHasDeleteFlag(t *testing.T) {
 	cmd := newSyncCmd()
 
@@ -757,6 +778,31 @@ func TestTarTrackedFilesWarnsOnMissingFile(t *testing.T) {
 	_, _ = stderrBuf.ReadFrom(r)
 	if !strings.Contains(stderrBuf.String(), "Warning: skipping gone.txt") {
 		t.Errorf("expected warning for missing file, got: %s", stderrBuf.String())
+	}
+}
+
+// A plan compares modification times to the nanosecond, and the workspace
+// takes them from the archive, so the archive must carry them whole.
+func TestTarTrackedFilesKeepsExactModificationTimes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2020, 1, 2, 3, 4, 5, 123456789, time.UTC)
+	if err := os.Chtimes(path, time.Time{}, at); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := tarTrackedFiles(dir, []string{"a.txt"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	hdr, err := tar.NewReader(&buf).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hdr.ModTime.Equal(at) {
+		t.Errorf("archived mtime = %v, want %v", hdr.ModTime, at)
 	}
 }
 

@@ -18,15 +18,16 @@ import (
 	"time"
 )
 
-var syncedAt = time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+var syncedAt = time.Date(2020, 1, 2, 3, 4, 5, 6789, time.UTC)
 
-// tarFile and tarLink describe entries the way the CLI writes them.
+// tarFile and tarLink describe entries the way the CLI writes them, with PAX
+// headers, which keep modification times to the nanosecond.
 func tarFile(name, content string, mode int64) (*tar.Header, string) {
-	return &tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: mode, Size: int64(len(content)), ModTime: syncedAt, Uid: 4242, Gid: 4242}, content
+	return &tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: mode, Size: int64(len(content)), ModTime: syncedAt, Uid: 4242, Gid: 4242, Format: tar.FormatPAX}, content
 }
 
 func tarLink(name, target string) (*tar.Header, string) {
-	return &tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: target, Mode: 0o777, ModTime: syncedAt}, ""
+	return &tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: target, Mode: 0o777, ModTime: syncedAt, Format: tar.FormatPAX}, ""
 }
 
 type tarEntry struct {
@@ -141,6 +142,35 @@ func TestSyncUploadWritesFilesAndSymlinks(t *testing.T) {
 	noTempFiles(t, a.workdir)
 }
 
+// A file synced and left alone plans as unchanged in the next sync: the
+// upload keeps what a plan compares.
+func TestSyncUploadKeepsWhatAPlanCompares(t *testing.T) {
+	a := newTestAgent(t)
+	client := t.TempDir()
+	writeTree(t, client, map[string]string{"a.txt": "content"})
+	chtimes(t, filepath.Join(client, "a.txt"), syncedAt)
+	if err := os.Symlink("a.txt", filepath.Join(client, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t,
+		entry(tarFile("a.txt", "content", 0o644)),
+		entry(tarLink("link", "a.txt")),
+	))); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{
+		"a.txt": version(t, filepath.Join(client, "a.txt")),
+		"link":  version(t, filepath.Join(client, "link")),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Changed) != 0 || plan.Unchanged != 2 {
+		t.Errorf("plan = %+v, want both unchanged", plan)
+	}
+}
+
 func TestSyncUploadCreatesTheWorkdir(t *testing.T) {
 	a := newTestAgent(t)
 	a.workdir = filepath.Join(t.TempDir(), "absent")
@@ -225,9 +255,10 @@ func TestSyncUploadRejectsOtherEntryTypes(t *testing.T) {
 func TestSyncUploadAppliesNothingWhenCutShort(t *testing.T) {
 	a := newTestAgent(t)
 	writeTree(t, a.workdir, map[string]string{"b.txt": "old"})
-	full := archive(t, entry(tarFile("a.txt", "new", 0o644)), entry(tarFile("b.txt", strings.Repeat("b", 100), 0o644)))
-	// a.txt's header and padded content, b.txt's header, then 10 of its bytes.
-	cut := full[:3*512+10]
+	content := strings.Repeat("b", 100)
+	full := archive(t, entry(tarFile("a.txt", "new", 0o644)), entry(tarFile("b.txt", content, 0o644)))
+	// All of a.txt, b.txt's header, then 10 of its bytes.
+	cut := full[:bytes.Index(full, []byte(content))+10]
 
 	_, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(cut))
 	wantBadRequest(t, "a cut archive", err)

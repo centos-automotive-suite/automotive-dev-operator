@@ -1,5 +1,11 @@
 package buildcontract
 
+import (
+	"fmt"
+	"io/fs"
+	"os"
+)
+
 // WorkspaceRequest is the payload to create a workspace.
 type WorkspaceRequest struct {
 	Name                    string `json:"name"`
@@ -70,8 +76,33 @@ func (r WorkspaceRun) Terminal() bool {
 
 // SyncPlanRequest is the manifest sent by the client to compute a sync diff.
 type SyncPlanRequest struct {
-	Files          map[string]string `json:"files"`                    // relative path -> hex-encoded sha256
+	Files          map[string]string `json:"files"`                    // relative path -> SyncFileVersion
 	IncludeDeleted bool              `json:"includeDeleted,omitempty"` // when true, report remote-only files in Deleted
+}
+
+// SyncFileVersion is what a sync plan compares of the file at path, without
+// following a symlink: a symlink's target, or a regular file's size and
+// modification time, as rsync's quick check compares them, so nothing is
+// read. Anything else has no version. The CLI and the workspace find versions
+// the same way, and an upload keeps a file's modification time, so a file
+// synced and left alone has the same version on both sides.
+func SyncFileVersion(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	switch mode := info.Mode(); {
+	case mode.IsRegular():
+		return fmt.Sprintf("file %d %d", info.Size(), info.ModTime().UnixNano()), nil
+	case mode&fs.ModeSymlink != 0:
+		target, err := os.Readlink(path)
+		if err != nil {
+			return "", err
+		}
+		return "link " + target, nil
+	default:
+		return "", nil
+	}
 }
 
 // SyncPlanResponse tells the client which files need uploading.
