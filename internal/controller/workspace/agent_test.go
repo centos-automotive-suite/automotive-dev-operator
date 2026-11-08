@@ -10,6 +10,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent/agentconn"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -33,7 +34,7 @@ func TestReconcileCreatesAgentServiceAndToken(t *testing.T) {
 	if err := fc.Get(ctx, types.NamespacedName{Name: "workspace-agent-ws-agent", Namespace: "default"}, service); err != nil {
 		t.Fatalf("agent service: %v", err)
 	}
-	if service.Annotations[servingCertAnn] != workspaceagent.TLSSecretName(ws.Name) {
+	if service.Annotations[agentconn.ServingCertAnn] != workspaceagent.TLSSecretName(ws.Name) {
 		t.Errorf("service annotations = %v, want a serving certificate in %s", service.Annotations, workspaceagent.TLSSecretName(ws.Name))
 	}
 	if len(service.Spec.Ports) != 1 || service.Spec.Ports[0].Port != workspaceagent.APIPort ||

@@ -26,10 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const (
-	workspaceContainerName = "toolchain"
-)
-
 // shellQuote returns s wrapped in POSIX single quotes with embedded single
 // quotes escaped, safe for interpolation into a /bin/sh -c script.
 func shellQuote(s string) string {

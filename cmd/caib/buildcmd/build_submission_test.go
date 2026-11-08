@@ -1,6 +1,7 @@
 package buildcmd
 
 import (
+	"archive/tar"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/klauspost/compress/zstd"
 	"github.com/spf13/cobra"
 )
 
@@ -149,14 +151,23 @@ func (f *manifestSubmissionServer) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(http.StatusAccepted)
 		response = buildcontract.BuildResponse{Name: "test-build", Phase: "Pending"}
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/builds/test-build/uploads":
-		reader, err := r.MultipartReader()
-		if err != nil {
+		// The upload pod's agent takes a request, then a zstd tar stream.
+		decoder := json.NewDecoder(r.Body)
+		var request buildcontract.SyncUploadRequest
+		if err := decoder.Decode(&request); err != nil {
 			f.t.Error(err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		archive, err := zstd.NewReader(io.MultiReader(decoder.Buffered(), r.Body))
+		if err != nil {
+			f.t.Error(err)
+			return
+		}
+		defer archive.Close()
+		reader := tar.NewReader(archive)
 		for {
-			part, err := reader.NextPart()
+			_, err := reader.Next()
 			if err == io.EOF {
 				break
 			}
@@ -164,13 +175,11 @@ func (f *manifestSubmissionServer) ServeHTTP(w http.ResponseWriter, r *http.Requ
 				f.t.Error(err)
 				return
 			}
-			data, err := io.ReadAll(part)
+			data, err := io.ReadAll(reader)
 			if err != nil {
 				f.t.Error(err)
 			}
-			if part.FormName() == "file" {
-				f.uploaded = string(data) == "file content"
-			}
+			f.uploaded = string(data) == "file content"
 		}
 		response = map[string]string{"message": "uploaded"}
 	case r.URL.Path == "/v1/builds/test-build":

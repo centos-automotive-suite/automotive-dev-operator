@@ -25,6 +25,8 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent/agentconn"
 	"github.com/go-logr/logr"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"go.opentelemetry.io/otel"
@@ -39,7 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/rest"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -185,11 +187,13 @@ func (r *ImageBuildReconciler) buildLogger(imageBuild *automotivev1alpha1.ImageB
 //nolint:revive // Name follows Kubebuilder convention for reconcilers
 type ImageBuildReconciler struct {
 	client.Client
-	APIReader       client.Reader
-	Scheme          *runtime.Scheme
-	Log             logr.Logger
-	Recorder        events.EventRecorder
-	RestConfig      *rest.Config
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Log       logr.Logger
+	Recorder  events.EventRecorder
+	// AgentImage holds the workspace agent the upload pod runs: the
+	// operator's own image, so the agent matches the build API.
+	AgentImage      string
 	verifiedBundles sync.Map
 	// hydrating tracks in-flight background workspace hydrations keyed by
 	// "namespace/name" so the long-running copy does not block a reconcile
@@ -201,7 +205,7 @@ type ImageBuildReconciler struct {
 }
 
 // hydrateFunc copies a build's workspace add_files onto its upload pod.
-type hydrateFunc func(context.Context, *rest.Config, client.Client, *automotivev1alpha1.ImageBuild) error
+type hydrateFunc func(context.Context, client.Client, *automotivev1alpha1.ImageBuild) error
 
 // hydrateJob is the state of a background hydration. err is written once, before
 // done is set, so a reader that observes done==true also observes err.
@@ -217,7 +221,7 @@ type hydrateJob struct {
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=serviceaccounts/token,verbs=create
 // +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreams,verbs=get;create;update;delete
@@ -681,7 +685,7 @@ func (r *ImageBuildReconciler) ensureWorkspaceHydrate(
 	go func() {
 		hydrateCtx, cancel := context.WithTimeout(context.Background(), workspaceHydrateTimeout)
 		defer cancel()
-		job.err = fn(hydrateCtx, r.RestConfig, r.Client, ib)
+		job.err = fn(hydrateCtx, r.Client, ib)
 		job.done.Store(true)
 	}()
 	return false, nil
@@ -696,8 +700,8 @@ func (r *ImageBuildReconciler) workspaceHydrateFunc() hydrateFunc {
 	if agentReader == nil {
 		agentReader = r.Client
 	}
-	return func(ctx context.Context, cfg *rest.Config, kube client.Client, build *automotivev1alpha1.ImageBuild) error {
-		return buildapi.HydrateWorkspaceForImageBuild(ctx, cfg, kube, agentReader, build)
+	return func(ctx context.Context, kube client.Client, build *automotivev1alpha1.ImageBuild) error {
+		return buildapi.HydrateWorkspaceForImageBuild(ctx, kube, agentReader, build)
 	}
 }
 
@@ -1672,10 +1676,12 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 		imageBuild.Status.PVCName = workspacePVCName
 	}
 
+	agentService := workspaceagent.UploadServiceName(imageBuild.Name)
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by":                    "automotive-dev-operator",
 		"automotive.sdv.cloud.redhat.com/imagebuild-name": imageBuild.Name,
 		"app.kubernetes.io/name":                          "upload-pod",
+		uploadAgentLabel:                                  agentService,
 	}
 
 	// Fetch OperatorConfig to inherit nodeSelector and tolerations for the upload pod.
@@ -1685,6 +1691,10 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 	if err := r.Get(ctx, types.NamespacedName{Name: "config", Namespace: controllerutils.OperatorNamespace()}, operatorConfig); err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("failed to get OperatorConfig: %w", err)
 	}
+	if err := r.ensureUploadAgentAccess(ctx, imageBuild, agentService); err != nil {
+		return err
+	}
+	limits := buildapi.LoadLimitsFromConfig(operatorConfig.Spec.BuildAPI)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1711,24 +1721,41 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 			},
 			Containers: []corev1.Container{
 				{
-					Name:    "fileserver",
-					Image:   "registry.access.redhat.com/ubi10-minimal:latest",
-					Command: []string{"sleep", "infinity"},
+					// The workspace agent takes the build's files, as a
+					// workspace's takes a sync, so nothing execs into the pod.
+					Name:  "agent",
+					Image: r.agentImage(operatorConfig),
+					Command: []string{"/workspace-agent", "serve",
+						"--state-dir", uploadAgentState,
+						"--workdir", "/workspace/shared",
+						"--workspace", "/workspace/shared",
+						"--export-dir", uploadAgentState + "/export",
+						"--max-upload", strconv.FormatInt(limits.MaxTotalUploadSize, 10),
+						"--max-file", strconv.FormatInt(limits.MaxUploadFileSize, 10),
+						"--build-uploads",
+					},
+					Ports: []corev1.ContainerPort{{Name: "agent", ContainerPort: workspaceagent.APIPort, Protocol: corev1.ProtocolTCP}},
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+							Path: "/healthz", Port: intstr.FromInt32(workspaceagent.APIPort), Scheme: corev1.URISchemeHTTPS,
+						}},
+						PeriodSeconds: 2,
+					},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse("100m"),
 							corev1.ResourceMemory: resource.MustParse("64Mi"),
 						},
 						Limits: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("200m"),
-							corev1.ResourceMemory: resource.MustParse("128Mi"),
+							corev1.ResourceCPU:    resource.MustParse("500m"),
+							corev1.ResourceMemory: resource.MustParse("256Mi"),
 						},
 					},
 					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "workspace",
-							MountPath: "/workspace/shared",
-						},
+						{Name: "workspace", MountPath: "/workspace/shared"},
+						{Name: "agent-state", MountPath: uploadAgentState},
+						{Name: "agent-token", MountPath: workspaceagent.TokenDir, ReadOnly: true},
+						{Name: "agent-tls", MountPath: workspaceagent.TLSDir, ReadOnly: true},
 					},
 				},
 			},
@@ -1741,6 +1768,14 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 						},
 					},
 				},
+				{Name: "agent-state", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				// Readable by the pod's group, which the agent runs in.
+				{Name: "agent-token", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+					SecretName: workspaceagent.UploadTokenSecretName(imageBuild.Name), DefaultMode: ptr.To[int32](0o440),
+				}}},
+				{Name: "agent-tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+					SecretName: workspaceagent.UploadTLSSecretName(imageBuild.Name), DefaultMode: ptr.To[int32](0o440),
+				}}},
 			},
 		},
 	}
@@ -2212,22 +2247,116 @@ func (r *ImageBuildReconciler) getOrCreateWorkspacePVC(
 	return uniquePVCName, nil
 }
 
+// shutdownUploadPod deletes the upload pod, and the token and Service its
+// agent was reached through.
 func (r *ImageBuildReconciler) shutdownUploadPod(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild) error {
 	log := r.buildLogger(imageBuild)
 
-	podName := safeDerivedName(imageBuild.Name, "-upload-pod")
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: imageBuild.Namespace,
-		},
+	meta := func(name string) metav1.ObjectMeta {
+		return metav1.ObjectMeta{Name: name, Namespace: imageBuild.Namespace}
 	}
-
-	if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete upload pod: %w", err)
+	for _, obj := range []client.Object{
+		&corev1.Pod{ObjectMeta: meta(safeDerivedName(imageBuild.Name, "-upload-pod"))},
+		&corev1.Secret{ObjectMeta: meta(workspaceagent.UploadTokenSecretName(imageBuild.Name))},
+		&corev1.Service{ObjectMeta: meta(workspaceagent.UploadServiceName(imageBuild.Name))},
+	} {
+		if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete upload %T %s: %w", obj, obj.GetName(), err)
+		}
 	}
 
 	log.Info("Upload pod deleted")
+	return nil
+}
+
+// agentImage returns the image the upload pod's agent runs: the operator's
+// own, or OperatorConfig's when the operator doesn't name it.
+func (r *ImageBuildReconciler) agentImage(operatorConfig *automotivev1alpha1.OperatorConfig) string {
+	if r.AgentImage != "" {
+		return r.AgentImage
+	}
+	return operatorConfig.Spec.GetImages().GetOperatorImage()
+}
+
+const (
+	// uploadAgentLabel selects a build's upload pod for its agent Service. Its
+	// value is the Service name, which is unique per build, unlike the build
+	// name label.
+	uploadAgentLabel = "automotive.sdv.cloud.redhat.com/upload-agent"
+	// uploadAgentState holds the upload agent's records.
+	uploadAgentState = "/var/lib/ado"
+)
+
+// ensureUploadAgentAccess creates what reaching the agent in imageBuild's
+// upload pod takes: a Secret with its bearer token and a Service with a
+// serving certificate, both owned by the build, and the namespace's service
+// CA bundle. Someone who created the token would know it, and someone who
+// created the Service could point it elsewhere, so it refuses either when
+// the build doesn't own it.
+func (r *ImageBuildReconciler) ensureUploadAgentAccess(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild, service string) error {
+	token := make([]byte, 32)
+	if _, err := rand.Read(token); err != nil {
+		return err
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: workspaceagent.UploadTokenSecretName(imageBuild.Name), Namespace: imageBuild.Namespace},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{workspaceagent.TokenKey: []byte(base64.RawURLEncoding.EncodeToString(token))},
+	}
+	if err := r.createOwned(ctx, imageBuild, secret, &corev1.Secret{}); err != nil {
+		return fmt.Errorf("upload agent token: %w", err)
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        service,
+			Namespace:   imageBuild.Namespace,
+			Annotations: map[string]string{agentconn.ServingCertAnn: workspaceagent.UploadTLSSecretName(imageBuild.Name)},
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{uploadAgentLabel: service},
+			Ports: []corev1.ServicePort{{
+				Name: "agent", Protocol: corev1.ProtocolTCP,
+				Port: workspaceagent.APIPort, TargetPort: intstr.FromInt32(workspaceagent.APIPort),
+			}},
+		},
+	}
+	if err := r.createOwned(ctx, imageBuild, svc, &corev1.Service{}); err != nil {
+		return fmt.Errorf("upload agent service: %w", err)
+	}
+	// Shared by everything in the namespace, so owned by none of it.
+	bundle := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name:        agentconn.CABundleConfigMap,
+		Namespace:   imageBuild.Namespace,
+		Labels:      map[string]string{"app.kubernetes.io/managed-by": "automotive-dev-operator"},
+		Annotations: map[string]string{agentconn.InjectCABundleAnn: "true"},
+	}}
+	if err := r.Create(ctx, bundle); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("service CA bundle: %w", err)
+	}
+	return nil
+}
+
+// createOwned creates obj, owned by imageBuild, or keeps the one already
+// there when imageBuild owns it. existing receives that one.
+func (r *ImageBuildReconciler) createOwned(ctx context.Context, imageBuild *automotivev1alpha1.ImageBuild, obj, existing client.Object) error {
+	if err := controllerutil.SetControllerReference(imageBuild, obj, r.Scheme); err != nil {
+		return err
+	}
+	err := r.Create(ctx, obj)
+	if !errors.IsAlreadyExists(err) {
+		return err
+	}
+	// The cache holds no Secrets.
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(obj), existing); err != nil {
+		return err
+	}
+	if !metav1.IsControlledBy(existing, imageBuild) {
+		return fmt.Errorf("%s exists but does not belong to the build", obj.GetName())
+	}
 	return nil
 }
 

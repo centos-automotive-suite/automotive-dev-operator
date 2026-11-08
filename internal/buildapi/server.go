@@ -119,7 +119,6 @@ func DefaultAPILimits() APILimits {
 
 // APIServer provides the REST API for build operations.
 type APIServer struct {
-	exec                podExecutor
 	deps                apiDependencies
 	server              *http.Server
 	router              *gin.Engine
@@ -156,7 +155,7 @@ func NewAPIServerWithLimits(addr string, logger logr.Logger, limits APILimits) *
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	a := &APIServer{addr: addr, log: logger, limits: limits, deps: defaultAPIDependencies(), exec: podExecutor{newExecutor: newPodExecExecutor}}
+	a := &APIServer{addr: addr, log: logger, limits: limits, deps: defaultAPIDependencies()}
 	if clientID := strings.TrimSpace(os.Getenv("BUILD_API_OIDC_CLIENT_ID")); clientID != "" {
 		a.oidcClientID = clientID
 	}

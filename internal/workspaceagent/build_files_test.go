@@ -158,25 +158,25 @@ func TestBuildFilesOverHTTP(t *testing.T) {
 	if want := []string{"src/my pkg%1.rpm"}; !slices.Equal(files, want) {
 		t.Fatalf("files = %q, want %q", files, want)
 	}
-	body, err := client.OpenFile(ctx, files[0])
+	body, size, err := client.OpenFile(ctx, files[0])
 	if err != nil {
 		t.Fatal(err)
 	}
 	data, err := io.ReadAll(body)
 	_ = body.Close()
-	if err != nil || string(data) != "rpm bytes" {
-		t.Errorf("file = %q, %v", data, err)
+	if err != nil || string(data) != "rpm bytes" || size != int64(len(data)) {
+		t.Errorf("file = %q, %d bytes, %v", data, size, err)
 	}
 
 	_, err = client.ListFiles(ctx, []FileRef{{Path: "nope"}})
 	wantAgentError(t, err, http.StatusUnprocessableEntity, "nope")
 	for _, name := range []string{"src/key", "src/sub", "nope", "../x"} {
-		if body, err := client.OpenFile(ctx, name); err == nil {
+		if body, _, err := client.OpenFile(ctx, name); err == nil {
 			_ = body.Close()
 			t.Errorf("opened %s", name)
 		}
 	}
-	if _, err := NewClient(server.URL, "wrong", nil).OpenFile(ctx, "src/sub/x"); err == nil {
+	if _, _, err := NewClient(server.URL, "wrong", nil).OpenFile(ctx, "src/sub/x"); err == nil {
 		t.Error("opened a file without the token")
 	}
 }

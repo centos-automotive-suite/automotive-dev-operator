@@ -509,6 +509,49 @@ func TestSyncUploadRejectsAnArchivePastTheLimit(t *testing.T) {
 	noTempFiles(t, a.workdir)
 }
 
+// A build's upload pod takes only what exec could write there before:
+// regular files, with names the build's scripts handle. A symlink could have
+// the privileged build pod read its node's devices into the image.
+func TestSyncUploadForABuildTakesOnlyRegularFilesWithPlainNames(t *testing.T) {
+	for name, entries := range map[string][]tarEntry{
+		"a symlink":     {entry(tarFile("ok.rpm", "ok", 0o644)), entry(tarLink("disk", "/dev/sda"))},
+		"a space":       {entry(tarFile("ok.rpm", "ok", 0o644)), entry(tarFile("my file.rpm", "x", 0o644))},
+		"a shell quote": {entry(tarFile("ok.rpm", "ok", 0o644)), entry(tarFile("it's.rpm", "x", 0o644))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newTestAgent(t)
+			a.TakeBuildUploads()
+			_, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t, entries...)))
+			wantBadRequest(t, name, err)
+			notApplied(t, a.workdir, "ok.rpm")
+		})
+	}
+	a := newTestAgent(t)
+	a.TakeBuildUploads()
+	if _, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t,
+		entry(tarFile("rpms/kernel-6.12_x86@64.rpm", "rpm", 0o644)),
+	))); err != nil {
+		t.Errorf("a plain name was rejected: %v", err)
+	}
+}
+
+// A build's upload pod also bounds each file, as the build API's limits
+// say.
+func TestSyncUploadRejectsAFilePastItsLimit(t *testing.T) {
+	a := newTestAgent(t)
+	a.LimitUploads(1<<20, 1<<10)
+	_, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t,
+		entry(tarFile("small.txt", "small", 0o644)),
+		entry(tarFile("big", strings.Repeat("x", 2<<10), 0o644)),
+	)))
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Code != http.StatusRequestEntityTooLarge || !strings.Contains(apiErr.Message, `"big"`) {
+		t.Errorf("err = %v, want a 413 naming big", err)
+	}
+	notApplied(t, a.workdir, "small.txt", "big")
+	noTempFiles(t, a.workdir)
+}
+
 // zstd skips skippable frames without producing anything, so the body has a
 // limit of its own: without it, a client could send them for as long as it
 // liked while holding the upload lock.

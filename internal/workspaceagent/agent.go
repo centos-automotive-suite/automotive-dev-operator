@@ -80,10 +80,14 @@ type Agent struct {
 	// syncing counts sync plans, uploads and deletes, and file lists and
 	// reads for builds, in progress, which keep the workspace active.
 	syncing atomic.Int32
-	// maxUpload bounds the body of a sync upload, and uploadIdle how long it
-	// may go without sending anything.
+	// maxUpload bounds a sync upload, maxFile each file in one, and
+	// uploadIdle how long an upload may go without sending anything.
 	maxUpload  int64
+	maxFile    int64
 	uploadIdle time.Duration
+	// buildUploads restricts sync uploads to what a build's upload pod
+	// takes.
+	buildUploads bool
 	// uploading lets one sync upload use the staging directory at a time.
 	uploading sync.Mutex
 
@@ -122,7 +126,8 @@ func New(root, workdir, workspace string, log *slog.Logger) (*Agent, error) {
 		now:        time.Now,
 		procDir:    "/proc",
 		ptsDir:     "/dev/pts",
-		maxUpload:  maxSyncUploadBytes,
+		maxUpload:  MaxSyncUploadBytes,
+		maxFile:    MaxSyncUploadBytes,
 		uploadIdle: syncUploadIdle,
 		records:    map[string]*record{},
 		broken:     map[string]error{},

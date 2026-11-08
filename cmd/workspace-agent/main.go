@@ -25,6 +25,8 @@ const usage = `usage: workspace-agent start|serve [flags]
 
 type config struct {
 	stateDir, workdir, exportDir, workspace, listen, filesListen, tokenFile, certFile, keyFile string
+	maxUpload, maxFile                                                                         int64
+	buildUploads                                                                               bool
 }
 
 func parseFlags(name string, args []string) (config, error) {
@@ -39,6 +41,9 @@ func parseFlags(name string, args []string) (config, error) {
 	flags.StringVar(&cfg.tokenFile, "token-file", workspaceagent.TokenDir+"/"+workspaceagent.TokenKey, "file holding the API bearer token")
 	flags.StringVar(&cfg.certFile, "tls-cert", workspaceagent.TLSDir+"/tls.crt", "serving certificate; plain HTTP when empty")
 	flags.StringVar(&cfg.keyFile, "tls-key", workspaceagent.TLSDir+"/tls.key", "serving certificate key")
+	flags.Int64Var(&cfg.maxUpload, "max-upload", workspaceagent.MaxSyncUploadBytes, "bytes a sync upload may unpack")
+	flags.Int64Var(&cfg.maxFile, "max-file", workspaceagent.MaxSyncUploadBytes, "bytes each file in a sync upload may hold")
+	flags.BoolVar(&cfg.buildUploads, "build-uploads", false, "take only the regular files with plain names that a build's upload pod takes")
 	err := flags.Parse(args)
 	return cfg, err
 }
@@ -135,6 +140,10 @@ func serve(args []string) error {
 	agent, err := workspaceagent.New(filepath.Join(cfg.stateDir, "runs"), cfg.workdir, cfg.workspace, log)
 	if err != nil {
 		return err
+	}
+	agent.LimitUploads(cfg.maxUpload, cfg.maxFile)
+	if cfg.buildUploads {
+		agent.TakeBuildUploads()
 	}
 	files, err := workspaceagent.NewFiles(cfg.exportDir, filepath.Join(cfg.stateDir, "file-grants.json"))
 	if err != nil {

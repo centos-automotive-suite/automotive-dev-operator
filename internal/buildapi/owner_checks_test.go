@@ -21,23 +21,6 @@ import (
 
 // Anyone may read a build, but only its requester may change what goes into it.
 
-func TestUploadFilesRejectsOtherUsersBuild(t *testing.T) {
-	fix := setupUploadTest(t, newTestImageBuild(), newTestUploadPod())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = buildMultipartRequest(t, []multipartPart{{"app.conf", "key=value"}})
-	c.Set("requester", "mallory")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("response: %d %s, want 403", w.Code, w.Body)
-	}
-	if len(fix.uploaded) != 0 {
-		t.Fatalf("files reached another user's upload pod: %v", fix.uploaded)
-	}
-}
-
 func TestUploadContainerBuildContextRequiresOwner(t *testing.T) {
 	for _, tc := range []struct {
 		requester string

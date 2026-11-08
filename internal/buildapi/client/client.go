@@ -2,6 +2,7 @@
 package client
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -9,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +20,7 @@ import (
 	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/catalogcontract"
 	"github.com/gorilla/websocket"
+	"github.com/klauspost/compress/zstd"
 )
 
 // Client provides access to the build API server.
@@ -478,68 +479,29 @@ type Upload struct {
 	DestPath   string
 }
 
-// UploadFiles uploads multiple files to a specific build on the API server.
+// UploadFiles uploads files to a build's upload pod in one request, which the
+// pod applies all or none of: an empty SyncUploadRequest, then the files as a
+// zstd-compressed tar stream, read from disk as the request goes. Each file
+// lands at its DestPath, readable but not executable, whatever its mode here.
 func (c *Client) UploadFiles(ctx context.Context, name string, files []Upload) error {
 	endpoint := c.resolve(path.Join("/v1/builds", url.PathEscape(name), "uploads"))
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
-
+	reader, writer := io.Pipe()
+	written := make(chan struct{})
 	go func() {
-		defer func() {
-			if err := pw.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to close pipe writer: %v\n", err)
-			}
-		}()
-		defer func() {
-			if err := mw.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to close multipart writer: %v\n", err)
-			}
-		}()
-
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			for _, f := range files {
-				// Write destination path as a separate field since Go's Part.FileName()
-				// strips directory paths per RFC 7578
-				if err := mw.WriteField("path", f.DestPath); err != nil {
-					_ = pw.CloseWithError(err)
-					return
-				}
-				file, err := os.Open(f.SourcePath)
-				if err != nil {
-					_ = pw.CloseWithError(err)
-					return
-				}
-				part, err := mw.CreateFormFile("file", f.DestPath)
-				if err != nil {
-					_ = file.Close()
-					_ = pw.CloseWithError(err)
-					return
-				}
-				if _, err := io.Copy(part, file); err != nil {
-					_ = file.Close()
-					_ = pw.CloseWithError(err)
-					return
-				}
-				if err := file.Close(); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to close file: %v\n", err)
-				}
-			}
-		}()
-
-		select {
-		case <-done:
-		case <-ctx.Done():
-			pw.CloseWithError(ctx.Err())
-		}
+		defer close(written)
+		_ = writer.CloseWithError(writeUploads(writer, files))
 	}()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, pr)
+	// Whatever ends the request stops the writing, which is over before the
+	// files are closed for good.
+	defer func() {
+		_ = reader.Close()
+		<-written
+	}()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Content-Type", "application/octet-stream")
 	if c.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.authToken)
 	}
@@ -548,6 +510,56 @@ func (c *Client) UploadFiles(ctx context.Context, name string, files []Upload) e
 		return err
 	}
 	defer closeBody(resp)
+	return nil
+}
+
+// writeUploads writes the body of an upload to w.
+func writeUploads(w io.Writer, files []Upload) error {
+	// Encode would add a newline, which the archive would start with.
+	head, err := json.Marshal(buildapi.SyncUploadRequest{})
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(head); err != nil {
+		return err
+	}
+	zw, err := zstd.NewWriter(w)
+	if err != nil {
+		return err
+	}
+	tw := tar.NewWriter(zw)
+	for _, file := range files {
+		if err = writeUpload(tw, file); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = tw.Close()
+	}
+	if closeErr := zw.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+func writeUpload(tw *tar.Writer, upload Upload) error {
+	file, err := os.Open(upload.SourcePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	// Exec wrote uploads as new files, 0644 under the upload pod's umask.
+	hdr := &tar.Header{Typeflag: tar.TypeReg, Name: upload.DestPath, Size: info.Size(), Mode: 0o644, ModTime: info.ModTime()}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("%s: %w", upload.SourcePath, err)
+	}
+	if _, err := io.Copy(tw, file); err != nil {
+		return fmt.Errorf("reading %s: %w", upload.SourcePath, err)
+	}
 	return nil
 }
 

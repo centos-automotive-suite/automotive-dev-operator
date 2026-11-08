@@ -411,10 +411,10 @@ func (c *Client) ListFiles(ctx context.Context, refs []FileRef) ([]string, error
 }
 
 // OpenFile returns the content of the workspace file at name, relative to
-// the workspace, for the caller to close.
-func (c *Client) OpenFile(ctx context.Context, name string) (io.ReadCloser, error) {
+// the workspace, for the caller to close, and its size.
+func (c *Client) OpenFile(ctx context.Context, name string) (io.ReadCloser, int64, error) {
 	if !fs.ValidPath(name) || name == "." {
-		return nil, fmt.Errorf("invalid workspace file name %q", name)
+		return nil, 0, fmt.Errorf("invalid workspace file name %q", name)
 	}
 	segments := strings.Split(name, "/")
 	for i, segment := range segments {
@@ -422,7 +422,11 @@ func (c *Client) OpenFile(ctx context.Context, name string) (io.ReadCloser, erro
 	}
 	resp, err := c.request(ctx, http.MethodGet, "/files/"+strings.Join(segments, "/"), nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return resp.Body, nil
+	if resp.ContentLength < 0 {
+		_ = resp.Body.Close()
+		return nil, 0, fmt.Errorf("the agent sent %s without its size", name)
+	}
+	return resp.Body, resp.ContentLength, nil
 }
