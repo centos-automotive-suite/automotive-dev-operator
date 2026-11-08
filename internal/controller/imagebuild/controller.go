@@ -909,12 +909,6 @@ func (r *ImageBuildReconciler) handleExpiredState(
 			deleteObj(&tektonv1.TaskRun{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}, "source discovery TaskRun")
 		}
 	}
-	if name := imageBuild.Status.PushTaskRunName; name != "" {
-		deleteObj(&tektonv1.TaskRun{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}, "push TaskRun")
-	}
-	if name := imageBuild.Status.FlashTaskRunName; name != "" {
-		deleteObj(&tektonv1.TaskRun{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}, "flash TaskRun")
-	}
 	if name := imageBuild.Status.PVCName; name != "" {
 		if name == imageBuild.Spec.BuildCachePVC {
 			log.Info("Skipping PVC deletion: shared build-cache PVC", "pvc", name)

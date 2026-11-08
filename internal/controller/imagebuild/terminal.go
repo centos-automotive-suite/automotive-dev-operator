@@ -108,14 +108,6 @@ func (r *ImageBuildReconciler) collectResults(ctx context.Context, ib *api.Image
 			}
 		}
 	}
-	for _, stage := range []struct{ name, task string }{{ib.Status.PushTaskRunName, pipelineTaskPushDisk}, {ib.Status.FlashTaskRunName, pipelineTaskFlash}} {
-		if stage.name == "" {
-			continue
-		}
-		if err := collectNamedStage(ctx, reader, ib, stage.name, stage.task, requireSettled); err != nil {
-			return err
-		}
-	}
 	terminal.NormalizeResults(&ib.Status)
 	return nil
 }
@@ -167,24 +159,6 @@ func collectPipelineChild(
 	return nil
 }
 
-func collectNamedStage(
-	ctx context.Context,
-	reader client.Reader,
-	ib *api.ImageBuild,
-	name, stage string,
-	requireSettled bool,
-) error {
-	tr, err := readResultTask(ctx, reader, ib.Namespace, name, requireSettled)
-	if err != nil || tr == nil {
-		return err
-	}
-	observeTask(&ib.Status, tr, stage)
-	if stage == pipelineTaskPushDisk {
-		observeTask(&ib.Status, tr, "push-disk-artifact-s3")
-	}
-	return nil
-}
-
 func readResultTask(
 	ctx context.Context,
 	reader client.Reader,
@@ -230,10 +204,7 @@ func (r *ImageBuildReconciler) cancellationRuns(ctx context.Context, ib *api.Ima
 			prs.Items = append(prs.Items, *pr)
 		}
 	}
-	for _, name := range []string{ib.Status.SourceTaskRunName, ib.Status.PushTaskRunName, ib.Status.FlashTaskRunName} {
-		if name == "" {
-			continue
-		}
+	if name := ib.Status.SourceTaskRunName; name != "" {
 		tr := &tekton.TaskRun{}
 		err := r.Get(ctx, types.NamespacedName{Namespace: ib.Namespace, Name: name}, tr)
 		if err != nil && !errors.IsNotFound(err) {

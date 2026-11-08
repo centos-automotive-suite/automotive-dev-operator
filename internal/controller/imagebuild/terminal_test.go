@@ -222,8 +222,6 @@ func TestTerminalMissingChildrenAndResults(t *testing.T) {
 	}
 }
 
-
-
 func TestCancellationWaitsForExecution(t *testing.T) {
 	for _, stage := range []string{"Pending", "Building"} {
 		t.Run(stage, func(t *testing.T) {
@@ -402,8 +400,6 @@ func TestCancellationSelectsLatestPipelineRun(t *testing.T) {
 		t.Fatalf("PipelineRunName = %q, want %q", ib.Status.PipelineRunName, latest.Name)
 	}
 }
-
-
 
 func TestOCIRepoProvenanceFromBuildPod(t *testing.T) {
 	ref := "quay.io/org/rpms:v1"

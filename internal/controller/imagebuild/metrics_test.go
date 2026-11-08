@@ -551,10 +551,9 @@ func TestInitialReplayDoesNotSeedCounters(t *testing.T) {
 				Export:       &automotivev1alpha1.ExportSpec{Format: "raw"},
 			},
 			Status: automotivev1alpha1.ImageBuildStatus{
-				Phase:            "Completed",
-				StartTime:        &start,
-				CompletionTime:   &end,
-				FlashTaskRunName: "flash-run-1",
+				Phase:          "Completed",
+				StartTime:      &start,
+				CompletionTime: &end,
 			},
 		},
 		{

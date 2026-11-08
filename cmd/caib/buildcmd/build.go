@@ -28,7 +28,6 @@ const (
 	phaseCancelled = automotivev1alpha1.ImageBuildPhaseCancelled
 	phaseCompleted = automotivev1alpha1.ImageBuildPhaseCompleted
 	phaseFailed    = automotivev1alpha1.ImageBuildPhaseFailed
-	phaseFlashing  = automotivev1alpha1.ImageBuildPhaseFlashing
 	phasePending   = automotivev1alpha1.ImageBuildPhasePending
 	phaseUploading = automotivev1alpha1.ImageBuildPhaseUploading
 	phaseRunning   = "Running"

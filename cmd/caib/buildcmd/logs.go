@@ -189,7 +189,7 @@ func (h *Handler) waitForBuildCompletion(ctx context.Context, api *buildapiclien
 const maxLogRetries = 24
 
 func isBuildActive(phase string) bool {
-	return phase == "Building" || phase == phaseRunning || phase == phaseUploading || phase == phaseFlashing
+	return phase == "Building" || phase == phaseRunning || phase == phaseUploading
 }
 
 func (h *Handler) tryLogStreaming(ctx context.Context, logClient *http.Client, name string, state *logstream.State) error {

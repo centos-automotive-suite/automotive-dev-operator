@@ -77,8 +77,6 @@ const (
 	phasePending   = automotivev1alpha1.ImageBuildPhasePending
 	phaseUploading = automotivev1alpha1.ImageBuildPhaseUploading
 	phaseBuilding  = automotivev1alpha1.ImageBuildPhaseBuilding
-	phasePushing   = automotivev1alpha1.ImageBuildPhasePushing
-	phaseFlashing  = automotivev1alpha1.ImageBuildPhaseFlashing
 	phaseRunning   = "Running"
 
 	// Image format constants
@@ -96,16 +94,8 @@ const (
 )
 
 // buildProducedArtifacts reports whether artifact URLs point to real objects.
-// For Failed builds, only true when flash was attempted (proving push succeeded).
 func buildProducedArtifacts(build *automotivev1alpha1.ImageBuild) bool {
-	switch build.Status.Phase {
-	case phaseCompleted, phaseFlashing:
-		return true
-	case phaseFailed:
-		return build.Status.FlashTaskRunName != ""
-	default:
-		return false
-	}
+	return build.Status.Phase == phaseCompleted
 }
 
 // APILimits holds configurable limits for the API server
@@ -538,7 +528,7 @@ func cancellationRejection(build *automotivev1alpha1.ImageBuild, requester strin
 		return 0, ""
 	}
 	switch build.Status.Phase {
-	case "", phasePending, phaseUploading, phaseBuilding, phasePushing, phaseFlashing:
+	case "", phasePending, phaseUploading, phaseBuilding:
 		return 0, ""
 	}
 	return http.StatusConflict, fmt.Sprintf("build is in %q phase and cannot be cancelled", build.Status.Phase)
@@ -572,7 +562,7 @@ func (a *APIServer) cancelBuild(c *gin.Context, name string) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error fetching PipelineRun: %v", err)})
 				return
 			}
-		} else if pipelineRun.Status.CompletionTime != nil && build.Status.Phase != phasePushing && build.Status.Phase != phaseFlashing {
+		} else if pipelineRun.Status.CompletionTime != nil {
 			c.JSON(http.StatusConflict, gin.H{
 				"error": "build has already completed; refresh and retry",
 			})
