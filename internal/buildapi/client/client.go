@@ -844,7 +844,8 @@ func (c *Client) SyncPlan(ctx context.Context, name string, req buildapi.SyncPla
 	return &plan, nil
 }
 
-// SyncWorkspace uploads archive, a tar stream, to a workspace, and deletes
+// SyncWorkspace uploads archive, a zstd-compressed tar stream, to a
+// workspace, and deletes
 // req.Delete from it as the upload applies. The workspace applies all of it
 // or none.
 func (c *Client) SyncWorkspace(ctx context.Context, name string, req buildapi.SyncUploadRequest, archive io.Reader) error {

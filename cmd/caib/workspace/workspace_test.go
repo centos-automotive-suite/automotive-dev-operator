@@ -23,6 +23,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/clilog"
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/klauspost/compress/zstd"
 	"gopkg.in/yaml.v3"
 )
 
@@ -944,7 +945,13 @@ func syncWithDelete(t *testing.T, dir, plan string) ([]string, buildcontract.Syn
 		if err := decoder.Decode(&req); err != nil {
 			t.Errorf("the upload doesn't start with its request: %v", err)
 		}
-		reader := tar.NewReader(io.MultiReader(decoder.Buffered(), r.Body))
+		archive, err := zstd.NewReader(io.MultiReader(decoder.Buffered(), r.Body))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer archive.Close()
+		reader := tar.NewReader(archive)
 		for {
 			hdr, err := reader.Next()
 			if err != nil {

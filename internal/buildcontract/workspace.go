@@ -113,8 +113,8 @@ type SyncPlanResponse struct {
 	IncludeDeleted bool     `json:"includeDeleted,omitempty"` // echoed so clients can detect servers that ignore IncludeDeleted
 }
 
-// SyncUploadRequest starts the body of a sync upload, and the tar stream of
-// files to upload follows it.
+// SyncUploadRequest starts the body of a sync upload, and the zstd-compressed
+// tar stream of files to upload follows it.
 type SyncUploadRequest struct {
 	Delete []string `json:"delete,omitempty"` // relative paths under /workspace/src/ to remove as the upload applies
 }

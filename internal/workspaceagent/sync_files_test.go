@@ -3,6 +3,7 @@ package workspaceagent
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 var syncedAt = time.Date(2020, 1, 2, 3, 4, 5, 6789, time.UTC)
@@ -50,6 +53,23 @@ func archive(t *testing.T, entries ...tarEntry) []byte {
 		}
 	}
 	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// compressed is data the way an upload's body carries an archive.
+func compressed(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
@@ -468,10 +488,15 @@ func TestSyncUploadsRunOneAtATime(t *testing.T) {
 	noTempFiles(t, a.workdir)
 }
 
-func TestSyncUploadRejectsAnOversizedBody(t *testing.T) {
+// The limit bounds what an upload stages, so it applies to the archive the
+// body expands to.
+func TestSyncUploadRejectsAnArchivePastTheLimit(t *testing.T) {
 	a := newTestAgent(t)
 	a.maxUpload = 1 << 20
-	body := archive(t, entry(tarFile("small.txt", "small", 0o644)), entry(tarFile("big", strings.Repeat("x", 2<<20), 0o644)))
+	body := compressed(t, archive(t, entry(tarFile("small.txt", "small", 0o644)), entry(tarFile("big", strings.Repeat("x", 2<<20), 0o644))))
+	if len(body) >= 1<<20 {
+		t.Fatalf("the compressed body is %d bytes, which would test the body's limit instead", len(body))
+	}
 	req := httptest.NewRequest(http.MethodPost, "/sync/upload", io.MultiReader(strings.NewReader("{}"), bytes.NewReader(body)))
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
@@ -481,6 +506,24 @@ func TestSyncUploadRejectsAnOversizedBody(t *testing.T) {
 	}
 	notApplied(t, a.workdir, "small.txt", "big")
 	noTempFiles(t, a.workdir)
+}
+
+// zstd skips skippable frames without producing anything, so the body has a
+// limit of its own: without it, a client could send them for as long as it
+// liked while holding the upload lock.
+func TestSyncUploadRejectsABodyPastTheLimit(t *testing.T) {
+	a := newTestAgent(t)
+	a.maxUpload = 1 << 20
+	frame := make([]byte, 8+2<<20)
+	binary.LittleEndian.PutUint32(frame, 0x184D2A50)
+	binary.LittleEndian.PutUint32(frame[4:], 2<<20)
+	req := httptest.NewRequest(http.MethodPost, "/sync/upload", io.MultiReader(strings.NewReader("{}"), bytes.NewReader(frame)))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	a.Handler("secret", nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("response = %d %s, want a 413", rec.Code, rec.Body.String())
+	}
 }
 
 func TestSyncUploadDeleteRemovesFilesAndEmptyParents(t *testing.T) {
@@ -599,8 +642,8 @@ func TestSyncUploadGivesUpOnAStalledClient(t *testing.T) {
 	reader, writer := io.Pipe()
 	t.Cleanup(func() { _ = writer.Close() })
 	go func() {
-		// The header and one byte of content, then nothing.
-		_, _ = writer.Write(append([]byte("{}"), archive(t, entry(tarFile("a.txt", "abc", 0o644)))[:512+1]...))
+		// The request and the start of the archive, then nothing.
+		_, _ = writer.Write(append([]byte("{}"), compressed(t, archive(t, entry(tarFile("a.txt", "abc", 0o644))))[:8]...))
 	}()
 	req, err := http.NewRequest(http.MethodPost, server.URL+"/sync/upload", reader)
 	if err != nil {
@@ -677,7 +720,7 @@ func TestSyncUploadRequiresTheRequest(t *testing.T) {
 func TestSyncUploadOverHTTPDeletesAndUploads(t *testing.T) {
 	a := newTestAgent(t)
 	writeTree(t, a.workdir, map[string]string{"old.txt": "old"})
-	body := io.MultiReader(strings.NewReader(`{"delete":["old.txt"]}`), bytes.NewReader(archive(t, entry(tarFile("new.txt", "new", 0o644)))))
+	body := io.MultiReader(strings.NewReader(`{"delete":["old.txt"]}`), bytes.NewReader(compressed(t, archive(t, entry(tarFile("new.txt", "new", 0o644))))))
 	req := httptest.NewRequest(http.MethodPost, "/sync/upload", body)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
@@ -735,7 +778,7 @@ func TestSyncUploadThatFailsDeletesNothing(t *testing.T) {
 			a.maxUpload = 1 << 20
 			writeTree(t, a.workdir, map[string]string{"old.txt": "old", "dir/inner": "x"})
 			req := httptest.NewRequest(http.MethodPost, "/sync/upload",
-				io.MultiReader(strings.NewReader(deleteHeader(t, tc.deletes)), bytes.NewReader(tc.archive(t))))
+				io.MultiReader(strings.NewReader(deleteHeader(t, tc.deletes)), bytes.NewReader(compressed(t, tc.archive(t)))))
 			req.Header.Set("Authorization", "Bearer secret")
 			rec := httptest.NewRecorder()
 			a.Handler("secret", nil).ServeHTTP(rec, req)

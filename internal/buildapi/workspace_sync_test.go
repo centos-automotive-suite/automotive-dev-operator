@@ -17,6 +17,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 )
 
 func syncTestRouter(t *testing.T, workdir string) *gin.Engine {
@@ -137,7 +138,11 @@ func TestSyncUploadReachesTheWorkspace(t *testing.T) {
 	}
 	api := newRunClient(t, syncTestRouter(t, workdir))
 	var archive bytes.Buffer
-	tw := tar.NewWriter(&archive)
+	zw, err := zstd.NewWriter(&archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(zw)
 	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "src/main.go", Mode: 0o644, Size: 4}); err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +150,9 @@ func TestSyncUploadReachesTheWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
 

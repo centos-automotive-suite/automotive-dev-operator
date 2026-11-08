@@ -30,6 +30,7 @@ import (
 	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/klauspost/compress/zstd"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -600,10 +601,19 @@ func runSync(_ *cobra.Command, args []string) {
 	uploadArchive(name, req, buildArchive(absDir, plan.Changed))
 }
 
+// buildArchive returns the files as the workspace takes them: a tar archive,
+// compressed with zstd.
 func buildArchive(absDir string, files []string) []byte {
 	var buf bytes.Buffer
-	if err := tarTrackedFiles(absDir, files, &buf); err != nil {
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		handleError(fmt.Errorf("failed to compress the archive: %w", err))
+	}
+	if err := tarTrackedFiles(absDir, files, zw); err != nil {
 		handleError(fmt.Errorf("failed to create tar archive: %w", err))
+	}
+	if err := zw.Close(); err != nil {
+		handleError(fmt.Errorf("failed to compress the archive: %w", err))
 	}
 	return buf.Bytes()
 }
