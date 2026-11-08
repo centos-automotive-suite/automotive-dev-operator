@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -57,6 +58,12 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = conn.Close() }()
 	conn.SetReadLimit(buildcontract.MaxWorkspaceShellMessageBytes)
 
+	// gone closes once reading from the client or writing to it fails. Reads
+	// alone miss a client that leaves while the input relay waits for the
+	// shell to read what it typed.
+	gone := make(chan struct{})
+	var leaving sync.Once
+	leave := func() { leaving.Do(func() { close(gone) }) }
 	// The output relay is the only writer of data messages, and control
 	// messages may be written alongside it, so writes need no lock.
 	output := make(chan struct{})
@@ -67,6 +74,7 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 			n, err := terminal.Read(buf)
 			if n > 0 {
 				if conn.WriteMessage(websocket.BinaryMessage, buf[:n]) != nil {
+					leave()
 					return
 				}
 			}
@@ -75,9 +83,8 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
-	input := make(chan struct{})
 	go func() {
-		defer close(input)
+		defer leave()
 		for {
 			kind, data, err := conn.ReadMessage()
 			if err != nil {
@@ -117,10 +124,10 @@ func (a *Agent) handleShell(w http.ResponseWriter, r *http.Request) {
 		_ = conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, strconv.Itoa(exitCode(status))), time.Now().Add(time.Second))
 		select {
-		case <-input:
+		case <-gone:
 		case <-time.After(time.Second):
 		}
-	case <-input:
+	case <-gone:
 		hangUp(terminal, pid, exited)
 		stopOutput()
 	}

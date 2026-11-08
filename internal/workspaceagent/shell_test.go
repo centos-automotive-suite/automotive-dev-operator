@@ -114,6 +114,47 @@ func TestShellEndsWhenTheClientGoesAway(t *testing.T) {
 	}
 }
 
+// Typing into a shell that is not reading fills its terminal, and the agent
+// stops reading the client until the shell reads. A client that goes away then
+// is noticed when output to it fails, and its shell ends.
+func TestShellEndsWhenTheClientGoesAwayWhileItsTerminalIsFull(t *testing.T) {
+	conn := dialShell(t, newTestAgent(t))
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("echo pid=$$; while :; do echo tick; sleep 0.1; done\n")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var output bytes.Buffer
+	pid := 0
+	for pid == 0 {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("shell read: %v\n%s", err, output.String())
+		}
+		output.Write(data)
+		if m := regexp.MustCompile(`pid=(\d+)\r?\n`).FindStringSubmatch(output.String()); m != nil {
+			pid, _ = strconv.Atoi(m[1])
+		}
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	// Whole lines, which the terminal keeps until the shell reads them, well
+	// past what it holds.
+	line := append(bytes.Repeat([]byte("x"), 1023), '\n')
+	for range 1024 {
+		_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+		if conn.WriteMessage(websocket.BinaryMessage, line) != nil {
+			break
+		}
+	}
+	_ = conn.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the shell outlived its connection")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestShellRequiresTheToken(t *testing.T) {
 	server := httptest.NewServer(newTestAgent(t).Handler("secret", nil))
 	defer server.Close()
