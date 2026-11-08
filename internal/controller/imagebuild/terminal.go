@@ -182,10 +182,6 @@ func collectNamedStage(
 	if stage == pipelineTaskPushDisk {
 		observeTask(&ib.Status, tr, "push-disk-artifact-s3")
 	}
-	if requireSettled && ((ib.Status.Phase == api.ImageBuildPhasePushing && stage == pipelineTaskPushDisk) ||
-		(ib.Status.Phase == api.ImageBuildPhaseFlashing && stage == pipelineTaskFlash)) {
-		setCompletion(&ib.Status, tr.Status.CompletionTime)
-	}
 	return nil
 }
 
@@ -325,18 +321,6 @@ func (r *ImageBuildReconciler) handleCancellation(ctx context.Context, ib *api.I
 			}
 		}
 	}
-	for i := range trs.Items {
-		tr := &trs.Items[i]
-		if !tr.IsSuccessful() {
-			continue
-		}
-		if ib.Status.Phase == api.ImageBuildPhaseFlashing && tr.Name == ib.Status.FlashTaskRunName {
-			return r.handleFlashingState(ctx, ib)
-		}
-		if ib.Status.Phase == api.ImageBuildPhasePushing && tr.Name == ib.Status.PushTaskRunName && !ib.Spec.IsFlashEnabled() {
-			return r.handlePushingState(ctx, ib)
-		}
-	}
 	return ctrl.Result{}, r.updateStatus(ctx, ib, phaseCancelled, "Build cancelled by user")
 }
 
@@ -349,14 +333,6 @@ func latestPipelineRun(runs []tekton.PipelineRun) *tekton.PipelineRun {
 		}
 	}
 	return latest
-}
-
-func settledTaskStatus(tr *tekton.TaskRun, failureMessage, cancellationMessage string) (string, string) {
-	phase, _ := terminal.TaskPhase(tr)
-	if phase == api.ImageBuildPhaseCancelled {
-		return phase, taskRunFailureMessage(tr, cancellationMessage)
-	}
-	return phase, failureMessage
 }
 
 func pipelineCancelled(pr *tekton.PipelineRun) bool {
