@@ -23,17 +23,22 @@ var children = struct {
 // startCommand runs /bin/sh -c command in its own session, so the command
 // leads a process group that cancellation can signal as a whole.
 func startCommand(command, dir string, stdin, output *os.File) (int, <-chan syscall.WaitStatus, error) {
-	children.once.Do(func() { go reapChildren() })
-	// Register the PID before the reaper can look it up: it takes this lock
-	// for every exit it collects.
-	children.Lock()
-	defer children.Unlock()
-	pid, err := syscall.ForkExec("/bin/sh", []string{"/bin/sh", "-c", command}, &syscall.ProcAttr{
+	return startProcess([]string{"/bin/sh", "-c", command}, &syscall.ProcAttr{
 		Dir:   dir,
 		Env:   os.Environ(),
 		Files: []uintptr{stdin.Fd(), output.Fd(), output.Fd()},
 		Sys:   &syscall.SysProcAttr{Setsid: true},
 	})
+}
+
+// startProcess starts argv for the reaping loop to wait for.
+func startProcess(argv []string, attr *syscall.ProcAttr) (int, <-chan syscall.WaitStatus, error) {
+	children.once.Do(func() { go reapChildren() })
+	// Register the PID before the reaper can look it up: it takes this lock
+	// for every exit it collects.
+	children.Lock()
+	defer children.Unlock()
+	pid, err := syscall.ForkExec(argv[0], argv, attr)
 	if err != nil {
 		return 0, nil, err
 	}

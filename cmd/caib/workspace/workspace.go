@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +17,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -242,10 +245,12 @@ func newShellCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "shell <name>",
 		Short: "Open an interactive shell in a workspace",
-		Long: `Open an interactive shell session in the workspace pod.
+		Long: `Open an interactive shell in the workspace, with the cross-compilation
+toolchain, in a terminal that follows your terminal's size. Exits with the
+shell's exit code.
 
-Your terminal is connected directly to the workspace container,
-giving you a full shell with the cross-compilation toolchain.
+The shell ends when the connection drops. For commands that must outlive it,
+use caib workspace exec.
 
 Examples:
   caib workspace shell my-app`,
@@ -765,29 +770,17 @@ func runShell(_ *cobra.Command, args []string) {
 	requireServer()
 	name := args[0]
 
-	// Set terminal to raw mode
 	fd := int(os.Stdin.Fd())
-	if !term.IsTerminal(fd) {
+	// The shell's terminal follows this one's size. Watching for resizes
+	// first means none is missed between reading the size and relaying.
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	size, err := terminalSize(fd)
+	if err != nil {
 		handleError(fmt.Errorf("stdin is not a terminal"))
 	}
-	oldState, err := term.MakeRaw(fd)
-	if err != nil {
-		handleError(fmt.Errorf("failed to set raw terminal: %w", err))
-	}
-	defer func() { _ = term.Restore(fd, oldState) }()
-
-	// Restore terminal on signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		_ = term.Restore(fd, oldState)
-		os.Exit(0)
-	}()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	var ws *websocket.Conn
 	err = caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
 		conn, cerr := client.ShellWorkspace(ctx, name)
@@ -798,38 +791,112 @@ func runShell(_ *cobra.Command, args []string) {
 		return nil
 	})
 	if err != nil {
-		_ = term.Restore(fd, oldState)
 		handleError(fmt.Errorf("shell failed: %w", err))
 	}
 	defer func() { _ = ws.Close() }()
 
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		handleError(fmt.Errorf("failed to set raw terminal: %w", err))
+	}
+	restore := func() { _ = term.Restore(fd, oldState) }
+	sigCh := make(chan os.Signal, 1)
+	// Ctrl-C reaches the shell as a keystroke; these come from elsewhere.
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		buf := make([]byte, 1024)
-		for {
-			n, rerr := os.Stdin.Read(buf)
-			if n > 0 {
-				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
-					return
-				}
-			}
-			if rerr != nil {
-				_ = ws.WriteMessage(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-				return
+		<-sigCh
+		restore()
+		os.Exit(1)
+	}()
+
+	resizes := make(chan buildcontract.WorkspaceShellSize)
+	go func() {
+		for range winch {
+			if size, err := terminalSize(fd); err == nil {
+				resizes <- size
 			}
 		}
 	}()
 
-	for {
-		_, msg, rerr := ws.ReadMessage()
-		if rerr != nil {
-			if closeErr, ok := rerr.(*websocket.CloseError); ok && closeErr.Code != websocket.CloseNormalClosure {
-				_ = term.Restore(fd, oldState)
-				fmt.Fprintf(os.Stderr, "shell error: %s\n", closeErr.Text)
+	code, err := shellSession(ws, os.Stdin, os.Stdout, size, resizes)
+	restore()
+	if err != nil {
+		handleError(err)
+	}
+	os.Exit(code)
+}
+
+func terminalSize(fd int) (buildcontract.WorkspaceShellSize, error) {
+	cols, rows, err := term.GetSize(fd)
+	return buildcontract.WorkspaceShellSize{Cols: uint16(cols), Rows: uint16(rows)}, err
+}
+
+// shellSession relays a terminal of the given size to a workspace shell until
+// the shell ends, and returns its exit code. The protocol is described at
+// buildcontract.WorkspaceShellSize.
+func shellSession(
+	conn *websocket.Conn,
+	stdin io.Reader,
+	stdout io.Writer,
+	size buildcontract.WorkspaceShellSize,
+	resizes <-chan buildcontract.WorkspaceShellSize,
+) (int, error) {
+	var writes sync.Mutex
+	write := func(kind int, data []byte) error {
+		writes.Lock()
+		defer writes.Unlock()
+		return conn.WriteMessage(kind, data)
+	}
+	sendSize := func(size buildcontract.WorkspaceShellSize) error {
+		data, _ := json.Marshal(size)
+		return write(websocket.TextMessage, data)
+	}
+	// The shell gets the terminal's size before any keystrokes.
+	if err := sendSize(size); err != nil {
+		return 0, fmt.Errorf("shell connection lost: %w", err)
+	}
+	go func() {
+		for size := range resizes {
+			if sendSize(size) != nil {
+				return
 			}
-			return
 		}
-		_, _ = os.Stdout.Write(msg)
+	}()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdin.Read(buf)
+			if n > 0 {
+				if write(websocket.BinaryMessage, buf[:n]) != nil {
+					return
+				}
+			}
+			if err != nil {
+				_ = write(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+				return
+			}
+		}
+	}()
+	for {
+		_, data, err := conn.ReadMessage()
+		if err == nil {
+			if _, err := stdout.Write(data); err != nil {
+				return 0, fmt.Errorf("print shell output: %w", err)
+			}
+			continue
+		}
+		var closed *websocket.CloseError
+		if !errors.As(err, &closed) {
+			return 0, fmt.Errorf("shell connection lost: %w", err)
+		}
+		if closed.Code != websocket.CloseNormalClosure {
+			return 0, fmt.Errorf("shell ended: %s", closed.Error())
+		}
+		code, err := strconv.Atoi(closed.Text)
+		if err != nil {
+			return 0, fmt.Errorf("shell ended without an exit code")
+		}
+		return code, nil
 	}
 }
 

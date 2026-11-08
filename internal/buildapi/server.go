@@ -144,6 +144,9 @@ type APIServer struct {
 	lastAuthConfigCheck time.Time    // Last time we checked OperatorConfig
 	progressCache       map[string]progressCacheEntry
 	progressCacheMu     sync.RWMutex
+	// shellPingInterval is how often a workspace shell's client is pinged;
+	// zero means defaultShellPingInterval.
+	shellPingInterval time.Duration
 }
 
 //go:embed openapi.yaml
