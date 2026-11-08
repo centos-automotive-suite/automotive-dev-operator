@@ -1215,8 +1215,8 @@ func (h *Handler) handleFileUploads(
 			if st.Phase == phaseUploading {
 				break
 			}
-			if st.Phase == phaseFailed {
-				return fmt.Errorf("build failed while waiting for upload server: %s", st.Message)
+			if isTerminalPhase(st.Phase) {
+				return fmt.Errorf("build %s while waiting for upload server: %s", strings.ToLower(st.Phase), st.Message)
 			}
 		}
 		time.Sleep(3 * time.Second)
