@@ -460,7 +460,9 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 		interval = defaultShellPingInterval
 	}
 	pingClient(conn, interval, done)
+	input := make(chan struct{})
 	go func() {
+		defer close(input)
 		relayMessages(shell, conn)
 		// The shell's close carries its exit code, so the relay to the client
 		// goes on after the client's side ends: input can fail because the
@@ -469,6 +471,13 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 		_ = shell.SetReadDeadline(time.Now().Add(shellCloseWait))
 	}()
 	relayMessages(conn, shell)
+	// Closing the connection with keystrokes from the client still unread
+	// resets it, which can discard the close before the client reads it, so
+	// wait for the client to answer the close.
+	select {
+	case <-input:
+	case <-time.After(time.Second):
+	}
 }
 
 // shellCloseWait is how long the relay waits for the agent to close a shell
@@ -504,7 +513,8 @@ func pingClient(conn *websocket.Conn, interval time.Duration, done <-chan struct
 }
 
 // relayMessages copies messages from src to dst until src closes, then passes
-// its close on.
+// its close on. Messages dst no longer takes are dropped, and src is still
+// read, so that its close is answered.
 func relayMessages(dst, src *websocket.Conn) {
 	for {
 		kind, data, err := src.ReadMessage()
@@ -519,9 +529,7 @@ func relayMessages(dst, src *websocket.Conn) {
 			_ = dst.WriteControl(websocket.CloseMessage, message, time.Now().Add(time.Second))
 			return
 		}
-		if err := dst.WriteMessage(kind, data); err != nil {
-			return
-		}
+		_ = dst.WriteMessage(kind, data)
 	}
 }
 
