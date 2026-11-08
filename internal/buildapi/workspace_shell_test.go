@@ -251,6 +251,45 @@ func TestWorkspaceShellGivesUpOnAnAgentThatDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// A client that stops reading while the shell prints holds the relay in a write
+// to it, so once the client stops answering pings it is cut off.
+func TestWorkspaceShellCutsOffAClientThatStopsReading(t *testing.T) {
+	ended := make(chan error, 1)
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		output := make([]byte, 32<<10)
+		for {
+			if err := conn.WriteMessage(websocket.BinaryMessage, output); err != nil {
+				ended <- err
+				return
+			}
+		}
+	}))
+	defer agent.Close()
+	a, router := runTestServer(t, agent.URL, "alice", false)
+	a.shellPingInterval = 50 * time.Millisecond
+	api := newRunClient(t, router)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// The client reads nothing, so it answers no pings either.
+	conn, err := api.ShellWorkspace(ctx, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	select {
+	case <-ended:
+	case <-time.After(shellCloseWait + 5*time.Second):
+		t.Fatal("the relay is still writing to a client that stopped reading")
+	}
+}
+
 // startIdleShellAgent serves a shell that never says anything, and reports how
 // the build API's connection to it ended.
 func startIdleShellAgent(t *testing.T) (string, <-chan error) {

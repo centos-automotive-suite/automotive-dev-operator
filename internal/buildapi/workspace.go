@@ -462,13 +462,19 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 	pingClient(conn, interval, done)
 	input := make(chan struct{})
 	go func() {
-		defer close(input)
 		relayMessages(shell, conn)
+		close(input)
 		// The shell's close carries its exit code, so the relay to the client
 		// goes on after the client's side ends: input can fail because the
-		// shell just closed. The agent answers the close passed on to it,
-		// unless it is unreachable.
-		_ = shell.SetReadDeadline(time.Now().Add(shellCloseWait))
+		// shell just closed. The agent may not answer the close passed on to
+		// it, though, and a client that stopped reading would hold the relay
+		// in a write forever.
+		select {
+		case <-done:
+		case <-time.After(shellCloseWait):
+			_ = shell.Close()
+			_ = conn.Close()
+		}
 	}()
 	relayMessages(conn, shell)
 	// Closing the connection with keystrokes from the client still unread
@@ -480,8 +486,8 @@ func (a *APIServer) shellWorkspace(c *gin.Context, name string) {
 	}
 }
 
-// shellCloseWait is how long the relay waits for the agent to close a shell
-// whose client went away.
+// shellCloseWait is how long the relay to a client goes on after the client's
+// side ends.
 const shellCloseWait = 5 * time.Second
 
 // defaultShellPingInterval keeps an idle shell's connection under the
