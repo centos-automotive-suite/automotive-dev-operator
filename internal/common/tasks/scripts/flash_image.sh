@@ -89,7 +89,15 @@ cleanup() {
     if [[ "${FLASH_SUCCESS}" != "true" ]] && [[ "${USER_PROVIDED_LEASE}" != "true" ]]; then
         echo ""
         echo "Releasing lease ${LEASE_NAME} due to failure..."
-        jmp delete leases --client-config "${JMP_CLIENT_CONFIG}" "${LEASE_NAME}" || true
+        if jmp delete leases --client-config "${JMP_CLIENT_CONFIG}" "${LEASE_NAME}"; then
+            # Tekton reads results after the step exits, so the build no longer
+            # reports a lease it does not hold.
+            if [[ -n "${RESULTS_LEASE_ID_PATH:-}" ]]; then
+                : > "${RESULTS_LEASE_ID_PATH}"
+            fi
+        else
+            echo "WARNING: failed to release lease ${LEASE_NAME}; it is still held"
+        fi
     fi
 }
 trap cleanup EXIT
