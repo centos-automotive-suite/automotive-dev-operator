@@ -280,8 +280,9 @@ ifeq (, $(shell which operator-sdk 2>/dev/null))
 	set -e ;\
 	mkdir -p $(dir $(OPERATOR_SDK)) ;\
 	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OPERATOR_SDK) https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$${OS}_$${ARCH} ;\
-	chmod +x $(OPERATOR_SDK) ;\
+	curl -fsSLo $(OPERATOR_SDK).tmp https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$${OS}_$${ARCH} || { rm -f $(OPERATOR_SDK).tmp; exit 1; } ;\
+	chmod +x $(OPERATOR_SDK).tmp ;\
+	mv $(OPERATOR_SDK).tmp $(OPERATOR_SDK) ;\
 	}
 else
 OPERATOR_SDK = $(shell which operator-sdk)
@@ -316,8 +317,9 @@ ifeq (,$(shell which opm 2>/dev/null))
 	set -e ;\
 	mkdir -p $(dir $(OPM)) ;\
 	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OPM) https://github.com/operator-framework/operator-registry/releases/download/v1.60.0/$${OS}-$${ARCH}-opm ;\
-	chmod +x $(OPM) ;\
+	curl -fsSLo $(OPM).tmp https://github.com/operator-framework/operator-registry/releases/download/v1.60.0/$${OS}-$${ARCH}-opm || { rm -f $(OPM).tmp; exit 1; } ;\
+	chmod +x $(OPM).tmp ;\
+	mv $(OPM).tmp $(OPM) ;\
 	}
 else
 OPM = $(shell which opm)
