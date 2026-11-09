@@ -140,6 +140,11 @@ func (a *Agent) stage(root *os.Root, archive io.Reader) ([]stagedEntry, error) {
 	for {
 		hdr, err := reader.Next()
 		if errors.Is(err, io.EOF) {
+			// The archive can end before the stream holding it does, and only
+			// the stream's end shows that all of it arrived.
+			if _, err := io.Copy(io.Discard, archive); err != nil {
+				return nil, a.archiveError(err)
+			}
 			return entries, nil
 		}
 		if err != nil {
@@ -407,7 +412,8 @@ func (a *Agent) handleSyncUpload(w http.ResponseWriter, r *http.Request) {
 	defer archive.Close()
 	// A small body can expand into a large archive, so the limit applies to
 	// both.
-	result, err := a.SyncUpload(req, http.MaxBytesReader(w, io.NopCloser(archive), a.maxUpload))
+	stream := io.MultiReader(archive, bodyEnd{body})
+	result, err := a.SyncUpload(req, http.MaxBytesReader(w, io.NopCloser(stream), a.maxUpload))
 	// zstd reports a body that stopped partway through a skipped frame as a
 	// cut archive, whatever stopped it.
 	if err != nil && body.err != nil {
@@ -432,4 +438,15 @@ func (r *uploadBody) Read(p []byte) (int, error) {
 		r.err = err
 	}
 	return n, err
+}
+
+// bodyEnd ends an upload's archive the way its body ended: zstd takes a body
+// cut before a frame for the end of the stream.
+type bodyEnd struct{ body *uploadBody }
+
+func (e bodyEnd) Read([]byte) (int, error) {
+	if e.body.err != nil {
+		return 0, e.body.err
+	}
+	return 0, io.EOF
 }

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -733,6 +734,40 @@ func TestSyncUploadOverHTTPDeletesAndUploads(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(a.workdir, "old.txt")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("old.txt is still there: %v", err)
+	}
+}
+
+// Wherever the connection drops, even before the archive starts or after it
+// ends, the upload applies nothing: only the end of the compressed stream
+// shows that all of it arrived.
+func TestSyncUploadOverHTTPAppliesNothingWhenCutShort(t *testing.T) {
+	head := `{"delete":["old.txt"]}`
+	files := func(b string) []byte {
+		return archive(t, entry(tarFile("a.txt", "a", 0o644)), entry(tarFile("b.txt", b, 0o644)))
+	}
+	for name, full := range map[string][]byte{
+		"small": compressed(t, files("b")),
+		// 128 KiB, a whole zstd block, so the block that ends the stream
+		// comes after all of the archive.
+		"a block": compressed(t, files(strings.Repeat("b", 128<<10-len(files(""))))),
+	} {
+		for n := range len(full) {
+			a := newTestAgent(t)
+			writeTree(t, a.workdir, map[string]string{"old.txt": "old"})
+			// What net/http reads from a client whose connection drops.
+			body := io.MultiReader(strings.NewReader(head), bytes.NewReader(full[:n]), iotest.ErrReader(io.ErrUnexpectedEOF))
+			req := httptest.NewRequest(http.MethodPost, "/sync/upload", body)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.Handler("secret", nil).ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s cut to %d of %d bytes: response = %d %s, want a 400", name, n, len(full), rec.Code, rec.Body.String())
+			}
+			notApplied(t, a.workdir, "a.txt", "b.txt")
+			if got := readFile(t, filepath.Join(a.workdir, "old.txt")); got != "old" {
+				t.Errorf("%s cut to %d of %d bytes: old.txt = %q, want it kept", name, n, len(full), got)
+			}
+		}
 	}
 }
 
