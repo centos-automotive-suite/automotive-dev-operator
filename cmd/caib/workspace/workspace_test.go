@@ -646,6 +646,9 @@ func TestComputeManifestWarnsOnSkippedFiles(t *testing.T) {
 // The manifest holds each file's version, which a plan compares without
 // reading the file, so making one reads none either.
 func TestComputeManifestDoesNotReadFiles(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any file")
+	}
 	dir := t.TempDir()
 	secret := filepath.Join(dir, "secret")
 	if err := os.WriteFile(secret, []byte("x"), 0o644); err != nil {
