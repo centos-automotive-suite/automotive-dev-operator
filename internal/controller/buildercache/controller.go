@@ -10,6 +10,7 @@ import (
 	"time"
 
 	automotivev1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	imagev1 "github.com/openshift/api/image/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,7 +25,7 @@ import (
 )
 
 const (
-	streamName         = "aib-build"
+	streamName         = tasks.BuilderCacheStreamName
 	lastUsedAnnotation = "automotive.sdv.cloud.redhat.com/builder-cache-last-used"
 	cleanupCondition   = "BuilderCacheCleanupDeferred"
 	// Leave time for task results and catalog publication to become visible.

@@ -7,9 +7,11 @@ import (
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/golang-jwt/jwt/v5"
 	routev1 "github.com/openshift/api/route/v1"
 	securityv1 "github.com/openshift/api/security/v1"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -847,6 +849,118 @@ func (r *OperatorConfigReconciler) buildBuildServiceAccount(namespace string) *c
 				"app.kubernetes.io/name":      "automotive-dev-operator",
 				"app.kubernetes.io/component": "build",
 				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+	}
+}
+
+// buildRegistryServiceAccount is an SA registry tokens are minted for. Its
+// only rights are image pulls, plus pushes for ado-registry (config/rbac).
+func (r *OperatorConfigReconciler) buildRegistryServiceAccount(name, namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "registry",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		// No pod runs as this SA; its tokens are only minted on request.
+		AutomountServiceAccountToken: new(false),
+	}
+}
+
+// buildPodPatchPolicyName is per namespace so that removing one operator
+// instance does not remove another instance's policy.
+func buildPodPatchPolicyName(namespace string) string {
+	return "ado-build-pod-patch-" + namespace
+}
+
+// buildBuildPodPatchPolicy narrows the pod patch right build pods need for
+// progress reporting (RBAC can only grant it on every pod in the namespace)
+// to the progress annotation on the caller's own pod. A pod's mounted token
+// names that pod; a token minted through TokenRequest names none.
+func (r *OperatorConfigReconciler) buildBuildPodPatchPolicy(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicy {
+	buildUser := "system:serviceaccount:" + namespace + ":" + automotivev1alpha1.BuildServiceAccountName
+	return &admissionregistrationv1.ValidatingAdmissionPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: buildPodPatchPolicyName(namespace),
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "build",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		Spec: admissionregistrationv1.ValidatingAdmissionPolicySpec{
+			FailurePolicy: ptr.To(admissionregistrationv1.Fail),
+			MatchConstraints: &admissionregistrationv1.MatchResources{
+				ResourceRules: []admissionregistrationv1.NamedRuleWithOperations{{
+					RuleWithOperations: admissionregistrationv1.RuleWithOperations{
+						Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Update},
+						Rule: admissionregistrationv1.Rule{
+							APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"pods"},
+						},
+					},
+				}},
+			},
+			MatchConditions: []admissionregistrationv1.MatchCondition{{
+				Name:       "build-service-account",
+				Expression: fmt.Sprintf("request.userInfo.username == %q", buildUser),
+			}},
+			Variables: []admissionregistrationv1.Variable{
+				// Besides progress, the keys OpenShift's SCC admission rewrites on
+				// every update: it re-selects the SCC as the requester (ado-build)
+				// before policies run, and it overwrites whatever a client sends.
+				{Name: "mutableAnnotations", Expression: fmt.Sprintf(
+					"[%q, 'openshift.io/scc', 'security.openshift.io/validated-scc-subject-type']", labels.Progress)},
+				{Name: "oldAnnotations", Expression: "oldObject.metadata.?annotations.orValue({})"},
+				{Name: "newAnnotations", Expression: "object.metadata.?annotations.orValue({})"},
+			},
+			Validations: []admissionregistrationv1.Validation{
+				{
+					Expression: "request.userInfo.?extra[?'authentication.kubernetes.io/pod-name'].orValue([]) == [object.metadata.name]",
+					Message:    "ado-build may only update the pod its token was issued to",
+				},
+				{
+					Expression: "variables.newAnnotations.all(k, k in variables.mutableAnnotations || " +
+						"(k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k])) && " +
+						"variables.oldAnnotations.all(k, k in variables.mutableAnnotations || k in variables.newAnnotations)",
+					Message: "ado-build may only change the " + labels.Progress + " annotation",
+				},
+				{
+					Expression: "object.spec == oldObject.spec && " +
+						"object.metadata.?labels.orValue({}) == oldObject.metadata.?labels.orValue({}) && " +
+						"object.metadata.?ownerReferences.orValue([]) == oldObject.metadata.?ownerReferences.orValue([]) && " +
+						"object.metadata.?finalizers.orValue([]) == oldObject.metadata.?finalizers.orValue([])",
+					Message: "ado-build may not change a pod's spec, labels, owners or finalizers",
+				},
+			},
+		},
+	}
+}
+
+// buildBuildPodPatchPolicyBinding enforces the pod patch policy in the
+// operator's namespace only.
+func (r *OperatorConfigReconciler) buildBuildPodPatchPolicyBinding(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicyBinding {
+	name := buildPodPatchPolicyName(namespace)
+	return &admissionregistrationv1.ValidatingAdmissionPolicyBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "build",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		Spec: admissionregistrationv1.ValidatingAdmissionPolicyBindingSpec{
+			PolicyName:        name,
+			ValidationActions: []admissionregistrationv1.ValidationAction{admissionregistrationv1.Deny},
+			MatchResources: &admissionregistrationv1.MatchResources{
+				NamespaceSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"kubernetes.io/metadata.name": namespace},
+				},
 			},
 		},
 	}

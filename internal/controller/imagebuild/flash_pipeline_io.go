@@ -67,6 +67,8 @@ func flashOCIAuthSecret(build *automotivev1alpha1.ImageBuild, creds *flashOCICre
 	}
 }
 
+// flashOCICredentials returns the credentials the flash task pulls the image
+// with: a registry SA token for internal-registry builds, else the build's secret.
 func (r *ImageBuildReconciler) flashOCICredentials(ctx context.Context, build *automotivev1alpha1.ImageBuild, flash *flashTarget) (*flashOCICredentials, error) {
 	if flash == nil || flash.imageRef == "" {
 		return nil, nil
@@ -76,7 +78,7 @@ func (r *ImageBuildReconciler) flashOCICredentials(ctx context.Context, build *a
 		expiry := int64(4 * 3600)
 		request := &authnv1.TokenRequest{Spec: authnv1.TokenRequestSpec{ExpirationSeconds: &expiry}}
 		account := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
-			Name: automotivev1alpha1.BuildServiceAccountName, Namespace: build.Namespace,
+			Name: automotivev1alpha1.RegistryPullServiceAccountName, Namespace: build.Namespace,
 		}}
 		if err := r.SubResource("token").Create(ctx, account, request); err != nil {
 			return nil, fmt.Errorf("failed to create SA token for flash OCI credentials: %w", err)

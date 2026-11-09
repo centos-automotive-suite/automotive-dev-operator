@@ -541,7 +541,7 @@ func TestFlashOCICredentialsServiceAccount(t *testing.T) {
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
 				SubResourceCreate: func(_ context.Context, _ client.Client, name string, obj client.Object, subResource client.Object, _ ...client.SubResourceCreateOption) error {
 					requested = true
-					if name != "token" || obj.GetName() != automotivev1alpha1.BuildServiceAccountName || obj.GetNamespace() != build.Namespace {
+					if name != "token" || obj.GetName() != automotivev1alpha1.RegistryPullServiceAccountName || obj.GetNamespace() != build.Namespace {
 						t.Fatalf("token request target = %s %s/%s", name, obj.GetNamespace(), obj.GetName())
 					}
 					request, ok := subResource.(*authnv1.TokenRequest)

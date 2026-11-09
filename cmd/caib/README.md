@@ -580,7 +580,7 @@ caib image inspect quay.io/org/my-os:v1 --registry-auth-file ~/.config/container
 
 ### image token
 
-Request a fresh, short-lived registry token (valid ~4 hours) for a completed build that used `--internal-registry`. Can be used with podman, skopeo, or any OCI-compatible tool.
+Request a fresh, short-lived, pull-only registry token (valid ~4 hours) for a completed build that used `--internal-registry`. Can be used with podman, skopeo, or any OCI-compatible tool.
 
 ```bash
 caib image token <build-name> [flags]
@@ -778,7 +778,7 @@ For registry authentication (`--push`, `--push-disk`, sealed operations):
 
 For the OpenShift internal registry (`--internal-registry`):
 
-No credentials are needed. The system automatically creates a short-lived service account token for the `pipeline` SA and uses it to authenticate to the internal registry. The `pipeline` SA must have `registry-editor` permissions (applied automatically by the operator's RBAC).
+No credentials are needed. The system automatically creates a short-lived service account token for the `ado-registry` SA and uses it to authenticate to the internal registry. The `ado-registry` SA can only pull and push images (`system:image-pusher`, applied automatically by the operator's RBAC) and never runs a pod. Tokens returned to you, such as from `caib image token`, are for the `ado-registry-pull` SA and can only pull (`system:image-puller`).
 
 ## Manifest File References
 

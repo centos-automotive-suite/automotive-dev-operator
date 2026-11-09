@@ -26,7 +26,8 @@ resources:
 - imagebuild_viewer_role.yaml
 - image_editor_role.yaml
 - image_viewer_role.yaml
-- pipeline_registry_rolebinding.yaml
+- pipeline_registry_pusher_rolebinding.yaml
+- pipeline_registry_puller_rolebinding.yaml
 - pipeline_pod_role.yaml
 - pipeline_pod_rolebinding.yaml
 
