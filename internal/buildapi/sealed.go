@@ -161,6 +161,23 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 	namespace := resolveNamespace()
 	requestedBy := a.resolveRequester(c)
 
+	// These Secrets are mounted into the reseal pod, which runs the requester's
+	// choice of image.
+	for _, ref := range []struct{ name, what string }{
+		{req.KeySecretRef, "seal key"},
+		{req.KeyPasswordSecretRef, "seal key password"},
+	} {
+		if ref.name == "" {
+			continue
+		}
+		if _, httpErr := requesterSecret(ctx, k8sClient, namespace, requestedBy, ref.name, ref.what); httpErr != nil {
+			spanError(span, errors.New(httpErr.message))
+			SealedCreateRequestsTotal.WithLabelValues(opLabel, "forbidden").Inc()
+			c.JSON(httpErr.code, gin.H{"error": httpErr.message})
+			return
+		}
+	}
+
 	refs, err := createSealedSecrets(ctx, clientset, namespace, &req)
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {

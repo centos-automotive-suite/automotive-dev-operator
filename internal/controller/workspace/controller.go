@@ -3,6 +3,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -110,6 +111,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 	var pod *corev1.Pod
 	if err == nil {
 		pod, err = r.ensurePod(ctx, ws, log)
+	}
+	if errors.Is(err, errClientConfigPending) {
+		// Owning the Secret means its creation triggers the next reconcile.
+		return ctrl.Result{}, r.setStatus(ctx, ws, phaseCreating, "", "Waiting for the Jumpstarter client config")
 	}
 	if err != nil {
 		if statusErr := r.setStatus(ctx, ws, "Failed", automotivev1alpha1.WorkspaceReasonPodCreationError, fmt.Sprintf("Pod error: %v", err)); statusErr != nil {
@@ -396,6 +401,10 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 		return nil, err
 	}
 
+	if err := r.checkClientConfigSecret(ctx, ws); err != nil {
+		return nil, err
+	}
+
 	// Load OperatorConfig only when creating a new pod
 	var operatorConfig *automotivev1alpha1.OperatorConfig
 	oc := &automotivev1alpha1.OperatorConfig{}
@@ -436,6 +445,33 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 		return nil, err
 	}
 	return pod, nil
+}
+
+// errClientConfigPending means the API has created the Workspace but not yet
+// its client config Secret.
+var errClientConfigPending = errors.New("client config Secret not created yet")
+
+// checkClientConfigSecret makes sure the pod only mounts a client config
+// Secret the Workspace controls. The API creates that Secret just after the
+// Workspace; until then a Secret by the same name belongs to someone else,
+// such as a flashing build of the same name, and holds their Jumpstarter
+// config.
+func (r *Reconciler) checkClientConfigSecret(ctx context.Context, ws *automotivev1alpha1.Workspace) error {
+	name := ws.Spec.ClientConfigSecretRef
+	if name == "" {
+		return nil
+	}
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: ws.Namespace, Name: name}, secret); err != nil {
+		if k8serrors.IsNotFound(err) {
+			return errClientConfigPending
+		}
+		return err
+	}
+	if !metav1.IsControlledBy(secret, ws) {
+		return fmt.Errorf("client config Secret %s is not controlled by this workspace", name)
+	}
+	return nil
 }
 
 func resolveWorkspaceImage(ws *automotivev1alpha1.Workspace, wsConfig *automotivev1alpha1.WorkspacesConfig) string {
@@ -798,6 +834,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&automotivev1alpha1.Workspace{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&corev1.Secret{}).
 		Complete(r)
 }
 

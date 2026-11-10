@@ -128,29 +128,14 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 		}
 	}
 
-	// Create secret for Jumpstarter client config if provided
-	var jmpClientSecret string
+	var clientConfig []byte
 	if req.ClientConfig != "" {
-		clientConfigBytes, decErr := base64.StdEncoding.DecodeString(req.ClientConfig)
+		decoded, decErr := base64.StdEncoding.DecodeString(req.ClientConfig)
 		if decErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "clientConfig must be base64 encoded"})
 			return
 		}
-		jmpClientSecret = req.Name + "-jumpstarter-client"
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      jmpClientSecret,
-				Namespace: namespace,
-			},
-			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{
-				"client.yaml": clientConfigBytes,
-			},
-		}
-		if createErr := k8sClient.Create(c.Request.Context(), secret); createErr != nil && !k8serrors.IsAlreadyExists(createErr) {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create client config secret: %v", createErr)})
-			return
-		}
+		clientConfig = decoded
 	}
 
 	// Check if workspace CR already exists
@@ -182,6 +167,11 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 		return
 	}
 
+	var jmpClientSecret string
+	if clientConfig != nil {
+		jmpClientSecret = req.Name + "-jumpstarter-client"
+	}
+
 	// Create Workspace CR — the controller will create Pod, PVC, etc.
 	ws := &automotivev1alpha1.Workspace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -205,6 +195,24 @@ func (a *APIServer) createWorkspace(c *gin.Context) {
 	if err := k8sClient.Create(c.Request.Context(), ws); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create workspace: %v", err)})
 		return
+	}
+
+	// The Secret comes after the Workspace and is owned by it, so garbage
+	// collection removes it whatever happens to this request. The controller
+	// creates the pod only once the Workspace controls the Secret, so it never
+	// mounts an existing one of the same name.
+	if jmpClientSecret != "" {
+		if code, err := createWorkspaceClientSecret(c.Request.Context(), k8sClient, ws, clientConfig); err != nil {
+			// The request may be what failed, so use a context of our own. The
+			// UID precondition spares a Workspace that took the name meanwhile.
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 30*time.Second)
+			defer cancel()
+			if delErr := k8sClient.Delete(cleanupCtx, ws, client.Preconditions{UID: &ws.UID}); delErr != nil && !k8serrors.IsNotFound(delErr) {
+				a.log.Error(delErr, "failed to delete workspace after its client config secret failed", "workspace", ws.Name)
+			}
+			c.JSON(code, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusCreated, workspaceResponseFromCR(ws))
@@ -263,15 +271,8 @@ func (a *APIServer) deleteWorkspace(c *gin.Context, name string) {
 		return
 	}
 
-	// Delete client config secret
-	if ws.Spec.ClientConfigSecretRef != "" {
-		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: ws.Spec.ClientConfigSecretRef, Namespace: ws.Namespace}}
-		if delErr := k8sClient.Delete(c.Request.Context(), secret); delErr != nil && !k8serrors.IsNotFound(delErr) {
-			a.log.Error(delErr, "Failed to delete client config secret", "secret", ws.Spec.ClientConfigSecretRef)
-		}
-	}
-
-	// Delete Workspace CR
+	// Garbage collection removes the client config Secret the Workspace owns.
+	// Deleting by name could remove another user's Secret of the same name.
 	if err := k8sClient.Delete(c.Request.Context(), ws); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to delete workspace: %v", err)})
 		return
@@ -781,4 +782,35 @@ func (fw *flushWriter) Write(p []byte) (int, error) {
 		fw.flusher.Flush()
 	}
 	return n, err
+}
+
+// createWorkspaceClientSecret stores the Jumpstarter client config for ws.
+// It never reuses an existing Secret: a flashing build with the same name has
+// one by this name, holding another user's config.
+func createWorkspaceClientSecret(ctx context.Context, k8sClient client.Client, ws *automotivev1alpha1.Workspace, config []byte) (int, error) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ws.Spec.ClientConfigSecretRef,
+			Namespace: ws.Namespace,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: automotivev1alpha1.GroupVersion.String(),
+				Kind:       "Workspace",
+				Name:       ws.Name,
+				UID:        ws.UID,
+				// The controller mounts the Secret only once the Workspace
+				// controls it. No blockOwnerDeletion: that would need update
+				// on workspaces/finalizers.
+				Controller: new(true),
+			}},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{"client.yaml": config},
+	}
+	if err := k8sClient.Create(ctx, secret); err != nil {
+		if k8serrors.IsAlreadyExists(err) {
+			return http.StatusConflict, fmt.Errorf("secret %s already exists, choose another workspace name", secret.Name)
+		}
+		return http.StatusInternalServerError, fmt.Errorf("failed to create client config secret: %w", err)
+	}
+	return 0, nil
 }
