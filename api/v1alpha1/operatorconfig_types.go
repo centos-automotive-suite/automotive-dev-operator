@@ -30,7 +30,7 @@ import (
 
 const (
 	// DefaultAutomotiveImageBuilderImage is the default container image for automotive-image-builder
-	DefaultAutomotiveImageBuilderImage = "quay.io/centos-sig-automotive/automotive-image-builder:1.3.5"
+	DefaultAutomotiveImageBuilderImage = "quay.io/centos-sig-automotive/automotive-image-builder:1.3.6"
 
 	// DefaultYQHelperImage is the default yq helper image used in Tekton task steps
 	DefaultYQHelperImage = "quay.io/konflux-ci/yq:latest"
