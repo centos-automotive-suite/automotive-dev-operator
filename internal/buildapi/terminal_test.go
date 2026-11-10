@@ -34,7 +34,7 @@ func newRegistryTokenTestServer(t *testing.T, build client.Object) (*APIServer, 
 	}
 	tokenRequests := &atomic.Int64{}
 	tokens := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/namespaces/test-ns/serviceaccounts/ado-build/token" {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/namespaces/test-ns/serviceaccounts/"+api.RegistryPullServiceAccountName+"/token" {
 			t.Errorf("unexpected token request: %s %s", r.Method, r.URL.Path)
 		}
 		tokenRequests.Add(1)

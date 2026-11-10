@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	imagev1 "github.com/openshift/api/image/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	securityv1 "github.com/openshift/api/security/v1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -184,6 +186,8 @@ type OperatorConfigReconciler struct {
 // +kubebuilder:rbac:groups=networking.k8s.io,namespace=system,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=tasks;pipelines;pipelineruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,verbs=get;list;watch;create;update;patch;delete;use
+// +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreams,verbs=create
 // +kubebuilder:rbac:groups=monitoring.coreos.com,namespace=system,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=ado-metrics-reader,verbs=bind
 
@@ -658,22 +662,8 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 		return fmt.Errorf("failed to create/update pipeline: %w", err)
 	}
 
-	// Create the dedicated build SA (used by Tekton pods and token minting)
-	buildSA := r.buildBuildServiceAccount(config.Namespace)
-	if err := r.createOrUpdate(ctx, buildSA, config); err != nil {
-		return fmt.Errorf("failed to create/update build service account: %w", err)
-	}
-
-	// On OpenShift, bind the build SA to the privileged SCC for build pods
-	if r.detectOpenShift(ctx, config.Namespace) {
-		buildClusterRole := r.buildBuildSCCClusterRole()
-		if err := r.createOrUpdate(ctx, buildClusterRole, config); err != nil {
-			return fmt.Errorf("failed to create/update build SCC cluster role: %w", err)
-		}
-		buildBinding := r.buildBuildSCCRoleBinding(config.Namespace)
-		if err := r.createOrUpdate(ctx, buildBinding, config); err != nil {
-			return fmt.Errorf("failed to create/update build SCC role binding: %w", err)
-		}
+	if err := r.deployBuildIdentity(ctx, config); err != nil {
+		return err
 	}
 
 	// Deploy workspace infrastructure (ServiceAccount + SCC binding)
@@ -869,23 +859,8 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 		return fmt.Errorf("failed to cleanup build controller: %w", err)
 	}
 
-	// Cleanup build SA and SCC bindings
-	buildSA := &corev1.ServiceAccount{}
-	buildSA.Name = automotivev1alpha1.BuildServiceAccountName
-	buildSA.Namespace = config.Namespace
-	if err := r.Delete(ctx, buildSA); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build service account: %w", err)
-	}
-	buildClusterRole := &rbacv1.ClusterRole{}
-	buildClusterRole.Name = sccPrivilegedRoleName
-	if err := r.Delete(ctx, buildClusterRole); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build SCC cluster role: %w", err)
-	}
-	buildBinding := &rbacv1.RoleBinding{}
-	buildBinding.Name = pipelineSCCBindingName
-	buildBinding.Namespace = config.Namespace
-	if err := r.Delete(ctx, buildBinding); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build SCC role binding: %w", err)
+	if err := r.cleanupBuildIdentity(ctx, config); err != nil {
+		return err
 	}
 
 	// Cleanup workspace infrastructure
@@ -894,6 +869,69 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 	}
 
 	r.Log.Info("OSBuilds cleanup completed successfully")
+	return nil
+}
+
+// deployBuildIdentity reconciles the ServiceAccounts that build pods and
+// minted registry tokens run as, and the policy that limits build pods to
+// reporting their own progress.
+func (r *OperatorConfigReconciler) deployBuildIdentity(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	objects := []client.Object{
+		r.buildBuildServiceAccount(config.Namespace),
+		r.buildRegistryServiceAccount(automotivev1alpha1.RegistryServiceAccountName, config.Namespace),
+		r.buildRegistryServiceAccount(automotivev1alpha1.RegistryPullServiceAccountName, config.Namespace),
+		r.buildBuildPodPatchPolicy(config.Namespace),
+		r.buildBuildPodPatchPolicyBinding(config.Namespace),
+	}
+	// On OpenShift, bind the build SA to the privileged SCC for build pods
+	openShift := r.detectOpenShift(ctx, config.Namespace)
+	if openShift {
+		objects = append(objects, r.buildBuildSCCClusterRole(), r.buildBuildSCCRoleBinding(config.Namespace))
+	}
+	for _, obj := range objects {
+		if err := r.createOrUpdate(ctx, obj, config); err != nil {
+			return fmt.Errorf("failed to create/update %T %s: %w", obj, obj.GetName(), err)
+		}
+	}
+	if !openShift {
+		return nil
+	}
+	// Build pods push the builder cache as ado-build, which can push to an
+	// ImageStream but not create one. Create it once and never update it: it
+	// holds the cached builder images.
+	stream := &imagev1.ImageStream{ObjectMeta: metav1.ObjectMeta{
+		Name:      tasks.BuilderCacheStreamName,
+		Namespace: config.Namespace,
+		Labels: map[string]string{
+			"app.kubernetes.io/name":      "automotive-dev-operator",
+			"app.kubernetes.io/component": "build",
+			"app.kubernetes.io/part-of":   "automotive-dev-operator",
+		},
+	}}
+	if err := r.Create(ctx, stream); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create builder cache ImageStream: %w", err)
+	}
+	return nil
+}
+
+// cleanupBuildIdentity deletes what deployBuildIdentity creates, including
+// the cluster-scoped policy objects that namespace deletion would not remove.
+// It keeps the builder cache ImageStream and the images cached in it.
+func (r *OperatorConfigReconciler) cleanupBuildIdentity(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	policyName := buildPodPatchPolicyName(config.Namespace)
+	for _, obj := range []client.Object{
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.BuildServiceAccountName, Namespace: config.Namespace}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.RegistryServiceAccountName, Namespace: config.Namespace}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.RegistryPullServiceAccountName, Namespace: config.Namespace}},
+		&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: policyName}},
+		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: policyName}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: sccPrivilegedRoleName}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: pipelineSCCBindingName, Namespace: config.Namespace}},
+	} {
+		if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete %T %s: %w", obj, obj.GetName(), err)
+		}
+	}
 	return nil
 }
 

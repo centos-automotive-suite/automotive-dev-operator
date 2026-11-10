@@ -228,6 +228,28 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 			a.log.Error(err, "failed to set owner reference on sealed secret", "secret", secretName, "job", imageSealed.Name)
 		}
 	}
+
+	// Reseal pods push as ado-build, which can push to an ImageStream but not
+	// create one. Create it only now that the job is accepted, so a rejected
+	// request (a duplicate name, say) leaves no stream behind.
+	if stream := internalImageStreamName(req.OutputRef, namespace); stream != "" {
+		if _, err := ensureImageStream(ctx, k8sClient, namespace, stream); err != nil {
+			// Without the stream the job could only fail at its final push, so
+			// withdraw it. The Secrets are owned by the job by now, so garbage
+			// collection removes any that fail to delete here. The request may be
+			// what failed, so use a context of our own.
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			cleanupSealedSecrets(cleanupCtx, clientset, namespace, &req, refs)
+			if delErr := k8sClient.Delete(cleanupCtx, imageSealed); delErr != nil && !k8serrors.IsNotFound(delErr) {
+				err = fmt.Errorf("%w (deleting ImageReseal %s also failed: %v)", err, imageSealed.Name, delErr)
+			}
+			spanError(span, err)
+			SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	SealedCreateRequestsTotal.WithLabelValues(opLabel, "accepted").Inc()
 
 	writeJSON(c, http.StatusAccepted, buildcontract.SealedResponse{

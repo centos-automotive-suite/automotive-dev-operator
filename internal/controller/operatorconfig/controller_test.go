@@ -21,12 +21,16 @@ import (
 	"fmt"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
+	imagev1 "github.com/openshift/api/image/v1"
 	securityv1 "github.com/openshift/api/security/v1"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -106,6 +110,96 @@ var _ = Describe("workspace infrastructure reconciliation", func() {
 		})
 		Expect(r.deployWorkspaceInfra(context.Background(), config)).To(MatchError(ContainSubstring("workspace SCC rejected")))
 		Expect(attempts).To(Equal(1))
+	})
+})
+
+var _ = Describe("build identity reconciliation", func() {
+	var (
+		r      *OperatorConfigReconciler
+		config *automotivev1alpha1.OperatorConfig
+	)
+
+	BeforeEach(func() {
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(rbacv1.AddToScheme(scheme)).To(Succeed())
+		Expect(admissionregistrationv1.AddToScheme(scheme)).To(Succeed())
+		Expect(imagev1.Install(scheme)).To(Succeed())
+		r = &OperatorConfigReconciler{
+			Client:      fake.NewClientBuilder().WithScheme(scheme).Build(),
+			Log:         logr.Discard(),
+			IsOpenShift: new(true),
+		}
+		config = &automotivev1alpha1.OperatorConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "test-ns"},
+		}
+	})
+
+	// Every object deployBuildIdentity owns, keyed for Get and Delete.
+	owned := func() []client.Object {
+		return []client.Object{
+			&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.BuildServiceAccountName, Namespace: "test-ns"}},
+			&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.RegistryServiceAccountName, Namespace: "test-ns"}},
+			&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.RegistryPullServiceAccountName, Namespace: "test-ns"}},
+			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: sccPrivilegedRoleName}},
+			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: pipelineSCCBindingName, Namespace: "test-ns"}},
+			&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: r.buildBuildPodPatchPolicy("test-ns").Name}},
+			&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: r.buildBuildPodPatchPolicyBinding("test-ns").Name}},
+		}
+	}
+
+	It("binds the pod patch policy to the build namespace", func() {
+		ctx := context.Background()
+		Expect(r.deployBuildIdentity(ctx, config)).To(Succeed())
+
+		policy := r.buildBuildPodPatchPolicy("test-ns")
+		binding := &admissionregistrationv1.ValidatingAdmissionPolicyBinding{}
+		Expect(r.Get(ctx, client.ObjectKey{Name: r.buildBuildPodPatchPolicyBinding("test-ns").Name}, binding)).To(Succeed())
+		Expect(binding.Spec.PolicyName).To(Equal(policy.Name))
+		Expect(binding.Spec.ValidationActions).To(Equal([]admissionregistrationv1.ValidationAction{admissionregistrationv1.Deny}))
+		Expect(binding.Spec.MatchResources.NamespaceSelector.MatchLabels).To(Equal(map[string]string{"kubernetes.io/metadata.name": "test-ns"}))
+		Expect(r.buildBuildPodPatchPolicy("other-ns").Name).NotTo(Equal(policy.Name),
+			"instances in different namespaces must not share cluster-scoped policy objects")
+	})
+
+	It("creates registry ServiceAccounts that never mount their token", func() {
+		ctx := context.Background()
+		Expect(r.deployBuildIdentity(ctx, config)).To(Succeed())
+
+		for _, name := range []string{automotivev1alpha1.RegistryServiceAccountName, automotivev1alpha1.RegistryPullServiceAccountName} {
+			sa := &corev1.ServiceAccount{}
+			Expect(r.Get(ctx, client.ObjectKey{Name: name, Namespace: "test-ns"}, sa)).To(Succeed(), name)
+			Expect(sa.AutomountServiceAccountToken).To(HaveValue(BeFalse()), name)
+		}
+	})
+
+	// Build pods push the builder cache as ado-build, which may push to an
+	// existing ImageStream but not create one.
+	It("creates the builder cache ImageStream once and keeps an existing one", func() {
+		ctx := context.Background()
+		Expect(r.deployBuildIdentity(ctx, config)).To(Succeed())
+		stream := &imagev1.ImageStream{}
+		Expect(r.Get(ctx, client.ObjectKey{Name: tasks.BuilderCacheStreamName, Namespace: "test-ns"}, stream)).To(Succeed())
+
+		stream.Annotations = map[string]string{"example.com/cached": "builders"}
+		Expect(r.Update(ctx, stream)).To(Succeed())
+		Expect(r.deployBuildIdentity(ctx, config)).To(Succeed())
+		kept := &imagev1.ImageStream{}
+		Expect(r.Get(ctx, client.ObjectKey{Name: tasks.BuilderCacheStreamName, Namespace: "test-ns"}, kept)).To(Succeed())
+		Expect(kept.Annotations).To(HaveKeyWithValue("example.com/cached", "builders"))
+	})
+
+	It("deletes everything it created on cleanup", func() {
+		ctx := context.Background()
+		Expect(r.deployBuildIdentity(ctx, config)).To(Succeed())
+		for _, obj := range owned() {
+			Expect(r.Get(ctx, client.ObjectKeyFromObject(obj), obj)).To(Succeed(), "%T %s", obj, obj.GetName())
+		}
+
+		Expect(r.cleanupBuildIdentity(ctx, config)).To(Succeed())
+		for _, obj := range owned() {
+			Expect(errors.IsNotFound(r.Get(ctx, client.ObjectKeyFromObject(obj), obj))).To(BeTrue(), "%T %s", obj, obj.GetName())
+		}
 	})
 })
 

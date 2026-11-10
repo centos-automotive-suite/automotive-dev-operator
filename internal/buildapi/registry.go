@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	authnv1 "k8s.io/api/authentication/v1"
@@ -79,27 +80,14 @@ func (a *APIServer) resolveTokenLifetime(ctx context.Context, k8sClient client.C
 	return operatorCfg.Spec.OSBuilds.GetRegistryTokenLifetimeSeconds()
 }
 
+// createInternalRegistrySecret stores a registry SA token for the build's pods.
+// The token is bound to the Secret holding it, so it stops working when the
+// build's transient Secrets are cleaned up rather than at the end of its lifetime.
 func createInternalRegistrySecret(ctx context.Context, restCfg *rest.Config, namespace, buildName string, tokenLifetimeSeconds int64) (string, error) {
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return "", fmt.Errorf("error creating clientset: %w", err)
 	}
-
-	expSeconds := tokenLifetimeSeconds
-	tokenReq := &authnv1.TokenRequest{
-		Spec: authnv1.TokenRequestSpec{
-			ExpirationSeconds: &expSeconds,
-		},
-	}
-	tokenResp, err := clientset.CoreV1().ServiceAccounts(namespace).
-		CreateToken(ctx, automotivev1alpha1.BuildServiceAccountName, tokenReq, metav1.CreateOptions{})
-	if err != nil {
-		return "", fmt.Errorf("error creating SA token: %w", err)
-	}
-
-	// Build dockerconfigjson
-	auth := base64.StdEncoding.EncodeToString([]byte("serviceaccount:" + tokenResp.Status.Token))
-	dockerConfig := fmt.Sprintf(`{"auths":{"%s":{"auth":"%s"}}}`, defaultInternalRegistryURL, auth)
 
 	secretName := buildName + "-registry-auth"
 	secret := &corev1.Secret{
@@ -115,19 +103,67 @@ func createInternalRegistrySecret(ctx context.Context, restCfg *rest.Config, nam
 			},
 		},
 		Type: corev1.SecretTypeDockerConfigJson,
+		// The token can only be bound to a Secret that exists, so start empty.
 		Data: map[string][]byte{
-			".dockerconfigjson": []byte(dockerConfig),
+			corev1.DockerConfigJsonKey: []byte(`{"auths":{}}`),
 		},
 	}
-
-	if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+	secrets := clientset.CoreV1().Secrets(namespace)
+	created, err := secrets.Create(ctx, secret, metav1.CreateOptions{})
+	if err != nil {
 		return "", fmt.Errorf("error creating internal registry secret: %w", err)
+	}
+	// Don't leave a Secret behind that a build would mount without working
+	// credentials, or that makes a retry with this build name hit AlreadyExists.
+	// The request may already be canceled, so clean up on a context of our own.
+	fail := func(err error) (string, error) {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if delErr := secrets.Delete(cleanupCtx, created.Name, metav1.DeleteOptions{}); delErr != nil && !k8serrors.IsNotFound(delErr) {
+			return "", fmt.Errorf("%w (deleting secret %s also failed: %v)", err, created.Name, delErr)
+		}
+		return "", err
+	}
+
+	expSeconds := tokenLifetimeSeconds
+	tokenReq := &authnv1.TokenRequest{
+		Spec: authnv1.TokenRequestSpec{
+			ExpirationSeconds: &expSeconds,
+			BoundObjectRef: &authnv1.BoundObjectReference{
+				Kind: "Secret", APIVersion: "v1", Name: created.Name, UID: created.UID,
+			},
+		},
+	}
+	tokenResp, err := clientset.CoreV1().ServiceAccounts(namespace).
+		CreateToken(ctx, automotivev1alpha1.RegistryServiceAccountName, tokenReq, metav1.CreateOptions{})
+	if err != nil {
+		return fail(fmt.Errorf("error creating registry SA token: %w", err))
+	}
+	auth := base64.StdEncoding.EncodeToString([]byte("serviceaccount:" + tokenResp.Status.Token))
+	created.Data[corev1.DockerConfigJsonKey] = fmt.Appendf(nil, `{"auths":{"%s":{"auth":"%s"}}}`, defaultInternalRegistryURL, auth)
+	if _, err := secrets.Update(ctx, created, metav1.UpdateOptions{}); err != nil {
+		return fail(fmt.Errorf("error storing registry SA token: %w", err))
 	}
 	return secretName, nil
 }
 
 // ensureImageStream creates an ImageStream if it doesn't already exist.
 // The OpenShift internal registry requires an ImageStream before oras can push to it.
+// internalImageStreamName returns the ImageStream that ref pushes to when it
+// points at namespace in the internal registry, and "" for any other ref.
+func internalImageStreamName(ref, namespace string) string {
+	path, ok := strings.CutPrefix(ref, defaultInternalRegistryURL+"/"+namespace+"/")
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(path, "@")
+	name, _, _ = strings.Cut(name, ":")
+	if name == "" || strings.Contains(name, "/") {
+		return ""
+	}
+	return name
+}
+
 func ensureImageStream(ctx context.Context, k8sClient client.Client, namespace, name string) (bool, error) {
 	is := &unstructured.Unstructured{}
 	is.SetGroupVersionKind(schema.GroupVersionKind{
@@ -221,8 +257,10 @@ func buildRegistryTokenEligible(build *automotivev1alpha1.ImageBuild, requester 
 	return container != "" || disk != ""
 }
 
-// mintRegistryToken creates a fresh short-lived token for the pipeline SA
-// so the caller can pull images from the internal registry.
+// mintRegistryToken creates a fresh short-lived token for the pull-only
+// registry SA, for users to pull images from the internal registry. Callers
+// fetch it after the build's transient Secrets are gone, so only its lifetime
+// bounds it.
 func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, namespace string, tokenLifetimeSeconds int64) (string, metav1.Time, error) {
 	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
@@ -239,9 +277,9 @@ func (a *APIServer) mintRegistryToken(ctx context.Context, c *gin.Context, names
 		},
 	}
 	tokenResp, err := clientset.CoreV1().ServiceAccounts(namespace).
-		CreateToken(ctx, automotivev1alpha1.BuildServiceAccountName, tokenReq, metav1.CreateOptions{})
+		CreateToken(ctx, automotivev1alpha1.RegistryPullServiceAccountName, tokenReq, metav1.CreateOptions{})
 	if err != nil {
-		return "", metav1.Time{}, fmt.Errorf("error creating token for SA %s in %s: %w", automotivev1alpha1.BuildServiceAccountName, namespace, err)
+		return "", metav1.Time{}, fmt.Errorf("error creating token for SA %s in %s: %w", automotivev1alpha1.RegistryPullServiceAccountName, namespace, err)
 	}
 	return tokenResp.Status.Token, tokenResp.Status.ExpirationTimestamp, nil
 }

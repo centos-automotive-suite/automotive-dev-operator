@@ -2,6 +2,10 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: pipeline-pod-annotator
+# Build pods annotate their own pod with progress (emit_progress in
+# internal/common/tasks/scripts/common.sh). RBAC cannot name a pod that does
+# not exist yet, so the ado-build-pod-patch-<namespace> ValidatingAdmissionPolicy
+# the operator installs narrows this to that annotation on the caller's own pod.
 rules:
 - apiGroups: [""]
   resources: ["pods"]

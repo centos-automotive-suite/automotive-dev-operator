@@ -221,6 +221,10 @@ func (c *BuildConfig) getDefaultLeaseDuration() string {
 // DefaultInternalRegistryURL is the standard in-cluster URL for the OpenShift internal image registry.
 const DefaultInternalRegistryURL = "image-registry.openshift-image-registry.svc:5000"
 
+// BuilderCacheStreamName is the ImageStream build pods push cached builder
+// images to (build_builder.sh, build_image.sh); the builder cache controller prunes it.
+const BuilderCacheStreamName = "aib-build"
+
 // volumeNameContainerStorage is the common volume name for container storage across tasks.
 const volumeNameContainerStorage = "container-storage"
 

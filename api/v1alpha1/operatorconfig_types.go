@@ -83,9 +83,19 @@ const (
 	// NoExpireAnnotation prevents automatic expiry when set to "true" on an ImageBuild
 	NoExpireAnnotation = "automotive.sdv.cloud.redhat.com/no-expire"
 
-	// BuildServiceAccountName is the dedicated SA used by build pods and token minting.
+	// BuildServiceAccountName is the dedicated SA build pods run as.
 	// Using a dedicated SA avoids collisions with the shared "pipeline" SA.
 	BuildServiceAccountName = "ado-build"
+
+	// RegistryServiceAccountName can pull and push internal-registry images and
+	// nothing else. A build's registry-auth Secret holds a token for it, so the
+	// token carries none of ado-build's other rights.
+	RegistryServiceAccountName = "ado-registry"
+
+	// RegistryPullServiceAccountName can only pull internal-registry images.
+	// Tokens handed to users and to flash jobs are for this SA, so they cannot
+	// overwrite tags in shared streams such as the builder cache.
+	RegistryPullServiceAccountName = "ado-registry-pull"
 )
 
 // ImagesConfig defines container image references used by the operator
