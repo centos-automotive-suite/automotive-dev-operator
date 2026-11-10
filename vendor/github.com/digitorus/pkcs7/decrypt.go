@@ -8,6 +8,7 @@ import (
 	"crypto/des"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/asn1"
 	"errors"
@@ -20,24 +21,44 @@ var ErrUnsupportedAlgorithm = errors.New("pkcs7: cannot decrypt data: only RSA, 
 // ErrNotEncryptedContent is returned when attempting to Decrypt data that is not encrypted data
 var ErrNotEncryptedContent = errors.New("pkcs7: content data is a decryptable data type")
 
-// Decrypt decrypts encrypted content info for recipient cert and private key
+// Decrypt decrypts encrypted content info for a recipient certificate and an
+// RSA private key or ML-KEM-768/1024 decapsulation key.
 func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pkey crypto.PrivateKey) ([]byte, error) {
 	data, ok := p7.raw.(envelopedData)
 	if !ok {
 		return nil, ErrNotEncryptedContent
 	}
-	recipient := selectRecipientForCertificate(data.RecipientInfos, cert)
-	if recipient.EncryptedKey == nil {
-		return nil, errors.New("pkcs7: no enveloped recipient for provided certificate")
-	}
 	switch pkey := pkey.(type) {
 	case *rsa.PrivateKey:
-		var contentKey []byte
-		contentKey, err := rsa.DecryptPKCS1v15(rand.Reader, pkey, recipient.EncryptedKey)
+		recipient, err := selectRecipientForCertificate(data.RecipientInfos, cert)
 		if err != nil {
 			return nil, err
 		}
+		var contentKey []byte
+		//nolint:staticcheck // PKCS #1 v1.5 is required by the existing CMS RSA key-transport format.
+		contentKey, err = rsa.DecryptPKCS1v15(rand.Reader, pkey, recipient.EncryptedKey)
+		if err != nil {
+			return nil, err
+		}
+		defer clear(contentKey)
 		return data.EncryptedContentInfo.decrypt(contentKey)
+	default:
+		if _, _, ok := mlKEMDecapsulator(pkey); ok {
+			if data.Version != 3 {
+				return nil, errors.New("pkcs7: EnvelopedData containing OtherRecipientInfo must use version 3")
+			}
+			contentEncryptionAlgorithm := data.EncryptedContentInfo.ContentEncryptionAlgorithm.Algorithm
+			if !contentEncryptionAlgorithm.Equal(OIDEncryptionAlgorithmAES128CBC) &&
+				!contentEncryptionAlgorithm.Equal(OIDEncryptionAlgorithmAES256CBC) {
+				return nil, errors.New("pkcs7: ML-KEM EnvelopedData requires AES-CBC; AES-GCM requires AuthEnvelopedData")
+			}
+			contentKey, err := decryptKEMRecipientKey(data.RecipientInfos, cert, pkey)
+			if err != nil {
+				return nil, err
+			}
+			defer clear(contentKey)
+			return data.EncryptedContentInfo.decrypt(contentKey)
+		}
 	}
 	return nil, ErrUnsupportedAlgorithm
 }
@@ -136,6 +157,9 @@ func (eci encryptedContentInfo) decrypt(key []byte) ([]byte, error) {
 	if len(iv) != block.BlockSize() {
 		return nil, errors.New("pkcs7: encryption algorithm parameters are malformed")
 	}
+	if len(cyphertext) == 0 || len(cyphertext)%block.BlockSize() != 0 {
+		return nil, errors.New("invalid padding")
+	}
 	mode := cipher.NewCBCDecrypter(block, iv)
 	plaintext := make([]byte, len(cyphertext))
 	mode.CryptBlocks(plaintext, cyphertext)
@@ -150,28 +174,44 @@ func unpad(data []byte, blocklen int) ([]byte, error) {
 		return nil, fmt.Errorf("invalid blocklen %d", blocklen)
 	}
 	if len(data)%blocklen != 0 || len(data) == 0 {
-		return nil, fmt.Errorf("invalid data len %d", len(data))
+		return nil, errors.New("invalid padding")
 	}
 
-	// the last byte is the length of padding
+	// Scan the entire final block regardless of the padding length or contents.
+	// CBC still requires caller-side authentication to prevent padding oracles.
 	padlen := int(data[len(data)-1])
-
-	// check padding integrity, all bytes should be the same
-	pad := data[len(data)-padlen:]
-	for _, padbyte := range pad {
-		if padbyte != byte(padlen) {
-			return nil, errors.New("invalid padding")
-		}
+	valid := subtle.ConstantTimeLessOrEq(1, padlen) & subtle.ConstantTimeLessOrEq(padlen, blocklen)
+	for i := 0; i < blocklen; i++ {
+		inPadding := subtle.ConstantTimeLessOrEq(i+1, padlen)
+		equal := subtle.ConstantTimeByteEq(data[len(data)-1-i], byte(padlen))
+		valid &= subtle.ConstantTimeSelect(inPadding, equal, 1)
+	}
+	if valid != 1 {
+		return nil, errors.New("invalid padding")
 	}
 
 	return data[:len(data)-padlen], nil
 }
 
-func selectRecipientForCertificate(recipients []recipientInfo, cert *x509.Certificate) recipientInfo {
-	for _, recp := range recipients {
+func selectRecipientForCertificate(recipients []asn1.RawValue, cert *x509.Certificate) (recipientInfo, error) {
+	if cert == nil {
+		return recipientInfo{}, errors.New("pkcs7: recipient certificate is nil")
+	}
+	for _, raw := range recipients {
+		if raw.Class != 0 || raw.Tag != asn1.TagSequence {
+			continue
+		}
+		var recp recipientInfo
+		rest, err := asn1.Unmarshal(raw.FullBytes, &recp)
+		if err != nil {
+			return recipientInfo{}, fmt.Errorf("pkcs7: malformed KeyTransRecipientInfo: %w", err)
+		}
+		if len(rest) != 0 {
+			return recipientInfo{}, errors.New("pkcs7: trailing data in KeyTransRecipientInfo")
+		}
 		if isCertMatchForIssuerAndSerial(cert, recp.IssuerAndSerialNumber) {
-			return recp
+			return recp, nil
 		}
 	}
-	return recipientInfo{}
+	return recipientInfo{}, errors.New("pkcs7: no enveloped recipient for provided certificate")
 }
