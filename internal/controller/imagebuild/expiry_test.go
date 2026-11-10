@@ -183,8 +183,6 @@ func TestCheckExpiry_InProgressNeverExpires(t *testing.T) {
 		automotivev1alpha1.ImageBuildPhasePending,
 		automotivev1alpha1.ImageBuildPhaseUploading,
 		automotivev1alpha1.ImageBuildPhaseBuilding,
-		automotivev1alpha1.ImageBuildPhasePushing,
-		automotivev1alpha1.ImageBuildPhaseFlashing,
 	} {
 		t.Run(phase, func(t *testing.T) {
 			ib := newTestImageBuild("build-"+phase, phase, "30m", 0)
@@ -250,14 +248,13 @@ func TestCheckExpiry_SetsExpiresAtInStatus(t *testing.T) {
 }
 
 // newExpiredBuildWithResources creates an expired ImageBuild along with its
-// owned child resources (PipelineRun, push TaskRun, PVC, manifest ConfigMap)
+// owned child resources (PipelineRun, PVC, manifest ConfigMap)
 // for testing cleanup behavior.
 func newExpiredBuildWithResources(t *testing.T) (*ImageBuildReconciler, *automotivev1alpha1.ImageBuild) {
 	t.Helper()
 
 	ib := newTestImageBuild("my-build", automotivev1alpha1.ImageBuildPhaseExpired, "1h", 2*time.Hour)
 	ib.Status.PipelineRunName = "my-build-build-abc"
-	ib.Status.PushTaskRunName = "my-build-push-def"
 	ib.Status.PVCName = "my-build-pvc"
 	ib.Spec.Export = &automotivev1alpha1.ExportSpec{
 		Container:             tasks.DefaultInternalRegistryURL + "/test-ns/my-image:latest",
@@ -269,13 +266,6 @@ func newExpiredBuildWithResources(t *testing.T) (*ImageBuildReconciler, *automot
 	pipelineRun := &tektonv1.PipelineRun{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "my-build-build-abc", Namespace: "test-ns",
-			OwnerReferences: ownerRefs,
-		},
-	}
-
-	pushTaskRun := &tektonv1.TaskRun{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "my-build-push-def", Namespace: "test-ns",
 			OwnerReferences: ownerRefs,
 		},
 	}
@@ -305,7 +295,7 @@ func newExpiredBuildWithResources(t *testing.T) (*ImageBuildReconciler, *automot
 	scheme := newTestSchemeWithTekton()
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(&ib, pipelineRun, pushTaskRun, pvc, manifestCM).
+		WithObjects(&ib, pipelineRun, pvc, manifestCM).
 		WithStatusSubresource(&ib).
 		Build()
 
@@ -341,19 +331,6 @@ func TestHandleExpiredState_DeletesPipelineRun(t *testing.T) {
 	err := r.Get(ctx, types.NamespacedName{Name: "my-build-build-abc", Namespace: "test-ns"}, pr)
 	if !errors.IsNotFound(err) {
 		t.Errorf("expected PipelineRun to be deleted, got err=%v", err)
-	}
-}
-
-func TestHandleExpiredState_DeletesPushTaskRun(t *testing.T) {
-	r, ib := newExpiredBuildWithResources(t)
-	ctx := context.Background()
-
-	r.handleExpiredState(ctx, ib) //nolint:errcheck
-
-	tr := &tektonv1.TaskRun{}
-	err := r.Get(ctx, types.NamespacedName{Name: "my-build-push-def", Namespace: "test-ns"}, tr)
-	if !errors.IsNotFound(err) {
-		t.Errorf("expected push TaskRun to be deleted, got err=%v", err)
 	}
 }
 
@@ -414,7 +391,6 @@ func TestHandleExpiredState_IdempotentWhenResourcesAlreadyGone(t *testing.T) {
 	// Build with status refs to resources that don't exist
 	ib := newTestImageBuild("clean-build", automotivev1alpha1.ImageBuildPhaseExpired, "1h", 2*time.Hour)
 	ib.Status.PipelineRunName = "gone-pipeline"
-	ib.Status.PushTaskRunName = "gone-push"
 	ib.Status.PVCName = "gone-pvc"
 
 	r := newExpiryReconciler(ib)
@@ -438,31 +414,6 @@ func TestHandleExpiredState_PreservesImageBuildCR(t *testing.T) {
 	}
 	if got.Status.Phase != automotivev1alpha1.ImageBuildPhaseExpired {
 		t.Errorf("phase should remain %q, got %q", automotivev1alpha1.ImageBuildPhaseExpired, got.Status.Phase)
-	}
-}
-
-func TestHandleExpiredState_DeletesFlashTaskRun(t *testing.T) {
-	r, ib := newExpiredBuildWithResources(t)
-	ctx := context.Background()
-
-	// Add a flash TaskRun
-	ib.Status.FlashTaskRunName = "my-build-flash-ghi"
-	flashTR := &tektonv1.TaskRun{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-build-flash-ghi",
-			Namespace: "test-ns",
-		},
-	}
-	if err := r.Create(ctx, flashTR); err != nil {
-		t.Fatalf("failed to create flash TaskRun: %v", err)
-	}
-
-	r.handleExpiredState(ctx, ib) //nolint:errcheck
-
-	tr := &tektonv1.TaskRun{}
-	err := r.Get(ctx, types.NamespacedName{Name: "my-build-flash-ghi", Namespace: "test-ns"}, tr)
-	if !errors.IsNotFound(err) {
-		t.Errorf("expected flash TaskRun to be deleted, got err=%v", err)
 	}
 }
 

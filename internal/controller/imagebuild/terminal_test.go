@@ -222,55 +222,8 @@ func TestTerminalMissingChildrenAndResults(t *testing.T) {
 	}
 }
 
-func TestLegacyTerminalResults(t *testing.T) {
-	for _, failure := range []bool{false, true} {
-		t.Run(map[bool]string{false: "success", true: "flash failure"}[failure], func(t *testing.T) {
-			ib := terminalBuild()
-			ib.Status.Phase = "Flashing"
-			ib.Status.PushTaskRunName = "push"
-			ib.Status.FlashTaskRunName = "flash"
-			build := resultTask("build-image", "Succeeded", map[string]string{"IMAGE_URL": "registry/container"})
-			pr := resultPipeline(ib, "Succeeded", build)
-			push := resultTask("push", "Succeeded", map[string]string{"IMAGE_URL": "registry/disk"})
-			reason := "Succeeded"
-			if failure {
-				reason = "Failed"
-			}
-			flash := resultTask("flash", reason, map[string]string{"lease-id": "legacy-lease"})
-			r := newTestReconciler(ib, pr, build, push, flash)
-			if _, err := r.handleFlashingState(context.Background(), ib); err != nil {
-				t.Fatal(err)
-			}
-			result := ib.Status.TerminalResult
-			if result == nil || len(result.Artifacts) != 2 || result.Flash.LeaseID != "legacy-lease" {
-				t.Fatalf("legacy result: %+v", result)
-			}
-		})
-	}
-}
-
-func TestCollectNamedStageCapturesOnlySettledCompletion(t *testing.T) {
-	ib := terminalBuild()
-	ib.Status.Phase = api.ImageBuildPhasePushing
-	push := resultTask("push", "Succeeded", nil)
-	reader := newTestReconciler(push).Client
-
-	if err := collectNamedStage(context.Background(), reader, ib, push.Name, pipelineTaskPushDisk, false); err != nil {
-		t.Fatal(err)
-	}
-	if ib.Status.CompletionTime != nil {
-		t.Fatal("live collection set completion time")
-	}
-	if err := collectNamedStage(context.Background(), reader, ib, push.Name, pipelineTaskPushDisk, true); err != nil {
-		t.Fatal(err)
-	}
-	if ib.Status.CompletionTime == nil || !ib.Status.CompletionTime.Equal(push.Status.CompletionTime) {
-		t.Fatalf("settled completion = %v, want %v", ib.Status.CompletionTime, push.Status.CompletionTime)
-	}
-}
-
 func TestCancellationWaitsForExecution(t *testing.T) {
-	for _, stage := range []string{"Pending", "Building", "Pushing", "Flashing"} {
+	for _, stage := range []string{"Pending", "Building"} {
 		t.Run(stage, func(t *testing.T) {
 			ib := terminalBuild()
 			ib.Status.Phase = stage
@@ -282,12 +235,6 @@ func TestCancellationWaitsForExecution(t *testing.T) {
 				tr = resultTask("active", "Running", nil)
 				tr.Labels = map[string]string{api.LabelImageBuildName: ib.Name}
 				objects = append(objects, tr)
-				if stage == "Pushing" {
-					ib.Status.PushTaskRunName = tr.Name
-				}
-				if stage == "Flashing" {
-					ib.Status.FlashTaskRunName = tr.Name
-				}
 			}
 			r := newTestReconciler(objects...)
 			ctx := context.Background()
@@ -451,55 +398,6 @@ func TestCancellationSelectsLatestPipelineRun(t *testing.T) {
 	}
 	if ib.Status.PipelineRunName != latest.Name {
 		t.Fatalf("PipelineRunName = %q, want %q", ib.Status.PipelineRunName, latest.Name)
-	}
-}
-
-func TestLegacyPushTerminalResult(t *testing.T) {
-	for _, reason := range []string{"Succeeded", "Failed", string(tekton.TaskRunReasonCancelled)} {
-		t.Run(reason, func(t *testing.T) {
-			ib := terminalBuild()
-			ib.Spec.Flash = nil
-			ib.Status.Phase = "Pushing"
-			ib.Status.PushTaskRunName = "push"
-			build := resultTask("build-image", "Succeeded", map[string]string{"IMAGE_URL": "registry/container"})
-			pr := resultPipeline(ib, "Succeeded", build)
-			push := resultTask("push", reason, nil)
-			if reason == "Succeeded" {
-				push.Status.Results = []tekton.TaskRunResult{{Name: "IMAGE_URL", Value: tekton.ParamValue{Type: tekton.ParamTypeString, StringVal: "registry/disk"}}}
-			}
-			r := newTestReconciler(ib, pr, build, push)
-			if _, err := r.handlePushingState(context.Background(), ib); err != nil {
-				t.Fatal(err)
-			}
-			want, count := phaseFailed, 1
-			if reason == "Succeeded" {
-				want, count = phaseCompleted, 2
-			}
-			if reason == string(tekton.TaskRunReasonCancelled) {
-				want = phaseCancelled
-			}
-			if ib.Status.TerminalResult == nil || ib.Status.TerminalResult.Phase != want || len(ib.Status.TerminalResult.Artifacts) != count {
-				t.Fatalf("result: %+v", ib.Status.TerminalResult)
-			}
-			if reason == string(tekton.TaskRunReasonCancelled) && !strings.HasPrefix(ib.Status.TerminalResult.Message, "Push to registry cancelled") {
-				t.Fatalf("cancellation message: %q", ib.Status.TerminalResult.Message)
-			}
-		})
-	}
-}
-
-func TestLegacyFlashCancellationMessage(t *testing.T) {
-	ib := terminalBuild()
-	ib.Status.Phase = api.ImageBuildPhaseFlashing
-	ib.Status.FlashTaskRunName = "flash"
-	flash := resultTask("flash", string(tekton.TaskRunReasonCancelled), nil)
-	r := newTestReconciler(ib, resultPipeline(ib, "Succeeded"), flash)
-
-	if _, err := r.handleFlashingState(context.Background(), ib); err != nil {
-		t.Fatal(err)
-	}
-	if ib.Status.TerminalResult == nil || !strings.HasPrefix(ib.Status.TerminalResult.Message, "Flash to device cancelled") {
-		t.Fatalf("cancellation result: %+v", ib.Status.TerminalResult)
 	}
 }
 

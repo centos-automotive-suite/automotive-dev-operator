@@ -638,8 +638,6 @@ components:
             - Pending
             - Uploading
             - Building
-            - Pushing
-            - Flashing
             - Completed
             - Failed
             - Cancelled
@@ -927,8 +925,6 @@ components:
             - Pending
             - Uploading
             - Building
-            - Pushing
-            - Flashing
             - Completed
             - Failed
             - Cancelled

@@ -284,21 +284,16 @@ func TestCompletionMetricsUsesFlashOutcome(t *testing.T) {
 
 func TestCompletionMetricsWithTektonResults(t *testing.T) {
 	for _, tc := range []struct {
-		name                string
-		available, separate bool
+		name      string
+		available bool
 	}{
 		{name: "pipeline", available: true},
 		{name: "missing pipeline"},
-		{name: "separate flash", available: true, separate: true},
-		{name: "missing separate flash", separate: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			build := metricsBuild("build", "build", phaseCompleted)
 			build.Spec.AIB.Target = "tekton-metrics-" + tc.name
 			build.Status.PipelineRunName = "pipeline"
-			if tc.separate {
-				build.Status.FlashTaskRunName = "flash"
-			}
 			build.Status.Flash = &api.FlashOutcomeStatus{Enabled: true, State: "Succeeded"}
 			pipeline := pipelineRunWithTiming(`{"setup_s":2,"build_s":90,"post_build_s":8}`)
 			pipeline.Name, pipeline.Namespace = "pipeline", build.Namespace

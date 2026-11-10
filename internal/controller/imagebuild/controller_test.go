@@ -494,22 +494,6 @@ func TestSetImageBuildConditions(t *testing.T) {
 			wantReadyReason: "Building",
 		},
 		{
-			name:            "pushing",
-			phase:           "Pushing",
-			message:         "Pushing artifact",
-			wantProgressing: metav1.ConditionTrue,
-			wantReady:       metav1.ConditionFalse,
-			wantReadyReason: "Pushing",
-		},
-		{
-			name:            "flashing",
-			phase:           "Flashing",
-			message:         "Flashing to device",
-			wantProgressing: metav1.ConditionTrue,
-			wantReady:       metav1.ConditionFalse,
-			wantReadyReason: "Flashing",
-		},
-		{
 			name:            "completed",
 			phase:           "Completed",
 			message:         "Build completed successfully",

@@ -25,8 +25,6 @@ const (
 	ImageBuildPhasePending   = "Pending"
 	ImageBuildPhaseUploading = "Uploading"
 	ImageBuildPhaseBuilding  = "Building"
-	ImageBuildPhasePushing   = "Pushing"
-	ImageBuildPhaseFlashing  = "Flashing"
 	ImageBuildPhaseCompleted = "Completed"
 	ImageBuildPhaseFailed    = "Failed"
 	ImageBuildPhaseCancelled = "Cancelled"
@@ -378,7 +376,7 @@ type ImageBuildStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Phase represents the current phase of the build
-	// +kubebuilder:validation:Enum=Pending;Uploading;Building;Pushing;Flashing;Completed;Failed;Cancelled;Expired
+	// +kubebuilder:validation:Enum=Pending;Uploading;Building;Completed;Failed;Cancelled;Expired
 	Phase string `json:"phase,omitempty"`
 
 	// StartTime is when the build started
@@ -395,12 +393,6 @@ type ImageBuildStatus struct {
 
 	// PipelineRunName is the name of the active PipelineRun for this build
 	PipelineRunName string `json:"pipelineRunName,omitempty"`
-
-	// PushTaskRunName is the name of the TaskRun for pushing artifacts to registry
-	PushTaskRunName string `json:"pushTaskRunName,omitempty"`
-
-	// FlashTaskRunName is the name of the TaskRun for flashing to hardware
-	FlashTaskRunName string `json:"flashTaskRunName,omitempty"`
 
 	// Conditions represent the latest available observations of the ImageBuild's state
 	// +optional

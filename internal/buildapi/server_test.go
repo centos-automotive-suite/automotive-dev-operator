@@ -999,26 +999,18 @@ var _ = Describe("APIServer Performance", func() {
 
 	Context("buildProducedArtifacts", func() {
 		DescribeTable("returns correct result for each phase",
-			func(phase string, pushTaskRun string, flashTaskRun string, expected bool) {
+			func(phase string, expected bool) {
 				build := &automotivev1alpha1.ImageBuild{
-					Status: automotivev1alpha1.ImageBuildStatus{
-						Phase:            phase,
-						PushTaskRunName:  pushTaskRun,
-						FlashTaskRunName: flashTaskRun,
-					},
+					Status: automotivev1alpha1.ImageBuildStatus{Phase: phase},
 				}
 				Expect(buildProducedArtifacts(build)).To(Equal(expected))
 			},
-			Entry("Pending", phasePending, "", "", false),
-			Entry("Uploading", phaseUploading, "", "", false),
-			Entry("Building", phaseBuilding, "", "", false),
-			Entry("Pushing (in progress)", phasePushing, "", "", false),
-			Entry("Flashing", phaseFlashing, "", "", true),
-			Entry("Completed", phaseCompleted, "", "", true),
-			Entry("Cancelled", phaseCancelled, "", "", false),
-			Entry("Failed during build (no push/flash)", phaseFailed, "", "", false),
-			Entry("Failed during push", phaseFailed, "push-taskrun", "", false),
-			Entry("Failed during flash", phaseFailed, "push-taskrun", "flash-taskrun", true),
+			Entry("Pending", phasePending, false),
+			Entry("Uploading", phaseUploading, false),
+			Entry("Building", phaseBuilding, false),
+			Entry("Completed", phaseCompleted, true),
+			Entry("Cancelled", phaseCancelled, false),
+			Entry("Failed", phaseFailed, false),
 		)
 	})
 })

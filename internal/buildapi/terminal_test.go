@@ -73,8 +73,8 @@ func assertRegistryToken(t *testing.T, requests *atomic.Int64, token string, wan
 
 func TestGetBuildTokenRequiresRecordedArtifact(t *testing.T) {
 	for _, tc := range []struct {
-		name, phase, kind                                            string
-		resolveOnly, legacy, flashAttempt, staleArtifacts, wantToken bool
+		name, phase, kind                              string
+		resolveOnly, legacy, staleArtifacts, wantToken bool
 	}{
 		{name: "failed", phase: "Failed"},
 		{name: "cancelled", phase: "Cancelled"},
@@ -84,11 +84,11 @@ func TestGetBuildTokenRequiresRecordedArtifact(t *testing.T) {
 		{name: "disk", phase: "Completed", kind: "disk", wantToken: true},
 		{name: "flash failed", phase: "Failed", kind: "disk", wantToken: true},
 		{name: "expired with recorded artifacts", phase: "Expired", kind: "disk", wantToken: true},
-		{name: "active with artifacts", phase: "Flashing", kind: "disk"},
+		{name: "active with artifacts", phase: "Building", kind: "disk"},
 		{name: "resolved lockfile", phase: "Completed", kind: "disk", resolveOnly: true, wantToken: true},
 		{name: "legacy completed without artifacts", phase: "Completed", legacy: true},
-		{name: "legacy failed flash without artifacts", phase: "Failed", legacy: true, flashAttempt: true},
-		{name: "legacy active without artifacts", phase: "Flashing", legacy: true},
+		{name: "legacy failed without artifacts", phase: "Failed", legacy: true},
+		{name: "legacy active without artifacts", phase: "Building", legacy: true},
 		{name: "legacy completed with artifacts", phase: "Completed", kind: "disk", legacy: true, wantToken: true},
 		{name: "legacy expired with artifacts", phase: "Expired", kind: "disk", legacy: true, wantToken: true},
 		{name: "legacy lockfile", phase: "Completed", kind: "disk", legacy: true, resolveOnly: true, wantToken: true},
@@ -112,9 +112,6 @@ func TestGetBuildTokenRequiresRecordedArtifact(t *testing.T) {
 				build.Status.Artifacts = artifacts
 			} else {
 				build.Status.TerminalResult.Artifacts = artifacts
-			}
-			if tc.flashAttempt {
-				build.Status.FlashTaskRunName = "flash"
 			}
 			if tc.staleArtifacts {
 				build.Status.Artifacts = []api.ArtifactStatus{{Kind: "disk", URL: "registry.example/old:latest"}}

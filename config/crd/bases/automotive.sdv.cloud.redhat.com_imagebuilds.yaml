@@ -554,10 +554,6 @@ spec:
                 - enabled
                 - state
                 type: object
-              flashTaskRunName:
-                description: FlashTaskRunName is the name of the TaskRun for flashing
-                  to hardware
-                type: string
               leaseId:
                 description: LeaseID is the Jumpstarter lease ID acquired during flash
                 type: string
@@ -582,8 +578,6 @@ spec:
                 - Pending
                 - Uploading
                 - Building
-                - Pushing
-                - Flashing
                 - Completed
                 - Failed
                 - Cancelled
@@ -597,10 +591,6 @@ spec:
                 description: |-
                   PreviousPhase is the phase the build was in before transitioning to Expired.
                   Used to determine whether an expired build originally succeeded or failed.
-                type: string
-              pushTaskRunName:
-                description: PushTaskRunName is the name of the TaskRun for pushing
-                  artifacts to registry
                 type: string
               pvcName:
                 description: PVCName is the name of the PVC where the artifact is

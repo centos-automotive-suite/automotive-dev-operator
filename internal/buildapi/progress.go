@@ -302,16 +302,6 @@ func buildProgressStep(
 		}
 		return &buildcontract.BuildStep{Stage: "Starting build", Done: 0, Total: pipelineTotal}
 
-	case "Pushing":
-		return &buildcontract.BuildStep{Stage: "Pushing artifact", Done: clampDone(combinedDone, pipelineTotal), Total: pipelineTotal}
-
-	case "Flashing":
-		done := combinedDone
-		if hasPushTask && !pushReported {
-			done++
-		}
-		return &buildcontract.BuildStep{Stage: "Flashing device", Done: clampDone(done, pipelineTotal), Total: pipelineTotal}
-
 	case phaseCompleted:
 		return &buildcontract.BuildStep{Stage: "Complete", Done: pipelineTotal, Total: pipelineTotal}
 
@@ -355,7 +345,7 @@ func (a *APIServer) handleGetProgress(c *gin.Context) {
 	hasClusterRegistryRoute := false
 	tr := strings.TrimSpace(build.Status.PipelineRunName)
 	phase := build.Status.Phase
-	if tr != "" && (phase == phaseBuilding || phase == phaseRunning || phase == "Pushing" || phase == "Flashing") {
+	if tr != "" && (phase == phaseBuilding || phase == phaseRunning) {
 		cacheKey := namespace + "/" + tr
 		a.progressCacheMu.RLock()
 		cached, ok := a.progressCache[cacheKey]

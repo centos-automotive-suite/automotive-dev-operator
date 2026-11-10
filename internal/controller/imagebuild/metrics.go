@@ -389,12 +389,7 @@ func (r *ImageBuildReconciler) recordCompletionMetrics(ctx context.Context, b *a
 		return
 	}
 	FlashTotal.WithLabelValues(b.Spec.GetTarget(), status).Inc()
-	if b.Status.FlashTaskRunName != "" {
-		tr := &tektonv1.TaskRun{}
-		if err := r.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: b.Status.FlashTaskRunName}, tr); err == nil {
-			recordFlashDuration(b, tr, status)
-		}
-	} else if pipelineRun != nil {
+	if pipelineRun != nil {
 		r.recordPipelineFlashDuration(ctx, b, pipelineRun, status)
 	}
 }
