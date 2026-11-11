@@ -496,6 +496,10 @@ func (a *APIServer) uploadContainerBuildContext(c *gin.Context, name string) {
 	if err := getResourceOrFail(ctx, c, k8sClient, name, namespace, cb, "container build"); err != nil {
 		return
 	}
+	if cb.Annotations[labels.RequestedBy] != a.resolveRequester(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you can only upload to your own container builds"})
+		return
+	}
 
 	if cb.Status.Phase != phaseUploading && cb.Status.Phase != phasePending {
 		c.JSON(http.StatusConflict, gin.H{
