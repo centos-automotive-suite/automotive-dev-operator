@@ -103,9 +103,9 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("server URL required (use --server, CAIB_SERVER, run 'caib login <server-url>' or 'jmp login <endpoint>')")
 	}
 
-	token := authToken
-	if token == "" {
-		token = os.Getenv("CAIB_TOKEN")
+	token, err := resolveAuthToken(cmd, server)
+	if err != nil {
+		return err
 	}
 
 	clilog.Infof("Adding image to catalog...\n")
@@ -139,9 +139,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	client := newHTTPClient(getInsecureSkipTLS(cmd))
 	resp, err := client.Do(req)

@@ -169,7 +169,7 @@ func NewAPIServerWithLimits(addr string, logger logr.Logger, limits APILimits) *
 	// Try to load authentication configuration directly from OperatorConfig CRD
 	namespace := resolveNamespace()
 	logger.Info("attempting to load authentication config from OperatorConfig", "namespace", namespace)
-	k8sClient, err := a.getCatalogClient()
+	k8sClient, err := a.deps.getCatalogClient()
 	if err == nil {
 		// IMPORTANT: Use context.Background() without cancel - the OIDC authenticator does lazy
 		// initialization in the background and needs the context to remain valid after this function returns.
@@ -334,13 +334,12 @@ func (a *APIServer) createRouter() *gin.Engine {
 
 		a.registerWorkspaceRoutes(v1)
 
-		// Register catalog routes with authentication
-		catalogClient, err := a.getCatalogClient()
+		catalogClient, err := a.deps.getCatalogClient()
 		if err != nil {
 			a.log.Error(err, "failed to create catalog client, catalog routes will not be available")
 		} else if catalogClient != nil {
 			a.log.Info("registering catalog routes")
-			catalog.RegisterRoutes(v1, catalogClient, a.log, resolveNamespace())
+			catalog.RegisterRoutes(v1.Group("", a.authMiddleware()), catalogClient, a.log, resolveNamespace())
 		}
 	}
 
@@ -359,8 +358,8 @@ func StartServer(addr string, logger logr.Logger) (*http.Server, error) {
 	return server, nil
 }
 
-// getCatalogClient returns a Kubernetes client for catalog operations
-func (a *APIServer) getCatalogClient() (client.Client, error) {
+// newCatalogClient returns a Kubernetes client for catalog operations
+func newCatalogClient() (client.Client, error) {
 	var cfg *rest.Config
 	var err error
 	cfg, err = rest.InClusterConfig()

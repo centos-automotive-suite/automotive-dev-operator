@@ -23,6 +23,7 @@ type apiDependencies struct {
 	loadOperatorConfig           func(context.Context, client.Client, string) (*automotivev1alpha1.OperatorConfig, error)
 	loadTargetDefaults           func(context.Context, client.Client, string) (map[string]buildcontract.TargetDefaults, error)
 	workspaceAgent               func(context.Context, client.Client, *automotivev1alpha1.Workspace) (*workspaceagent.Client, error)
+	getCatalogClient             func() (client.Client, error)
 }
 
 func defaultAPIDependencies() apiDependencies {
@@ -35,6 +36,7 @@ func defaultAPIDependencies() apiDependencies {
 		workspaceAgent: func(ctx context.Context, kube client.Client, ws *automotivev1alpha1.Workspace) (*workspaceagent.Client, error) {
 			return agentconn.Connect(ctx, kube, ws)
 		},
+		getCatalogClient: newCatalogClient,
 	}
 }
 
