@@ -383,13 +383,15 @@ Sealed operations manage TPM-based image sealing for secure boot workflows. All 
 | `--arch` | (auto-detected) | Target architecture (`amd64`, `arm64`) |
 | `--key` | | Path to local PEM key file |
 | `--passwd` | | Password for encrypted key file |
-| `--key-secret` | | Name of cluster secret containing sealing key |
-| `--key-password-secret` | | Name of cluster secret containing key password |
+| `--key-secret` | | Name of cluster secret containing sealing key (must be annotated with your requester ID, see below) |
+| `--key-password-secret` | | Name of cluster secret containing key password (same annotation) |
 | `--registry-auth-file` | | Path to Docker/Podman auth file for registry authentication |
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |
 | `--timeout` | `120` | Timeout in minutes |
 | `-w`, `--wait` | `false` | Wait for completion |
 | `-f`, `--follow` | `true` | Stream task logs |
+
+A Secret passed with `--key-secret` or `--key-password-secret` must have the annotation `automotive.sdv.cloud.redhat.com/requested-by` set to your requester ID as reported by the API, or the request is rejected. This stops one user from using another user's key, or any other Secret in the build namespace. A key shared by a team needs one copy per user.
 
 #### reseal
 
@@ -821,7 +823,7 @@ CLI flags override config values. Explicitly passing an empty flag (e.g. `--s3-r
 
 | Source | How to configure |
 |--------|------------------|
-| Kubernetes secret | `credentials_secret` in config file or `--s3-credentials-secret` flag |
+| Kubernetes secret | `credentials_secret` in config file or `--s3-credentials-secret` flag. The Secret must have the annotation `automotive.sdv.cloud.redhat.com/requested-by` set to your requester ID as reported by the API |
 | Inline keys | `--s3-access-key-id` + `--s3-secret-access-key` flags |
 | Environment variables | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` |
 | IAM / instance profile | Omit all credential fields |

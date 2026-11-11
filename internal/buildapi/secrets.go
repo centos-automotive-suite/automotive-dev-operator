@@ -247,40 +247,61 @@ func setupBuildSecrets(
 	return envSecretRef, pushSecretName, nil
 }
 
+// checkBuildCredentials checks the credentials a build request names, the Git
+// and S3 Secrets among them, before anything is created for the build.
+func checkBuildCredentials(
+	ctx context.Context, k8sClient client.Client, namespace, requester string, req *buildcontract.BuildRequest,
+) *httpError {
+	if httpErr := validateGitCredentials(ctx, k8sClient, namespace, requester, req.GitSource); httpErr != nil {
+		return httpErr
+	}
+	return checkS3Credentials(ctx, k8sClient, req, namespace, requester)
+}
+
+// checkS3Credentials rejects a request's S3 credentials before anything is
+// created for the build, so a rejected request leaves nothing behind.
+func checkS3Credentials(
+	ctx context.Context,
+	k8sClient client.Client,
+	req *buildcontract.BuildRequest,
+	namespace, requester string,
+) *httpError {
+	if req.S3Bucket == "" {
+		return nil
+	}
+	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
+		return &httpError{code: http.StatusBadRequest, message: "cannot specify both s3Credentials and s3CredentialsSecretName"}
+	}
+	if req.S3Credentials != nil {
+		if req.S3Credentials.AccessKeyID == "" || req.S3Credentials.SecretAccessKey == "" {
+			return &httpError{code: http.StatusBadRequest, message: "S3 access key ID and secret access key are required"}
+		}
+		return nil
+	}
+	if req.S3CredentialsSecretName != "" {
+		_, httpErr := requesterSecret(ctx, k8sClient, namespace, requester, req.S3CredentialsSecretName, "S3 credentials")
+		return httpErr
+	}
+	return nil
+}
+
+// resolveS3Credentials creates the Secret for inline S3 credentials that
+// checkS3Credentials accepted.
 func resolveS3Credentials(
 	ctx context.Context,
 	k8sClient client.Client,
 	req *buildcontract.BuildRequest,
 	namespace string,
-) (int, error) {
-	if req.S3Bucket == "" {
-		return 0, nil
+) error {
+	if req.S3Bucket == "" || req.S3Credentials == nil {
+		return nil
 	}
-	if req.S3Credentials != nil && req.S3CredentialsSecretName != "" {
-		return http.StatusBadRequest, fmt.Errorf("cannot specify both s3Credentials and s3CredentialsSecretName")
+	s3SecretName, err := createS3Secret(ctx, k8sClient, req.Name, namespace, req.S3Credentials)
+	if err != nil {
+		return fmt.Errorf("error creating S3 secret: %w", err)
 	}
-	if req.S3Credentials != nil {
-		if req.S3Credentials.AccessKeyID == "" || req.S3Credentials.SecretAccessKey == "" {
-			return http.StatusBadRequest, fmt.Errorf("S3 access key ID and secret access key are required")
-		}
-		s3SecretName, err := createS3Secret(ctx, k8sClient, req.Name, namespace, req.S3Credentials)
-		if err != nil {
-			return http.StatusInternalServerError, fmt.Errorf("error creating S3 secret: %w", err)
-		}
-		req.S3CredentialsSecretName = s3SecretName
-		return 0, nil
-	}
-	if req.S3CredentialsSecretName != "" {
-		secret := &corev1.Secret{}
-		if err := k8sClient.Get(ctx, types.NamespacedName{
-			Name:      req.S3CredentialsSecretName,
-			Namespace: namespace,
-		}, secret); err != nil {
-			return http.StatusBadRequest, fmt.Errorf("S3 credentials secret %s not found: %w", req.S3CredentialsSecretName, err)
-		}
-		return 0, nil
-	}
-	return 0, nil
+	req.S3CredentialsSecretName = s3SecretName
+	return nil
 }
 
 // createS3Secret creates a secret containing S3 credentials

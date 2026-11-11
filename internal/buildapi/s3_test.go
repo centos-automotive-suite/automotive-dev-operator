@@ -88,16 +88,15 @@ var _ = Describe("S3 Integration", func() {
 
 	})
 
-	Describe("resolveS3Credentials", func() {
+	Describe("checkS3Credentials", func() {
 		It("is a no-op when S3Bucket is empty", func() {
 			scheme := newRegistryTestScheme()
 			k8sClient := newRegistryTestClient(scheme)
 
 			req := &buildcontract.BuildRequest{}
 
-			status, err := resolveS3Credentials(context.Background(), k8sClient, req, "ns")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(status).To(Equal(0))
+			httpErr := checkS3Credentials(context.Background(), k8sClient, req, "ns", "alice")
+			Expect(httpErr).To(BeNil())
 		})
 
 		It("returns error when both s3Credentials and s3CredentialsSecretName are set", func() {
@@ -113,29 +112,10 @@ var _ = Describe("S3 Integration", func() {
 				},
 			}
 
-			status, err := resolveS3Credentials(context.Background(), k8sClient, req, "ns")
-			Expect(err).To(HaveOccurred())
-			Expect(status).To(Equal(http.StatusBadRequest))
-			Expect(err.Error()).To(ContainSubstring("cannot specify both"))
-		})
-
-		It("creates secret from inline credentials", func() {
-			scheme := newRegistryTestScheme()
-			k8sClient := newRegistryTestClient(scheme)
-
-			req := &buildcontract.BuildRequest{
-				Name:     "my-build",
-				S3Bucket: "my-bucket",
-				S3Credentials: &buildcontract.S3Credentials{
-					AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-					SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-				},
-			}
-
-			status, err := resolveS3Credentials(context.Background(), k8sClient, req, "ns")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(status).To(Equal(0))
-			Expect(req.S3CredentialsSecretName).To(Equal("my-build-s3-auth"))
+			httpErr := checkS3Credentials(context.Background(), k8sClient, req, "ns", "alice")
+			Expect(httpErr).NotTo(BeNil())
+			Expect(httpErr.code).To(Equal(http.StatusBadRequest))
+			Expect(httpErr.message).To(ContainSubstring("cannot specify both"))
 		})
 
 		It("returns error when inline credentials have empty keys", func() {
@@ -151,17 +131,18 @@ var _ = Describe("S3 Integration", func() {
 				},
 			}
 
-			status, err := resolveS3Credentials(context.Background(), k8sClient, req, "ns")
-			Expect(err).To(HaveOccurred())
-			Expect(status).To(Equal(http.StatusBadRequest))
+			httpErr := checkS3Credentials(context.Background(), k8sClient, req, "ns", "alice")
+			Expect(httpErr).NotTo(BeNil())
+			Expect(httpErr.code).To(Equal(http.StatusBadRequest))
 		})
 
-		It("succeeds when existing secret is found", func() {
+		It("succeeds when the requester's secret is found", func() {
 			scheme := newRegistryTestScheme()
 			existingSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "shared-s3-creds",
-					Namespace: "ns",
+					Name:        "shared-s3-creds",
+					Namespace:   "ns",
+					Annotations: map[string]string{labels.RequestedBy: "alice"},
 				},
 			}
 			k8sClient := newRegistryTestClient(scheme, existingSecret)
@@ -171,9 +152,8 @@ var _ = Describe("S3 Integration", func() {
 				S3CredentialsSecretName: "shared-s3-creds",
 			}
 
-			status, err := resolveS3Credentials(context.Background(), k8sClient, req, "ns")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(status).To(Equal(0))
+			httpErr := checkS3Credentials(context.Background(), k8sClient, req, "ns", "alice")
+			Expect(httpErr).To(BeNil())
 		})
 
 		It("returns error when existing secret is not found", func() {
@@ -185,10 +165,10 @@ var _ = Describe("S3 Integration", func() {
 				S3CredentialsSecretName: "nonexistent-secret",
 			}
 
-			status, err := resolveS3Credentials(context.Background(), k8sClient, req, "ns")
-			Expect(err).To(HaveOccurred())
-			Expect(status).To(Equal(http.StatusBadRequest))
-			Expect(err.Error()).To(ContainSubstring("not found"))
+			httpErr := checkS3Credentials(context.Background(), k8sClient, req, "ns", "alice")
+			Expect(httpErr).NotTo(BeNil())
+			Expect(httpErr.code).To(Equal(http.StatusForbidden))
+			Expect(httpErr.message).To(ContainSubstring("must exist"))
 		})
 
 		It("succeeds when S3Bucket set without credentials for IAM-based auth", func() {
@@ -199,11 +179,31 @@ var _ = Describe("S3 Integration", func() {
 				S3Bucket: "my-bucket",
 			}
 
-			status, err := resolveS3Credentials(context.Background(), k8sClient, req, "ns")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(status).To(Equal(0))
+			httpErr := checkS3Credentials(context.Background(), k8sClient, req, "ns", "alice")
+			Expect(httpErr).To(BeNil())
+			Expect(resolveS3Credentials(context.Background(), k8sClient, req, "ns")).To(Succeed())
 			Expect(req.S3CredentialsSecretName).To(BeEmpty())
 		})
+	})
+
+	Describe("resolveS3Credentials", func() {
+		It("creates secret from inline credentials", func() {
+			scheme := newRegistryTestScheme()
+			k8sClient := newRegistryTestClient(scheme)
+
+			req := &buildcontract.BuildRequest{
+				Name:     "my-build",
+				S3Bucket: "my-bucket",
+				S3Credentials: &buildcontract.S3Credentials{
+					AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+					SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				},
+			}
+
+			Expect(resolveS3Credentials(context.Background(), k8sClient, req, "ns")).To(Succeed())
+			Expect(req.S3CredentialsSecretName).To(Equal("my-build-s3-auth"))
+		})
+
 	})
 
 	Describe("buildExportSpec", func() {

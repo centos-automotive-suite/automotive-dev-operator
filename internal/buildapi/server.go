@@ -1340,8 +1340,8 @@ func (a *APIServer) createBuild(c *gin.Context) {
 
 	namespace := resolveNamespace()
 	requestedBy := a.resolveRequester(c)
-	if err := validateGitCredentials(ctx, k8sClient, namespace, requestedBy, req.GitSource); err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+	if httpErr := checkBuildCredentials(ctx, k8sClient, namespace, requestedBy, &req); httpErr != nil {
+		c.JSON(httpErr.code, gin.H{"error": httpErr.message})
 		return
 	}
 
@@ -1438,7 +1438,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 		}
 	}
 
-	if status, err := resolveS3Credentials(ctx, k8sClient, &req, namespace); err != nil {
+	if err := resolveS3Credentials(ctx, k8sClient, &req, namespace); err != nil {
 		if flashSecretName != "" {
 			orphan := &corev1.Secret{}
 			orphan.Name = flashSecretName
@@ -1448,7 +1448,7 @@ func (a *APIServer) createBuild(c *gin.Context) {
 			}
 		}
 		spanError(span, err)
-		c.JSON(status, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
