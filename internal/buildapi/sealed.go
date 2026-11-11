@@ -14,6 +14,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -178,6 +179,20 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 		}
 	}
 
+	outputStream := internalImageStreamName(req.OutputRef, namespace)
+	if outputStream != "" {
+		if err := imagestream.CheckOwner(ctx, k8sClient, namespace, outputStream, requestedBy); err != nil {
+			spanError(span, err)
+			status, outcome := imageStreamErrorStatus(err), "error"
+			if status == http.StatusForbidden {
+				outcome = "forbidden"
+			}
+			SealedCreateRequestsTotal.WithLabelValues(opLabel, outcome).Inc()
+			c.JSON(status, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	refs, err := createSealedSecrets(ctx, clientset, namespace, &req)
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
@@ -249,8 +264,8 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 	// Reseal pods push as ado-build, which can push to an ImageStream but not
 	// create one. Create it only now that the job is accepted, so a rejected
 	// request (a duplicate name, say) leaves no stream behind.
-	if stream := internalImageStreamName(req.OutputRef, namespace); stream != "" {
-		if _, err := ensureImageStream(ctx, k8sClient, namespace, stream); err != nil {
+	if outputStream != "" {
+		if _, err := imagestream.Ensure(ctx, k8sClient, namespace, outputStream, requestedBy); err != nil {
 			// Without the stream the job could only fail at its final push, so
 			// withdraw it. The Secrets are owned by the job by now, so garbage
 			// collection removes any that fail to delete here. The request may be
@@ -263,7 +278,7 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 			}
 			spanError(span, err)
 			SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(imageStreamErrorStatus(err), gin.H{"error": err.Error()})
 			return
 		}
 	}

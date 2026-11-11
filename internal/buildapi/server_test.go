@@ -500,6 +500,7 @@ var _ = Describe("APIServer", func() {
 			})
 			is.SetName("my-ir-build")
 			is.SetNamespace("test-ns")
+			is.SetAnnotations(map[string]string{labels.RequestedBy: "alice"})
 
 			// Pre-create ImageStreamTag
 			ist := &unstructured.Unstructured{}
