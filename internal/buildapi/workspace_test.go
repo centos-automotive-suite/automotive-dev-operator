@@ -28,7 +28,6 @@ var _ = Describe("Workspace API", func() {
 		server.internalJWT = &internalJWTConfig{
 			issuer: "workspace-test", audience: "workspace-api", key: []byte("workspace-test-signing-key-32-bytes"),
 		}
-		server.lastAuthConfigCheck = time.Now()
 		server.router = server.createRouter()
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
 			Issuer: server.internalJWT.issuer, Audience: jwt.ClaimStrings{server.internalJWT.audience},

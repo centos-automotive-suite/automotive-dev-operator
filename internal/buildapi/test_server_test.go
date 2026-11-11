@@ -3,6 +3,7 @@ package buildapi
 import (
 	"context"
 	"fmt"
+	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
@@ -11,6 +12,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 type testReporter interface {
@@ -38,6 +40,7 @@ func newTestServer(t testReporter, configure func(*apiDependencies)) *APIServer 
 		loadTargetDefaults: func(context.Context, client.Client, string) (map[string]buildcontract.TargetDefaults, error) {
 			return nil, unexpected("loadTargetDefaults")
 		},
+		getCatalogClient: func() (client.Client, error) { return fake.NewClientBuilder().Build(), nil },
 	}
 	if configure != nil {
 		configure(&deps)
@@ -47,5 +50,8 @@ func newTestServer(t testReporter, configure func(*apiDependencies)) *APIServer 
 			return nil, unexpected("newPodExecExecutor")
 		},
 	}}
+	// Treat the auth config as just checked, so authenticated requests do not
+	// read OperatorConfig from whatever cluster the kubeconfig points at.
+	a.lastAuthConfigCheck = time.Now()
 	return a
 }

@@ -125,9 +125,9 @@ func runList(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Get auth token
-	token := authToken
-	if token == "" {
-		token = os.Getenv("CAIB_TOKEN")
+	token, err := resolveAuthToken(cmd, server)
+	if err != nil {
+		return err
 	}
 
 	params, err := listQueryParams(cmd)
@@ -146,9 +146,7 @@ func runList(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	client := newHTTPClient(getInsecureSkipTLS(cmd))
 	resp, err := client.Do(req)

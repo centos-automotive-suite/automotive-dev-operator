@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 
+	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/spf13/cobra"
 )
 
@@ -61,6 +62,13 @@ func NewCatalogCmd() *cobra.Command {
 func addCommonFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&serverURL, "server", "", "REST API server base URL (env: CAIB_SERVER)")
 	cmd.Flags().StringVar(&authToken, "token", "", "Bearer token for authentication (env: CAIB_TOKEN)")
+}
+
+// resolveAuthToken finds the token the way other caib commands do: --token,
+// CAIB_TOKEN, the caib login session, then the kubeconfig.
+func resolveAuthToken(cmd *cobra.Command, server string) (string, error) {
+	token := authToken
+	return caibcommon.ResolveAuthToken(server, &token, getInsecureSkipTLS(cmd))
 }
 
 // getOutputFormat returns the output format from the root command's --output-format flag.

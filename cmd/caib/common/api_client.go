@@ -15,8 +15,11 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// CreateBuildAPIClient creates a build API client with auth token from flags/env/kubeconfig.
-func CreateBuildAPIClient(serverURL string, authToken *string, insecureSkipTLS bool) (*buildapiclient.Client, error) {
+// ResolveAuthToken returns the token for serverURL: --token (authToken), then
+// CAIB_TOKEN, then the OIDC session from caib login, then the kubeconfig. The
+// result is also stored in authToken. Every API route needs a token, so finding
+// none is an error here rather than a 401 from the server.
+func ResolveAuthToken(serverURL string, authToken *string, insecureSkipTLS bool) (string, error) {
 	ctx := context.Background()
 
 	tokenValue := ""
@@ -41,7 +44,7 @@ func CreateBuildAPIClient(serverURL string, authToken *string, insecureSkipTLS b
 			if tok, loadErr := LoadTokenFromKubeconfig(); loadErr == nil && strings.TrimSpace(tok) != "" {
 				setToken(tok)
 			} else {
-				return nil, fmt.Errorf("OIDC authentication failed and no kubeconfig token available: %w", err)
+				return "", fmt.Errorf("OIDC authentication failed and no kubeconfig token available: %w", err)
 			}
 		} else if token != "" {
 			setToken(token)
@@ -58,11 +61,20 @@ func CreateBuildAPIClient(serverURL string, authToken *string, insecureSkipTLS b
 			setToken(tok)
 		}
 	}
-
-	var opts []buildapiclient.Option
-	if tokenValue != "" {
-		opts = append(opts, buildapiclient.WithAuthToken(tokenValue))
+	if tokenValue == "" {
+		return "", fmt.Errorf("no credentials found: run 'caib login' or 'oc login', pass --token, or set CAIB_TOKEN")
 	}
+	return tokenValue, nil
+}
+
+// CreateBuildAPIClient creates a build API client with auth token from flags/env/kubeconfig.
+func CreateBuildAPIClient(serverURL string, authToken *string, insecureSkipTLS bool) (*buildapiclient.Client, error) {
+	tokenValue, err := ResolveAuthToken(serverURL, authToken, insecureSkipTLS)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := []buildapiclient.Option{buildapiclient.WithAuthToken(tokenValue)}
 
 	if insecureSkipTLS {
 		opts = append(opts, buildapiclient.WithInsecureTLS())

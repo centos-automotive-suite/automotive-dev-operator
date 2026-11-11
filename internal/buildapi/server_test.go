@@ -117,6 +117,36 @@ var _ = Describe("APIServer", func() {
 		})
 	})
 
+	Context("Route Authentication", func() {
+		// Only these routes may be reached without a token.
+		public := map[string]bool{
+			"GET /metrics":         true,
+			"GET /v1/healthz":      true,
+			"GET /v1/openapi.yaml": true,
+			"GET /v1/auth/config":  true,
+		}
+
+		It("should require authentication for every other route", func() {
+			routes := server.router.Routes()
+			Expect(routes).To(ContainElement(HaveField("Path", "/v1/catalog/images")),
+				"catalog routes must be registered for this test to cover them")
+			for _, route := range routes {
+				if public[route.Method+" "+route.Path] {
+					continue
+				}
+				By(fmt.Sprintf("testing %s %s", route.Method, route.Path))
+				path := strings.NewReplacer(":name", "x", ":run", "x").Replace(route.Path)
+				req, err := http.NewRequest(route.Method, path, nil)
+				Expect(err).NotTo(HaveOccurred())
+
+				w := httptest.NewRecorder()
+				server.router.ServeHTTP(w, req)
+
+				Expect(w.Code).To(Equal(http.StatusUnauthorized), "%s %s", route.Method, route.Path)
+			}
+		})
+	})
+
 	Context("createBuild S3 validation", func() {
 		var (
 			originalNamespace    string

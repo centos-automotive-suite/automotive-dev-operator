@@ -171,3 +171,21 @@ func TestExecuteWithReauth_DoesNotCacheRejectedToken(t *testing.T) {
 		t.Errorf("re-auth returned the rejected token instead of the cached one")
 	}
 }
+
+// TestResolveAuthTokenFailsWithoutCredentials verifies that a missing login is
+// reported locally rather than as a 401 from the server.
+func TestResolveAuthTokenFailsWithoutCredentials(t *testing.T) {
+	isolateHome(t)
+
+	// Build API without OIDC, so the kubeconfig is the last source left.
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer apiSrv.Close()
+
+	token := ""
+	_, err := ResolveAuthToken(apiSrv.URL, &token, false)
+	if err == nil || !strings.Contains(err.Error(), "caib login") {
+		t.Fatalf("expected a no-credentials error naming caib login, got %v", err)
+	}
+}
