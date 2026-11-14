@@ -128,27 +128,6 @@ func (h *Handler) RunShow(_ *cobra.Command, args []string) {
 		return
 	}
 
-	// Backward-compatible fallback for older API servers that do not yet include response parameters.
-	if st.Parameters == nil {
-		fallbackErr := common.ExecuteWithReauth(serverURL, &h.opts.Connection.AuthToken, insecureSkipTLS, func(api *buildapiclient.Client) error {
-			tpl, tplErr := api.GetBuildTemplate(ctx, showBuildName)
-			if tplErr != nil {
-				return tplErr
-			}
-			st.Parameters = buildParametersFromTemplate(tpl)
-			return nil
-		})
-		if fallbackErr != nil {
-			fmt.Fprintf(
-				os.Stderr,
-				"Warning: failed to fetch build template for %s from %s: %v\n",
-				showBuildName,
-				serverURL,
-				fallbackErr,
-			)
-		}
-	}
-
 	h.renderShow(format, st)
 }
 
@@ -159,48 +138,6 @@ func (h *Handler) renderShow(format string, st *buildcontract.BuildResponse) {
 
 func (h *Handler) renderFormatted(format string, data any, tablePrinter func() error) {
 	common.RenderFormatted(format, data, tablePrinter, h.handleError)
-}
-
-func buildParametersFromTemplate(tpl *buildcontract.BuildTemplateResponse) *buildcontract.BuildParameters {
-	if tpl == nil {
-		return nil
-	}
-
-	params := &buildcontract.BuildParameters{
-		Architecture:           string(tpl.Architecture),
-		Distro:                 string(tpl.Distro),
-		Target:                 string(tpl.Target),
-		Mode:                   string(tpl.Mode),
-		ExportFormat:           string(tpl.ExportFormat),
-		Compression:            string(tpl.Compression),
-		StorageClass:           tpl.StorageClass,
-		AutomotiveImageBuilder: tpl.AutomotiveImageBuilder,
-		BuilderImage:           tpl.BuilderImage,
-		ContainerRef:           tpl.ContainerRef,
-		BuildDiskImage:         tpl.BuildDiskImage,
-		FlashEnabled:           tpl.FlashEnabled,
-		FlashLeaseDuration:     tpl.FlashLeaseDuration,
-		UseServiceAccountAuth:  tpl.UseInternalRegistry,
-	}
-
-	if strings.TrimSpace(params.Architecture) == "" &&
-		strings.TrimSpace(params.Distro) == "" &&
-		strings.TrimSpace(params.Target) == "" &&
-		strings.TrimSpace(params.Mode) == "" &&
-		strings.TrimSpace(params.ExportFormat) == "" &&
-		strings.TrimSpace(params.Compression) == "" &&
-		strings.TrimSpace(params.StorageClass) == "" &&
-		strings.TrimSpace(params.AutomotiveImageBuilder) == "" &&
-		strings.TrimSpace(params.BuilderImage) == "" &&
-		strings.TrimSpace(params.ContainerRef) == "" &&
-		strings.TrimSpace(params.FlashLeaseDuration) == "" &&
-		!params.BuildDiskImage &&
-		!params.FlashEnabled &&
-		!params.UseServiceAccountAuth {
-		return nil
-	}
-
-	return params
 }
 
 func printBuildList(items []buildcontract.BuildListItem) error {
