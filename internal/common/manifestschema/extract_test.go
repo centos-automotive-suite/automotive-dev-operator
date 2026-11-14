@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -69,7 +70,7 @@ func TestExtractSchemaFromImage(t *testing.T) {
 				newTestLayer(map[string][]byte{SchemaPathInContainer: minimalSchema}),
 			}}, nil
 		}
-		data, err := ExtractSchemaFromImage("fake:latest")
+		data, err := ExtractSchemaFromImage(fakeDigestRef(t, "fake"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -84,7 +85,7 @@ func TestExtractSchemaFromImage(t *testing.T) {
 				newTestLayer(map[string][]byte{"other/file": []byte("x")}),
 			}}, nil
 		}
-		_, err := ExtractSchemaFromImage("empty:latest")
+		_, err := ExtractSchemaFromImage(fakeDigestRef(t, "empty"))
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -98,19 +99,12 @@ func TestExtractSchemaFromImage(t *testing.T) {
 				newTestLayer(map[string][]byte{SchemaPathInContainer: minimalSchema}),
 			}}, nil
 		}
-		data, err := ExtractSchemaFromImage("layered:latest")
+		data, err := ExtractSchemaFromImage(fakeDigestRef(t, "layered"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !bytes.Contains(data, []byte("additionalProperties")) {
 			t.Error("expected top layer schema")
-		}
-	})
-
-	t.Run("invalid ref", func(t *testing.T) {
-		_, err := ExtractSchemaFromImage("!!!invalid!!!")
-		if err == nil {
-			t.Fatal("expected error for invalid ref")
 		}
 	})
 
@@ -120,7 +114,7 @@ func TestExtractSchemaFromImage(t *testing.T) {
 				newTestLayer(map[string][]byte{"./" + SchemaPathInContainer: []byte("found")}),
 			}}, nil
 		}
-		data, err := ExtractSchemaFromImage("prefixed:latest")
+		data, err := ExtractSchemaFromImage(fakeDigestRef(t, "prefixed"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -128,4 +122,20 @@ func TestExtractSchemaFromImage(t *testing.T) {
 			t.Errorf("got %q, want %q", data, "found")
 		}
 	})
+}
+
+func fakeDigestRef(t *testing.T, repo string) name.Digest {
+	t.Helper()
+	d, err := name.NewDigest(repo + "@sha256:" + strings.Repeat("0", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestValidateFromImageInvalidRef(t *testing.T) {
+	t.Setenv("CAIB_SKIP_MANIFEST_VALIDATION", "")
+	if _, err := ValidateFromImage("!!!invalid!!!", nil); err == nil {
+		t.Fatal("expected error for invalid ref")
+	}
 }
