@@ -3,6 +3,7 @@ package workspaceagent
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,18 +16,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
-var syncedAt = time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+var syncedAt = time.Date(2020, 1, 2, 3, 4, 5, 6789, time.UTC)
 
-// tarFile and tarLink describe entries the way the CLI writes them.
+// tarFile and tarLink describe entries the way the CLI writes them, with PAX
+// headers, which keep modification times to the nanosecond.
 func tarFile(name, content string, mode int64) (*tar.Header, string) {
-	return &tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: mode, Size: int64(len(content)), ModTime: syncedAt, Uid: 4242, Gid: 4242}, content
+	return &tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: mode, Size: int64(len(content)), ModTime: syncedAt, Uid: 4242, Gid: 4242, Format: tar.FormatPAX}, content
 }
 
 func tarLink(name, target string) (*tar.Header, string) {
-	return &tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: target, Mode: 0o777, ModTime: syncedAt}, ""
+	return &tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: target, Mode: 0o777, ModTime: syncedAt, Format: tar.FormatPAX}, ""
 }
 
 type tarEntry struct {
@@ -49,6 +54,23 @@ func archive(t *testing.T, entries ...tarEntry) []byte {
 		}
 	}
 	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// compressed is data the way an upload's body carries an archive.
+func compressed(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
@@ -141,6 +163,35 @@ func TestSyncUploadWritesFilesAndSymlinks(t *testing.T) {
 	noTempFiles(t, a.workdir)
 }
 
+// A file synced and left alone plans as unchanged in the next sync: the
+// upload keeps what a plan compares.
+func TestSyncUploadKeepsWhatAPlanCompares(t *testing.T) {
+	a := newTestAgent(t)
+	client := t.TempDir()
+	writeTree(t, client, map[string]string{"a.txt": "content"})
+	chtimes(t, filepath.Join(client, "a.txt"), syncedAt)
+	if err := os.Symlink("a.txt", filepath.Join(client, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t,
+		entry(tarFile("a.txt", "content", 0o644)),
+		entry(tarLink("link", "a.txt")),
+	))); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{
+		"a.txt": version(t, filepath.Join(client, "a.txt")),
+		"link":  version(t, filepath.Join(client, "link")),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Changed) != 0 || plan.Unchanged != 2 {
+		t.Errorf("plan = %+v, want both unchanged", plan)
+	}
+}
+
 func TestSyncUploadCreatesTheWorkdir(t *testing.T) {
 	a := newTestAgent(t)
 	a.workdir = filepath.Join(t.TempDir(), "absent")
@@ -225,9 +276,10 @@ func TestSyncUploadRejectsOtherEntryTypes(t *testing.T) {
 func TestSyncUploadAppliesNothingWhenCutShort(t *testing.T) {
 	a := newTestAgent(t)
 	writeTree(t, a.workdir, map[string]string{"b.txt": "old"})
-	full := archive(t, entry(tarFile("a.txt", "new", 0o644)), entry(tarFile("b.txt", strings.Repeat("b", 100), 0o644)))
-	// a.txt's header and padded content, b.txt's header, then 10 of its bytes.
-	cut := full[:3*512+10]
+	content := strings.Repeat("b", 100)
+	full := archive(t, entry(tarFile("a.txt", "new", 0o644)), entry(tarFile("b.txt", content, 0o644)))
+	// All of a.txt, b.txt's header, then 10 of its bytes.
+	cut := full[:bytes.Index(full, []byte(content))+10]
 
 	_, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(cut))
 	wantBadRequest(t, "a cut archive", err)
@@ -437,10 +489,15 @@ func TestSyncUploadsRunOneAtATime(t *testing.T) {
 	noTempFiles(t, a.workdir)
 }
 
-func TestSyncUploadRejectsAnOversizedBody(t *testing.T) {
+// The limit bounds what an upload stages, so it applies to the archive the
+// body expands to.
+func TestSyncUploadRejectsAnArchivePastTheLimit(t *testing.T) {
 	a := newTestAgent(t)
 	a.maxUpload = 1 << 20
-	body := archive(t, entry(tarFile("small.txt", "small", 0o644)), entry(tarFile("big", strings.Repeat("x", 2<<20), 0o644)))
+	body := compressed(t, archive(t, entry(tarFile("small.txt", "small", 0o644)), entry(tarFile("big", strings.Repeat("x", 2<<20), 0o644))))
+	if len(body) >= 1<<20 {
+		t.Fatalf("the compressed body is %d bytes, which would test the body's limit instead", len(body))
+	}
 	req := httptest.NewRequest(http.MethodPost, "/sync/upload", io.MultiReader(strings.NewReader("{}"), bytes.NewReader(body)))
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
@@ -450,6 +507,24 @@ func TestSyncUploadRejectsAnOversizedBody(t *testing.T) {
 	}
 	notApplied(t, a.workdir, "small.txt", "big")
 	noTempFiles(t, a.workdir)
+}
+
+// zstd skips skippable frames without producing anything, so the body has a
+// limit of its own: without it, a client could send them for as long as it
+// liked while holding the upload lock.
+func TestSyncUploadRejectsABodyPastTheLimit(t *testing.T) {
+	a := newTestAgent(t)
+	a.maxUpload = 1 << 20
+	frame := make([]byte, 8+2<<20)
+	binary.LittleEndian.PutUint32(frame, 0x184D2A50)
+	binary.LittleEndian.PutUint32(frame[4:], 2<<20)
+	req := httptest.NewRequest(http.MethodPost, "/sync/upload", io.MultiReader(strings.NewReader("{}"), bytes.NewReader(frame)))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	a.Handler("secret", nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("response = %d %s, want a 413", rec.Code, rec.Body.String())
+	}
 }
 
 func TestSyncUploadDeleteRemovesFilesAndEmptyParents(t *testing.T) {
@@ -568,8 +643,8 @@ func TestSyncUploadGivesUpOnAStalledClient(t *testing.T) {
 	reader, writer := io.Pipe()
 	t.Cleanup(func() { _ = writer.Close() })
 	go func() {
-		// The header and one byte of content, then nothing.
-		_, _ = writer.Write(append([]byte("{}"), archive(t, entry(tarFile("a.txt", "abc", 0o644)))[:512+1]...))
+		// The request and the start of the archive, then nothing.
+		_, _ = writer.Write(append([]byte("{}"), compressed(t, archive(t, entry(tarFile("a.txt", "abc", 0o644))))[:8]...))
 	}()
 	req, err := http.NewRequest(http.MethodPost, server.URL+"/sync/upload", reader)
 	if err != nil {
@@ -646,7 +721,7 @@ func TestSyncUploadRequiresTheRequest(t *testing.T) {
 func TestSyncUploadOverHTTPDeletesAndUploads(t *testing.T) {
 	a := newTestAgent(t)
 	writeTree(t, a.workdir, map[string]string{"old.txt": "old"})
-	body := io.MultiReader(strings.NewReader(`{"delete":["old.txt"]}`), bytes.NewReader(archive(t, entry(tarFile("new.txt", "new", 0o644)))))
+	body := io.MultiReader(strings.NewReader(`{"delete":["old.txt"]}`), bytes.NewReader(compressed(t, archive(t, entry(tarFile("new.txt", "new", 0o644))))))
 	req := httptest.NewRequest(http.MethodPost, "/sync/upload", body)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
@@ -659,6 +734,40 @@ func TestSyncUploadOverHTTPDeletesAndUploads(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(a.workdir, "old.txt")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("old.txt is still there: %v", err)
+	}
+}
+
+// Wherever the connection drops, even before the archive starts or after it
+// ends, the upload applies nothing: only the end of the compressed stream
+// shows that all of it arrived.
+func TestSyncUploadOverHTTPAppliesNothingWhenCutShort(t *testing.T) {
+	head := `{"delete":["old.txt"]}`
+	files := func(b string) []byte {
+		return archive(t, entry(tarFile("a.txt", "a", 0o644)), entry(tarFile("b.txt", b, 0o644)))
+	}
+	for name, full := range map[string][]byte{
+		"small": compressed(t, files("b")),
+		// 128 KiB, a whole zstd block, so the block that ends the stream
+		// comes after all of the archive.
+		"a block": compressed(t, files(strings.Repeat("b", 128<<10-len(files(""))))),
+	} {
+		for n := range len(full) {
+			a := newTestAgent(t)
+			writeTree(t, a.workdir, map[string]string{"old.txt": "old"})
+			// What net/http reads from a client whose connection drops.
+			body := io.MultiReader(strings.NewReader(head), bytes.NewReader(full[:n]), iotest.ErrReader(io.ErrUnexpectedEOF))
+			req := httptest.NewRequest(http.MethodPost, "/sync/upload", body)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.Handler("secret", nil).ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s cut to %d of %d bytes: response = %d %s, want a 400", name, n, len(full), rec.Code, rec.Body.String())
+			}
+			notApplied(t, a.workdir, "a.txt", "b.txt")
+			if got := readFile(t, filepath.Join(a.workdir, "old.txt")); got != "old" {
+				t.Errorf("%s cut to %d of %d bytes: old.txt = %q, want it kept", name, n, len(full), got)
+			}
+		}
 	}
 }
 
@@ -704,7 +813,7 @@ func TestSyncUploadThatFailsDeletesNothing(t *testing.T) {
 			a.maxUpload = 1 << 20
 			writeTree(t, a.workdir, map[string]string{"old.txt": "old", "dir/inner": "x"})
 			req := httptest.NewRequest(http.MethodPost, "/sync/upload",
-				io.MultiReader(strings.NewReader(deleteHeader(t, tc.deletes)), bytes.NewReader(tc.archive(t))))
+				io.MultiReader(strings.NewReader(deleteHeader(t, tc.deletes)), bytes.NewReader(compressed(t, tc.archive(t)))))
 			req.Header.Set("Authorization", "Bearer secret")
 			rec := httptest.NewRecorder()
 			a.Handler("secret", nil).ServeHTTP(rec, req)

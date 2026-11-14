@@ -14,11 +14,19 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
-// maxSyncUploadBytes bounds a sync upload, and so the space its staged files
-// take beside the ones they replace until they are renamed into place.
+// maxSyncUploadBytes bounds a sync upload's archive, and so the space its
+// staged files take beside the ones they replace until they are renamed into
+// place, and the compressed body that carries it.
 const maxSyncUploadBytes = 512 << 20
+
+// syncArchiveWindow bounds the window of an upload's zstd stream, and so the
+// memory decompressing it takes. caib compresses with zstd's default window,
+// 8 MiB.
+const syncArchiveWindow = 8 << 20
 
 // syncUploadIdle bounds how long an upload may go without sending anything,
 // so a stalled client can't hold the upload lock or keep the workspace
@@ -33,8 +41,8 @@ const syncUploadIdle = time.Minute
 // mid-upload left behind.
 const syncStaging = ".caib-sync"
 
-// SyncUploadRequest starts the body of POST /sync/upload, and the tar stream
-// follows it: files to delete, relative to the working directory, as the
+// SyncUploadRequest starts the body of POST /sync/upload, and the
+// zstd-compressed tar stream follows it: files to delete, relative to the working directory, as the
 // upload applies. Its JSON matches buildcontract.SyncUploadRequest, which the
 // build API relays as it is.
 type SyncUploadRequest struct {
@@ -132,6 +140,11 @@ func (a *Agent) stage(root *os.Root, archive io.Reader) ([]stagedEntry, error) {
 	for {
 		hdr, err := reader.Next()
 		if errors.Is(err, io.EOF) {
+			// The archive can end before the stream holding it does, and only
+			// the stream's end shows that all of it arrived.
+			if _, err := io.Copy(io.Discard, archive); err != nil {
+				return nil, a.archiveError(err)
+			}
 			return entries, nil
 		}
 		if err != nil {
@@ -379,7 +392,7 @@ func deleteFiles(root *os.Root, files []string) (int, error) {
 }
 
 func (a *Agent) handleSyncUpload(w http.ResponseWriter, r *http.Request) {
-	body := idleReader{http.MaxBytesReader(w, r.Body, a.maxUpload), http.NewResponseController(w), a.uploadIdle}
+	body := &uploadBody{body: http.MaxBytesReader(w, r.Body, a.maxUpload), connection: http.NewResponseController(w), idle: a.uploadIdle}
 	decoder := json.NewDecoder(body)
 	var req SyncUploadRequest
 	if err := decoder.Decode(&req); err != nil {
@@ -390,18 +403,50 @@ func (a *Agent) handleSyncUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, a.archiveError(err))
 		return
 	}
-	result, err := a.SyncUpload(req, io.MultiReader(decoder.Buffered(), body))
+	archive, err := zstd.NewReader(io.MultiReader(decoder.Buffered(), body),
+		zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(syncArchiveWindow))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer archive.Close()
+	// A small body can expand into a large archive, so the limit applies to
+	// both.
+	stream := io.MultiReader(archive, bodyEnd{body})
+	result, err := a.SyncUpload(req, http.MaxBytesReader(w, io.NopCloser(stream), a.maxUpload))
+	// zstd reports a body that stopped partway through a skipped frame as a
+	// cut archive, whatever stopped it.
+	if err != nil && body.err != nil {
+		err = a.archiveError(body.err)
+	}
 	writeResult(w, http.StatusOK, result, err)
 }
 
-// idleReader fails a read that waits longer than idle for the client.
-type idleReader struct {
+// uploadBody fails a read that waits longer than idle for the client, and
+// keeps the first error reading the body.
+type uploadBody struct {
 	body       io.Reader
 	connection *http.ResponseController
 	idle       time.Duration
+	err        error
 }
 
-func (r idleReader) Read(p []byte) (int, error) {
+func (r *uploadBody) Read(p []byte) (int, error) {
 	_ = r.connection.SetReadDeadline(time.Now().Add(r.idle))
-	return r.body.Read(p)
+	n, err := r.body.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && r.err == nil {
+		r.err = err
+	}
+	return n, err
+}
+
+// bodyEnd ends an upload's archive the way its body ended: zstd takes a body
+// cut before a frame for the end of the stream.
+type bodyEnd struct{ body *uploadBody }
+
+func (e bodyEnd) Read([]byte) (int, error) {
+	if e.body.err != nil {
+		return 0, e.body.err
+	}
+	return 0, io.EOF
 }

@@ -397,8 +397,9 @@ func (a *APIServer) syncWorkspace(c *gin.Context, name string) {
 	a.relaySync(c.Request.Context(), c, name, (*workspaceagent.Client).SyncUpload)
 }
 
-// syncPlanTimeout bounds a sync plan. The agent hashes every listed file, so
-// it gets far longer than other agent calls.
+// syncPlanTimeout bounds a sync plan. The agent looks up every listed file
+// and, for --delete, lists the whole workspace, so it gets far longer than
+// other agent calls.
 const syncPlanTimeout = 10 * time.Minute
 
 func (a *APIServer) syncPlanWorkspace(c *gin.Context, name string) {
