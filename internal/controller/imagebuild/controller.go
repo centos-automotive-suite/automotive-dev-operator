@@ -18,6 +18,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/registryutil"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
@@ -941,30 +942,33 @@ func (r *ImageBuildReconciler) deleteExpiredImageStreams(
 	imageBuild *automotivev1alpha1.ImageBuild,
 	log logr.Logger,
 ) bool {
-	var failed bool
-	tags := extractInternalImageStreamTags(imageBuild)
-	seen := make(map[string]struct{}, len(tags))
-	for _, tag := range tags {
-		name, _, _ := strings.Cut(tag, ":")
-		if _, ok := seen[name]; ok || name == "" {
+	// Other builds may push to the same stream, so remove only this build's tags.
+	var streams []string
+	tagsByStream := map[string][]string{}
+	for _, ref := range extractInternalImageStreamTags(imageBuild) {
+		name, tag, _ := strings.Cut(ref, ":")
+		if name == "" {
 			continue
 		}
-		seen[name] = struct{}{}
+		if _, ok := tagsByStream[name]; !ok {
+			streams = append(streams, name)
+		}
+		tagsByStream[name] = append(tagsByStream[name], tag)
+	}
 
-		is := &unstructured.Unstructured{}
-		is.SetGroupVersionKind(schema.GroupVersionKind{
-			Group: "image.openshift.io", Version: "v1", Kind: "ImageStream",
-		})
-		is.SetName(name)
-		is.SetNamespace(imageBuild.Namespace)
-
-		if err := r.Delete(ctx, is); err != nil {
-			if !errors.IsNotFound(err) {
-				log.Error(err, "Failed to delete ImageStream", "name", name)
-				failed = true
-			}
-		} else {
-			log.Info("Deleted ImageStream", "name", name)
+	var failed bool
+	owner := imageBuild.Annotations[labels.RequestedBy]
+	for _, name := range streams {
+		err := imagestream.RemoveTags(ctx, r.Client, imageBuild.Namespace, name, owner, tagsByStream[name])
+		switch {
+		case err == nil:
+			log.Info("Removed build's tags from ImageStream", "name", name, "tags", tagsByStream[name])
+		case stderrors.Is(err, imagestream.ErrNotOwned):
+			// Retrying would not change the owner.
+			log.Info("Skipping ImageStream owned by another user", "name", name)
+		default:
+			log.Error(err, "Failed to clean up ImageStream", "name", name)
+			failed = true
 		}
 	}
 	return failed

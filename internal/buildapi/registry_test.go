@@ -16,19 +16,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 )
 
 var imageStreamGVK = schema.GroupVersionKind{
 	Group:   "image.openshift.io",
 	Version: "v1",
 	Kind:    "ImageStream",
-}
-
-var imageStreamTagGVK = schema.GroupVersionKind{
-	Group:   "image.openshift.io",
-	Version: "v1",
-	Kind:    "ImageStreamTag",
 }
 
 func newRegistryTestScheme() *runtime.Scheme {
@@ -50,44 +43,7 @@ func newUnstructuredImageStream(namespace, name string) *unstructured.Unstructur
 	return is
 }
 
-func newUnstructuredImageStreamTag(namespace, stream, tag string) *unstructured.Unstructured {
-	ist := &unstructured.Unstructured{}
-	ist.SetGroupVersionKind(imageStreamTagGVK)
-	ist.SetName(stream + ":" + tag)
-	ist.SetNamespace(namespace)
-	return ist
-}
-
 var _ = Describe("Registry", func() {
-	Describe("ensureImageStream", func() {
-		It("creates ImageStream when it does not exist", func() {
-			scheme := newRegistryTestScheme()
-			k8sClient := newRegistryTestClient(scheme)
-
-			created, err := ensureImageStream(context.Background(), k8sClient, "ns", "my-stream")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(created).To(BeTrue())
-
-			// Verify it exists
-			is := &unstructured.Unstructured{}
-			is.SetGroupVersionKind(imageStreamGVK)
-			err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-stream", Namespace: "ns"}, is)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(is.GetLabels()).To(HaveKeyWithValue(labels.ManagedBy, labels.ValueBuildAPI))
-			Expect(is.GetLabels()).To(HaveKeyWithValue(labels.Transient, labels.ValueTrue))
-		})
-
-		It("returns false when ImageStream already exists", func() {
-			scheme := newRegistryTestScheme()
-			existing := newUnstructuredImageStream("ns", "existing-stream")
-			k8sClient := newRegistryTestClient(scheme, existing)
-
-			created, err := ensureImageStream(context.Background(), k8sClient, "ns", "existing-stream")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(created).To(BeFalse())
-		})
-	})
-
 	Describe("deleteImageStream", func() {
 		It("deletes an existing ImageStream", func() {
 			scheme := newRegistryTestScheme()
@@ -109,65 +65,6 @@ var _ = Describe("Registry", func() {
 			k8sClient := newRegistryTestClient(scheme)
 
 			err := deleteImageStream(context.Background(), k8sClient, "ns", "nonexistent")
-			Expect(err).To(HaveOccurred())
-		})
-	})
-
-	Describe("deleteImageStreamTag", func() {
-		It("deletes an existing ImageStreamTag", func() {
-			scheme := newRegistryTestScheme()
-			existing := newUnstructuredImageStreamTag("ns", "my-stream", "v1")
-			k8sClient := newRegistryTestClient(scheme, existing)
-
-			err := deleteImageStreamTag(context.Background(), k8sClient, "ns", "my-stream", "v1")
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify deleted
-			ist := &unstructured.Unstructured{}
-			ist.SetGroupVersionKind(imageStreamTagGVK)
-			err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-stream:v1", Namespace: "ns"}, ist)
-			Expect(err).To(HaveOccurred())
-		})
-
-		It("returns error when ImageStreamTag does not exist", func() {
-			scheme := newRegistryTestScheme()
-			k8sClient := newRegistryTestClient(scheme)
-
-			err := deleteImageStreamTag(context.Background(), k8sClient, "ns", "my-stream", "v1")
-			Expect(err).To(HaveOccurred())
-		})
-	})
-
-	Describe("imageStreamHasTags", func() {
-		It("returns true when ImageStream has tags", func() {
-			scheme := newRegistryTestScheme()
-			is := newUnstructuredImageStream("ns", "tagged-stream")
-			// Set status.tags via unstructured
-			Expect(unstructured.SetNestedSlice(is.Object, []any{
-				map[string]any{"tag": "v1"},
-			}, "status", "tags")).To(Succeed())
-			k8sClient := newRegistryTestClient(scheme, is)
-
-			hasTags, err := imageStreamHasTags(context.Background(), k8sClient, "ns", "tagged-stream")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(hasTags).To(BeTrue())
-		})
-
-		It("returns false when ImageStream has no tags", func() {
-			scheme := newRegistryTestScheme()
-			is := newUnstructuredImageStream("ns", "empty-stream")
-			k8sClient := newRegistryTestClient(scheme, is)
-
-			hasTags, err := imageStreamHasTags(context.Background(), k8sClient, "ns", "empty-stream")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(hasTags).To(BeFalse())
-		})
-
-		It("returns error when ImageStream does not exist", func() {
-			scheme := newRegistryTestScheme()
-			k8sClient := newRegistryTestClient(scheme)
-
-			_, err := imageStreamHasTags(context.Background(), k8sClient, "ns", "missing")
 			Expect(err).To(HaveOccurred())
 		})
 	})

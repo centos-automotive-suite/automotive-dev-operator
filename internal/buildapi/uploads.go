@@ -148,6 +148,10 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	if err := getResourceOrFail(c.Request.Context(), c, k8sClient, name, namespace, build, "build"); err != nil {
 		return
 	}
+	if build.Annotations[labels.RequestedBy] != a.resolveRequester(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you can only upload to your own builds"})
+		return
+	}
 	uploadPod, err := findRunningUploadPod(c.Request.Context(), k8sClient, namespace, name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

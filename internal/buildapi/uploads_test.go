@@ -254,6 +254,7 @@ func TestUploadFiles_BuildNotFound(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds/nonexistent/uploads", nil)
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "nonexistent")
 
 	if w.Code != http.StatusNotFound {
@@ -269,6 +270,7 @@ func TestUploadFiles_NoPodReady(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds/test-build/uploads", nil)
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusServiceUnavailable {
@@ -289,6 +291,7 @@ func TestUploadFiles_ContentTooLarge(t *testing.T) {
 	c.Request.ContentLength = 100
 	c.Request.Header.Set("Content-Type", "multipart/form-data; boundary=test")
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusRequestEntityTooLarge {
@@ -307,6 +310,7 @@ func TestUploadFiles_SingleFile(t *testing.T) {
 		{"app.conf", "key=value"},
 	})
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusOK {
@@ -341,6 +345,7 @@ func TestUploadFiles_PathFieldSetsDestination(t *testing.T) {
 		{"upload.dat", "data"},
 	})
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusOK {
@@ -364,6 +369,7 @@ func TestUploadFiles_UnsafeFilenameRejected(t *testing.T) {
 		{"payload", "evil"},
 	})
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusBadRequest {
@@ -392,6 +398,7 @@ func TestUploadFiles_StreamToPodFails(t *testing.T) {
 		{"file.txt", "content"},
 	})
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusBadRequest {
@@ -431,6 +438,7 @@ func TestUploadFiles_EmptyMultipartRejected(t *testing.T) {
 	c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds/test-build/uploads", &body)
 	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusBadRequest {
@@ -456,6 +464,7 @@ func TestUploadFiles_PathOnlyNoFileRejected(t *testing.T) {
 		{"path", "configs/app.conf"},
 	})
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusBadRequest {
@@ -477,6 +486,7 @@ func TestUploadFiles_PathFieldTooLargeRejected(t *testing.T) {
 		{"file.txt", "content"},
 	})
 
+	c.Set("requester", "test-user")
 	fix.server.uploadFiles(c, "test-build")
 
 	if w.Code != http.StatusBadRequest {
@@ -541,6 +551,7 @@ func TestUploadFiles_StreamingTotalSizeLimit(t *testing.T) {
 			// Bypass the Content-Length guard so the streamed file bytes enforce the limit.
 			c.Request.ContentLength = -1
 
+			c.Set("requester", "test-user")
 			fix.server.uploadFiles(c, "test-build")
 
 			if w.Code != tt.wantStatus {

@@ -35,6 +35,8 @@ paths:
           description: Build accepted
         "400":
           description: Invalid input
+        "403":
+          description: A requested Secret or ImageStream belongs to another user
         "413":
           description: Operation JSON body exceeds 4 MiB
       summary: Create a build
@@ -154,6 +156,8 @@ paths:
                     type: string
                 type: object
           description: Upload complete
+        "403":
+          description: Build belongs to another user
         "503":
           content:
             text/plain:

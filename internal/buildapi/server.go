@@ -18,6 +18,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/catalog"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/bundleverify"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/manifestschema"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
@@ -483,31 +484,11 @@ func (a *APIServer) deleteBuild(c *gin.Context, name string) {
 		return
 	}
 
-	// Clean up ImageStream tags created by this build before deleting
-	// Only delete the specific tags this build created; if the stream becomes
-	// empty afterwards, delete the whole ImageStream.
+	// Remove the tags this build pushed, and the stream once it is empty.
 	if build.Spec.GetUseServiceAccountAuth() {
-		streamName, tags := resolveImageStreamRefs(build)
-		if streamName != "" {
-			for _, tag := range tags {
-				if delErr := deleteImageStreamTag(ctx, k8sClient, namespace, streamName, tag); delErr != nil {
-					if !k8serrors.IsNotFound(delErr) {
-						a.log.Error(delErr, "failed to delete ImageStreamTag", "imageStreamTag", streamName+":"+tag)
-					}
-				}
-			}
-			// If no tags remain, clean up the empty ImageStream
-			hasTags, err := imageStreamHasTags(ctx, k8sClient, namespace, streamName)
-			if err != nil {
-				if !k8serrors.IsNotFound(err) {
-					a.log.Error(err, "failed to check ImageStream tags", "imageStream", streamName)
-				}
-			} else if !hasTags {
-				if delErr := deleteImageStream(ctx, k8sClient, namespace, streamName); delErr != nil {
-					if !k8serrors.IsNotFound(delErr) {
-						a.log.Error(delErr, "failed to delete empty ImageStream", "imageStream", streamName)
-					}
-				}
+		if streamName, tags := resolveImageStreamRefs(build); streamName != "" {
+			if err := imagestream.RemoveTags(ctx, k8sClient, namespace, streamName, owner, tags); err != nil {
+				a.log.Error(err, "failed to clean up ImageStream", "imageStream", streamName)
 			}
 		}
 	}
@@ -625,7 +606,7 @@ func (a *APIServer) resolveRegistryForBuild(
 	namespace string, req *buildcontract.BuildRequest,
 ) (string, string, error) {
 	if req.UseInternalRegistry {
-		_, pushSecretName, err := a.setupInternalRegistryBuild(ctx, c, k8sClient, namespace, req)
+		pushSecretName, err := a.setupInternalRegistryBuild(ctx, c, k8sClient, namespace, req)
 		if err != nil {
 			return "", "", err
 		}
@@ -641,6 +622,7 @@ func (a *APIServer) resolveRegistryForBuild(
 			return envSecretRef, pushSecretName, nil
 		}
 
+		// The push Secret also backs the pipeline's registry-auth workspace.
 		return pushSecretName, pushSecretName, nil
 	}
 
@@ -659,26 +641,26 @@ func (a *APIServer) resolveRegistryForBuild(
 }
 
 // setupInternalRegistryBuild validates and configures internal registry push,
-// returning ("", pushSecretName, nil) on success.
+// returning the name of the push Secret it creates.
 func (a *APIServer) setupInternalRegistryBuild(
 	ctx context.Context, c *gin.Context, k8sClient client.Client,
 	namespace string, req *buildcontract.BuildRequest,
-) (string, string, error) {
+) (string, error) {
 	// Validate: internal registry handles the disk push, so exportOci must not be set.
 	// containerPush (and registryCredentials) MAY be set for hybrid builds where
 	// the bootc container is pushed to an external registry.
 	if req.ExportOCI != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "useInternalRegistry cannot be used with exportOci"})
-		return "", "", fmt.Errorf("validation error")
+		return "", fmt.Errorf("validation error")
 	}
 	if req.Reproducible {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "reproducible builds cannot use internal registry (OCI referrers not supported)"})
-		return "", "", fmt.Errorf("validation error")
+		return "", fmt.Errorf("validation error")
 	}
 	// Resolve external route (validates registry is reachable)
 	if _, err := getExternalRegistryRoute(ctx, k8sClient, namespace); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return "", "", err
+		return "", err
 	}
 
 	// Generate image name and tag
@@ -725,9 +707,9 @@ func (a *APIServer) setupInternalRegistryBuild(
 	// distinguished by tag (:bootc, :disk).
 	needsImageStream := !externalContainerPush || req.BuildDiskImage || !req.Mode.IsBootc()
 	if needsImageStream {
-		if _, err := ensureImageStream(ctx, k8sClient, namespace, imageName); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error creating ImageStream: %v", err)})
-			return "", "", err
+		if _, err := imagestream.Ensure(ctx, k8sClient, namespace, imageName, a.resolveRequester(c)); err != nil {
+			c.JSON(imageStreamErrorStatus(err), gin.H{"error": err.Error()})
+			return "", err
 		}
 	}
 
@@ -735,17 +717,15 @@ func (a *APIServer) setupInternalRegistryBuild(
 	restCfg, err := a.deps.getRESTConfigFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error getting REST config: %v", err)})
-		return "", "", err
+		return "", err
 	}
 	tokenLifetime := a.resolveTokenLifetime(ctx, k8sClient, namespace)
 	secretName, err := a.deps.createInternalRegistrySecret(ctx, restCfg, namespace, req.Name, tokenLifetime)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return "", "", err
+		return "", err
 	}
-	// Return as both envSecretRef (for pipeline registry-auth workspace + WhenExpression)
-	// and pushSecretName (for push credential binding)
-	return secretName, secretName, nil
+	return secretName, nil
 }
 
 // errWorkspaceLookup is returned by resolveExtraRepos when a workspace lookup

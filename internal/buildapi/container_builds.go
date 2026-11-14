@@ -13,6 +13,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -212,6 +213,13 @@ func (a *APIServer) createContainerBuild(c *gin.Context) {
 
 	// Handle internal registry: create SA token secret, ensure ImageStream, generate output ref
 	if req.UseInternalRegistry {
+		created, err := imagestream.Ensure(ctx, k8sClient, namespace, req.Name, requestedBy)
+		if err != nil {
+			c.JSON(imageStreamErrorStatus(err), gin.H{"error": err.Error()})
+			return
+		}
+		createdImageStream = created
+
 		restCfg, err := a.deps.getRESTConfigFromRequest(c)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to get REST config: %v", err)})
@@ -225,13 +233,6 @@ func (a *APIServer) createContainerBuild(c *gin.Context) {
 			return
 		}
 		pushSecretName = secretName
-
-		created, err := ensureImageStream(ctx, k8sClient, namespace, req.Name)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to ensure ImageStream: %v", err)})
-			return
-		}
-		createdImageStream = created
 
 		req.Output = generateRegistryImageRef(defaultInternalRegistryURL, namespace, req.Name, "latest")
 	}
@@ -494,6 +495,10 @@ func (a *APIServer) uploadContainerBuildContext(c *gin.Context, name string) {
 	ctx := c.Request.Context()
 	cb := &automotivev1alpha1.ContainerBuild{}
 	if err := getResourceOrFail(ctx, c, k8sClient, name, namespace, cb, "container build"); err != nil {
+		return
+	}
+	if cb.Annotations[labels.RequestedBy] != a.resolveRequester(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you can only upload to your own container builds"})
 		return
 	}
 

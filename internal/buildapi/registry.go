@@ -3,7 +3,9 @@ package buildapi
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 )
@@ -164,48 +167,13 @@ func internalImageStreamName(ref, namespace string) string {
 	return name
 }
 
-func ensureImageStream(ctx context.Context, k8sClient client.Client, namespace, name string) (bool, error) {
-	is := &unstructured.Unstructured{}
-	is.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "image.openshift.io",
-		Version: "v1",
-		Kind:    "ImageStream",
-	})
-
-	// Check if it already exists
-	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, is)
-	if err == nil {
-		return false, nil // already exists
+// imageStreamErrorStatus maps an imagestream.Ensure or CheckOwner error to the
+// response status: naming another user's stream is the caller's fault.
+func imageStreamErrorStatus(err error) int {
+	if errors.Is(err, imagestream.ErrNotOwned) {
+		return http.StatusForbidden
 	}
-	if apimeta.IsNoMatchError(err) {
-		return false, nil // not an OpenShift cluster; ImageStreams are not needed
-	}
-	if !k8serrors.IsNotFound(err) {
-		return false, fmt.Errorf("error checking ImageStream %s: %w", name, err)
-	}
-
-	// Create it
-	newIS := &unstructured.Unstructured{}
-	newIS.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "image.openshift.io",
-		Version: "v1",
-		Kind:    "ImageStream",
-	})
-	newIS.SetName(name)
-	newIS.SetNamespace(namespace)
-	newIS.SetLabels(map[string]string{
-		labels.ManagedBy: labels.ValueBuildAPI,
-		labels.PartOf:    labels.ValueAutomotiveDev,
-		labels.Transient: labels.ValueTrue,
-	})
-
-	if err := k8sClient.Create(ctx, newIS); err != nil {
-		if k8serrors.IsAlreadyExists(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("error creating ImageStream %s: %w", name, err)
-	}
-	return true, nil
+	return http.StatusInternalServerError
 }
 
 func deleteImageStream(ctx context.Context, k8sClient client.Client, namespace, name string) error {
@@ -218,33 +186,6 @@ func deleteImageStream(ctx context.Context, k8sClient client.Client, namespace, 
 	is.SetName(name)
 	is.SetNamespace(namespace)
 	return k8sClient.Delete(ctx, is)
-}
-
-func deleteImageStreamTag(ctx context.Context, k8sClient client.Client, namespace, stream, tag string) error {
-	ist := &unstructured.Unstructured{}
-	ist.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "image.openshift.io",
-		Version: "v1",
-		Kind:    "ImageStreamTag",
-	})
-	ist.SetName(stream + ":" + tag)
-	ist.SetNamespace(namespace)
-	return k8sClient.Delete(ctx, ist)
-}
-
-// imageStreamHasTags checks whether an ImageStream still has any tags.
-func imageStreamHasTags(ctx context.Context, k8sClient client.Client, namespace, name string) (bool, error) {
-	is := &unstructured.Unstructured{}
-	is.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "image.openshift.io",
-		Version: "v1",
-		Kind:    "ImageStream",
-	})
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, is); err != nil {
-		return false, err
-	}
-	tags, _, _ := unstructured.NestedSlice(is.Object, "status", "tags")
-	return len(tags) > 0, nil
 }
 
 // Recorded artifacts survive flash failures and expiry, but may no longer be pullable.
