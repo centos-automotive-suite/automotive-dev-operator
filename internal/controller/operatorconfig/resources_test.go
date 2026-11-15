@@ -48,9 +48,9 @@ var _ = Describe("OperatorConfig Resources", func() {
 	})
 
 	Describe("buildBuildAPIDeployment", func() {
-		It("should use ado-operator service account", func() {
+		It("should use its own service account", func() {
 			deployment := r.buildBuildAPIDeployment("test-namespace", defaultTestConfig())
-			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-operator"))
+			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-build-api"))
 		})
 	})
 

@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	apiserverv1beta1 "k8s.io/apiserver/pkg/apis/apiserver/v1beta1"
 )
 
@@ -342,6 +343,26 @@ type AuthenticationConfig struct {
 	// OIDC client ID for caib CLI.
 	// +optional
 	ClientID string `json:"clientId,omitempty"`
+}
+
+// CARefs returns the Secrets and ConfigMaps that hold the JWT issuers' CA
+// certificates. A reference without a namespace is to defaultNamespace.
+func (a *AuthenticationConfig) CARefs(defaultNamespace string) (secrets, configMaps []types.NamespacedName) {
+	ref := func(namespace, name string) types.NamespacedName {
+		if namespace == "" {
+			namespace = defaultNamespace
+		}
+		return types.NamespacedName{Namespace: namespace, Name: name}
+	}
+	for _, jwt := range a.JWT {
+		if secret := jwt.Issuer.CertificateAuthoritySecret; secret != nil {
+			secrets = append(secrets, ref(secret.Namespace, secret.Name))
+		}
+		if configMap := jwt.Issuer.CertificateAuthorityConfigMap; configMap != nil {
+			configMaps = append(configMaps, ref(configMap.Namespace, configMap.Name))
+		}
+	}
+	return secrets, configMaps
 }
 
 // InternalAuthConfig defines the built-in authentication configuration.

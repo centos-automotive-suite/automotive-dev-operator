@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 )
@@ -175,12 +176,132 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, con
 					},
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "ado-operator",
+					ServiceAccountName: buildAPIName,
 					Containers:         r.buildBuildAPIContainers(namespace, config),
 					// No volumes needed - Build API reads directly from OperatorConfig CRD
 				},
 			},
 		},
+	}
+}
+
+func buildAPILabels() map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":      "automotive-dev-operator",
+		"app.kubernetes.io/component": "build-api",
+		"app.kubernetes.io/part-of":   "automotive-dev-operator",
+	}
+}
+
+// buildBuildAPIServiceAccount is the account the build API runs as. The build
+// API serves any authenticated user, so it holds what its handlers use, not
+// the operator's rights, which include creating SCCs and ClusterRoles.
+func (r *OperatorConfigReconciler) buildBuildAPIServiceAccount(namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: buildAPIName, Namespace: namespace, Labels: buildAPILabels()},
+	}
+}
+
+// buildBuildAPIRole grants what the build API's handlers do in its
+// namespace, which holds every build, workspace and catalog image.
+func (r *OperatorConfigReconciler) buildBuildAPIRole(namespace string, config *automotivev1alpha1.OperatorConfig) *rbacv1.Role {
+	group := automotivev1alpha1.GroupVersion.Group
+	rules := []rbacv1.PolicyRule{
+		// Build, flash and reseal Secrets, the Secrets requests name, and the
+		// agents' tokens.
+		{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get", "create", "update", "patch", "delete"}},
+		// Target defaults, the agents' CA bundle and the catalog's signing key.
+		{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}},
+		// Workspace builds' caches, and the size of a workspace's volume.
+		{APIGroups: []string{""}, Resources: []string{"persistentvolumeclaims"}, Verbs: []string{"get", "list", "create"}},
+		// Build logs and progress.
+		{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list"}},
+		{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}},
+		// Container build context uploads.
+		{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}},
+		// Internal registry tokens, for the registry accounts alone.
+		{
+			APIGroups:     []string{""},
+			Resources:     []string{"serviceaccounts/token"},
+			ResourceNames: []string{automotivev1alpha1.RegistryServiceAccountName, automotivev1alpha1.RegistryPullServiceAccountName},
+			Verbs:         []string{"create"},
+		},
+		{APIGroups: []string{group}, Resources: []string{"imagebuilds"}, Verbs: []string{"get", "list", "create", "update", "patch", "delete"}},
+		{APIGroups: []string{group}, Resources: []string{"imagereseals"}, Verbs: []string{"get", "list", "create", "delete"}},
+		{APIGroups: []string{group}, Resources: []string{"containerbuilds"}, Verbs: []string{"get", "list", "create"}},
+		{APIGroups: []string{group}, Resources: []string{"workspaces"}, Verbs: []string{"get", "list", "create", "patch", "delete"}},
+		{APIGroups: []string{group}, Resources: []string{"workspaces/status"}, Verbs: []string{"patch"}},
+		{APIGroups: []string{group}, Resources: []string{"catalogimages"}, Verbs: []string{"get", "list", "create", "update", "delete"}},
+		{APIGroups: []string{group}, Resources: []string{"catalogimages/status"}, Verbs: []string{"update"}},
+		// The build API reloads its authentication config when it changes.
+		{APIGroups: []string{group}, Resources: []string{"operatorconfigs"}, Verbs: []string{"get", "watch"}},
+		{APIGroups: []string{group}, Resources: []string{"webhookdeliveries"}, Verbs: []string{"get"}},
+		// Flash TaskRuns, and the PipelineRuns cancelling a build stops.
+		{APIGroups: []string{"tekton.dev"}, Resources: []string{"taskruns"}, Verbs: []string{"get", "list", "create", "delete"}},
+		{APIGroups: []string{"tekton.dev"}, Resources: []string{"pipelineruns"}, Verbs: []string{"get", "update"}},
+		// The internal registry's streams for builds' images.
+		{APIGroups: []string{"image.openshift.io"}, Resources: []string{"imagestreams"}, Verbs: []string{"get", "create", "delete"}},
+		{APIGroups: []string{"image.openshift.io"}, Resources: []string{"imagestreamtags"}, Verbs: []string{"delete"}},
+	}
+	// It also watches the CA Secrets and ConfigMaps of its OIDC issuers, by
+	// name: a watch of every Secret would read them all. A rule without names
+	// would grant every one, so a kind with none named gets no rule. A Role
+	// can't grant one in another namespace.
+	var secrets, configMaps []string
+	if config.Spec.BuildAPI != nil && config.Spec.BuildAPI.Authentication != nil {
+		secretRefs, configMapRefs := config.Spec.BuildAPI.Authentication.CARefs(namespace)
+		secrets, configMaps = namesIn(namespace, secretRefs), namesIn(namespace, configMapRefs)
+	}
+	if len(secrets) > 0 {
+		rules = append(rules, rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"secrets"}, ResourceNames: secrets, Verbs: []string{"watch"}})
+	}
+	if len(configMaps) > 0 {
+		rules = append(rules, rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"configmaps"}, ResourceNames: configMaps, Verbs: []string{"watch"}})
+	}
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: buildAPIName, Namespace: namespace, Labels: buildAPILabels()},
+		Rules:      rules,
+	}
+}
+
+// namesIn returns the names of refs in namespace.
+func namesIn(namespace string, refs []types.NamespacedName) []string {
+	var names []string
+	for _, ref := range refs {
+		if ref.Namespace == namespace {
+			names = append(names, ref.Name)
+		}
+	}
+	return names
+}
+
+func (r *OperatorConfigReconciler) buildBuildAPIRoleBinding(namespace string) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: buildAPIName, Namespace: namespace, Labels: buildAPILabels()},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: buildAPIName},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: buildAPIName, Namespace: namespace}},
+	}
+}
+
+// buildBuildAPIClusterRole grants what the build API does outside its
+// namespace.
+func (r *OperatorConfigReconciler) buildBuildAPIClusterRole(namespace string) *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: buildAPIClusterName(namespace), Labels: buildAPILabels()},
+		Rules: []rbacv1.PolicyRule{
+			// Authenticating Kubernetes tokens.
+			{APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"tokenreviews"}, Verbs: []string{"create"}},
+			// The internal registry's external route, in openshift-image-registry.
+			{APIGroups: []string{"route.openshift.io"}, Resources: []string{"routes"}, ResourceNames: []string{"default-route"}, Verbs: []string{"get"}},
+		},
+	}
+}
+
+func (r *OperatorConfigReconciler) buildBuildAPIClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: buildAPIClusterName(namespace), Labels: buildAPILabels()},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: buildAPIClusterName(namespace)},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: buildAPIName, Namespace: namespace}},
 	}
 }
 
@@ -870,6 +991,12 @@ func (r *OperatorConfigReconciler) buildRegistryServiceAccount(name, namespace s
 		// No pod runs as this SA; its tokens are only minted on request.
 		AutomountServiceAccountToken: new(false),
 	}
+}
+
+// buildAPIClusterName names the build API's cluster-scoped RBAC objects, one
+// set for each namespace the operator runs in.
+func buildAPIClusterName(namespace string) string {
+	return buildAPIName + "-" + namespace
 }
 
 // buildPodPatchPolicyName is per namespace so that removing one operator

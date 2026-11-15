@@ -339,6 +339,12 @@ func (r *OperatorConfigReconciler) deployBuildAPI(ctx context.Context, owner *au
 	// No need to generate ConfigMap anymore
 	r.Log.Info("Build API will read authentication config directly from OperatorConfig")
 
+	for _, obj := range r.buildAPIIdentity(owner) {
+		if err := r.createOrUpdate(ctx, obj, owner); err != nil {
+			return fmt.Errorf("failed to create/update build-api %T %s: %w", obj, obj.GetName(), err)
+		}
+	}
+
 	// Create/update build-api deployment
 	r.Log.Info("Creating/updating build-api deployment")
 	buildAPIDeployment := r.buildBuildAPIDeployment(owner.Namespace, owner)
@@ -421,7 +427,24 @@ func (r *OperatorConfigReconciler) cleanupBuildAPI(ctx context.Context, config *
 		return fmt.Errorf("failed to delete build-api internal JWT secret: %w", err)
 	}
 
+	// The cluster-scoped objects outlive the namespace.
+	for _, obj := range r.buildAPIIdentity(config) {
+		if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete build-api %T %s: %w", obj, obj.GetName(), err)
+		}
+	}
 	return nil
+}
+
+// buildAPIIdentity is the account the build API runs as and what it may do.
+func (r *OperatorConfigReconciler) buildAPIIdentity(config *automotivev1alpha1.OperatorConfig) []client.Object {
+	return []client.Object{
+		r.buildBuildAPIServiceAccount(config.Namespace),
+		r.buildBuildAPIRole(config.Namespace, config),
+		r.buildBuildAPIRoleBinding(config.Namespace),
+		r.buildBuildAPIClusterRole(config.Namespace),
+		r.buildBuildAPIClusterRoleBinding(config.Namespace),
+	}
 }
 
 const internalJWTExpiryThreshold = 30 * 24 * time.Hour // Regenerate when within 30 days of expiry

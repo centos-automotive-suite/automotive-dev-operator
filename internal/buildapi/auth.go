@@ -68,23 +68,14 @@ func caRefsFromConfig(operatorConfig *automotivev1alpha1.OperatorConfig, default
 		return nil
 	}
 
+	// The operator grants the build API a watch on exactly these.
+	secrets, configMaps := operatorConfig.Spec.BuildAPI.Authentication.CARefs(defaultNamespace)
 	var refs []caRef
-	for _, cfg := range operatorConfig.Spec.BuildAPI.Authentication.JWT {
-		issuer := cfg.Issuer
-		if issuer.CertificateAuthoritySecret != nil {
-			ns := issuer.CertificateAuthoritySecret.Namespace
-			if ns == "" {
-				ns = defaultNamespace
-			}
-			refs = append(refs, caRef{namespace: ns, name: issuer.CertificateAuthoritySecret.Name})
-		}
-		if issuer.CertificateAuthorityConfigMap != nil {
-			ns := issuer.CertificateAuthorityConfigMap.Namespace
-			if ns == "" {
-				ns = defaultNamespace
-			}
-			refs = append(refs, caRef{namespace: ns, name: issuer.CertificateAuthorityConfigMap.Name, isConfigMap: true})
-		}
+	for _, ref := range secrets {
+		refs = append(refs, caRef{namespace: ref.Namespace, name: ref.Name})
+	}
+	for _, ref := range configMaps {
+		refs = append(refs, caRef{namespace: ref.Namespace, name: ref.Name, isConfigMap: true})
 	}
 	return refs
 }

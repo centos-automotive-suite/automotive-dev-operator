@@ -19,6 +19,7 @@ package operatorconfig
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
@@ -28,7 +29,9 @@ import (
 	imagev1 "github.com/openshift/api/image/v1"
 	securityv1 "github.com/openshift/api/security/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -198,6 +201,137 @@ var _ = Describe("build identity reconciliation", func() {
 
 		Expect(r.cleanupBuildIdentity(ctx, config)).To(Succeed())
 		for _, obj := range owned() {
+			Expect(errors.IsNotFound(r.Get(ctx, client.ObjectKeyFromObject(obj), obj))).To(BeTrue(), "%T %s", obj, obj.GetName())
+		}
+	})
+})
+
+// The build API serves any authenticated user, so it runs as an account of
+// its own with what its handlers use, not as the operator, which can create
+// SCCs and ClusterRoles.
+var _ = Describe("build API identity reconciliation", func() {
+	var (
+		r      *OperatorConfigReconciler
+		config *automotivev1alpha1.OperatorConfig
+	)
+
+	BeforeEach(func() {
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(appsv1.AddToScheme(scheme)).To(Succeed())
+		Expect(rbacv1.AddToScheme(scheme)).To(Succeed())
+		Expect(networkingv1.AddToScheme(scheme)).To(Succeed())
+		r = &OperatorConfigReconciler{
+			Client:      fake.NewClientBuilder().WithScheme(scheme).Build(),
+			Scheme:      scheme,
+			Log:         logr.Discard(),
+			IsOpenShift: new(true),
+		}
+		config = &automotivev1alpha1.OperatorConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "test-ns"},
+		}
+	})
+
+	buildAPIRole := func(ctx context.Context) *rbacv1.Role {
+		role := &rbacv1.Role{}
+		Expect(r.Get(ctx, client.ObjectKey{Name: buildAPIName, Namespace: "test-ns"}, role)).To(Succeed())
+		return role
+	}
+	buildAPIClusterRole := func(ctx context.Context) *rbacv1.ClusterRole {
+		role := &rbacv1.ClusterRole{}
+		Expect(r.Get(ctx, client.ObjectKey{Name: buildAPIClusterName("test-ns")}, role)).To(Succeed())
+		return role
+	}
+	subject := rbacv1.Subject{Kind: "ServiceAccount", Name: buildAPIName, Namespace: "test-ns"}
+
+	It("runs the build API as its own ServiceAccount, bound to its roles", func() {
+		ctx := context.Background()
+		Expect(r.deployBuildAPI(ctx, config)).To(Succeed())
+
+		deployment := &appsv1.Deployment{}
+		Expect(r.Get(ctx, client.ObjectKey{Name: buildAPIName, Namespace: "test-ns"}, deployment)).To(Succeed())
+		Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal(buildAPIName))
+		Expect(r.Get(ctx, client.ObjectKey{Name: buildAPIName, Namespace: "test-ns"}, &corev1.ServiceAccount{})).To(Succeed())
+
+		binding := &rbacv1.RoleBinding{}
+		Expect(r.Get(ctx, client.ObjectKey{Name: buildAPIName, Namespace: "test-ns"}, binding)).To(Succeed())
+		Expect(binding.RoleRef).To(Equal(rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: buildAPIName}))
+		Expect(binding.Subjects).To(ConsistOf(subject))
+
+		clusterBinding := &rbacv1.ClusterRoleBinding{}
+		Expect(r.Get(ctx, client.ObjectKey{Name: buildAPIClusterName("test-ns")}, clusterBinding)).To(Succeed())
+		Expect(clusterBinding.RoleRef).To(Equal(rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: buildAPIClusterName("test-ns")}))
+		Expect(clusterBinding.Subjects).To(ConsistOf(subject))
+	})
+
+	It("grants nothing that would let the build API widen its rights", func() {
+		ctx := context.Background()
+		Expect(r.deployBuildAPI(ctx, config)).To(Succeed())
+
+		for _, rule := range buildAPIRole(ctx).Rules {
+			Expect(rule.APIGroups).NotTo(ContainElements("*", "rbac.authorization.k8s.io", "security.openshift.io", "admissionregistration.k8s.io", "apps"), "%+v", rule)
+			Expect(rule.Resources).NotTo(ContainElements("*", "serviceaccounts", "pods/attach", "pods/ephemeralcontainers"), "%+v", rule)
+			Expect(rule.Verbs).NotTo(ContainElements("*", "escalate", "bind", "impersonate"), "%+v", rule)
+			if slices.Contains(rule.Resources, "serviceaccounts/token") {
+				Expect(rule.ResourceNames).To(ConsistOf(automotivev1alpha1.RegistryServiceAccountName, automotivev1alpha1.RegistryPullServiceAccountName),
+					"the build API mints tokens only for the registry accounts")
+			}
+		}
+		Expect(buildAPIClusterRole(ctx).Rules).To(ConsistOf(
+			rbacv1.PolicyRule{APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"tokenreviews"}, Verbs: []string{"create"}},
+			rbacv1.PolicyRule{APIGroups: []string{"route.openshift.io"}, Resources: []string{"routes"}, ResourceNames: []string{"default-route"}, Verbs: []string{"get"}},
+		))
+	})
+
+	// A watch of every Secret would read them all, where the build API
+	// otherwise reads a Secret only by name.
+	It("watches only the CA Secrets and ConfigMaps the OIDC issuers name in its namespace", func() {
+		ctx := context.Background()
+		watches := func(resource string) [][]string {
+			var names [][]string
+			for _, rule := range buildAPIRole(ctx).Rules {
+				if slices.Contains(rule.Resources, resource) && slices.Contains(rule.Verbs, "watch") {
+					names = append(names, rule.ResourceNames)
+				}
+			}
+			return names
+		}
+		Expect(r.deployBuildAPI(ctx, config)).To(Succeed())
+		Expect(watches("secrets")).To(BeEmpty(), "an empty resourceNames list would grant every Secret")
+		Expect(watches("configmaps")).To(BeEmpty())
+
+		config.Spec.BuildAPI = &automotivev1alpha1.BuildAPIConfig{Authentication: &automotivev1alpha1.AuthenticationConfig{
+			JWT: []automotivev1alpha1.JWTAuthenticatorConfig{
+				{Issuer: automotivev1alpha1.JWTIssuerConfig{CertificateAuthoritySecret: &automotivev1alpha1.SecretKeySelector{Name: "oidc-ca", Key: "ca.crt"}}},
+				{Issuer: automotivev1alpha1.JWTIssuerConfig{CertificateAuthorityConfigMap: &automotivev1alpha1.ConfigMapKeySelector{Name: "oidc-bundle", Namespace: "test-ns", Key: "ca.crt"}}},
+				{Issuer: automotivev1alpha1.JWTIssuerConfig{CertificateAuthoritySecret: &automotivev1alpha1.SecretKeySelector{Name: "elsewhere", Namespace: "other-ns", Key: "ca.crt"}}},
+			},
+		}}
+		Expect(r.deployBuildAPI(ctx, config)).To(Succeed())
+		Expect(watches("secrets")).To(ConsistOf(ConsistOf("oidc-ca")))
+		Expect(watches("configmaps")).To(ConsistOf(ConsistOf("oidc-bundle")))
+	})
+
+	It("gives each namespace's build API its own cluster-scoped objects", func() {
+		Expect(buildAPIClusterName("other-ns")).NotTo(Equal(buildAPIClusterName("test-ns")))
+	})
+
+	It("deletes everything it created on cleanup", func() {
+		ctx := context.Background()
+		Expect(r.deployBuildAPI(ctx, config)).To(Succeed())
+		owned := []client.Object{
+			&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: buildAPIName, Namespace: "test-ns"}},
+			&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: buildAPIName, Namespace: "test-ns"}},
+			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: buildAPIName, Namespace: "test-ns"}},
+			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: buildAPIClusterName("test-ns")}},
+			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: buildAPIClusterName("test-ns")}},
+		}
+		for _, obj := range owned {
+			Expect(r.Get(ctx, client.ObjectKeyFromObject(obj), obj)).To(Succeed(), "%T %s", obj, obj.GetName())
+		}
+
+		Expect(r.cleanupBuildAPI(ctx, config)).To(Succeed())
+		for _, obj := range owned {
 			Expect(errors.IsNotFound(r.Get(ctx, client.ObjectKeyFromObject(obj), obj))).To(BeTrue(), "%T %s", obj, obj.GetName())
 		}
 	})
