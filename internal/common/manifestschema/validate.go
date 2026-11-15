@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dlclark/regexp2/v2"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -61,9 +62,11 @@ func ValidateFromImage(imageRef string, manifest []byte) (ValidationResult, erro
 		saveCachedDigest(imageRef, digest)
 	}
 
+	// The caches are keyed by digest, so pull by digest: a registry can claim
+	// any digest for a tag, but must serve content that matches a digest pull.
 	schemaYAML := loadCachedSchema(digest)
 	if schemaYAML == nil {
-		schemaYAML, err = ExtractSchemaFromImage(imageRef)
+		schemaYAML, err = ExtractSchemaFromImage(ref.Context().Digest(digest))
 		if err != nil {
 			return ValidationResult{}, err
 		}
@@ -151,22 +154,30 @@ type ecmaRegexp struct {
 	src string
 }
 
+// MatchString reports a failed match, such as a timeout, as no match: the
+// interface has no way to return the error, and an unchecked value must not pass.
 func (r *ecmaRegexp) MatchString(s string) bool {
 	m, err := r.re.MatchString(s)
 	if err != nil {
-		slog.Warn("regexp2 match failed, skipping pattern check", "pattern", r.src, "error", err)
-		return true
+		slog.Warn("regexp2 match failed, treating it as no match", "pattern", r.src, "error", err)
+		return false
 	}
 	return m
 }
 
 func (r *ecmaRegexp) String() string { return r.src }
 
+// regexpMatchTimeout bounds each schema pattern match. regexp2 backtracks, and
+// the schema comes from the AIB image named in the build request, so a hostile
+// pattern could otherwise spin forever. Real AIB patterns match in microseconds.
+const regexpMatchTimeout = 100 * time.Millisecond
+
 func ecmaRegexpEngine(s string) (jsonschema.Regexp, error) {
 	re, err := regexp2.Compile(s, regexp2.ECMAScript)
 	if err != nil {
 		return nil, err
 	}
+	re.MatchTimeout = regexpMatchTimeout
 	return &ecmaRegexp{re: re, src: s}, nil
 }
 

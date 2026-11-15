@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -202,5 +203,33 @@ func TestValidateWithRealSchema(t *testing.T) {
 				t.Error("expected invalid, got valid")
 			}
 		})
+	}
+}
+
+// A schema pattern with catastrophic backtracking must not hang validation:
+// the AIB image, and so the schema, comes from the build request.
+func TestValidateManifestBoundsPathologicalPattern(t *testing.T) {
+	schema, err := CompileSchema([]byte(`
+type: object
+properties:
+  name:
+    type: string
+    pattern: "^(a+)+$"
+`))
+	if err != nil {
+		t.Fatalf("compiling schema: %v", err)
+	}
+	manifest := []byte("name: " + strings.Repeat("a", 40) + "!\n")
+
+	results := make(chan ValidationResult, 1)
+	go func() { results <- ValidateManifest(schema, manifest) }()
+	select {
+	case res := <-results:
+		// A match that timed out was never checked, so it must not pass.
+		if res.Valid {
+			t.Fatal("manifest passed a pattern check that timed out")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pattern match did not time out")
 	}
 }
