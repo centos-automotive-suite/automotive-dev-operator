@@ -35,10 +35,11 @@ const (
 // hydrateFixture is a build whose upload pod runs the agent as the
 // controller starts it, over a directory standing for its shared PVC.
 type hydrateFixture struct {
-	kube     client.Client
-	build    *automotivev1alpha1.ImageBuild
-	shared   string
-	uploader uploadConnector
+	kube      client.Client
+	build     *automotivev1alpha1.ImageBuild
+	shared    string
+	uploadPod *httptest.Server
+	uploader  uploadConnector
 }
 
 func newHydrateFixture(t *testing.T, refs []workspacemanifest.WorkspaceHydrateRef) *hydrateFixture {
@@ -78,9 +79,10 @@ func newHydrateFixture(t *testing.T, refs []workspacemanifest.WorkspaceHydrateRe
 	server := httptest.NewServer(agent.Handler("secret", nil))
 	t.Cleanup(server.Close)
 	return &hydrateFixture{
-		kube:   fake.NewClientBuilder().WithScheme(scheme).WithObjects(build, ws, uploadPod).Build(),
-		build:  build,
-		shared: shared,
+		kube:      fake.NewClientBuilder().WithScheme(scheme).WithObjects(build, ws, uploadPod).Build(),
+		build:     build,
+		shared:    shared,
+		uploadPod: server,
 		uploader: func(_ context.Context, target *automotivev1alpha1.ImageBuild) (*workspaceagent.Client, error) {
 			if target.Name != testBuildName {
 				t.Errorf("connected to the upload pod of %s", target.Name)
@@ -94,9 +96,12 @@ func (f *hydrateFixture) hydrate(connect agentConnector) error {
 	return hydrateWorkspace(context.Background(), connect, f.uploader, f.kube, f.build)
 }
 
-// uploaded returns the files on the upload pod's shared PVC.
+// uploaded returns the files on the upload pod's shared PVC once the pod
+// has finished with every request: a hydrate that fails partway returns
+// before the pod has seen the upload cut and cleared what it staged.
 func (f *hydrateFixture) uploaded(t *testing.T) map[string]string {
 	t.Helper()
+	f.uploadPod.Close()
 	files := map[string]string{}
 	err := filepath.WalkDir(f.shared, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
