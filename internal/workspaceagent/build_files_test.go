@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func symlink(t *testing.T, target, name string) {
@@ -178,6 +181,37 @@ func TestBuildFilesOverHTTP(t *testing.T) {
 	}
 	if _, _, err := NewClient(server.URL, "wrong", nil).OpenFile(ctx, "src/sub/x"); err == nil {
 		t.Error("opened a file without the token")
+	}
+}
+
+// Opening a FIFO for reading blocks until something writes to it, and a
+// workspace process can put one where the agent found a file.
+func TestOpenFileDoesNotBlockOnAFIFO(t *testing.T) {
+	root := t.TempDir()
+	fifo := filepath.Join(root, "pipe")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		file, _, err := openFile(root, "pipe")
+		if err == nil {
+			_ = file.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("err = %v, want the FIFO refused", err)
+		}
+	case <-time.After(5 * time.Second):
+		// Release the blocked open so the goroutine can finish.
+		if f, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			_ = f.Close()
+		}
+		<-done
+		t.Fatal("opening the file blocked on a FIFO")
 	}
 }
 

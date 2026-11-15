@@ -346,8 +346,9 @@ func escapeClass(class string) string {
 }
 
 // openFile opens the regular file at name in root, following links, and
-// refuses one whose real path is outside root. It checks the type before
-// opening, so a FIFO doesn't block it.
+// refuses one whose real path is outside root. A FIFO there could block an
+// open, and a workspace process can put one where a file was, so it opens
+// without blocking and checks the type of what it opened.
 func openFile(root, name string) (*os.File, os.FileInfo, error) {
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -360,10 +361,7 @@ func openFile(root, name string) (*os.File, os.FileInfo, error) {
 	if !inRoot(root, real) {
 		return nil, nil, fs.ErrNotExist
 	}
-	if info, err := os.Stat(real); err != nil || !info.Mode().IsRegular() {
-		return nil, nil, fs.ErrNotExist
-	}
-	file, err := os.Open(real)
+	file, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, err
 	}
