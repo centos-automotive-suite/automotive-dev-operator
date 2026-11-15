@@ -558,13 +558,8 @@ func TestSyncUploadRejectsAFilePastItsLimit(t *testing.T) {
 // hole: the archive carries only its empty sparse map, and tar.Reader reads
 // it as a regular file of size zero bytes. tar.Writer can't write one.
 func sparseFile(name string, size int64) []byte {
-	var records string
-	for _, record := range [][2]string{
-		{"GNU.sparse.major", "1"}, {"GNU.sparse.minor", "0"},
-		{"GNU.sparse.name", name}, {"GNU.sparse.realsize", strconv.FormatInt(size, 10)},
-	} {
-		records += paxRecord(record[0], record[1])
-	}
+	records := paxRecord("GNU.sparse.major", "1") + paxRecord("GNU.sparse.minor", "0") +
+		paxRecord("GNU.sparse.name", name) + paxRecord("GNU.sparse.realsize", strconv.FormatInt(size, 10))
 	var b bytes.Buffer
 	b.Write(ustarBlock("PaxHeaders/"+name, tar.TypeXHeader, int64(len(records))))
 	b.Write(tarPadded(records))
