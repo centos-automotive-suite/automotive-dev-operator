@@ -678,8 +678,9 @@ func (r *ImageBuildReconciler) ensureWorkspaceHydrate(
 	job := &hydrateJob{}
 	r.hydrating.Store(key, job)
 	// The reconcile ctx is cancelled when Reconcile returns, so the copy uses
-	// its own timeout-bounded context. Hydration is idempotent (it skips files
-	// already present), so an interrupted or restarted copy resumes safely.
+	// its own timeout-bounded context. Hydration copies every file in one
+	// upload, which the upload pod applies all or none of, so an interrupted
+	// or restarted copy starts over safely.
 	ib := imageBuild.DeepCopy()
 	fn := r.workspaceHydrateFunc()
 	go func() {
