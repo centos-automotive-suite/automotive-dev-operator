@@ -1229,21 +1229,17 @@ func (h *Handler) handleFileUploads(
 		})
 	}
 
+	// The deadline bounds waiting for the upload pod, not the transfer, which
+	// takes as long as the files take to send.
 	uploadDeadline := time.Now().Add(10 * time.Minute)
-	const perAttemptTimeout = 30 * time.Second
 	for {
-		remaining := time.Until(uploadDeadline)
-		if remaining <= 0 {
+		if time.Now().After(uploadDeadline) {
 			return common.NewActionableError(
 				fmt.Errorf("upload files failed: timed out after 10m"),
 				"caib image logs "+buildName,
 			)
 		}
-		attemptTimeout := min(remaining, perAttemptTimeout)
-
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, attemptTimeout)
-		err := api.UploadFiles(attemptCtx, buildName, uploads)
-		attemptCancel()
+		err := api.UploadFiles(ctx, buildName, uploads)
 		if err != nil {
 			lower := strings.ToLower(err.Error())
 			if time.Now().After(uploadDeadline) {
