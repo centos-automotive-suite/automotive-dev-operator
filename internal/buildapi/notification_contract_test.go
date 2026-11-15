@@ -2,7 +2,6 @@ package buildapi
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -103,7 +102,7 @@ func TestOperationRequestEnvelope(t *testing.T) {
 	}
 }
 
-func TestCallbackFormattingAndJSONRedaction(t *testing.T) {
+func TestCallbackFormattingRedaction(t *testing.T) {
 	request := buildcontract.BuildRequest{Name: "build", Manifest: "name: image", ExternalID: "pipeline-42", Callback: validCallback()}
 	for _, format := range []string{"%v", "%+v", "%#v"} {
 		formatted := fmt.Sprintf(format, request)
@@ -112,13 +111,5 @@ func TestCallbackFormattingAndJSONRedaction(t *testing.T) {
 				t.Errorf("format %s leaked callback data", format)
 			}
 		}
-	}
-	template := buildcontract.BuildTemplateResponse{BuildRequest: request}
-	data, err := json.Marshal(template)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "callback") || strings.Contains(string(data), validCallback().Secret) {
-		t.Fatalf("template response leaked callback: %s", data)
 	}
 }

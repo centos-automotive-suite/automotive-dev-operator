@@ -630,7 +630,7 @@ caib image cancel <build-name> [flags]
 
 ## Building from Git
 
-Pass a repository-relative manifest path to `build` or `build-dev` with `--git-url`. When the architecture is unknown, a PVC-free discovery TaskRun reads the manifest target before the source TaskRun checks out and validates the repository onto the build PVC. If the lockfile produced by `caib image resolve` is committed beside the manifest (for example, `simple.aib.lock` for `simple.aib.yml`), the build uses it. Use `--git-lockfile locks/release.json` to select a different committed file; an explicit selection must exist in the same commit. Local `--lockfile` overrides are not supported with Git sources. Use `--git-ref` to choose a branch, tag, or full commit ID. `caib image show` reports the resolved commit, and build templates use that commit for a repeatable run.
+Pass a repository-relative manifest path to `build` or `build-dev` with `--git-url`. When the architecture is unknown, a PVC-free discovery TaskRun reads the manifest target before the source TaskRun checks out and validates the repository onto the build PVC. If the lockfile produced by `caib image resolve` is committed beside the manifest (for example, `simple.aib.lock` for `simple.aib.yml`), the build uses it. Use `--git-lockfile locks/release.json` to select a different committed file; an explicit selection must exist in the same commit. Local `--lockfile` overrides are not supported with Git sources. Use `--git-ref` to choose a branch, tag, or full commit ID. `caib image show` reports the resolved commit.
 
 A lockfile covers one architecture; when building the same manifest for both arm64 and amd64, commit separate locks and select the right one with `--git-lockfile`.
 

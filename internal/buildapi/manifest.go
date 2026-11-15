@@ -2,7 +2,6 @@ package buildapi
 
 import (
 	"log"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -10,8 +9,6 @@ import (
 // manifestAddFile represents a single add_files entry from an AIB manifest.
 type manifestAddFile struct {
 	SourcePath string `yaml:"source_path"`
-	SourceGlob string `yaml:"source_glob"`
-	Source     string `yaml:"source"`
 }
 
 // manifestContent represents the content section of an AIB manifest.
@@ -46,24 +43,4 @@ func manifestNeedsUpload(manifest string) bool {
 		}
 	}
 	return false
-}
-
-// extractManifestSourceFiles parses the manifest YAML and returns the list of
-// relative, non-HTTP source references (source, source_path, source_glob).
-func extractManifestSourceFiles(manifest string) []string {
-	var m manifestSchema
-	if err := yaml.Unmarshal([]byte(manifest), &m); err != nil {
-		return nil
-	}
-	var files []string
-	for _, sections := range [][]manifestAddFile{m.Content.AddFiles, m.QM.Content.AddFiles} {
-		for _, f := range sections {
-			for _, p := range []string{f.Source, f.SourcePath, f.SourceGlob} {
-				if p != "" && !strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "http://") && !strings.HasPrefix(p, "https://") {
-					files = append(files, p)
-				}
-			}
-		}
-	}
-	return files
 }

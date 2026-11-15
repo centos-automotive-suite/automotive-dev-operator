@@ -298,7 +298,6 @@ func (a *APIServer) createRouter() *gin.Engine {
 			buildsGroup.GET("/:name", a.wrapNamedHandler("get build", a.getBuild))
 			buildsGroup.GET("/:name/logs", a.wrapNamedHandler("logs requested", a.streamLogs))
 			buildsGroup.GET("/:name/progress", a.handleGetProgress)
-			buildsGroup.GET("/:name/template", a.wrapNamedHandler("template requested", a.getBuildTemplate))
 			buildsGroup.POST("/:name/uploads", a.wrapNamedHandler("uploads", a.uploadFiles))
 			buildsGroup.POST("/:name/token", a.handleCreateBuildToken)
 			buildsGroup.POST("/:name/cancel", a.wrapNamedHandler("cancel build", a.cancelBuild))
@@ -1772,61 +1771,6 @@ func (a *APIServer) getBuild(c *gin.Context, name string) {
 			FlashLeaseName:         build.Spec.GetFlashLeaseName(),
 			UseServiceAccountAuth:  build.Spec.GetUseServiceAccountAuth(),
 		},
-	})
-}
-
-// getBuildTemplate returns a BuildRequest-like struct representing the inputs that produced a given build
-func (a *APIServer) getBuildTemplate(c *gin.Context, name string) {
-	namespace := resolveNamespace()
-	k8sClient, err := a.getK8sClientOrFail(c)
-	if err != nil {
-		return
-	}
-
-	ctx := c.Request.Context()
-	build := &automotivev1alpha1.ImageBuild{}
-	if err := getResourceOrFail(ctx, c, k8sClient, name, namespace, build, "build"); err != nil {
-		return
-	}
-
-	manifest := build.Spec.GetManifest()
-	manifestFileName := build.Spec.GetManifestFileName()
-	if manifestFileName == "" {
-		manifestFileName = "manifest.aib.yml"
-	}
-
-	sourceFiles := extractManifestSourceFiles(manifest)
-	gitSource := build.Spec.GetGitSource()
-	if gitSource != nil && build.Status.SourceCommit != "" {
-		resolved := *gitSource
-		resolved.Revision = build.Status.SourceCommit
-		gitSource = &resolved
-	}
-
-	writeJSON(c, http.StatusOK, buildcontract.BuildTemplateResponse{
-		BuildRequest: buildcontract.BuildRequest{
-			GitSource:              gitSource,
-			Name:                   build.Name,
-			Manifest:               manifest,
-			ResolveOnly:            build.Spec.GetResolveOnly(),
-			Lockfile:               build.Spec.GetLockfile(),
-			ManifestFileName:       manifestFileName,
-			Distro:                 buildcontract.Distro(build.Spec.GetDistro()),
-			Target:                 buildcontract.Target(build.Spec.GetTarget()),
-			Architecture:           buildcontract.Architecture(build.Spec.Architecture),
-			ExportFormat:           buildcontract.ExportFormat(build.Spec.GetExportFormat()),
-			Mode:                   buildcontract.Mode(build.Spec.GetMode()),
-			AutomotiveImageBuilder: build.Spec.GetAIBImage(),
-			CustomDefs:             build.Spec.GetCustomDefs(),
-			AIBExtraArgs:           build.Spec.GetAIBExtraArgs(),
-			Compression:            buildcontract.Compression(build.Spec.GetCompression()),
-			SecureBuild:            build.Spec.SecureBuild,
-			Reproducible:           build.Spec.Reproducible,
-			TaskBundleRef:          build.Spec.TaskBundleRef,
-			RestoreSourcesRef:      build.Spec.RestoreSourcesRef,
-			TTL:                    build.Spec.GetTTL(),
-		},
-		SourceFiles: sourceFiles,
 	})
 }
 

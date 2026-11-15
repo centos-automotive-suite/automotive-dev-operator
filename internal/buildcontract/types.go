@@ -1,7 +1,6 @@
 package buildcontract
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -425,12 +424,6 @@ type OperatorConfigResponse struct {
 	AutomotiveImageBuilder string `json:"automotiveImageBuilder,omitempty"`
 }
 
-// BuildTemplateResponse includes the original inputs plus a hint of source files referenced by the manifest
-type BuildTemplateResponse struct {
-	BuildRequest `json:",inline"`
-	SourceFiles  []string `json:"sourceFiles,omitempty"`
-}
-
 // ContainerBuildRequest is the payload to create a container build via the REST API
 type ContainerBuildRequest struct {
 	// Name is the build identifier (auto-generated if omitted)
@@ -554,13 +547,4 @@ type SealedListItem struct {
 	RequestedBy    string `json:"requestedBy,omitempty"`
 	CreatedAt      string `json:"createdAt"`
 	CompletionTime string `json:"completionTime,omitempty"`
-}
-
-// MarshalJSON prevents the write-only callback from leaking through a build template response.
-func (r BuildTemplateResponse) MarshalJSON() ([]byte, error) {
-	type templateResponse BuildTemplateResponse
-	return json.Marshal(struct {
-		templateResponse
-		Callback *BuildCallback `json:"callback,omitempty"`
-	}{templateResponse: templateResponse(r)})
 }
