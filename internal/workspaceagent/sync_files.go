@@ -155,6 +155,9 @@ type stagedEntry struct {
 // stage writes every entry of the archive into the staging directory.
 func (a *Agent) stage(root *os.Root, archive io.Reader) ([]stagedEntry, error) {
 	var entries []stagedEntry
+	// The limit on the archive misses a sparse file's holes, which take room
+	// on disk all the same.
+	var size int64
 	reader := tar.NewReader(archive)
 	for {
 		hdr, err := reader.Next()
@@ -177,6 +180,9 @@ func (a *Agent) stage(root *os.Root, archive io.Reader) ([]stagedEntry, error) {
 		}
 		if hdr.Size > a.maxFile {
 			return nil, apiError(http.StatusRequestEntityTooLarge, "file %q exceeds %d MiB", hdr.Name, a.maxFile>>20)
+		}
+		if size += hdr.Size; size > a.maxUpload {
+			return nil, apiError(http.StatusRequestEntityTooLarge, "upload exceeds %d MiB", a.maxUpload>>20)
 		}
 		temp := path.Join(syncStaging, rand.Text())
 		switch hdr.Typeflag {
