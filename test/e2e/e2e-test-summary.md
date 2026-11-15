@@ -2,7 +2,7 @@
 
 Global `BeforeSuite` resolves namespace/registry/arch; `AfterSuite` tears down the namespace and port-forwards unless `E2E_SKIP_CLEANUP=true`. Most lanes additionally rely on shared setup helpers from `test/e2e/helpers_test.go` (memoized once per suite run), referenced in plain words below:
 
-- operator deployed — CRDs installed, `ado-operator` deployed, OperatorConfig applied, Build API deployment ready
+- operator deployed — CRDs installed, `ado-operator` deployed, OperatorConfig applied, Build API deployment ready; on Kind, a stand-in for OpenShift's service CA (`test/e2e/service_ca_test.go`) issues the serving certificates of the upload and workspace agents and fills the `ado-service-ca` bundle
 - Build API reachable — Route (OpenShift) or port-forward (Kind) set up to the Build API
 - caib credentials provisioned — a `caib` ServiceAccount and token created for CLI calls
 - registry configured — OperatorConfig registry settings and the `push-artifact-registry` Task patched for the target registry

@@ -181,6 +181,11 @@ func deployOperator() {
 		_, _ = utils.Run(cmd)
 	}
 
+	if !openShiftCluster {
+		By("standing in for OpenShift's service CA, which issues the agents' certificates")
+		startServiceCA(testNamespace)
+	}
+
 	projectImage := fmt.Sprintf("automotive-dev-operator:test-%d", time.Now().Unix())
 	deployedImage := utils.PrepareOperatorImage(projectImage, testNamespace)
 
