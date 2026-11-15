@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +17,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 )
 
 func syncTestRouter(t *testing.T, workdir string) *gin.Engine {
@@ -81,10 +80,13 @@ func TestSyncPlanComesFromTheWorkspaceAgent(t *testing.T) {
 		}
 	}
 	api := newRunClient(t, syncTestRouter(t, workdir))
-	sum := sha256.Sum256([]byte("same"))
+	same, err := buildcontract.SyncFileVersion(filepath.Join(workdir, "same.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	plan, err := api.SyncPlan(context.Background(), "dev", buildcontract.SyncPlanRequest{
-		Files:          map[string]string{"same.txt": hex.EncodeToString(sum[:]), "new.txt": "00"},
+		Files:          map[string]string{"same.txt": same, "new.txt": "00"},
 		IncludeDeleted: true,
 	})
 	if err != nil {
@@ -136,7 +138,11 @@ func TestSyncUploadReachesTheWorkspace(t *testing.T) {
 	}
 	api := newRunClient(t, syncTestRouter(t, workdir))
 	var archive bytes.Buffer
-	tw := tar.NewWriter(&archive)
+	zw, err := zstd.NewWriter(&archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(zw)
 	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "src/main.go", Mode: 0o644, Size: 4}); err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +150,9 @@ func TestSyncUploadReachesTheWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
 

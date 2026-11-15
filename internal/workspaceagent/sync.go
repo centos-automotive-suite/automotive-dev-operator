@@ -2,8 +2,6 @@ package workspaceagent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,7 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 // MaxSyncListBytes bounds a request that lists files, a sync plan or delete:
@@ -21,7 +20,8 @@ import (
 const MaxSyncListBytes = 64 << 20
 
 // SyncPlanRequest is the body of POST /sync/plan: the client's files,
-// relative to the working directory, each with its SHA-256 in hex.
+// relative to the working directory, each with its
+// buildcontract.SyncFileVersion.
 type SyncPlanRequest struct {
 	Files          map[string]string `json:"files"`
 	IncludeDeleted bool              `json:"includeDeleted,omitempty"`
@@ -38,11 +38,9 @@ type SyncPlanResponse struct {
 	IncludeDeleted bool     `json:"includeDeleted,omitempty"`
 }
 
-// PlanSync compares the client's files with the working directory. A file
-// the workspace lacks, or holds with other content or as something other
-// than a regular file, is changed. Symlinks are followed, even out of the
-// working directory, as the CLI follows them when it hashes; the owner can
-// read those files with a run anyway. A file that can't be read fails the
+// PlanSync compares the versions of the client's files with the working
+// directory's, so it reads no file. A file the workspace lacks, or holds
+// with another version, is changed. A path that can't be looked up fails the
 // plan, as does a directory that can't be listed, so a plan never guesses.
 // Cancelling ctx stops the plan before its next file. A plan in progress
 // keeps the workspace active.
@@ -61,8 +59,8 @@ func (a *Agent) PlanSync(ctx context.Context, req SyncPlanRequest) (SyncPlanResp
 		if err := checkName(name); err != nil {
 			return SyncPlanResponse{}, err
 		}
-		got, err := hashFile(filepath.Join(a.workdir, filepath.FromSlash(name)))
-		if err != nil {
+		got, err := buildcontract.SyncFileVersion(filepath.Join(a.workdir, filepath.FromSlash(name)))
+		if err != nil && !absent(err) {
 			return SyncPlanResponse{}, err
 		}
 		if got != "" && got == want {
@@ -114,33 +112,6 @@ func workspaceOnly(ctx context.Context, workdir fs.FS, files map[string]string) 
 		return nil, err
 	}
 	return names, nil
-}
-
-// hashFile returns the SHA-256 in hex of the file at path, following
-// symlinks, or "" when there is no regular file to compare. It opens without
-// blocking, since opening a FIFO for reading otherwise waits for a writer,
-// and checks what it opened, so nothing can swap in a FIFO after a check.
-func hashFile(path string) (string, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = file.Close() }()
-	info, err := file.Stat()
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() {
-		return "", nil
-	}
-	h := sha256.New()
-	if _, err := io.Copy(h, file); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // checkName accepts only clean paths relative to the working directory, so

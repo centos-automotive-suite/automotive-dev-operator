@@ -2,8 +2,6 @@ package workspaceagent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 )
 
 func writeTree(t *testing.T, root string, files map[string]string) {
@@ -30,9 +30,21 @@ func writeTree(t *testing.T, root string, files map[string]string) {
 	}
 }
 
-func sha(content string) string {
-	sum := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(sum[:])
+// version is the file's version as a client sends it in a plan.
+func version(t *testing.T, path string) string {
+	t.Helper()
+	v, err := buildcontract.SyncFileVersion(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func chtimes(t *testing.T, path string, modified time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, time.Time{}, modified); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPlanSyncReportsEveryFile(t *testing.T) {
@@ -43,23 +55,32 @@ func TestPlanSyncReportsEveryFile(t *testing.T) {
 		"edited.txt":   "remote",
 		"sub/file":     "a directory where the client has a file",
 	})
-	// The CLI hashes what a symlink points to, so the plan follows it too.
-	if err := os.Symlink("same.txt", filepath.Join(a.workdir, "link")); err != nil {
-		t.Fatal(err)
+	for name, target := range map[string]string{"link": "same.txt", "moved": "same.txt"} {
+		if err := os.Symlink(target, filepath.Join(a.workdir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := t.TempDir()
+	writeTree(t, client, map[string]string{"edited.txt": "local", "missing.txt": "new", "sub": "file"})
+	for name, target := range map[string]string{"link": "same.txt", "moved": "dir/same.txt"} {
+		if err := os.Symlink(target, filepath.Join(client, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// What an earlier sync wrote keeps the client's size and time.
+	files := map[string]string{
+		"same.txt":     version(t, filepath.Join(a.workdir, "same.txt")),
+		"dir/same.txt": version(t, filepath.Join(a.workdir, "dir/same.txt")),
+	}
+	for _, name := range []string{"edited.txt", "missing.txt", "sub", "link", "moved"} {
+		files[name] = version(t, filepath.Join(client, name))
 	}
 
-	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{
-		"same.txt":     sha("same"),
-		"dir/same.txt": sha("nested"),
-		"edited.txt":   sha("local"),
-		"missing.txt":  sha("new"),
-		"sub":          sha("file"),
-		"link":         sha("same"),
-	}})
+	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: files})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"edited.txt", "missing.txt", "sub"}; !slices.Equal(plan.Changed, want) {
+	if want := []string{"edited.txt", "missing.txt", "moved", "sub"}; !slices.Equal(plan.Changed, want) {
 		t.Errorf("changed = %q, want %q", plan.Changed, want)
 	}
 	if plan.Unchanged != 3 {
@@ -67,6 +88,38 @@ func TestPlanSyncReportsEveryFile(t *testing.T) {
 	}
 	if plan.Deleted != nil {
 		t.Errorf("deleted = %q without includeDeleted", plan.Deleted)
+	}
+}
+
+// A plan compares sizes and modification times, as rsync does by default,
+// and reads no file: the same content written later is changed, and other
+// content of the same size and time is not.
+func TestPlanSyncComparesSizesAndModificationTimes(t *testing.T) {
+	a := newTestAgent(t)
+	client := t.TempDir()
+	writeTree(t, a.workdir, map[string]string{"touched.txt": "same", "rewritten.txt": "old!", "secret": "x"})
+	writeTree(t, client, map[string]string{"touched.txt": "same", "rewritten.txt": "new!", "secret": "x"})
+	at := time.Date(2020, 1, 2, 3, 4, 5, 6789, time.UTC)
+	for _, dir := range []string{a.workdir, client} {
+		chtimes(t, filepath.Join(dir, "rewritten.txt"), at)
+		chtimes(t, filepath.Join(dir, "secret"), at)
+	}
+	chtimes(t, filepath.Join(a.workdir, "touched.txt"), at)
+	chtimes(t, filepath.Join(client, "touched.txt"), at.Add(time.Nanosecond))
+	if err := os.Chmod(filepath.Join(a.workdir, "secret"), 0); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{}
+	for _, name := range []string{"touched.txt", "rewritten.txt", "secret"} {
+		files[name] = version(t, filepath.Join(client, name))
+	}
+
+	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(plan.Changed, []string{"touched.txt"}) || plan.Unchanged != 2 {
+		t.Errorf("plan = %+v, want only touched.txt changed", plan)
 	}
 }
 
@@ -81,7 +134,7 @@ func TestPlanSyncListsFilesOnlyTheWorkspaceHas(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"kept.txt": sha("kept")}, IncludeDeleted: true})
+	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"kept.txt": version(t, filepath.Join(a.workdir, "kept.txt"))}, IncludeDeleted: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +154,7 @@ func TestPlanSyncSkipsTheStagingPath(t *testing.T) {
 	for _, staged := range []string{syncStaging + "/partial", syncStaging} {
 		a := newTestAgent(t)
 		writeTree(t, a.workdir, map[string]string{"kept.txt": "kept", staged: "half"})
-		plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"kept.txt": sha("kept")}, IncludeDeleted: true})
+		plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"kept.txt": version(t, filepath.Join(a.workdir, "kept.txt"))}, IncludeDeleted: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +177,7 @@ func TestPlanSyncWithoutAWorkdirChangesEverything(t *testing.T) {
 	a := newTestAgent(t)
 	a.workdir = filepath.Join(t.TempDir(), "absent")
 
-	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"a.txt": sha("a")}, IncludeDeleted: true})
+	plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"a.txt": "file 1 1"}, IncludeDeleted: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,13 +191,13 @@ func TestPlanSyncWithoutAWorkdirChangesEverything(t *testing.T) {
 func TestPlanSyncRejectsInvalidPaths(t *testing.T) {
 	a := newTestAgent(t)
 	for _, name := range []string{"../escape", "/etc/passwd", "", "a/../../b", ".", "a/../b", "a//b", "a/", "a\x00b", ".caib-sync/x"} {
-		_, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{name: sha("x")}})
+		_, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{name: "file 1 1"}})
 		wantBadRequest(t, fmt.Sprintf("%q", name), err)
 	}
 }
 
 // Opening a FIFO for reading blocks until something writes to it, so the
-// plan must see that it isn't a regular file before opening it.
+// plan must not open it.
 func TestPlanSyncDoesNotOpenAFIFO(t *testing.T) {
 	a := newTestAgent(t)
 	fifo := filepath.Join(a.workdir, "pipe")
@@ -154,7 +207,7 @@ func TestPlanSyncDoesNotOpenAFIFO(t *testing.T) {
 
 	done := make(chan []string, 1)
 	go func() {
-		plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"pipe": sha("x")}})
+		plan, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"pipe": "file 1 1"}})
 		if err != nil {
 			t.Error(err)
 		}
@@ -175,21 +228,6 @@ func TestPlanSyncDoesNotOpenAFIFO(t *testing.T) {
 	}
 }
 
-func TestPlanSyncFailsOnAnUnreadableFile(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root reads any file")
-	}
-	a := newTestAgent(t)
-	writeTree(t, a.workdir, map[string]string{"secret": "x"})
-	if err := os.Chmod(filepath.Join(a.workdir, "secret"), 0); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"secret": sha("x")}}); err == nil {
-		t.Fatal("an unreadable file was reported instead of failing the plan")
-	}
-}
-
 func TestPlanSyncFailsOnAnUnlistableDirectory(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root lists any directory")
@@ -202,12 +240,12 @@ func TestPlanSyncFailsOnAnUnlistableDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
-	if _, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"a": sha("a")}, IncludeDeleted: true}); err == nil {
+	if _, err := a.PlanSync(t.Context(), SyncPlanRequest{Files: map[string]string{"a": "file 1 1"}, IncludeDeleted: true}); err == nil {
 		t.Fatal("a partial listing was reported instead of failing the plan")
 	}
 }
 
-// A plan stops when its request is cancelled instead of hashing on for a
+// A plan stops when its request is cancelled instead of going on for a
 // caller that has gone.
 func TestPlanSyncStopsWhenCancelled(t *testing.T) {
 	a := newTestAgent(t)
@@ -215,8 +253,8 @@ func TestPlanSyncStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if _, err := a.PlanSync(ctx, SyncPlanRequest{Files: map[string]string{"a.txt": sha("a")}}); !errors.Is(err, context.Canceled) {
-		t.Errorf("hashing: err = %v, want context.Canceled", err)
+	if _, err := a.PlanSync(ctx, SyncPlanRequest{Files: map[string]string{"a.txt": "file 1 1"}}); !errors.Is(err, context.Canceled) {
+		t.Errorf("comparing: err = %v, want context.Canceled", err)
 	}
 	if _, err := workspaceOnly(ctx, os.DirFS(a.workdir), nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("listing: err = %v, want context.Canceled", err)

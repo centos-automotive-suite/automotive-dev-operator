@@ -5,9 +5,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +30,7 @@ import (
 	buildcontract "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/klauspost/compress/zstd"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -567,9 +566,8 @@ func runSync(_ *cobra.Command, args []string) {
 		}
 		// Fall back to full overlay sync — warn so users know why delta didn't work
 		fmt.Fprintf(os.Stderr, "Warning: sync plan unavailable (%v), uploading all files\n", err)
-		archive := buildArchive(absDir, files)
 		clilog.Infof("Syncing %d files to workspace %q...\n", len(files), name)
-		uploadArchive(name, buildcontract.SyncUploadRequest{}, archive)
+		uploadFiles(name, buildcontract.SyncUploadRequest{}, absDir, files)
 		return
 	}
 
@@ -599,23 +597,20 @@ func runSync(_ *cobra.Command, args []string) {
 		clilog.Infof("Syncing %d changed files to workspace %q (%d unchanged)...\n",
 			len(plan.Changed), name, plan.Unchanged)
 	}
-	uploadArchive(name, req, buildArchive(absDir, plan.Changed))
+	uploadFiles(name, req, absDir, plan.Changed)
 }
 
-func buildArchive(absDir string, files []string) []byte {
-	var buf bytes.Buffer
-	if err := tarTrackedFiles(absDir, files, &buf); err != nil {
-		handleError(fmt.Errorf("failed to create tar archive: %w", err))
-	}
-	return buf.Bytes()
-}
-
-func uploadArchive(name string, req buildcontract.SyncUploadRequest, archive []byte) {
-	var pr *progressReader
+// uploadFiles uploads files from absDir to the workspace, with req's
+// deletes. It reads them as the upload goes, again if a new login retries
+// it, so the upload's size costs no memory.
+func uploadFiles(name string, req buildcontract.SyncUploadRequest, absDir string, files []string) {
+	total := filesSize(absDir, files)
 	err := caibcommon.ExecuteWithReauth(serverURL, &authToken, insecureSkipTLS, func(client *buildapiclient.Client) error {
-		pr = newProgressReader(bytes.NewReader(archive), int64(len(archive)))
-		err := client.SyncWorkspace(context.Background(), name, req, pr)
-		pr.finish()
+		progress := newUploadProgress(total)
+		archive := streamArchive(absDir, files, progress)
+		err := client.SyncWorkspace(context.Background(), name, req, archive)
+		_ = archive.Close()
+		progress.finish()
 		return err
 	})
 	if err != nil {
@@ -624,23 +619,69 @@ func uploadArchive(name string, req buildcontract.SyncUploadRequest, archive []b
 	clilog.Infoln("Files synced")
 }
 
+// filesSize returns how many bytes the regular files among files hold.
+func filesSize(absDir string, files []string) int64 {
+	var total int64
+	for _, name := range files {
+		if info, err := os.Lstat(filepath.Join(absDir, name)); err == nil && info.Mode().IsRegular() {
+			total += info.Size()
+		}
+	}
+	return total
+}
+
+// streamArchive writes the files as the workspace takes them, a tar archive
+// compressed with zstd, into the reader it returns as the reader is read,
+// and copies their contents to progress as it goes. A failure to write the
+// archive fails the read, and closing the reader stops the writing and waits
+// for it to end.
+func streamArchive(absDir string, files []string, progress io.Writer) io.ReadCloser {
+	reader, writer := io.Pipe()
+	stream := &archiveStream{PipeReader: reader, written: make(chan struct{})}
+	go func() {
+		defer close(stream.written)
+		_ = writer.CloseWithError(writeArchive(absDir, files, writer, progress))
+	}()
+	return stream
+}
+
+type archiveStream struct {
+	*io.PipeReader
+	written chan struct{}
+}
+
+func (s *archiveStream) Close() error {
+	err := s.PipeReader.Close()
+	<-s.written
+	return err
+}
+
+func writeArchive(absDir string, files []string, w, progress io.Writer) error {
+	zw, err := zstd.NewWriter(w)
+	if err != nil {
+		return err
+	}
+	err = tarTrackedFiles(absDir, files, zw, progress)
+	if closeErr := zw.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+// computeManifest returns the version of each file, which the plan compares
+// with the workspace's copy.
 func computeManifest(baseDir string, files []string) map[string]string {
 	manifest := make(map[string]string, len(files))
 	for _, relPath := range files {
-		absPath := filepath.Join(baseDir, relPath)
-		f, err := os.Open(absPath)
+		version, err := buildcontract.SyncFileVersion(filepath.Join(baseDir, relPath))
+		if err == nil && version == "" {
+			err = errors.New("not a regular file or symlink")
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: skipping %s: %v\n", relPath, err)
 			continue
 		}
-		h := sha256.New()
-		_, err = io.Copy(h, f)
-		_ = f.Close()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: skipping %s: %v\n", relPath, err)
-			continue
-		}
-		manifest[relPath] = hex.EncodeToString(h.Sum(nil))
+		manifest[relPath] = version
 	}
 	return manifest
 }
@@ -658,7 +699,7 @@ func abortDeleteIfUnreadable(baseDir string, files []string, manifest map[string
 			return fmt.Errorf("refusing --delete: %s: %w", rel, err)
 		}
 		if !gone {
-			return fmt.Errorf("refusing --delete: %s exists locally but could not be hashed (aborting to avoid deleting the remote copy)", rel)
+			return fmt.Errorf("refusing --delete: %s exists locally but could not be checked (aborting to avoid deleting the remote copy)", rel)
 		}
 	}
 	return nil
@@ -717,8 +758,9 @@ func gitListFiles(dir string, trackedOnly bool) ([]string, error) {
 	return files, nil
 }
 
-// tarTrackedFiles writes a tar archive of the given files (relative to baseDir) to w.
-func tarTrackedFiles(baseDir string, files []string, w io.Writer) error {
+// tarTrackedFiles writes a tar archive of the given files (relative to baseDir)
+// to w, and their contents to progress.
+func tarTrackedFiles(baseDir string, files []string, w, progress io.Writer) error {
 	tw := tar.NewWriter(w)
 	defer func() { _ = tw.Close() }()
 
@@ -745,6 +787,10 @@ func tarTrackedFiles(baseDir string, files []string, w io.Writer) error {
 			return fmt.Errorf("creating tar header for %s: %w", relPath, err)
 		}
 		hdr.Name = relPath
+		// The workspace keeps the archive's modification times, which plans
+		// compare to the nanosecond. Without a format, tar rounds them to the
+		// second.
+		hdr.Format = tar.FormatPAX
 
 		if err := tw.WriteHeader(hdr); err != nil {
 			return fmt.Errorf("writing tar header for %s: %w", relPath, err)
@@ -755,7 +801,7 @@ func tarTrackedFiles(baseDir string, files []string, w io.Writer) error {
 			if err != nil {
 				return fmt.Errorf("opening %s: %w", relPath, err)
 			}
-			_, err = io.Copy(tw, f)
+			_, err = io.Copy(tw, io.TeeReader(f, progress))
 			_ = f.Close()
 			if err != nil {
 				return fmt.Errorf("writing %s to tar: %w", relPath, err)
@@ -1048,46 +1094,44 @@ func handleError(err error) {
 	os.Exit(1)
 }
 
-// progressReader wraps an io.Reader and renders an upload progress bar
-// using the same visual style as the build progress bar (█░).
-type progressReader struct {
-	r     io.Reader
+// uploadProgress counts the bytes written to it out of total and renders an
+// upload progress bar using the same visual style as the build progress bar
+// (█░).
+type uploadProgress struct {
 	total int64
-	read  int64
+	sent  int64
 	last  int // last printed percentage
 	isTTY bool
 }
 
-func newProgressReader(r io.Reader, total int64) *progressReader {
-	return &progressReader{
-		r:     r,
+func newUploadProgress(total int64) *uploadProgress {
+	return &uploadProgress{
 		total: total,
 		isTTY: term.IsTerminal(int(os.Stderr.Fd())),
 		last:  -1,
 	}
 }
 
-func (p *progressReader) Read(b []byte) (int, error) {
-	n, err := p.r.Read(b)
-	p.read += int64(n)
+func (p *uploadProgress) Write(b []byte) (int, error) {
+	p.sent += int64(len(b))
 	if p.total > 0 {
-		pct := int(p.read * 100 / p.total)
+		pct := int(min(p.sent, p.total) * 100 / p.total)
 		if pct != p.last {
 			p.last = pct
 			p.render(pct)
 		}
 	}
-	return n, err
+	return len(b), nil
 }
 
-func (p *progressReader) render(pct int) {
+func (p *uploadProgress) render(pct int) {
 	if clilog.IsQuiet() {
 		return
 	}
 	barWidth := 30
 	filled := barWidth * pct / 100
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-	sizeInfo := fmt.Sprintf("%s / %s", humanSize(p.read), humanSize(p.total))
+	sizeInfo := fmt.Sprintf("%s / %s", humanSize(p.sent), humanSize(p.total))
 	if p.isTTY {
 		_, _ = fmt.Fprintf(os.Stderr, "\r  Upload   │%s│ %3d%% %s", bar, pct, sizeInfo)
 	} else if pct%25 == 0 || pct == 100 {
@@ -1095,7 +1139,7 @@ func (p *progressReader) render(pct int) {
 	}
 }
 
-func (p *progressReader) finish() {
+func (p *uploadProgress) finish() {
 	if p.total > 0 && p.isTTY && !clilog.IsQuiet() {
 		_, _ = fmt.Fprintln(os.Stderr)
 	}
