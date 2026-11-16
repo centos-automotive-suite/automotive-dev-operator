@@ -189,6 +189,7 @@ type BuildRequest struct {
 	LocalRepo              bool                 `json:"localRepo,omitempty"`     // prefer OCI repo over network repos (priority=1)
 	Workspace              string               `json:"workspace,omitempty"`     // workspace name for build caching and lease forwarding
 	Compression            Compression          `json:"compression,omitempty"`
+	ArtifactName           string               `json:"artifactName,omitempty"` // disk artifact base name (default: <distro>-<target>)
 	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`
 	PushRepository         string               `json:"pushRepository,omitempty"`
 

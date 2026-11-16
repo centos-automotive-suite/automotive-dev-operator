@@ -199,6 +199,15 @@ spec:
               export:
                 description: Export contains configuration for exporting build artifacts
                 properties:
+                  artifactName:
+                    description: |-
+                      ArtifactName is the base file name of the exported disk artifact, without
+                      format or compression extensions. Defaults to "<distro>-<target>".
+                      Builds that share an explicit S3 prefix and artifact name overwrite each
+                      other's uploads.
+                    maxLength: 200
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9._@-]*$
+                    type: string
                   buildDiskImage:
                     description: BuildDiskImage indicates whether to build a disk
                       image from the bootc container

@@ -722,6 +722,15 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 					},
 				},
 				{
+					Name:        "artifact-name",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Base file name of the disk artifact (empty: <distro>-<target>)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
 					Name:        "automotive-image-builder",
 					Type:        tektonv1.ParamTypeString,
 					Description: "automotive-image-builder container image to use",
@@ -969,6 +978,7 @@ func GenerateBuildAutomotiveImageTask(namespace string, buildConfig *BuildConfig
 						taskParamEnvVar("BUILD_MODE", "mode"),
 						taskParamEnvVar("EXPORT_FORMAT", "export-format"),
 						taskParamEnvVar("COMPRESSION", "compression"),
+						taskParamEnvVar("ARTIFACT_NAME", "artifact-name"),
 						taskParamEnvVar("AIB_IMAGE_REF", "automotive-image-builder"),
 						taskParamEnvVar("CONTAINER_PUSH", "container-push"),
 						taskParamEnvVar("BUILD_DISK_IMAGE", "build-disk-image"),
@@ -1273,6 +1283,15 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 						StringVal: "gzip",
 					},
 					Description: "Compression algorithm for artifacts (gzip, xz)",
+				},
+				{
+					Name: "artifact-name",
+					Type: tektonv1.ParamTypeString,
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+					Description: "Base file name of the disk artifact (empty: <distro>-<target>)",
 				},
 				{
 					Name: "automotive-image-builder",
@@ -1647,7 +1666,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 						},
 						append(
 							pipelinePassthroughParams(
-								"distro", "target", "mode", "export-format", "compression",
+								"distro", "target", "mode", "export-format", "compression", "artifact-name",
 								"automotive-image-builder", "container-push", "build-disk-image",
 								"export-oci", "builder-image", "cluster-registry-route",
 								"container-ref", "rebuild-builder", "builder-cache-policy", "use-persistent-cache",

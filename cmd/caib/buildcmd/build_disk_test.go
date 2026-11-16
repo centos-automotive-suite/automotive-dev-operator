@@ -132,13 +132,14 @@ func TestDiskBuildSubmitsBuilderCachePolicy(t *testing.T) {
 	opts := newTestDiskOpts()
 	opts.Connection.ServerURL, opts.Connection.AuthToken = srv.URL, "test-token"
 	opts.Build.Name, opts.Build.BuilderCachePolicy, opts.Build.RebuildBuilder = "test-build", "reuse", true
+	opts.Build.ArtifactName = "named-disk"
 	var buildErr error
 	opts.HandleError = func(err error) { buildErr = err }
 	NewHandler(opts).RunDisk(&cobra.Command{}, []string{"quay.io/test/image:latest"})
 	if buildErr != nil {
 		t.Fatal(buildErr)
 	}
-	if req := fixture.submitted; req == nil || req.BuilderCachePolicy != "reuse" || !req.RebuildBuilder {
+	if req := fixture.submitted; req == nil || req.BuilderCachePolicy != "reuse" || !req.RebuildBuilder || req.ArtifactName != "named-disk" {
 		t.Fatalf("builder options not submitted: %+v", req)
 	}
 }

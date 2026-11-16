@@ -437,6 +437,7 @@ func TestBuildScript_ReceivesParamsThroughEnvironment(t *testing.T) {
 		"BUILD_MODE":             "$(params.mode)",
 		"EXPORT_FORMAT":          "$(params.export-format)",
 		"COMPRESSION":            "$(params.compression)",
+		"ARTIFACT_NAME":          "$(params.artifact-name)",
 		"AIB_IMAGE_REF":          "$(params.automotive-image-builder)",
 		"CONTAINER_PUSH":         "$(params.container-push)",
 		"BUILD_DISK_IMAGE":       "$(params.build-disk-image)",

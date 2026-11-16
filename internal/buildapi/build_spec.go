@@ -32,6 +32,7 @@ func buildExportSpec(req *buildcontract.BuildRequest) *automotivev1alpha1.Export
 	export := &automotivev1alpha1.ExportSpec{
 		Format:                string(req.ExportFormat),
 		Compression:           string(req.Compression),
+		ArtifactName:          req.ArtifactName,
 		BuildDiskImage:        req.BuildDiskImage,
 		Container:             req.ContainerPush,
 		UseServiceAccountAuth: req.UseInternalRegistry,

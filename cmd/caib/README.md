@@ -141,6 +141,7 @@ caib image build <manifest.aib.yml> [flags]
 | `--disk` | `false` | Also build a disk image from the container |
 | `--format` | (inferred from `-o`) | Disk image format (`qcow2`, `raw`, `simg`) |
 | `--compress` | `gzip` | Compression algorithm (`gzip`, `xz`) |
+| `--artifact-name` | `<distro>-<target>` | Base file name of the disk artifact, without extensions; also names the S3 object, so reusing it under the same `--s3-prefix` overwrites the earlier upload |
 | `--push-disk` | | Push disk image as OCI artifact to registry |
 | `-o`, `--output` | | Download disk image to local file (implies `--disk`) |
 | `--builder-image` | | Custom aib-build container |
@@ -260,6 +261,7 @@ caib image disk <container-ref> [flags]
 | `-o`, `--output` | | Download disk image to local file |
 | `--format` | (inferred from `-o`) | Disk image format (`qcow2`, `raw`, `simg`) |
 | `--compress` | `gzip` | Compression algorithm (`gzip`, `xz`) |
+| `--artifact-name` | `<distro>-<target>` | Base file name of the disk artifact, without extensions; also names the S3 object, so reusing it under the same `--s3-prefix` overwrites the earlier upload |
 | `--push` | | Push disk image as OCI artifact to registry |
 | `-d`, `--distro` | `autosd` | Distribution |
 | `-t`, `--target` | `qemu` | Target platform |
@@ -323,6 +325,7 @@ caib image build-dev <manifest.aib.yml> [flags]
 | `-t`, `--target` | `qemu` | Target platform |
 | `-a`, `--arch` | (current system) | Architecture (`amd64`, `arm64`) |
 | `--compress` | `gzip` | Compression algorithm (`gzip`, `xz`) |
+| `--artifact-name` | `<distro>-<target>` | Base file name of the disk artifact, without extensions; also names the S3 object, so reusing it under the same `--s3-prefix` overwrites the earlier upload |
 | `--push` | | Push disk image as OCI artifact to registry |
 | `-o`, `--output` | | Download artifact to local file |
 | `--aib-image` | `quay.io/.../automotive-image-builder:1.3.6` | AIB container image |

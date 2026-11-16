@@ -9,6 +9,7 @@ BUILD_START_TIME=$(date +%s)
 
 : "${BUILD_MODE:=bootc}"
 : "${COMPRESSION:=gzip}"
+: "${ARTIFACT_NAME:=}"
 : "${BUILD_DISK_IMAGE:=false}"
 : "${REBUILD_BUILDER:=false}"
 : "${USE_PERSISTENT_CACHE:=false}"
@@ -263,7 +264,8 @@ esac
 
 SAFE_DISTRO="${DISTRO//[^[:alnum:]_.-]/_}"
 SAFE_TARGET="${TARGET//[^[:alnum:]_.-]/_}"
-CLEAN_NAME="${SAFE_DISTRO}-${SAFE_TARGET}"
+# The ImageBuild CRD validates ARTIFACT_NAME as a single safe path segment.
+CLEAN_NAME="${ARTIFACT_NAME:-${SAFE_DISTRO}-${SAFE_TARGET}}"
 
 declare -a FORMAT_ARGS=()
 case "$EXPORT_FORMAT" in

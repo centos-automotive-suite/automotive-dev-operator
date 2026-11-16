@@ -96,6 +96,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 		&opts.Build.DiskFormat, "format", "", "disk image format (qcow2, raw, simg); inferred from output filename if not set",
 	)
 	buildCmd.Flags().StringVar(&opts.Build.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
+	buildCmd.Flags().StringVar(&opts.Build.ArtifactName, "artifact-name", "", "base file name of the disk artifact, without extensions (default: <distro>-<target>)")
 	buildCmd.Flags().StringVar(&opts.Registry.ExportOCI, "push-disk", "", "push disk image as OCI artifact to registry (implies --disk)")
 	buildCmd.Flags().StringVar(
 		&opts.Registry.AuthFile,
@@ -185,6 +186,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 		&opts.Build.DiskFormat, "format", "", "disk image format (qcow2, raw, simg); inferred from output filename if not set",
 	)
 	diskCmd.Flags().StringVar(&opts.Build.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
+	diskCmd.Flags().StringVar(&opts.Build.ArtifactName, "artifact-name", "", "base file name of the disk artifact, without extensions (default: <distro>-<target>)")
 	diskCmd.Flags().StringVar(&opts.Registry.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
 	diskCmd.Flags().StringVar(
 		&opts.Registry.AuthFile,
@@ -234,6 +236,7 @@ func NewImageCmd(opts Options) *cobra.Command {
 	buildDevCmd.Flags().StringVar(&opts.Build.ExportFormat, "format", "", "export format: qcow2, raw, simg")
 	buildDevCmd.Flags().StringVarP(&opts.Output.Dir, "output", "o", "", "download artifact to file from registry (uses --internal-registry when no --push given)")
 	buildDevCmd.Flags().StringVar(&opts.Build.CompressionAlgo, "compress", "gzip", "compression algorithm (gzip, xz)")
+	buildDevCmd.Flags().StringVar(&opts.Build.ArtifactName, "artifact-name", "", "base file name of the disk artifact, without extensions (default: <distro>-<target>)")
 	buildDevCmd.Flags().StringVar(&opts.Registry.ExportOCI, "push", "", "push disk image as OCI artifact to registry")
 	buildDevCmd.Flags().StringVar(
 		&opts.Registry.AuthFile,
