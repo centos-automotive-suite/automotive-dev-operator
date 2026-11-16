@@ -149,6 +149,7 @@ Run `make e2e-spec-index` (or `test/e2e/scripts/gen-spec-index.sh`) to print an 
 - `e2e-test-summary.md`: Per-test inventory of every e2e spec
 - `e2e_suite_test.go`: Suite setup, `BeforeSuite`/`AfterSuite`
 - `helpers_test.go`: Shared helpers — `sync.Once`-based operator deploy, Build API access, caib credentials, and utility functions (`applyImageBuildCR`, `createBuildViaCaib`, `waitForImageBuildPhase`, etc.)
+- `service_ca_test.go`: On Kind, stands in for OpenShift's service CA, which issues the serving certificates of the upload and workspace agents (Services annotated `service.beta.openshift.io/serving-cert-secret-name`) and fills the CA bundle ConfigMaps annotated `service.beta.openshift.io/inject-cabundle`
 - `operator_test.go`: Operator health checks (`Label("operator", "smoke")`)
 - `smoke_test.go`: CRD availability, OperatorConfig, Build API endpoints, CR lifecycle, negative/guard-rail tests (`Label("smoke")`)
 - `buildapi_test.go`: Build API CRUD via caib CLI and ownership enforcement (`Label("operator")`)

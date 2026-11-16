@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -18,15 +19,33 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// maxSyncUploadBytes bounds a sync upload's archive, and so the space its
-// staged files take beside the ones they replace until they are renamed into
-// place, and the compressed body that carries it.
-const maxSyncUploadBytes = 512 << 20
+// MaxSyncUploadBytes is the default bound on a sync upload's archive, and so
+// on the space its staged files take beside the ones they replace until they
+// are renamed into place, and on the compressed body that carries it.
+const MaxSyncUploadBytes = 512 << 20
 
 // syncArchiveWindow bounds the window of an upload's zstd stream, and so the
 // memory decompressing it takes. caib compresses with zstd's default window,
 // 8 MiB.
 const syncArchiveWindow = 8 << 20
+
+// LimitUploads bounds each sync upload's archive at total bytes, and each file
+// in it at file bytes.
+func (a *Agent) LimitUploads(total, file int64) {
+	a.maxUpload, a.maxFile = total, file
+}
+
+// buildUploadName is the names a build's upload pod takes: the characters
+// the build API has always allowed, which its scripts handle.
+var buildUploadName = regexp.MustCompile(`^[a-zA-Z0-9.\-_/@]+$`)
+
+// TakeBuildUploads restricts sync uploads to what a build's upload pod takes:
+// regular files with plain names. The build pod that reads them is
+// privileged, so a symlink could have it read its node's devices into the
+// image.
+func (a *Agent) TakeBuildUploads() {
+	a.buildUploads = true
+}
 
 // syncUploadIdle bounds how long an upload may go without sending anything,
 // so a stalled client can't hold the upload lock or keep the workspace
@@ -136,6 +155,9 @@ type stagedEntry struct {
 // stage writes every entry of the archive into the staging directory.
 func (a *Agent) stage(root *os.Root, archive io.Reader) ([]stagedEntry, error) {
 	var entries []stagedEntry
+	// The limit on the archive misses a sparse file's holes, which take room
+	// on disk all the same.
+	var size int64
 	reader := tar.NewReader(archive)
 	for {
 		hdr, err := reader.Next()
@@ -152,6 +174,15 @@ func (a *Agent) stage(root *os.Root, archive io.Reader) ([]stagedEntry, error) {
 		}
 		if err := checkName(hdr.Name); err != nil {
 			return nil, err
+		}
+		if a.buildUploads && (hdr.Typeflag != tar.TypeReg || !buildUploadName.MatchString(hdr.Name)) {
+			return nil, apiError(http.StatusBadRequest, "unsupported entry %q: builds take regular files named with letters, digits and . - _ / @", hdr.Name)
+		}
+		if hdr.Size > a.maxFile {
+			return nil, apiError(http.StatusRequestEntityTooLarge, "file %q exceeds %d MiB", hdr.Name, a.maxFile>>20)
+		}
+		if size += hdr.Size; size > a.maxUpload {
+			return nil, apiError(http.StatusRequestEntityTooLarge, "upload exceeds %d MiB", a.maxUpload>>20)
 		}
 		temp := path.Join(syncStaging, rand.Text())
 		switch hdr.Typeflag {
@@ -337,7 +368,7 @@ func (a *Agent) writeFile(root *os.Root, name string, hdr *tar.Header, content i
 // write passes through.
 func (a *Agent) archiveError(err error) error {
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-		return apiError(http.StatusRequestEntityTooLarge, "sync upload exceeds %d MiB", a.maxUpload>>20)
+		return apiError(http.StatusRequestEntityTooLarge, "upload exceeds %d MiB", a.maxUpload>>20)
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return apiError(http.StatusRequestTimeout, "sync upload sent nothing for %v", a.uploadIdle)

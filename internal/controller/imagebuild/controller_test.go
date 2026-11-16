@@ -23,7 +23,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	knativev1 "knative.dev/pkg/apis/duck/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -1067,7 +1066,6 @@ func TestHandleUploadingState_HydrateUploadPodNotReady(t *testing.T) {
 		Spec: automotivev1alpha1.ImageBuildSpec{Workspace: "dev-ws"},
 	}
 	r := newTestReconciler(ib)
-	r.RestConfig = &rest.Config{}
 
 	result, err := r.handleUploadingState(context.Background(), ib)
 	if err != nil {
@@ -1089,6 +1087,7 @@ func TestHandleUploadingState_HydrateUploadPodNotReady(t *testing.T) {
 	}
 }
 
+// newRunningUploadPod is a build's upload pod with its agent ready.
 func newRunningUploadPod(buildName string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1099,9 +1098,14 @@ func newRunningUploadPod(buildName string) *corev1.Pod {
 				labels.Name:           "upload-pod",
 			},
 		},
-		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "upload"}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "agent"}}},
+		Status: readyPodStatus,
 	}
+}
+
+var readyPodStatus = corev1.PodStatus{
+	Phase:      corev1.PodRunning,
+	Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 }
 
 func newHydrateBuild(name string) *automotivev1alpha1.ImageBuild {
@@ -1164,10 +1168,9 @@ func driveUploadingUntilSettled(t *testing.T, r *ImageBuildReconciler, ib *autom
 func TestEnsureWorkspaceHydrate_AsyncCompletes(t *testing.T) {
 	ib := newHydrateBuild("hydrate-async")
 	r := newTestReconciler(ib, newRunningUploadPod("hydrate-async"))
-	r.RestConfig = &rest.Config{}
 
 	var calls atomic.Int32
-	r.hydrateFunc = func(context.Context, *rest.Config, client.Client, *automotivev1alpha1.ImageBuild) error {
+	r.hydrateFunc = func(context.Context, client.Client, *automotivev1alpha1.ImageBuild) error {
 		calls.Add(1)
 		return nil
 	}
@@ -1206,12 +1209,11 @@ func TestEnsureWorkspaceHydrate_AsyncCompletes(t *testing.T) {
 func TestEnsureWorkspaceHydrate_InProgressDoesNotRelaunch(t *testing.T) {
 	ib := newHydrateBuild("hydrate-inflight")
 	r := newTestReconciler(ib, newRunningUploadPod("hydrate-inflight"))
-	r.RestConfig = &rest.Config{}
 
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var calls atomic.Int32
-	r.hydrateFunc = func(context.Context, *rest.Config, client.Client, *automotivev1alpha1.ImageBuild) error {
+	r.hydrateFunc = func(context.Context, client.Client, *automotivev1alpha1.ImageBuild) error {
 		calls.Add(1)
 		started <- struct{}{}
 		<-release
@@ -1248,10 +1250,9 @@ func TestEnsureWorkspaceHydrate_InProgressDoesNotRelaunch(t *testing.T) {
 func TestEnsureWorkspaceHydrate_NoUploadPodDefers(t *testing.T) {
 	ib := newHydrateBuild("hydrate-nopod")
 	r := newTestReconciler(ib)
-	r.RestConfig = &rest.Config{}
 
 	var calls atomic.Int32
-	r.hydrateFunc = func(context.Context, *rest.Config, client.Client, *automotivev1alpha1.ImageBuild) error {
+	r.hydrateFunc = func(context.Context, client.Client, *automotivev1alpha1.ImageBuild) error {
 		calls.Add(1)
 		return nil
 	}
@@ -1274,10 +1275,9 @@ func TestEnsureWorkspaceHydrate_NoUploadPodDefers(t *testing.T) {
 func TestEnsureWorkspaceHydrate_ErrorSurfacesAndClearsJob(t *testing.T) {
 	ib := newHydrateBuild("hydrate-err")
 	r := newTestReconciler(ib, newRunningUploadPod("hydrate-err"))
-	r.RestConfig = &rest.Config{}
 
 	wantErr := errors.New("boom")
-	r.hydrateFunc = func(context.Context, *rest.Config, client.Client, *automotivev1alpha1.ImageBuild) error {
+	r.hydrateFunc = func(context.Context, client.Client, *automotivev1alpha1.ImageBuild) error {
 		return wantErr
 	}
 
@@ -1343,7 +1343,6 @@ func TestHandleUploadingState_HydratePermanentErrorFailsBuild(t *testing.T) {
 	// A running upload pod lets ensureWorkspaceHydrate launch the background copy;
 	// the invalid annotation then produces a permanent error asynchronously.
 	r := newTestReconciler(ib, newRunningUploadPod("hydrate-bad"))
-	r.RestConfig = &rest.Config{}
 
 	driveUploadingUntilSettled(t, r, ib)
 
@@ -1382,11 +1381,10 @@ func TestHandleUploadingState_HydrateTransientErrorRequeues(t *testing.T) {
 				labels.Name:           "upload-pod",
 			},
 		},
-		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "fileserver"}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "agent"}}},
+		Status: readyPodStatus,
 	}
 	r := newTestReconciler(ib, ws, uploadPod)
-	r.RestConfig = &rest.Config{}
 
 	// The workspace is Stopped, so the background copy returns a transient error;
 	// a later reconcile surfaces it and schedules the retry requeue.

@@ -7,10 +7,10 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -41,15 +41,17 @@ func newTestServer(t testReporter, configure func(*apiDependencies)) *APIServer 
 			return nil, unexpected("loadTargetDefaults")
 		},
 		getCatalogClient: func() (client.Client, error) { return fake.NewClientBuilder().Build(), nil },
+		workspaceAgent: func(context.Context, client.Client, *automotivev1alpha1.Workspace) (*workspaceagent.Client, error) {
+			return nil, unexpected("workspaceAgent")
+		},
+		uploadAgent: func(context.Context, client.Client, *automotivev1alpha1.ImageBuild) (*workspaceagent.Client, error) {
+			return nil, unexpected("uploadAgent")
+		},
 	}
 	if configure != nil {
 		configure(&deps)
 	}
-	a := &APIServer{addr: ":0", log: logr.Discard(), limits: DefaultAPILimits(), deps: deps, exec: podExecutor{
-		newExecutor: func(*rest.Config, string, string, string, []string) (remotecommand.Executor, error) {
-			return nil, unexpected("newPodExecExecutor")
-		},
-	}}
+	a := &APIServer{addr: ":0", log: logr.Discard(), limits: DefaultAPILimits(), deps: deps}
 	// Treat the auth config as just checked, so authenticated requests do not
 	// read OperatorConfig from whatever cluster the kubeconfig points at.
 	a.lastAuthConfigCheck = time.Now()

@@ -14,6 +14,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -436,7 +438,7 @@ func TestSyncUploadReplacesWhatIsAtTheStagingPath(t *testing.T) {
 func TestNewClearsAnInterruptedUpload(t *testing.T) {
 	workdir := t.TempDir()
 	writeTree(t, workdir, map[string]string{syncStaging + "/partial": "half", "kept.txt": "kept"})
-	if _, err := New(filepath.Join(t.TempDir(), "runs"), workdir, slog.New(slog.DiscardHandler)); err != nil {
+	if _, err := New(filepath.Join(t.TempDir(), "runs"), workdir, t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	noTempFiles(t, workdir)
@@ -507,6 +509,119 @@ func TestSyncUploadRejectsAnArchivePastTheLimit(t *testing.T) {
 	}
 	notApplied(t, a.workdir, "small.txt", "big")
 	noTempFiles(t, a.workdir)
+}
+
+// A build's upload pod takes only what exec could write there before:
+// regular files, with names the build's scripts handle. A symlink could have
+// the privileged build pod read its node's devices into the image.
+func TestSyncUploadForABuildTakesOnlyRegularFilesWithPlainNames(t *testing.T) {
+	for name, entries := range map[string][]tarEntry{
+		"a symlink":     {entry(tarFile("ok.rpm", "ok", 0o644)), entry(tarLink("disk", "/dev/sda"))},
+		"a space":       {entry(tarFile("ok.rpm", "ok", 0o644)), entry(tarFile("my file.rpm", "x", 0o644))},
+		"a shell quote": {entry(tarFile("ok.rpm", "ok", 0o644)), entry(tarFile("it's.rpm", "x", 0o644))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newTestAgent(t)
+			a.TakeBuildUploads()
+			_, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t, entries...)))
+			wantBadRequest(t, name, err)
+			notApplied(t, a.workdir, "ok.rpm")
+		})
+	}
+	a := newTestAgent(t)
+	a.TakeBuildUploads()
+	if _, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t,
+		entry(tarFile("rpms/kernel-6.12_x86@64.rpm", "rpm", 0o644)),
+	))); err != nil {
+		t.Errorf("a plain name was rejected: %v", err)
+	}
+}
+
+// A build's upload pod also bounds each file, as the build API's limits
+// say.
+func TestSyncUploadRejectsAFilePastItsLimit(t *testing.T) {
+	a := newTestAgent(t)
+	a.LimitUploads(1<<20, 1<<10)
+	_, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t,
+		entry(tarFile("small.txt", "small", 0o644)),
+		entry(tarFile("big", strings.Repeat("x", 2<<10), 0o644)),
+	)))
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Code != http.StatusRequestEntityTooLarge || !strings.Contains(apiErr.Message, `"big"`) {
+		t.Errorf("err = %v, want a 413 naming big", err)
+	}
+	notApplied(t, a.workdir, "small.txt", "big")
+	noTempFiles(t, a.workdir)
+}
+
+// sparseFile is a PAX sparse entry for a file of size bytes, all of them a
+// hole: the archive carries only its empty sparse map, and tar.Reader reads
+// it as a regular file of size zero bytes. tar.Writer can't write one.
+func sparseFile(name string, size int64) []byte {
+	records := paxRecord("GNU.sparse.major", "1") + paxRecord("GNU.sparse.minor", "0") +
+		paxRecord("GNU.sparse.name", name) + paxRecord("GNU.sparse.realsize", strconv.FormatInt(size, 10))
+	var b bytes.Buffer
+	b.Write(ustarBlock("PaxHeaders/"+name, tar.TypeXHeader, int64(len(records))))
+	b.Write(tarPadded(records))
+	b.Write(ustarBlock(name, tar.TypeReg, 512))
+	b.Write(tarPadded("0\n"))
+	return b.Bytes()
+}
+
+// paxRecord is a PAX record, which starts with its own length.
+func paxRecord(key, value string) string {
+	n := len(key) + len(value) + 3
+	for len(strconv.Itoa(n))+len(key)+len(value)+3 != n {
+		n = len(strconv.Itoa(n)) + len(key) + len(value) + 3
+	}
+	return fmt.Sprintf("%d %s=%s\n", n, key, value)
+}
+
+func ustarBlock(name string, typeflag byte, size int64) []byte {
+	block := make([]byte, 512)
+	copy(block, name)
+	copy(block[100:], "0000644\x00")
+	copy(block[124:], fmt.Sprintf("%011o\x00", size))
+	copy(block[136:], fmt.Sprintf("%011o\x00", syncedAt.Unix()))
+	block[156] = typeflag
+	copy(block[257:], "ustar\x0000")
+	copy(block[148:], "        ")
+	sum := 0
+	for _, c := range block {
+		sum += int(c)
+	}
+	copy(block[148:], fmt.Sprintf("%06o\x00 ", sum))
+	return block
+}
+
+func tarPadded(data string) []byte {
+	return append([]byte(data), make([]byte, -len(data)&511)...)
+}
+
+// A sparse file's holes take no room in the archive but do on disk, so the
+// files together are bounded too.
+func TestSyncUploadRejectsSparseFilesPastTheLimit(t *testing.T) {
+	a := newTestAgent(t)
+	a.TakeBuildUploads()
+	a.LimitUploads(1<<20, 1<<20)
+	tarball := slices.Concat(sparseFile("a.rpm", 1<<20), sparseFile("b.rpm", 1<<20), make([]byte, 1024))
+	req := httptest.NewRequest(http.MethodPost, "/sync/upload", io.MultiReader(strings.NewReader("{}"), bytes.NewReader(compressed(t, tarball))))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	a.Handler("secret", nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), "1 MiB") {
+		t.Errorf("response = %d %s, want a 413 naming the limit", rec.Code, rec.Body.String())
+	}
+	notApplied(t, a.workdir, "a.rpm", "b.rpm")
+	noTempFiles(t, a.workdir)
+
+	// One fits.
+	if _, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(slices.Concat(sparseFile("a.rpm", 1<<20), make([]byte, 1024)))); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(a.workdir, "a.rpm")); err != nil || info.Size() != 1<<20 {
+		t.Errorf("a.rpm = %v, %v, want 1 MiB", info, err)
+	}
 }
 
 // zstd skips skippable frames without producing anything, so the body has a

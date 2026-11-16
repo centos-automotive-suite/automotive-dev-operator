@@ -85,3 +85,19 @@ func TestHandleFileUploadsStopsOnTerminalPhase(t *testing.T) {
 		})
 	}
 }
+
+// Only a regular file uploads, and opening anything else, a FIFO say, could
+// block the upload for good, so the CLI refuses one before it starts.
+func TestHandleFileUploadsTakesOnlyRegularFiles(t *testing.T) {
+	server := fakeBuildServer(t, []buildcontract.BuildResponse{{Name: "build", Phase: phaseFailed, Message: "done"}})
+	t.Cleanup(server.Close)
+	api, err := buildapiclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	err = NewHandler(Options{}).handleFileUploads(t.Context(), api, "build", []map[string]string{{"source_path": dir, "dest": "file"}})
+	if err == nil || !strings.Contains(err.Error(), dir+" is not a regular file") {
+		t.Fatalf("err = %v, want the directory refused", err)
+	}
+}

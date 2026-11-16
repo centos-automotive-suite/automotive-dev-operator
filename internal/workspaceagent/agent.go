@@ -70,19 +70,24 @@ func apiError(code int, format string, args ...any) error {
 // Agent owns every run in one workspace container. mu guards all state,
 // including the files under root.
 type Agent struct {
-	root    string
-	workdir string
-	log     *slog.Logger
-	now     func() time.Time
-	procDir string
-	ptsDir  string
-	// syncing counts sync plans, uploads and deletes in progress, which keep
-	// the workspace active.
+	root      string
+	workdir   string
+	workspace string
+	log       *slog.Logger
+	now       func() time.Time
+	procDir   string
+	ptsDir    string
+	// syncing counts sync plans, uploads and deletes, and file lists and
+	// reads for builds, in progress, which keep the workspace active.
 	syncing atomic.Int32
-	// maxUpload bounds the body of a sync upload, and uploadIdle how long it
-	// may go without sending anything.
+	// maxUpload bounds a sync upload, maxFile each file in one, and
+	// uploadIdle how long an upload may go without sending anything.
 	maxUpload  int64
+	maxFile    int64
 	uploadIdle time.Duration
+	// buildUploads restricts sync uploads to what a build's upload pod
+	// takes.
+	buildUploads bool
 	// uploading lets one sync upload use the staging directory at a time.
 	uploading sync.Mutex
 
@@ -107,19 +112,22 @@ type run struct {
 
 // New loads the records under root. A record still marked live belonged to
 // the previous container, whose commands died with it, so it is marked
-// Interrupted. The caller must hold the agent lock for root.
-func New(root, workdir string, log *slog.Logger) (*Agent, error) {
+// Interrupted. The caller must hold the agent lock for root. Commands run in
+// workdir, and builds read files from workspace.
+func New(root, workdir, workspace string, log *slog.Logger) (*Agent, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, err
 	}
 	a := &Agent{
 		root:       root,
 		workdir:    workdir,
+		workspace:  workspace,
 		log:        log,
 		now:        time.Now,
 		procDir:    "/proc",
 		ptsDir:     "/dev/pts",
-		maxUpload:  maxSyncUploadBytes,
+		maxUpload:  MaxSyncUploadBytes,
+		maxFile:    MaxSyncUploadBytes,
 		uploadIdle: syncUploadIdle,
 		records:    map[string]*record{},
 		broken:     map[string]error{},

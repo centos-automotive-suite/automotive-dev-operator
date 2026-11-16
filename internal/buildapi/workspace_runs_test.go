@@ -34,7 +34,7 @@ import (
 // would, and counts the requests that reach it.
 func startRunAgent(t *testing.T, root string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	agent, err := workspaceagent.New(filepath.Join(root, "runs"), root, slog.New(slog.DiscardHandler))
+	agent, err := workspaceagent.New(filepath.Join(root, "runs"), root, root, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

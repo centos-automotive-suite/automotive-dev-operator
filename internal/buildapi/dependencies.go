@@ -24,6 +24,7 @@ type apiDependencies struct {
 	loadTargetDefaults           func(context.Context, client.Client, string) (map[string]buildcontract.TargetDefaults, error)
 	workspaceAgent               func(context.Context, client.Client, *automotivev1alpha1.Workspace) (*workspaceagent.Client, error)
 	getCatalogClient             func() (client.Client, error)
+	uploadAgent                  func(context.Context, client.Client, *automotivev1alpha1.ImageBuild) (*workspaceagent.Client, error)
 }
 
 func defaultAPIDependencies() apiDependencies {
@@ -37,6 +38,9 @@ func defaultAPIDependencies() apiDependencies {
 			return agentconn.Connect(ctx, kube, ws)
 		},
 		getCatalogClient: newCatalogClient,
+		uploadAgent: func(ctx context.Context, kube client.Client, build *automotivev1alpha1.ImageBuild) (*workspaceagent.Client, error) {
+			return agentconn.ConnectUpload(ctx, kube, build)
+		},
 	}
 }
 

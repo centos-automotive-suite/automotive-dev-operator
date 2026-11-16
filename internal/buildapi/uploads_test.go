@@ -3,15 +3,11 @@ package buildapi
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"mime/multipart"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"reflect"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,131 +15,51 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/remotecommand"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 )
 
-type fakeRemoteExecutor struct {
-	streamWithContextFn func(context.Context, remotecommand.StreamOptions) error
-}
-
-func (f *fakeRemoteExecutor) Stream(options remotecommand.StreamOptions) error {
-	return f.StreamWithContext(context.Background(), options)
-}
-
-func (f *fakeRemoteExecutor) StreamWithContext(ctx context.Context, options remotecommand.StreamOptions) error {
-	if f.streamWithContextFn != nil {
-		return f.streamWithContextFn(ctx, options)
+func newTestImageBuild() *automotivev1alpha1.ImageBuild {
+	return &automotivev1alpha1.ImageBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-build",
+			Namespace:   "test-ns",
+			Annotations: map[string]string{labels.RequestedBy: "test-user"},
+		},
 	}
-	return nil
 }
 
-func writeTempUploadFile(t *testing.T, data []byte) string {
+// newTestUploadPod is test-build's upload pod, its agent ready or not.
+func newTestUploadPod(ready bool) *corev1.Pod {
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-build-upload-pod",
+			Namespace: "test-ns",
+			Labels:    map[string]string{labels.ImageBuildName: "test-build", labels.Name: "upload-pod"},
+		},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: status}},
+		},
+	}
+}
+
+// uploadTestClient returns a client for a build API whose upload pod's agent,
+// started as the controller starts it, serves workdir, and the cluster it
+// sees.
+func uploadTestClient(t *testing.T, workdir string, objs ...ctrlclient.Object) (*buildapiclient.Client, ctrlclient.Client) {
 	t.Helper()
-
-	f, err := os.CreateTemp(t.TempDir(), "upload-*")
-	if err != nil {
-		t.Fatalf("create temp file: %v", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		t.Fatalf("write temp file: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close temp file: %v", err)
-	}
-	return f.Name()
-}
-
-func TestSafeFilename(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		{"empty string", "", false},
-		{"simple filename", "file.txt", true},
-		{"path with slashes", "configs/app.conf", true},
-		{"alphanumeric", "abc123", true},
-		{"with dots hyphens underscores", "my-file_v2.tar.gz", true},
-		{"with at sign", "user@host", true},
-		{"semicolon injection", "file;rm -rf /", false},
-		{"backtick injection", "file`whoami`", false},
-		{"pipe injection", "file|cat /etc/passwd", false},
-		{"dollar expansion", "file$(id)", false},
-		{"space", "file name", false},
-		{"single quote", "file'name", false},
-		{"double quote", "file\"name", false},
-		{"newline", "file\nname", false},
-		{"null byte", "file\x00name", false},
-		{"ampersand", "file&cmd", false},
-		{"parentheses", "file(1)", false},
-		{"hash", "file#1", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := safeFilename(tt.input)
-			if got != tt.expected {
-				t.Errorf("safeFilename(%q) = %v, want %v", tt.input, got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestValidateDestPath(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		wantPath  string
-		wantError bool
-	}{
-		{"simple file", "app.conf", "app.conf", false},
-		{"nested path", "configs/app.conf", "configs/app.conf", false},
-		{"deeply nested", "a/b/c/d.txt", "a/b/c/d.txt", false},
-		{"with at sign", "user@host.key", "user@host.key", false},
-		{"empty string", "", "", true},
-		{"unsafe characters", "file;rm", "", true},
-		{"dot-dot traversal cleaned", "../etc/passwd", "etc/passwd", false},
-		{"mid-path traversal cleaned", "a/../b/c.txt", "b/c.txt", false},
-		{"dot only", ".", "", true},
-		{"slash only resolves to dot", "/", "", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateDestPath(tt.input)
-			if tt.wantError {
-				if err == nil {
-					t.Errorf("validateDestPath(%q) expected error, got path=%q", tt.input, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("validateDestPath(%q) unexpected error: %v", tt.input, err)
-				return
-			}
-			if got != tt.wantPath {
-				t.Errorf("validateDestPath(%q) = %q, want %q", tt.input, got, tt.wantPath)
-			}
-		})
-	}
-}
-
-type uploadTestFixture struct {
-	server   *APIServer
-	fakeK8s  ctrlclient.Client
-	uploaded map[string][]byte // podPath -> content captured by fake executor
-}
-
-func setupUploadTest(t *testing.T, objs ...ctrlclient.Object) *uploadTestFixture {
-	t.Helper()
-
 	gin.SetMode(gin.TestMode)
-
+	t.Setenv("BUILD_API_NAMESPACE", "test-ns")
 	scheme := runtime.NewScheme()
 	if err := automotivev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -151,526 +67,172 @@ func setupUploadTest(t *testing.T, objs ...ctrlclient.Object) *uploadTestFixture
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-
-	builder := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&automotivev1alpha1.ImageBuild{})
-	for _, obj := range objs {
-		builder = builder.WithObjects(obj)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&automotivev1alpha1.ImageBuild{}).Build()
+	agent, err := workspaceagent.New(filepath.Join(t.TempDir(), "runs"), workdir, workdir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
 	}
-	fakeClient := builder.Build()
-
-	server := newTestServer(t, nil)
-	t.Setenv("BUILD_API_NAMESPACE", "test-ns")
-	server.deps.getClientFromRequest = func(_ *gin.Context) (ctrlclient.Client, error) {
-		return fakeClient, nil
-	}
-	server.deps.getRESTConfigFromRequest = func(_ *gin.Context) (*rest.Config, error) {
-		return &rest.Config{}, nil
-	}
-
-	uploaded := make(map[string][]byte)
-	server.exec.newExecutor = func(
-		_ *rest.Config, _, _, _ string, cmd []string,
-	) (remotecommand.Executor, error) {
-		podPath := cmd[len(cmd)-1]
-		return &fakeRemoteExecutor{
-			streamWithContextFn: func(_ context.Context, opts remotecommand.StreamOptions) error {
-				data, _ := io.ReadAll(opts.Stdin)
-				uploaded[podPath] = data
-				return nil
-			},
-		}, nil
-	}
-
-	return &uploadTestFixture{
-		server:   server,
-		fakeK8s:  fakeClient,
-		uploaded: uploaded,
-	}
+	agent.TakeBuildUploads()
+	server := httptest.NewServer(agent.Handler("secret", nil))
+	t.Cleanup(server.Close)
+	a := newTestServer(t, func(deps *apiDependencies) {
+		deps.getClientFromRequest = func(*gin.Context) (ctrlclient.Client, error) { return kube, nil }
+		deps.uploadAgent = func(_ context.Context, _ ctrlclient.Client, build *automotivev1alpha1.ImageBuild) (*workspaceagent.Client, error) {
+			if build.Namespace != "test-ns" || build.Name != "test-build" {
+				t.Errorf("wrong upload agent: %s/%s", build.Namespace, build.Name)
+			}
+			return workspaceagent.NewClient(server.URL, "secret", nil), nil
+		}
+	})
+	router := gin.New()
+	// The client is test-user, who requested test-build.
+	router.Use(func(c *gin.Context) { c.Set("requester", "test-user"); c.Next() })
+	router.POST("/v1/builds/:name/uploads", a.wrapNamedHandler("uploads", a.uploadFiles))
+	return newRunClient(t, router), kube
 }
 
-func newTestImageBuild() *automotivev1alpha1.ImageBuild {
-	return &automotivev1alpha1.ImageBuild{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-build",
-			Namespace: "test-ns",
-			Annotations: map[string]string{
-				labels.RequestedBy: "test-user",
-			},
-		},
-	}
-}
-
-func newTestUploadPod() *corev1.Pod {
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-build-upload",
-			Namespace: "test-ns",
-			Labels: map[string]string{
-				labels.ImageBuildName: "test-build",
-				labels.Name:           "upload-pod",
-			},
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{Name: "fileserver"}},
-		},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
-}
-
-type multipartPart struct{ name, content string }
-
-func buildMultipartRequest(t *testing.T, parts []multipartPart) *http.Request {
+func writeSource(t *testing.T, dir, name, content string, mode os.FileMode) string {
 	t.Helper()
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	for _, p := range parts {
-		var part io.Writer
-		var err error
-		if p.name == "path" {
-			part, err = writer.CreateFormField("path")
-		} else {
-			part, err = writer.CreateFormFile("file", p.name)
+	source := filepath.Join(dir, name)
+	if err := os.WriteFile(source, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	return source
+}
+
+func uploadsComplete(t *testing.T, kube ctrlclient.Client) bool {
+	t.Helper()
+	build := &automotivev1alpha1.ImageBuild{}
+	if err := kube.Get(context.Background(), ctrlclient.ObjectKey{Namespace: "test-ns", Name: "test-build"}, build); err != nil {
+		t.Fatal(err)
+	}
+	return build.Annotations[labels.UploadsComplete] == labels.ValueTrue
+}
+
+// The files go to the upload pod's agent in one request, which the build API
+// relays, and land as exec used to write them: at their destination,
+// readable, and not executable.
+func TestUploadFilesReachTheUploadPod(t *testing.T) {
+	workdir := t.TempDir()
+	api, kube := uploadTestClient(t, workdir, newTestImageBuild(), newTestUploadPod(true))
+	sources := t.TempDir()
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{
+		{SourcePath: writeSource(t, sources, "a.rpm", "rpm", 0o644), DestPath: "rpms/a.rpm"},
+		{SourcePath: writeSource(t, sources, "run.sh", "#!/bin/sh", 0o755), DestPath: "scripts/run.sh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"rpms/a.rpm": "rpm", "scripts/run.sh": "#!/bin/sh"} {
+		path := filepath.Join(workdir, name)
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != want {
+			t.Errorf("%s = %q, %v; want %q", name, data, err, want)
+			continue
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := part.Write([]byte(p.content)); err != nil {
-			t.Fatal(err)
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o644 {
+			t.Errorf("%s mode = %v, %v; want 0644", name, info.Mode(), err)
 		}
 	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	req, _ := http.NewRequest(http.MethodPost, "/v1/builds/test-build/uploads", &body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	return req
-}
-
-func TestUploadFiles_BuildNotFound(t *testing.T) {
-	fix := setupUploadTest(t)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds/nonexistent/uploads", nil)
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "nonexistent")
-
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	if !uploadsComplete(t, kube) {
+		t.Error("the build is not marked as having its uploads")
 	}
 }
 
-func TestUploadFiles_NoPodReady(t *testing.T) {
-	build := newTestImageBuild()
-	fix := setupUploadTest(t, build)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds/test-build/uploads", nil)
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestUploadFiles_ContentTooLarge(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	fix.server.limits.MaxTotalUploadSize = 10
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds/test-build/uploads", bytes.NewReader(make([]byte, 100)))
-	c.Request.ContentLength = 100
-	c.Request.Header.Set("Content-Type", "multipart/form-data; boundary=test")
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("expected 413, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestUploadFiles_SingleFile(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = buildMultipartRequest(t, []multipartPart{
-		{"app.conf", "key=value"},
-	})
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	if data, ok := fix.uploaded["/workspace/shared/app.conf"]; !ok {
-		t.Fatal("file not uploaded to pod")
-	} else if string(data) != "key=value" {
-		t.Fatalf("uploaded content = %q, want %q", data, "key=value")
-	}
-
-	// Verify annotation was set
-	updated := &automotivev1alpha1.ImageBuild{}
-	if err := fix.fakeK8s.Get(context.Background(), ctrlclient.ObjectKeyFromObject(build), updated); err != nil {
-		t.Fatal(err)
-	}
-	if updated.Annotations[labels.UploadsComplete] != labels.ValueTrue {
-		t.Fatalf("UploadsComplete annotation = %q, want %q", updated.Annotations[labels.UploadsComplete], labels.ValueTrue)
-	}
-}
-
-func TestUploadFiles_PathFieldSetsDestination(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = buildMultipartRequest(t, []multipartPart{
-		{"path", "configs/override.conf"},
-		{"upload.dat", "data"},
-	})
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	if _, ok := fix.uploaded["/workspace/shared/configs/override.conf"]; !ok {
-		t.Fatalf("file not at expected path; uploaded keys: %v", keysOf(fix.uploaded))
-	}
-}
-
-func TestUploadFiles_UnsafeFilenameRejected(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = buildMultipartRequest(t, []multipartPart{
-		{"path", "file;rm -rf /"},
-		{"payload", "evil"},
-	})
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestUploadFiles_StreamToPodFails(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	fix.server.exec.newExecutor = func(
-		_ *rest.Config, _, _, _ string, _ []string,
-	) (remotecommand.Executor, error) {
-		return &fakeRemoteExecutor{
-			streamWithContextFn: func(_ context.Context, _ remotecommand.StreamOptions) error {
-				return fmt.Errorf("pod exec failed")
-			},
-		}, nil
-	}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = buildMultipartRequest(t, []multipartPart{
-		{"file.txt", "content"},
-	})
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-	if msg := resp["error"]; msg == "" {
-		t.Fatal("expected error message in response")
-	}
-}
-
-func keysOf(m map[string][]byte) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-func TestUploadFiles_EmptyMultipartRejected(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds/test-build/uploads", &body)
-	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if resp["error"] != "at least one file part is required" {
-		t.Fatalf("unexpected error: %s", resp["error"])
-	}
-}
-
-func TestUploadFiles_PathOnlyNoFileRejected(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = buildMultipartRequest(t, []multipartPart{
-		{"path", "configs/app.conf"},
-	})
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestUploadFiles_PathFieldTooLargeRejected(t *testing.T) {
-	build := newTestImageBuild()
-	pod := newTestUploadPod()
-	fix := setupUploadTest(t, build, pod)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-
-	longPath := strings.Repeat("a", 4097)
-	c.Request = buildMultipartRequest(t, []multipartPart{
-		{"path", longPath},
-		{"file.txt", "content"},
-	})
-
-	c.Set("requester", "test-user")
-	fix.server.uploadFiles(c, "test-build")
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if resp["error"] != "path field too large" {
-		t.Fatalf("unexpected error: %s", resp["error"])
-	}
-}
-
-func TestUploadFiles_StreamingTotalSizeLimit(t *testing.T) {
-	tests := []struct {
-		name         string
-		parts        []multipartPart
-		wantStatus   int
-		wantUploaded map[string]string
-	}{
-		{
-			name:         "single file at limit",
-			parts:        []multipartPart{{"one.bin", "12345"}},
-			wantStatus:   http.StatusOK,
-			wantUploaded: map[string]string{"/workspace/shared/one.bin": "12345"},
-		},
-		{
-			name:         "multiple files below limit",
-			parts:        []multipartPart{{"one.bin", "12"}, {"two.bin", "34"}},
-			wantStatus:   http.StatusOK,
-			wantUploaded: map[string]string{"/workspace/shared/one.bin": "12", "/workspace/shared/two.bin": "34"},
-		},
-		{
-			name:         "multiple files at limit",
-			parts:        []multipartPart{{"one.bin", "12"}, {"two.bin", "345"}},
-			wantStatus:   http.StatusOK,
-			wantUploaded: map[string]string{"/workspace/shared/one.bin": "12", "/workspace/shared/two.bin": "345"},
-		},
-		{
-			name:       "single file over limit",
-			parts:      []multipartPart{{"one.bin", "123456"}},
-			wantStatus: http.StatusRequestEntityTooLarge,
-		},
-		{
-			name:         "multiple files over limit",
-			parts:        []multipartPart{{"one.bin", "123"}, {"two.bin", "456"}, {"three.bin", "7"}},
-			wantStatus:   http.StatusRequestEntityTooLarge,
-			wantUploaded: map[string]string{"/workspace/shared/one.bin": "123"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			build := newTestImageBuild()
-			fix := setupUploadTest(t, build, newTestUploadPod())
-			fix.server.limits.MaxTotalUploadSize = 5
-			fix.server.limits.MaxUploadFileSize = 100
-
-			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
-			c.Request = buildMultipartRequest(t, tt.parts)
-			// Bypass the Content-Length guard so the streamed file bytes enforce the limit.
-			c.Request.ContentLength = -1
-
-			c.Set("requester", "test-user")
-			fix.server.uploadFiles(c, "test-build")
-
-			if w.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d: %s", w.Code, tt.wantStatus, w.Body.String())
+// The CLI retries while the upload pod's agent isn't ready, on this message.
+func TestUploadFilesWaitForTheUploadAgent(t *testing.T) {
+	for name, objs := range map[string][]ctrlclient.Object{
+		"no pod":          {newTestImageBuild()},
+		"a pod not ready": {newTestImageBuild(), newTestUploadPod(false)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api, kube := uploadTestClient(t, t.TempDir(), objs...)
+			source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+			err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+			if err == nil || !strings.Contains(err.Error(), "upload pod not ready") {
+				t.Errorf("err = %v, want the upload pod not ready", err)
 			}
-			if tt.wantStatus == http.StatusRequestEntityTooLarge {
-				var resp map[string]string
-				if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-					t.Fatalf("decode error response: %v", err)
-				}
-				if got, want := resp["error"], "total upload size exceeded: maximum 5 bytes"; got != want {
-					t.Errorf("error = %q, want %q", got, want)
-				}
-			}
-			if len(fix.uploaded) != len(tt.wantUploaded) {
-				t.Errorf("copied files = %v, want %v", keysOf(fix.uploaded), tt.wantUploaded)
-			}
-			for path, want := range tt.wantUploaded {
-				if got, ok := fix.uploaded[path]; !ok || string(got) != want {
-					t.Errorf("copied file %q = %q (present: %t), want %q", path, got, ok, want)
-				}
-			}
-
-			updated := &automotivev1alpha1.ImageBuild{}
-			if err := fix.fakeK8s.Get(context.Background(), ctrlclient.ObjectKeyFromObject(build), updated); err != nil {
-				t.Fatal(err)
-			}
-			if tt.wantStatus == http.StatusOK {
-				if got := updated.Annotations[labels.UploadsComplete]; got != labels.ValueTrue {
-					t.Errorf("UploadsComplete = %q, want %q", got, labels.ValueTrue)
-				}
-			} else if value, exists := updated.Annotations[labels.UploadsComplete]; exists {
-				t.Errorf("rejected upload marked complete: %q", value)
+			if uploadsComplete(t, kube) {
+				t.Error("the build is marked as having its uploads")
 			}
 		})
 	}
 }
 
-func TestCopyFileToPodStreamsRawBytesWithNoTarCommand(t *testing.T) {
-	executor := podExecutor{}
-	content := []byte("hello\x00world\n")
-	localPath := writeTempUploadFile(t, content)
-
-	var gotNamespace, gotPodName, gotContainerName string
-	var gotCmd []string
-	var gotBytes []byte
-
-	executor.newExecutor = func(
-		_ *rest.Config,
-		namespace, podName, containerName string,
-		cmd []string,
-	) (remotecommand.Executor, error) {
-		gotNamespace = namespace
-		gotPodName = podName
-		gotContainerName = containerName
-		gotCmd = append([]string(nil), cmd...)
-
-		return &fakeRemoteExecutor{
-			streamWithContextFn: func(_ context.Context, options remotecommand.StreamOptions) error {
-				data, err := io.ReadAll(options.Stdin)
-				if err != nil {
-					return err
-				}
-				gotBytes = append([]byte(nil), data...)
-				return nil
-			},
-		}, nil
+// What the agent rejects reaches the client, and the build waits on.
+func TestUploadFilesPassOnTheAgentsRejection(t *testing.T) {
+	api, kube := uploadTestClient(t, t.TempDir(), newTestImageBuild(), newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "my file.rpm"}})
+	if err == nil || !strings.Contains(err.Error(), "my file.rpm") {
+		t.Errorf("err = %v, want the agent's rejection naming the file", err)
 	}
-
-	err := executor.copyFileToPod(
-		context.Background(),
-		&rest.Config{},
-		"test-ns",
-		"test-pod",
-		"fileserver",
-		localPath,
-		"/workspace/shared/configs/app.conf",
-	)
-	if err != nil {
-		t.Fatalf("copyFileToPod returned error: %v", err)
-	}
-
-	wantCmd := []string{
-		"/bin/sh",
-		"-c",
-		"mkdir -p \"$(dirname \"$1\")\" && tmp=\"$1.part.$$\" && cat > \"$tmp\" && chmod 0600 \"$tmp\" && mv -f \"$tmp\" \"$1\"",
-		"--",
-		"/workspace/shared/configs/app.conf",
-	}
-	if gotNamespace != "test-ns" || gotPodName != "test-pod" || gotContainerName != "fileserver" {
-		t.Fatalf("unexpected exec target: namespace=%q pod=%q container=%q", gotNamespace, gotPodName, gotContainerName)
-	}
-	if !reflect.DeepEqual(gotCmd, wantCmd) {
-		t.Fatalf("unexpected command:\n got: %#v\nwant: %#v", gotCmd, wantCmd)
-	}
-	if !bytes.Equal(gotBytes, content) {
-		t.Fatalf("unexpected streamed bytes:\n got: %q\nwant: %q", gotBytes, content)
+	if uploadsComplete(t, kube) {
+		t.Error("the build is marked as having its uploads")
 	}
 }
 
-func TestCopyFileToPodPropagatesStreamErrors(t *testing.T) {
-	executor := podExecutor{}
-	localPath := writeTempUploadFile(t, []byte("content"))
-
-	wantErr := errors.New("stream failed")
-	executor.newExecutor = func(
-		_ *rest.Config,
-		_, _, _ string,
-		_ []string,
-	) (remotecommand.Executor, error) {
-		return &fakeRemoteExecutor{
-			streamWithContextFn: func(_ context.Context, _ remotecommand.StreamOptions) error {
-				return wantErr
-			},
-		}, nil
+// An upload without files would let the build start without its inputs.
+func TestUploadFilesRequireAFile(t *testing.T) {
+	api, kube := uploadTestClient(t, t.TempDir(), newTestImageBuild(), newTestUploadPod(true))
+	err := api.UploadFiles(context.Background(), "test-build", nil)
+	if err == nil || !strings.Contains(err.Error(), "at least one file") {
+		t.Errorf("err = %v, want the empty upload rejected", err)
 	}
+	if uploadsComplete(t, kube) {
+		t.Error("the build is marked as having its uploads")
+	}
+}
 
-	err := executor.copyFileToPod(context.Background(), &rest.Config{}, "test-ns", "test-pod", "fileserver", localPath, "/workspace/shared/file.txt")
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("expected error %v, got %v", wantErr, err)
+// Anyone may read a build, but only its requester may change what goes into
+// it.
+func TestUploadFilesRejectsOtherUsersBuild(t *testing.T) {
+	build := newTestImageBuild()
+	build.Annotations[labels.RequestedBy] = "mallory"
+	workdir := t.TempDir()
+	api, kube := uploadTestClient(t, workdir, build, newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "app.conf", "key=value", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "app.conf"}})
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Errorf("err = %v, want a 403", err)
+	}
+	if entries, err := os.ReadDir(workdir); err != nil || len(entries) != 0 {
+		t.Errorf("files reached another user's upload pod: %v, %v", entries, err)
+	}
+	if uploadsComplete(t, kube) {
+		t.Error("the build is marked as having its uploads")
+	}
+}
+
+func TestUploadFilesForAMissingBuild(t *testing.T) {
+	api, _ := uploadTestClient(t, t.TempDir(), newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	if err == nil || !strings.Contains(err.Error(), "404") {
+		t.Errorf("err = %v, want a 404", err)
+	}
+}
+
+// The client sends the agent's format, which the build API relays as it is:
+// an empty request, then a zstd stream.
+func TestUploadFilesSendsTheAgentsFormat(t *testing.T) {
+	received := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body bytes.Buffer
+		_, _ = body.ReadFrom(r.Body)
+		received <- body.Bytes()
+		http.Error(w, "stop", http.StatusTeapot)
+	}))
+	t.Cleanup(server.Close)
+	api, err := buildapiclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	_ = api.UploadFiles(context.Background(), "b", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	body := <-received
+	zstdMagic := []byte{0x28, 0xb5, 0x2f, 0xfd}
+	if !bytes.HasPrefix(body, append([]byte("{}"), zstdMagic...)) {
+		t.Errorf("the body starts %q, want {} and a zstd frame", body[:min(len(body), 8)])
 	}
 }

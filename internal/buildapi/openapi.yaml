@@ -117,15 +117,17 @@ paths:
           type: string
     post:
       operationId: uploadFiles
+      description: >-
+        The body is an empty JSON object followed by a zstd-compressed tar
+        archive of the files, each named by its destination. The build's
+        upload pod takes only regular files named with letters, digits and
+        . - _ / @, and applies all of them or none.
       requestBody:
         content:
-          multipart/form-data:
+          application/octet-stream:
             schema:
-              properties:
-                file:
-                  format: binary
-                  type: string
-              type: object
+              format: binary
+              type: string
         required: true
       responses:
         "200":
@@ -137,13 +139,20 @@ paths:
                     type: string
                 type: object
           description: Upload complete
+        "400":
+          description: Invalid archive, a file a build cannot take, or no files
         "403":
           description: Build belongs to another user
+        "413":
+          description: Upload past the configured size limits
         "503":
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                properties:
+                  error:
+                    type: string
+                type: object
           description: Upload pod not ready
       summary: Upload local files referenced by manifest
   /v1/flash:

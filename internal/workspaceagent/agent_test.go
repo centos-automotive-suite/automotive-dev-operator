@@ -23,7 +23,7 @@ func testOptions() Options {
 
 func newTestAgent(t *testing.T) *Agent {
 	t.Helper()
-	a, err := New(filepath.Join(t.TempDir(), "runs"), t.TempDir(), slog.New(slog.DiscardHandler))
+	a, err := New(filepath.Join(t.TempDir(), "runs"), t.TempDir(), t.TempDir(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestRestartMarksLiveRunsInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a, err := New(root, t.TempDir(), slog.New(slog.DiscardHandler))
+	a, err := New(root, t.TempDir(), t.TempDir(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

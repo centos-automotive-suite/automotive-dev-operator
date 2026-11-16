@@ -27,9 +27,6 @@ const (
 	agentVolume      = "ado-agent"
 	agentTokenVolume = "ado-agent-token"
 	agentTLSVolume   = "ado-agent-tls"
-	// servingCertAnn asks OpenShift's service CA to issue a certificate for
-	// the Service into the named Secret, and to rotate it.
-	servingCertAnn = "service.beta.openshift.io/serving-cert-secret-name"
 	// agentPodLabel selects a workspace's pod for its agent Service. Its
 	// value is the Service name, which is unique per workspace, unlike the
 	// workspace name label, which is truncated to 63 characters.
@@ -54,7 +51,7 @@ func (r *Reconciler) ensureAgentAccess(ctx context.Context, ws *automotivev1alph
 			Name:        workspaceagent.ServiceName(ws.Name),
 			Namespace:   ws.Namespace,
 			Labels:      agentLabels(ws),
-			Annotations: map[string]string{servingCertAnn: workspaceagent.TLSSecretName(ws.Name)},
+			Annotations: map[string]string{agentconn.ServingCertAnn: workspaceagent.TLSSecretName(ws.Name)},
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{agentPodLabel: workspaceagent.ServiceName(ws.Name)},

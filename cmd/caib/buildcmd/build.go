@@ -1192,8 +1192,13 @@ func (h *Handler) handleFileUploads(
 	localRefs []map[string]string,
 ) error {
 	for _, ref := range localRefs {
-		if _, err := os.Stat(ref["source_path"]); err != nil {
+		info, err := os.Stat(ref["source_path"])
+		if err != nil {
 			return fmt.Errorf("referenced file %s does not exist: %w", ref["source_path"], err)
+		}
+		// Opening anything else, a FIFO say, could block the upload for good.
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("referenced file %s is not a regular file", ref["source_path"])
 		}
 	}
 

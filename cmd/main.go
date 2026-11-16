@@ -269,7 +269,7 @@ func main() {
 			Scheme:     mgr.GetScheme(),
 			Log:        ctrl.Log.WithName("controllers").WithName("ImageBuild"),
 			Recorder:   mgr.GetEventRecorder("imagebuild-controller"),
-			RestConfig: mgr.GetConfig(),
+			AgentImage: os.Getenv("OPERATOR_IMAGE"),
 		}
 
 		if err = imageBuildReconciler.SetupWithManager(mgr); err != nil {
