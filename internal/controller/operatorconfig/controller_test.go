@@ -269,9 +269,9 @@ var _ = Describe("build API identity reconciliation", func() {
 		Expect(r.deployBuildAPI(ctx, config)).To(Succeed())
 
 		for _, rule := range buildAPIRole(ctx).Rules {
-			Expect(rule.APIGroups).NotTo(ContainElements("*", "rbac.authorization.k8s.io", "security.openshift.io", "admissionregistration.k8s.io", "apps"), "%+v", rule)
-			Expect(rule.Resources).NotTo(ContainElements("*", "serviceaccounts", "pods/attach", "pods/ephemeralcontainers"), "%+v", rule)
-			Expect(rule.Verbs).NotTo(ContainElements("*", "escalate", "bind", "impersonate"), "%+v", rule)
+			Expect(rule.APIGroups).NotTo(ContainElement(BeElementOf("*", "rbac.authorization.k8s.io", "security.openshift.io", "admissionregistration.k8s.io", "apps")), "%+v", rule)
+			Expect(rule.Resources).NotTo(ContainElement(BeElementOf("*", "serviceaccounts", "pods/attach", "pods/ephemeralcontainers")), "%+v", rule)
+			Expect(rule.Verbs).NotTo(ContainElement(BeElementOf("*", "escalate", "bind", "impersonate")), "%+v", rule)
 			if slices.Contains(rule.Resources, "serviceaccounts/token") {
 				Expect(rule.ResourceNames).To(ConsistOf(automotivev1alpha1.RegistryServiceAccountName, automotivev1alpha1.RegistryPullServiceAccountName),
 					"the build API mints tokens only for the registry accounts")
