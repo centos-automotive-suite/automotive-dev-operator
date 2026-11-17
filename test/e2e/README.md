@@ -182,9 +182,10 @@ See `.github/workflows/e2e.yml` and `.github/workflows/e2e-lanes.yml` for the CI
 
 If tests fail, check:
 
-1. **Controller logs:**
+1. **Controller logs** (the operator runs the OperatorConfig controller; the build controller runs the rest):
    ```bash
    kubectl logs -n automotive-dev-operator-system -l control-plane=operator
+   kubectl logs -n automotive-dev-operator-system -l control-plane=build-controller
    ```
 
 2. **Pod status:**

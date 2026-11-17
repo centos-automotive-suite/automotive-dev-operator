@@ -63,6 +63,8 @@ runs:
             # caib.log is written during tests when E2E_LOG_DIR is set.
             kubectl logs -n "$NS" -l control-plane=operator --all-containers=true --tail=-1 \
               > "$NS_DIR/operator.log" 2>&1 || true
+            kubectl logs -n "$NS" -l control-plane=build-controller --all-containers=true --tail=-1 \
+              > "$NS_DIR/build-controller.log" 2>&1 || true
             kubectl logs -n "$NS" -l app.kubernetes.io/component=build-api --all-containers=true --tail=-1 \
               > "$NS_DIR/build-api.log" 2>&1 || true
             kubectl get pods -n "$NS" -o wide > "$NS_DIR/pods.log" 2>&1 || true
