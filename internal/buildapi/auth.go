@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	watchpkg "k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
@@ -89,7 +90,8 @@ func caRefsFromConfig(operatorConfig *automotivev1alpha1.OperatorConfig, default
 	return refs
 }
 
-// startResourceWatcher watches OperatorConfig and all referenced CA Secrets/ConfigMaps.
+// startResourceWatcher watches OperatorConfig and polls the CA Secrets and
+// ConfigMaps it references.
 // On any change it refreshes the auth config and restarts the session to pick up updated refs.
 func (a *APIServer) startResourceWatcher(ctx context.Context) {
 	watchClient, err := getWatchClient()
@@ -112,7 +114,7 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 		go a.watchOperatorConfigSession(sessionCtx, watchClient, namespace, eventCh)
 
 		for _, ref := range caRefs {
-			go a.watchCARefSession(sessionCtx, watchClient, ref, eventCh)
+			go a.pollCARef(sessionCtx, watchClient, ref, caPollInterval, eventCh)
 		}
 
 		select {
@@ -176,65 +178,57 @@ func (a *APIServer) runOperatorConfigWatchOnce(ctx context.Context, watchClient 
 	}
 }
 
-func (a *APIServer) watchCARefSession(ctx context.Context, watchClient client.WithWatch, ref caRef, eventCh chan<- struct{}) {
-	for {
-		if ctx.Err() != nil {
-			return
+// caPollInterval is how often the build API rereads its OIDC issuers' CAs.
+const caPollInterval = time.Minute
+
+// pollCARef signals eventCh once the CA Secret or ConfigMap ref names is
+// changed, created or deleted. It polls by name because the build API may read
+// Secrets and ConfigMaps only by name: a watch needs list and watch on the
+// whole namespace.
+func (a *APIServer) pollCARef(ctx context.Context, c client.Reader, ref caRef, interval time.Duration, eventCh chan<- struct{}) {
+	kind := "Secret"
+	if ref.isConfigMap {
+		kind = "ConfigMap"
+	}
+	version := func() (string, error) {
+		var obj client.Object = &corev1.Secret{}
+		if ref.isConfigMap {
+			obj = &corev1.ConfigMap{}
 		}
-		if err := a.runCARefWatchOnce(ctx, watchClient, ref, eventCh); err != nil {
+		err := c.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, obj)
+		if k8serrors.IsNotFound(err) {
+			return "", nil
+		}
+		return obj.GetResourceVersion(), err
+	}
+
+	a.log.Info("polling CA reference for changes", "kind", kind, "namespace", ref.namespace, "name", ref.name)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var last string
+	known := false
+	for {
+		current, err := version()
+		switch {
+		case err != nil:
 			if ctx.Err() != nil {
 				return
 			}
-			a.log.Error(err, "CA ref watch error, reconnecting in 5s", "name", ref.name, "namespace", ref.namespace)
+			a.log.Error(err, "failed to read CA reference", "kind", kind, "namespace", ref.namespace, "name", ref.name)
+		case !known:
+			last, known = current, true
+		case current != last:
+			a.log.Info("CA reference changed", "kind", kind, "namespace", ref.namespace, "name", ref.name)
 			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(5 * time.Second):
+			case eventCh <- struct{}{}:
+			default:
 			}
+			return
 		}
-	}
-}
-
-func (a *APIServer) runCARefWatchOnce(ctx context.Context, watchClient client.WithWatch, ref caRef, eventCh chan<- struct{}) error {
-	var (
-		watcher watchpkg.Interface
-		err     error
-		kind    = "Secret"
-	)
-	if ref.isConfigMap {
-		kind = "ConfigMap"
-		watcher, err = watchClient.Watch(ctx, &corev1.ConfigMapList{},
-			client.InNamespace(ref.namespace),
-			client.MatchingFields{"metadata.name": ref.name})
-	} else {
-		watcher, err = watchClient.Watch(ctx, &corev1.SecretList{},
-			client.InNamespace(ref.namespace),
-			client.MatchingFields{"metadata.name": ref.name})
-	}
-	if err != nil {
-		return fmt.Errorf("failed to start %s watch for %s/%s: %w", kind, ref.namespace, ref.name, err)
-	}
-	defer watcher.Stop()
-
-	a.log.Info("watching CA reference for changes", "kind", kind, "namespace", ref.namespace, "name", ref.name)
-	for {
 		select {
 		case <-ctx.Done():
-			return nil
-		case event, ok := <-watcher.ResultChan():
-			if !ok {
-				return fmt.Errorf("%s watch channel closed for %s/%s", kind, ref.namespace, ref.name)
-			}
-			switch event.Type {
-			case watchpkg.Modified, watchpkg.Deleted:
-				a.log.Info("CA reference changed", "kind", kind, "namespace", ref.namespace, "name", ref.name, "event", event.Type)
-				select {
-				case eventCh <- struct{}{}:
-				default:
-				}
-			case watchpkg.Error:
-				return fmt.Errorf("%s watch error event for %s/%s", kind, ref.namespace, ref.name)
-			}
+			return
+		case <-ticker.C:
 		}
 	}
 }
@@ -584,3 +578,4 @@ func (a *APIServer) handleGetAuthConfig(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, response)
 }
+
