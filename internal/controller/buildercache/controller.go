@@ -38,6 +38,14 @@ var (
 	pinPattern      = regexp.MustCompile(`^pin-[a-f0-9]{64}$`)
 )
 
+// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=operatorconfigs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=operatorconfigs/status,verbs=get;patch
+// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagebuilds;imagereseals,verbs=get;list;watch
+// +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=catalogimages,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreams,verbs=get;update
+// +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreamtags,verbs=delete
+// +kubebuilder:rbac:groups=events.k8s.io,namespace=system,resources=events,verbs=create;patch
+
 // Reconciler uses uncached reads for retention decisions and updates the existing ImageStream.
 // It deliberately does not watch ImageStreams or require additional registry/task permissions.
 type Reconciler struct {
