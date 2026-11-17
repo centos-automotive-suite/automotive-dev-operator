@@ -177,7 +177,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, con
 					},
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "ado-operator",
+					ServiceAccountName: automotivev1alpha1.BuildAPIServiceAccountName,
 					Containers:         r.buildBuildAPIContainers(namespace, config),
 					// No volumes needed - Build API reads directly from OperatorConfig CRD
 				},
