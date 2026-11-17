@@ -62,11 +62,11 @@ func dumpContainerBuildLogs(buildName string) {
 		_, _ = fmt.Fprintf(GinkgoWriter, "\n--- %s / %s ---\n%s\n", podName, container, string(logs))
 	}
 
-	// Dump operator controller logs for reconciliation debugging
+	// Dump build controller logs for reconciliation debugging
 	opLogs, _ := utils.Run(exec.Command("kubectl", "logs",
-		"-n", testNamespace, "deployment/ado-operator",
+		"-n", testNamespace, "deployment/ado-build-controller",
 		"--tail=50"))
-	_, _ = fmt.Fprintf(GinkgoWriter, "\n--- operator controller logs (last 50 lines) ---\n%s\n", string(opLogs))
+	_, _ = fmt.Fprintf(GinkgoWriter, "\n--- build controller logs (last 50 lines) ---\n%s\n", string(opLogs))
 }
 
 // isShipwrightInstalled checks if Shipwright CRDs are present on the cluster.

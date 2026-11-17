@@ -13,3 +13,6 @@ subjects:
 - kind: ServiceAccount
   name: operator
   namespace: system
+- kind: ServiceAccount
+  name: build-controller
+  namespace: system

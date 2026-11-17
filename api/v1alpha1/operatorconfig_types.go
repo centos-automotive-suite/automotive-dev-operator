@@ -176,10 +176,6 @@ type BuildAPIResourcesConfig struct {
 	// BuildAPI defines resource requirements for the Build API container
 	// +optional
 	BuildAPI *corev1.ResourceRequirements `json:"buildAPI,omitempty"`
-
-	// BuildController defines resource requirements for the build controller container
-	// +optional
-	BuildController *corev1.ResourceRequirements `json:"buildController,omitempty"`
 }
 
 // GetBuildAPIResources returns the Build API resource requirements with defaults
@@ -194,23 +190,6 @@ func (c *BuildAPIResourcesConfig) GetBuildAPIResources() corev1.ResourceRequirem
 		},
 		Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("200m"),
-			corev1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-	}
-}
-
-// GetBuildControllerResources returns the build controller resource requirements with defaults
-func (c *BuildAPIResourcesConfig) GetBuildControllerResources() corev1.ResourceRequirements {
-	if c != nil && c.BuildController != nil {
-		return *c.BuildController
-	}
-	return corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("100m"),
-			corev1.ResourceMemory: resource.MustParse("256Mi"),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("1000m"),
 			corev1.ResourceMemory: resource.MustParse("512Mi"),
 		},
 	}

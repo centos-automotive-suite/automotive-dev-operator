@@ -540,9 +540,9 @@ oc patch operatorconfig config -n automotive-dev-operator-system --type=merge -p
   }
 }'
 
-# Restart operator pod to pick up tracing config (OLM manages the deployment,
-# so oc rollout restart does not work)
-oc delete pod -n automotive-dev-operator-system -l control-plane=operator
+# Restart the operator and build controller pods to pick up tracing config (OLM
+# manages the deployments, so oc rollout restart does not work)
+oc delete pod -n automotive-dev-operator-system -l 'control-plane in (operator,build-controller)'
 ```
 
 Optional tracing fields:

@@ -203,10 +203,6 @@ uninstall_operator() {
     echo "Deleting build controller resources..."
     oc delete deployment ado-build-controller -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
     oc delete serviceaccount ado-build-controller -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete clusterrole ado-build-controller --ignore-not-found=true 2>/dev/null || true
-    oc delete clusterrolebinding ado-build-controller --ignore-not-found=true 2>/dev/null || true
-    oc delete role ado-build-controller-leader-election -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
-    oc delete rolebinding ado-build-controller-leader-election -n ${NAMESPACE} --ignore-not-found=true 2>/dev/null || true
 
     # Cluster-scoped, so neither OLM nor namespace deletion removes them, and the
     # operator's own cleanup was skipped when the OperatorConfig finalizer was cleared.
@@ -220,7 +216,7 @@ uninstall_operator() {
 
     echo "Waiting for operator pods to terminate..."
     oc wait --for=delete pod -l control-plane=operator -n ${NAMESPACE} --timeout=60s 2>/dev/null || true
-    oc wait --for=delete pod -l app.kubernetes.io/component=build-controller -n ${NAMESPACE} --timeout=60s 2>/dev/null || true
+    oc wait --for=delete pod -l control-plane=build-controller -n ${NAMESPACE} --timeout=60s 2>/dev/null || true
 
     echo "Deleting CatalogSource to force catalog refresh..."
     oc delete catalogsource ${CATALOG_NAME} -n ${CATALOG_NAMESPACE} --ignore-not-found=true
@@ -483,10 +479,10 @@ if [ "$COMMAND" = "redeploy" ]; then
     done
 
     echo ""
-    echo "Waiting for operator deployment to be available..."
+    echo "Waiting for operator and build controller deployments to be available..."
     for _ in {1..30}; do
-        if oc get deployment ado-operator -n ${NAMESPACE} &>/dev/null; then
-            oc wait --for=condition=Available deployment/ado-operator -n ${NAMESPACE} --timeout=300s && break
+        if oc get deployment ado-operator ado-build-controller -n ${NAMESPACE} &>/dev/null; then
+            oc wait --for=condition=Available deployment/ado-operator deployment/ado-build-controller -n ${NAMESPACE} --timeout=300s && break
         fi
         echo "  Deployment not yet created, checking pod status..."
         oc get pods -n ${NAMESPACE} 2>/dev/null | grep -v "^NAME" || true
