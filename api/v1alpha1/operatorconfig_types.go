@@ -100,6 +100,10 @@ const (
 	// BuildControllerServiceAccountName is the SA the build controller
 	// Deployment runs as (config/rbac/build-controller, with the ado- prefix).
 	BuildControllerServiceAccountName = "ado-build-controller"
+
+	// BuildAPIServiceAccountName is the SA the build API Deployment runs as
+	// (config/rbac/build-api, with the ado- prefix).
+	BuildAPIServiceAccountName = "ado-build-api"
 )
 
 // ImagesConfig defines container image references used by the operator

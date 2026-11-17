@@ -96,8 +96,10 @@ help: ## Display this help.
 
 ##@ Development
 
-# Controllers run by the build controller Deployment (--mode=build): every
-# controller package except operatorconfig, which runs in the operator.
+# Each Deployment gets a role generated from the RBAC markers of the code it
+# runs: the operator (manager-role) runs only the operatorconfig controller,
+# the build controller (--mode=build) every other controller package, and the
+# build API internal/buildapi.
 BUILD_CONTROLLER_PATHS = $(foreach d,$(filter-out internal/controller/operatorconfig/ internal/controller/test/,$(wildcard internal/controller/*/)),paths="./$(d)...")
 
 # Deployments in config/manager whose OPERATOR_IMAGE `make deploy` points at IMG.
@@ -105,8 +107,9 @@ MANAGER_DEPLOYMENTS = manager.yaml build_controller.yaml
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./api/..." paths="./internal/controller/..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./api/..." paths="./internal/controller/operatorconfig/..." output:crd:artifacts:config=config/crd/bases
 	$(CONTROLLER_GEN) rbac:roleName=build-controller-role $(BUILD_CONTROLLER_PATHS) output:rbac:artifacts:config=config/rbac/build-controller
+	$(CONTROLLER_GEN) rbac:roleName=build-api-role paths="./internal/buildapi/..." output:rbac:artifacts:config=config/rbac/build-api
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

@@ -8,6 +8,7 @@ resources:
 - role.yaml
 - role_binding.yaml
 - build-controller
+- build-api
 - leader_election_role.yaml
 - leader_election_role_binding.yaml
 # The following RBAC configurations are used to protect

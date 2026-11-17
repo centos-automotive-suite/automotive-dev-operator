@@ -17,10 +17,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
-// The build controller may create pods and Tekton runs in the operator's
-// namespace, and RBAC cannot limit which ServiceAccount those run as. The
-// admission policy must keep it from starting one as the operator's.
-func TestBuildControllerWorkloadPolicy(t *testing.T) {
+// The build controller and the build API may create pods and Tekton runs in
+// the operator's namespace, and RBAC cannot limit which ServiceAccount those
+// run as. The admission policy must keep them from starting one as the
+// operator's.
+func TestWorkloadAccountsPolicy(t *testing.T) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("set KUBEBUILDER_ASSETS or run make test for admission policy tests")
 	}
@@ -47,9 +48,10 @@ func TestBuildControllerWorkloadPolicy(t *testing.T) {
 	controllerSA := automotivev1alpha1.BuildControllerServiceAccountName
 
 	r := &OperatorConfigReconciler{}
-	policy := r.buildBuildControllerWorkloadPolicy(ns)
+	policy := r.buildWorkloadAccountsPolicy(ns)
 	objects := []client.Object{&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}}
-	for _, sa := range []string{controllerSA, "ado-operator", automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName} {
+	buildAPISA := automotivev1alpha1.BuildAPIServiceAccountName
+	for _, sa := range []string{controllerSA, buildAPISA, "ado-operator", automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName} {
 		objects = append(objects, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa, Namespace: ns}})
 	}
 	objects = append(objects,
@@ -64,10 +66,13 @@ func TestBuildControllerWorkloadPolicy(t *testing.T) {
 		&rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: "workloads", Namespace: ns},
 			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "workloads"},
-			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: controllerSA, Namespace: ns}},
+			Subjects: []rbacv1.Subject{
+				{Kind: rbacv1.ServiceAccountKind, Name: controllerSA, Namespace: ns},
+				{Kind: rbacv1.ServiceAccountKind, Name: buildAPISA, Namespace: ns},
+			},
 		},
 		policy,
-		r.buildBuildControllerWorkloadPolicyBinding(ns),
+		r.buildWorkloadAccountsPolicyBinding(ns),
 	)
 	for _, obj := range objects {
 		if err := admin.Create(ctx, obj); err != nil {
@@ -76,6 +81,7 @@ func TestBuildControllerWorkloadPolicy(t *testing.T) {
 	}
 
 	asController := impersonateSA(t, cfg, ns, controllerSA)
+	asBuildAPI := impersonateSA(t, cfg, ns, buildAPISA)
 	pod := func(sa string) client.Object {
 		return &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{GenerateName: "pod-", Namespace: ns},
@@ -124,6 +130,10 @@ func TestBuildControllerWorkloadPolicy(t *testing.T) {
 			obj: run("shipwright.io/v1beta1", "BuildRun", map[string]any{"serviceAccount": automotivev1alpha1.BuildServiceAccountName})},
 		{name: "operator BuildRun", as: asController,
 			obj: run("shipwright.io/v1beta1", "BuildRun", map[string]any{"serviceAccount": "ado-operator"})},
+		{name: "build API flash TaskRun", as: asBuildAPI, allowed: true,
+			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName})},
+		{name: "build API operator TaskRun", as: asBuildAPI,
+			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": "ado-operator"})},
 		{name: "other users unaffected", as: admin, obj: pod("ado-operator"), allowed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

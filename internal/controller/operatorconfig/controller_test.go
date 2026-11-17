@@ -145,8 +145,8 @@ var _ = Describe("build identity reconciliation", func() {
 			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: pipelineSCCBindingName, Namespace: "test-ns"}},
 			&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: r.buildBuildPodPatchPolicy("test-ns").Name}},
 			&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: r.buildBuildPodPatchPolicyBinding("test-ns").Name}},
-			&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: r.buildBuildControllerWorkloadPolicy("test-ns").Name}},
-			&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: r.buildBuildControllerWorkloadPolicyBinding("test-ns").Name}},
+			&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: r.buildWorkloadAccountsPolicy("test-ns").Name}},
+			&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: r.buildWorkloadAccountsPolicyBinding("test-ns").Name}},
 		}
 	}
 

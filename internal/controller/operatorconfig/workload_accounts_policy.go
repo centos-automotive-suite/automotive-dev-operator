@@ -9,16 +9,19 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-func buildControllerWorkloadPolicyName(namespace string) string {
-	return "ado-build-controller-workloads-" + namespace
+func workloadAccountsPolicyName(namespace string) string {
+	return "ado-workload-accounts-" + namespace
 }
 
-// buildBuildControllerWorkloadPolicy limits the ServiceAccounts the build
-// controller may run workloads as. RBAC lets it create pods and Tekton and
-// Shipwright runs but cannot say which ServiceAccount they use, so without
-// this it could start one as the operator and take its permissions.
-func (r *OperatorConfigReconciler) buildBuildControllerWorkloadPolicy(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicy {
-	controllerUser := "system:serviceaccount:" + namespace + ":" + automotivev1alpha1.BuildControllerServiceAccountName
+// buildWorkloadAccountsPolicy limits the ServiceAccounts the build controller
+// and the build API may run workloads as. RBAC lets them create pods and
+// Tekton and Shipwright runs but cannot say which ServiceAccount those use, so
+// without this either could start one as the operator and take its
+// permissions.
+func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicy {
+	users := fmt.Sprintf("[%q, %q]",
+		"system:serviceaccount:"+namespace+":"+automotivev1alpha1.BuildControllerServiceAccountName,
+		"system:serviceaccount:"+namespace+":"+automotivev1alpha1.BuildAPIServiceAccountName)
 	rule := func(group, version string, resources ...string) admissionregistrationv1.NamedRuleWithOperations {
 		return admissionregistrationv1.NamedRuleWithOperations{
 			RuleWithOperations: admissionregistrationv1.RuleWithOperations{
@@ -31,10 +34,10 @@ func (r *OperatorConfigReconciler) buildBuildControllerWorkloadPolicy(namespace 
 	}
 	return &admissionregistrationv1.ValidatingAdmissionPolicy{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: buildControllerWorkloadPolicyName(namespace),
+			Name: workloadAccountsPolicyName(namespace),
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "build-controller",
+				"app.kubernetes.io/component": "build",
 				"app.kubernetes.io/part-of":   "automotive-dev-operator",
 			},
 		},
@@ -50,8 +53,8 @@ func (r *OperatorConfigReconciler) buildBuildControllerWorkloadPolicy(namespace 
 				},
 			},
 			MatchConditions: []admissionregistrationv1.MatchCondition{{
-				Name:       "build-controller",
-				Expression: fmt.Sprintf("request.userInfo.username == %q", controllerUser),
+				Name:       "build-workload-creators",
+				Expression: "request.userInfo.username in " + users,
 			}},
 			Variables: []admissionregistrationv1.Variable{
 				// An empty name leaves the choice to the cluster: the pod's
@@ -68,23 +71,23 @@ func (r *OperatorConfigReconciler) buildBuildControllerWorkloadPolicy(namespace 
 			},
 			Validations: []admissionregistrationv1.Validation{{
 				Expression: "variables.serviceAccounts.all(sa, sa in variables.allowed)",
-				Message: fmt.Sprintf("the build controller may only run workloads as %s or %s",
+				Message: fmt.Sprintf("build workloads may only run as %s or %s",
 					automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName),
 			}},
 		},
 	}
 }
 
-// buildBuildControllerWorkloadPolicyBinding enforces the workload policy in
+// buildWorkloadAccountsPolicyBinding enforces the workload policy in
 // the operator's namespace only.
-func (r *OperatorConfigReconciler) buildBuildControllerWorkloadPolicyBinding(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicyBinding {
-	name := buildControllerWorkloadPolicyName(namespace)
+func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicyBinding(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicyBinding {
+	name := workloadAccountsPolicyName(namespace)
 	return &admissionregistrationv1.ValidatingAdmissionPolicyBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "build-controller",
+				"app.kubernetes.io/component": "build",
 				"app.kubernetes.io/part-of":   "automotive-dev-operator",
 			},
 		},
