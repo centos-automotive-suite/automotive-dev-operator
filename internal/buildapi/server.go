@@ -132,6 +132,7 @@ type APIServer struct {
 	oidcClientID        string
 	authConfigMu        sync.RWMutex // Protects externalJWT, authConfig, internalPrefix, oidcClientID
 	lastAuthConfigCheck time.Time    // Last time we checked OperatorConfig
+	refreshMu           sync.Mutex   // Serializes auth config refreshes
 	progressCache       map[string]progressCacheEntry
 	progressCacheMu     sync.RWMutex
 	// shellPingInterval is how often a workspace shell's client is pinged;

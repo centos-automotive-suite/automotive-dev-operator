@@ -200,7 +200,10 @@ func TestFailedRefreshRetriesAfterAPollInterval(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config, secret).Build()
 	a := &APIServer{log: logr.Discard()}
 
-	refs := a.refreshAuthConfig(c, "ado")
+	refs, err := a.refreshAuthConfig(c, "ado")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(refs) != 1 {
 		t.Fatalf("got %d CA refs, want 1", len(refs))
 	}
