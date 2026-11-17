@@ -58,6 +58,8 @@ rules:
   - get
 - apiGroups:
   - ""
+  resourceNames:
+  - ado-registry-pull
   resources:
   - serviceaccounts/token
   verbs:

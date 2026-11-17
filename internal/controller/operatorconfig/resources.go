@@ -30,8 +30,11 @@ const (
 	workspaceSCCName            = "ado-workspace-scc"
 	serviceMonitorName          = "ado-operator-metrics"
 	serviceMonitorTokenSecret   = "ado-operator-metrics-token"
-	metricsReaderRoleName       = "ado-metrics-reader"
-	metricsReaderBindingName    = "ado-metrics-reader"
+	// metricsScraperServiceAccountName may only read metrics. Prometheus
+	// scrapes with its token, kept in a Secret of the operator's namespace.
+	metricsScraperServiceAccountName = "ado-metrics-scraper"
+	metricsReaderRoleName            = "ado-metrics-reader"
+	metricsReaderBindingName         = "ado-metrics-reader"
 )
 
 // getOperatorImage returns the operator image from env var, then config, then default constant
@@ -651,13 +654,29 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCC() *securityv1.SecurityConte
 	}
 }
 
+func (r *OperatorConfigReconciler) buildMetricsScraperServiceAccount(namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      metricsScraperServiceAccountName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "monitoring",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		// No pod runs as it; Prometheus only uses the token Secret below.
+		AutomountServiceAccountToken: new(false),
+	}
+}
+
 func (r *OperatorConfigReconciler) buildMetricsTokenSecret(namespace string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      serviceMonitorTokenSecret,
 			Namespace: namespace,
 			Annotations: map[string]string{
-				"kubernetes.io/service-account.name": "ado-operator",
+				"kubernetes.io/service-account.name": metricsScraperServiceAccountName,
 			},
 		},
 		Type: corev1.SecretTypeServiceAccountToken,
@@ -715,7 +734,7 @@ func (r *OperatorConfigReconciler) buildMetricsReaderClusterRoleBinding(namespac
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      "ado-operator",
+				Name:      metricsScraperServiceAccountName,
 				Namespace: namespace,
 			},
 		},

@@ -96,6 +96,10 @@ const (
 	// Tokens handed to users and to flash jobs are for this SA, so they cannot
 	// overwrite tags in shared streams such as the builder cache.
 	RegistryPullServiceAccountName = "ado-registry-pull"
+
+	// BuildControllerServiceAccountName is the SA the build controller
+	// Deployment runs as (config/rbac/build-controller, with the ado- prefix).
+	BuildControllerServiceAccountName = "ado-build-controller"
 )
 
 // ImagesConfig defines container image references used by the operator

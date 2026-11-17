@@ -189,6 +189,8 @@ type OperatorConfigReconciler struct {
 // +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreams,verbs=create
 // +kubebuilder:rbac:groups=monitoring.coreos.com,namespace=system,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=ado-metrics-reader,verbs=bind
+// The build API runs as ado-operator and mints registry tokens for builds and users.
+// +kubebuilder:rbac:groups="",namespace=system,resources=serviceaccounts/token,resourceNames=ado-registry;ado-registry-pull,verbs=create
 
 // setCondition sets a condition on the OperatorConfig status
 func (r *OperatorConfigReconciler) setCondition(
@@ -753,8 +755,9 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 }
 
 // deployBuildIdentity reconciles the ServiceAccounts that build pods and
-// minted registry tokens run as, and the policy that limits build pods to
-// reporting their own progress.
+// minted registry tokens run as, the policy that limits build pods to
+// reporting their own progress, and the policy that limits which of them the
+// build controller may run workloads as.
 func (r *OperatorConfigReconciler) deployBuildIdentity(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
 	objects := []client.Object{
 		r.buildBuildServiceAccount(config.Namespace),
@@ -762,6 +765,8 @@ func (r *OperatorConfigReconciler) deployBuildIdentity(ctx context.Context, conf
 		r.buildRegistryServiceAccount(automotivev1alpha1.RegistryPullServiceAccountName, config.Namespace),
 		r.buildBuildPodPatchPolicy(config.Namespace),
 		r.buildBuildPodPatchPolicyBinding(config.Namespace),
+		r.buildBuildControllerWorkloadPolicy(config.Namespace),
+		r.buildBuildControllerWorkloadPolicyBinding(config.Namespace),
 	}
 	// On OpenShift, bind the build SA to the privileged SCC for build pods
 	openShift := r.detectOpenShift(ctx, config.Namespace)
@@ -799,12 +804,15 @@ func (r *OperatorConfigReconciler) deployBuildIdentity(ctx context.Context, conf
 // It keeps the builder cache ImageStream and the images cached in it.
 func (r *OperatorConfigReconciler) cleanupBuildIdentity(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
 	policyName := buildPodPatchPolicyName(config.Namespace)
+	workloadPolicyName := buildControllerWorkloadPolicyName(config.Namespace)
 	for _, obj := range []client.Object{
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.BuildServiceAccountName, Namespace: config.Namespace}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.RegistryServiceAccountName, Namespace: config.Namespace}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.RegistryPullServiceAccountName, Namespace: config.Namespace}},
 		&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: policyName}},
 		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: policyName}},
+		&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: workloadPolicyName}},
+		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: workloadPolicyName}},
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: sccPrivilegedRoleName}},
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: pipelineSCCBindingName, Namespace: config.Namespace}},
 	} {
@@ -905,6 +913,11 @@ func (r *OperatorConfigReconciler) reconcileMonitoring(ctx context.Context, conf
 }
 
 func (r *OperatorConfigReconciler) deployServiceMonitor(ctx context.Context, config *automotivev1alpha1.OperatorConfig) (bool, error) {
+	// The token controller fills the Secret only once its ServiceAccount exists.
+	if err := r.createOrUpdate(ctx, r.buildMetricsScraperServiceAccount(config.Namespace), config); err != nil {
+		return false, fmt.Errorf("failed to create/update metrics scraper service account: %w", err)
+	}
+
 	tokenSecret := r.buildMetricsTokenSecret(config.Namespace)
 	if err := r.createOrUpdate(ctx, tokenSecret, config); err != nil {
 		return false, fmt.Errorf("failed to create/update metrics token secret: %w", err)
@@ -974,6 +987,11 @@ func (r *OperatorConfigReconciler) cleanupServiceMonitor(ctx context.Context, co
 	clusterBinding.Name = metricsReaderBindingName
 	if err := r.Delete(ctx, clusterBinding); err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete metrics reader cluster role binding: %w", err)
+	}
+
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: metricsScraperServiceAccountName, Namespace: config.Namespace}}
+	if err := r.Delete(ctx, sa); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete metrics scraper service account: %w", err)
 	}
 	return nil
 }
