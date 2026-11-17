@@ -93,10 +93,16 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 	}
 
 	// The policy is loaded asynchronously; wait until it denies a request.
+	// Other errors may be transient, so only a denial naming it ends the wait.
+	policyName := workloadAccountsPolicyName(ns)
 	deadline := time.Now().Add(30 * time.Second)
-	for asController.Create(ctx, pod("ado-operator")) == nil {
+	for {
+		err := asController.Create(ctx, pod("ado-operator"))
+		if err != nil && strings.Contains(err.Error(), policyName) {
+			break
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("admission policy never took effect")
+			t.Fatalf("admission policy never took effect, last result: %v", err)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

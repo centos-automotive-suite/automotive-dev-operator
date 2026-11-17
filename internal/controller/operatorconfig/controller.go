@@ -243,6 +243,10 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			log.Error(err, "Failed to cleanup ServiceMonitor")
 			return ctrl.Result{}, err
 		}
+		if err := r.cleanupWorkloadAccountsPolicy(ctx, config); err != nil {
+			log.Error(err, "Failed to cleanup workload accounts policy")
+			return ctrl.Result{}, err
+		}
 		log.Info("Removing finalizer")
 		controllerutil.RemoveFinalizer(config, finalizerName)
 		if err := r.Update(ctx, config); err != nil {
@@ -254,6 +258,11 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	r.setCondition(config, automotivev1alpha1.OperatorConfigConditionReconciling, metav1.ConditionTrue, "Reconciling", "Reconciliation in progress")
+
+	if err := r.deployWorkloadAccountsPolicy(ctx, config); err != nil {
+		log.Error(err, "Failed to deploy workload accounts policy")
+		return ctrl.Result{}, err
+	}
 
 	// Reconcile OSBuilds
 	log.Info("Processing OSBuilds configuration", "osBuilds", config.Spec.OSBuilds, "generation", config.Generation)
@@ -753,9 +762,8 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 }
 
 // deployBuildIdentity reconciles the ServiceAccounts that build pods and
-// minted registry tokens run as, the policy that limits build pods to
-// reporting their own progress, and the policy that limits which of them the
-// build controller and the build API may run workloads as.
+// minted registry tokens run as, and the policy that limits build pods to
+// reporting their own progress.
 func (r *OperatorConfigReconciler) deployBuildIdentity(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
 	objects := []client.Object{
 		r.buildBuildServiceAccount(config.Namespace),
@@ -763,8 +771,6 @@ func (r *OperatorConfigReconciler) deployBuildIdentity(ctx context.Context, conf
 		r.buildRegistryServiceAccount(automotivev1alpha1.RegistryPullServiceAccountName, config.Namespace),
 		r.buildBuildPodPatchPolicy(config.Namespace),
 		r.buildBuildPodPatchPolicyBinding(config.Namespace),
-		r.buildWorkloadAccountsPolicy(config.Namespace),
-		r.buildWorkloadAccountsPolicyBinding(config.Namespace),
 	}
 	// On OpenShift, bind the build SA to the privileged SCC for build pods
 	openShift := r.detectOpenShift(ctx, config.Namespace)
@@ -797,20 +803,50 @@ func (r *OperatorConfigReconciler) deployBuildIdentity(ctx context.Context, conf
 	return nil
 }
 
+// deployWorkloadAccountsPolicy reconciles the policy that limits which
+// accounts the build controller and the build API may run workloads as. Both
+// are static Deployments whose roles let them create Pods and Secrets whether
+// or not OS builds are enabled, so it is deployed whatever OS builds says and
+// removed only with the OperatorConfig.
+func (r *OperatorConfigReconciler) deployWorkloadAccountsPolicy(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	for _, obj := range []client.Object{
+		r.buildWorkloadAccountsPolicy(config.Namespace),
+		r.buildWorkloadAccountsPolicyBinding(config.Namespace),
+	} {
+		if err := r.createOrUpdate(ctx, obj, config); err != nil {
+			return fmt.Errorf("failed to create/update %T %s: %w", obj, obj.GetName(), err)
+		}
+	}
+	return nil
+}
+
+// cleanupWorkloadAccountsPolicy deletes the cluster-scoped objects
+// deployWorkloadAccountsPolicy creates, which namespace deletion would not
+// remove.
+func (r *OperatorConfigReconciler) cleanupWorkloadAccountsPolicy(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	name := workloadAccountsPolicyName(config.Namespace)
+	for _, obj := range []client.Object{
+		&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: name}},
+	} {
+		if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete %T %s: %w", obj, obj.GetName(), err)
+		}
+	}
+	return nil
+}
+
 // cleanupBuildIdentity deletes what deployBuildIdentity creates, including
 // the cluster-scoped policy objects that namespace deletion would not remove.
 // It keeps the builder cache ImageStream and the images cached in it.
 func (r *OperatorConfigReconciler) cleanupBuildIdentity(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
 	policyName := buildPodPatchPolicyName(config.Namespace)
-	workloadPolicyName := workloadAccountsPolicyName(config.Namespace)
 	for _, obj := range []client.Object{
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.BuildServiceAccountName, Namespace: config.Namespace}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.RegistryServiceAccountName, Namespace: config.Namespace}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: automotivev1alpha1.RegistryPullServiceAccountName, Namespace: config.Namespace}},
 		&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: policyName}},
 		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: policyName}},
-		&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: workloadPolicyName}},
-		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: workloadPolicyName}},
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: sccPrivilegedRoleName}},
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: pipelineSCCBindingName, Namespace: config.Namespace}},
 	} {
