@@ -18,6 +18,8 @@ import (
 // digestPinnedRef matches an OCI reference with a sha256 digest: image@sha256:<64 hex chars>
 var digestPinnedRef = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
 
+var artifactNameRE = regexp.MustCompile(automotivev1alpha1.ArtifactNamePattern)
+
 func validateBuildRequest(req *buildcontract.BuildRequest) error {
 	if err := validateOCIRepoImages(req.OCIRepoImages); err != nil {
 		return err
@@ -31,6 +33,10 @@ func validateBuildRequest(req *buildcontract.BuildRequest) error {
 	}
 	if !buildcontract.ValidBuilderCachePolicy(req.BuilderCachePolicy) {
 		return fmt.Errorf("invalid builderCachePolicy %q: must be validate or reuse", req.BuilderCachePolicy)
+	}
+	if req.ArtifactName != "" && (len(req.ArtifactName) > automotivev1alpha1.ArtifactNameMaxLength || !artifactNameRE.MatchString(req.ArtifactName)) {
+		return fmt.Errorf("invalid artifactName: use at most %d letters, digits, '.', '_', '@' or '-', starting with a letter or digit",
+			automotivev1alpha1.ArtifactNameMaxLength)
 	}
 	if err := validateOperationMetadata(req.ExternalID, req.Callback); err != nil {
 		return err

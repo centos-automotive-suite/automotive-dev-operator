@@ -249,6 +249,16 @@ type AIBSpec struct {
 	RootPassword string `json:"rootPassword,omitempty"`
 }
 
+const (
+	// ArtifactNamePattern keeps an artifact name to one path segment that
+	// cannot be read as a flag or a hidden file. The ExportSpec.ArtifactName
+	// markers repeat it and ArtifactNameMaxLength as literals; a test checks the CRD.
+	ArtifactNamePattern = `^[A-Za-z0-9][A-Za-z0-9._@-]*$`
+	// ArtifactNameMaxLength leaves room for format and compression extensions
+	// within a 255-byte file name.
+	ArtifactNameMaxLength = 200
+)
+
 // ExportSpec defines the configuration for exporting build artifacts
 type ExportSpec struct {
 	// Format specifies the disk image output format (e.g., raw, qcow2, simg, or any AIB-supported format).
@@ -260,6 +270,15 @@ type ExportSpec struct {
 	// +kubebuilder:validation:Enum=gzip;xz
 	// +kubebuilder:default=gzip
 	Compression string `json:"compression,omitempty"`
+
+	// ArtifactName is the base file name of the exported disk artifact, without
+	// format or compression extensions. Defaults to "<distro>-<target>".
+	// Builds that share an explicit S3 prefix and artifact name overwrite each
+	// other's uploads.
+	// +kubebuilder:validation:MaxLength=200
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._@-]*$`
+	// +optional
+	ArtifactName string `json:"artifactName,omitempty"`
 
 	// BuildDiskImage indicates whether to build a disk image from the bootc container
 	BuildDiskImage bool `json:"buildDiskImage,omitempty"`
@@ -596,6 +615,14 @@ func (s *ImageBuildSpec) GetCompression() string {
 		return s.Export.Compression
 	}
 	return "gzip"
+}
+
+// GetArtifactName returns the disk artifact base name, or "" for the default
+func (s *ImageBuildSpec) GetArtifactName() string {
+	if s.Export != nil {
+		return s.Export.ArtifactName
+	}
+	return ""
 }
 
 // GetBuildDiskImage returns whether to build a disk image

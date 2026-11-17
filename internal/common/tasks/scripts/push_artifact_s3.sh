@@ -138,10 +138,45 @@ s3_key() {
   fi
 }
 
+s3_put() {
+  local file="$1" key="$2"
+  aws s3 cp "${AWS_ARGS[@]}" \
+    --region "$S3_REGION" \
+    --storage-class STANDARD \
+    "$file" \
+    "s3://${S3_BUCKET}/${key}"
+}
+
+# Sidecars live outside the shared workspace, whose files are served as build artifacts.
+CHECKSUM_DIR=$(mktemp -d)
+
+# upload_with_checksum uploads a file and a sha256sum-format sidecar named
+# <key>.sha256, so consumers can verify a download with "sha256sum -c".
+upload_with_checksum() {
+  local file="$1" key="$2"
+  local name sidecar
+  name=$(basename "$file")
+  sidecar="${CHECKSUM_DIR}/${name}.sha256"
+  (cd "$(dirname "$file")" && sha256sum "$name") > "$sidecar"
+
+  echo "Uploading ${name} ($(stat -c %s "$file") bytes) to s3://${S3_BUCKET}/${key}"
+  if ! s3_put "$file" "$key" || ! s3_put "$sidecar" "${key}.sha256"; then
+    echo "  ✗ Upload failed" >&2
+    exit 1
+  fi
+  echo "  ✓ Uploaded ${name} and its checksum"
+}
+
+# Decide once: the multi-part branch changes into PARTS_DIR, a relative path.
+MULTI_PART=false
+if [ -d "$PARTS_DIR" ] && [ -n "$(ls -A "$PARTS_DIR" 2>/dev/null)" ]; then
+  MULTI_PART=true
+fi
+
 emit_progress "Pushing to S3" 0 1
 
 # Multi-part push (separate partition files)
-if [ -d "$PARTS_DIR" ] && [ -n "$(ls -A "$PARTS_DIR" 2>/dev/null)" ]; then
+if [ "$MULTI_PART" = true ]; then
   echo "Pushing multi-part artifact to S3..."
 
   cd "$PARTS_DIR" || exit
@@ -156,22 +191,8 @@ if [ -d "$PARTS_DIR" ] && [ -n "$(ls -A "$PARTS_DIR" 2>/dev/null)" ]; then
     esac
 
     if [ -f "$part_file" ]; then
-      S3_KEY="$(s3_key "$part_file")"
-      FILE_SIZE=$(stat -f %z "$part_file" 2>/dev/null || stat -c %s "$part_file" 2>/dev/null || echo "unknown")
-
-      echo "Uploading $part_file (${FILE_SIZE} bytes) to s3://${S3_BUCKET}/${S3_KEY}"
-
-      if aws s3 cp "${AWS_ARGS[@]}" \
-        --region "$S3_REGION" \
-        --storage-class STANDARD \
-        "$part_file" \
-        "s3://${S3_BUCKET}/${S3_KEY}"; then
-        echo "  ✓ Uploaded successfully"
-        UPLOADED_FILES=$((UPLOADED_FILES + 1))
-      else
-        echo "  ✗ Upload failed" >&2
-        exit 1
-      fi
+      upload_with_checksum "$part_file" "$(s3_key "$part_file")"
+      UPLOADED_FILES=$((UPLOADED_FILES + 1))
     fi
   done
 
@@ -181,31 +202,18 @@ else
   # Single file push
   # Use absolute path to ensure we find the file
   ARTIFACT_PATH="/workspace/shared/${ARTIFACT_FILE}"
-  S3_KEY="$(s3_key "$ARTIFACT_FILE")"
 
   # Debug: show what we're looking for
   echo "Looking for artifact: ${ARTIFACT_PATH}"
   ls -la "${ARTIFACT_PATH}" || ls -la /workspace/shared/
 
-  echo "Uploading ${ARTIFACT_FILE} to s3://${S3_BUCKET}/${S3_KEY}"
-
-  # Upload using absolute path
-  if aws s3 cp "${AWS_ARGS[@]}" \
-    --region "$S3_REGION" \
-    --storage-class STANDARD \
-    "${ARTIFACT_PATH}" \
-    "s3://${S3_BUCKET}/${S3_KEY}"; then
-    echo "  ✓ Uploaded successfully"
-  else
-    echo "  ✗ Upload failed" >&2
-    exit 1
-  fi
+  upload_with_checksum "$ARTIFACT_PATH" "$(s3_key "$ARTIFACT_FILE")"
 fi
 
 emit_progress "Pushing to S3" 1 1
 
 # Write Tekton results
-if [ -d "$PARTS_DIR" ] && [ -n "$(ls -A "$PARTS_DIR" 2>/dev/null)" ]; then
+if [ "$MULTI_PART" = true ]; then
   S3_URL="s3://${S3_BUCKET}/$(s3_key "")"
 else
   S3_URL="s3://${S3_BUCKET}/$(s3_key "$ARTIFACT_FILE")"

@@ -95,6 +95,7 @@ type Build struct {
 	LocalRepo              string
 	Workspace              string
 	CompressionAlgo        string
+	ArtifactName           string
 	BuildDiskImage         bool
 	DiskFormat             string
 	BuilderImage           string

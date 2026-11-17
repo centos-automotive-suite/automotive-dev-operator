@@ -57,7 +57,7 @@ func groupedBuildUsage(cmd *cobra.Command) error {
 		flags []string
 	}{
 		{"Build Flags", []string{"name", "target", "arch", "distro", "mode", "define", "define-file", "extra-args", "workspace"}},
-		{"Output Flags", []string{"output", "push", "push-disk", "disk", "format", "compress", "internal-registry", "image-name", "image-tag"}},
+		{"Output Flags", []string{"output", "push", "push-disk", "disk", "format", "compress", "artifact-name", "internal-registry", "image-name", "image-tag"}},
 		{"Progress Flags", []string{"wait", "follow", "timeout"}},
 		{"Source and Package Flags", []string{"git-url", "git-ref", "git-secret", "git-lockfile", "lockfile", "extra-repo", "local-repo", "root-password"}},
 		{"Device Flags", []string{"flash", "client", "exporter", "lease", "lease-duration", "lease-tag", "flash-cmd"}},

@@ -65,6 +65,7 @@ func TestManifestBuildSubmission(t *testing.T) {
 				opts.Flash.AfterBuild, opts.Flash.JumpstarterClient = true, filepath.Join(root, "client.yaml")
 				opts.Flash.LeaseName, opts.Flash.LeaseDuration = "existing-lease", "unused-duration"
 				opts.S3.Bucket, opts.S3.CredentialsSecret = "artifacts", "s3-secret"
+				opts.Build.ArtifactName = "named-disk"
 				if git {
 					opts.Build.GitURL, opts.Build.GitRef, opts.Build.GitLockfile, opts.Build.Lockfile = "https://git.example/os.git", "main", "input.lock", ""
 					manifestPath = filepath.Base(manifestPath)
@@ -112,6 +113,9 @@ func TestManifestBuildSubmission(t *testing.T) {
 				}
 				assertManifestSource(t, req, git, explicit, fixture.uploaded, lockfile)
 				assertManifestExports(t, req, opts, clientConfig, callbackSecret)
+				if req.ArtifactName != "named-disk" {
+					t.Fatalf("artifact name = %q, want named-disk", req.ArtifactName)
+				}
 				if source == "git OCI repo" || source == "git local repo" {
 					if !reflect.DeepEqual(req.OCIRepoImages, []string{"quay.io/example/rpms:v1"}) || req.LocalRepo != (source == "git local repo") {
 						t.Fatalf("OCI repository options lost: %+v", req)

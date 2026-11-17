@@ -137,6 +137,7 @@ func baseParams(imageBuild *automotivev1alpha1.ImageBuild, operatorConfig *autom
 		boolParam("hermeto-prefetch", buildConfig != nil && buildConfig.HermetoPrefetch),
 		stringParam("hermeto-image", operatorConfig.Spec.GetImages().GetHermetoImage()),
 		stringParam("compression", imageBuild.Spec.GetCompression()),
+		stringParam("artifact-name", imageBuild.Spec.GetArtifactName()),
 		stringParam("container-push", imageBuild.Spec.GetContainerPush()),
 		boolParam("build-disk-image", imageBuild.Spec.GetBuildDiskImage()),
 		stringParam("export-oci", imageBuild.Spec.GetExportOCI()),

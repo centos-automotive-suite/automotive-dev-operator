@@ -722,6 +722,11 @@ components:
         architectureFallback:
           type: string
           description: Optional CLI architecture used for Git sources only when the target has no default and architecture is not explicit.
+        artifactName:
+          type: string
+          maxLength: 200
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._@-]*$'
+          description: Base file name of the disk artifact, without format or compression extensions. Defaults to <distro>-<target>.
         automotiveImageBuilder:
           type: string
         buildDiskImage:
