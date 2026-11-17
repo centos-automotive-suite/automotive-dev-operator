@@ -29,10 +29,11 @@ package buildapi
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=pipelineruns,verbs=get;update
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=taskruns,verbs=get;list;create;delete
 //
-// Build Secrets, and the JWT CA Secret and ConfigMap, which it watches by name.
-// A CA kept in another namespace needs get and watch granted there by hand.
-// +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=get;list;watch
+// Build Secrets, and the JWT CA Secrets and ConfigMaps, which it polls by
+// name. It never lists or watches them: that would read every one in the
+// namespace. A CA kept in another namespace needs get granted there by hand.
+// +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;create;update;patch;delete
+// +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=get
 //
 // Build logs and progress, and container build context uploads.
 // +kubebuilder:rbac:groups="",namespace=system,resources=pods,verbs=get;list

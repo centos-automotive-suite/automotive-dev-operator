@@ -396,14 +396,16 @@ type JWTIssuerConfig struct {
 	CertificateAuthority string `json:"certificateAuthority,omitempty"`
 
 	// CertificateAuthoritySecret references a Kubernetes Secret containing the
-	// PEM-encoded CA certificate. The build API watches the Secret for changes so
-	// CA rotations are picked up immediately without restarting the server.
+	// PEM-encoded CA certificate. The build API rereads the Secret every minute,
+	// so CA rotations are picked up without restarting the server. A Secret in
+	// another namespace needs the build API granted get on it there.
 	// +optional
 	CertificateAuthoritySecret *SecretKeySelector `json:"certificateAuthoritySecret,omitempty"`
 
 	// CertificateAuthorityConfigMap references a Kubernetes ConfigMap containing the
-	// PEM-encoded CA certificate. The build API watches the ConfigMap for changes so
-	// CA rotations are picked up immediately without restarting the server.
+	// PEM-encoded CA certificate. The build API rereads the ConfigMap every minute,
+	// so CA rotations are picked up without restarting the server. A ConfigMap in
+	// another namespace needs the build API granted get on it there.
 	// +optional
 	CertificateAuthorityConfigMap *ConfigMapKeySelector `json:"certificateAuthorityConfigMap,omitempty"`
 }

@@ -29,10 +29,9 @@ rules:
   - ""
   resources:
   - configmaps
+  - pods/log
   verbs:
   - get
-  - list
-  - watch
 - apiGroups:
   - ""
   resources:
@@ -57,21 +56,13 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods/log
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
   - secrets
   verbs:
   - create
   - delete
   - get
-  - list
   - patch
   - update
-  - watch
 - apiGroups:
   - ""
   resourceNames:
