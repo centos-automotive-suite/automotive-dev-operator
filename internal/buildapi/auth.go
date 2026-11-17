@@ -578,4 +578,3 @@ func (a *APIServer) handleGetAuthConfig(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, response)
 }
-
