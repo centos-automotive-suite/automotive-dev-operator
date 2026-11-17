@@ -53,7 +53,7 @@ func (a *APIServer) refreshAuthConfigIfNeeded() {
 	a.lastAuthConfigCheck = time.Now()
 	a.authConfigMu.Unlock()
 
-	_ = a.doRefreshAuthConfig()
+	_, _ = a.doRefreshAuthConfig()
 }
 
 // caRef identifies a Secret or ConfigMap referenced as a CA certificate by a JWT issuer.
@@ -131,7 +131,7 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 		return
 	}
 
-	caRefs := a.doRefreshAuthConfig()
+	caRefs, _ := a.doRefreshAuthConfig()
 
 	for {
 		if ctx.Err() != nil {
@@ -154,7 +154,8 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 			return
 		case <-eventCh:
 			cancelSession()
-			caRefs = a.doRefreshAuthConfig()
+			refreshed, err := a.doRefreshAuthConfig()
+			caRefs = caRefsAfterRefresh(caRefs, refreshed, err)
 		}
 	}
 }
@@ -252,26 +253,43 @@ func (a *APIServer) pollCARef(ctx context.Context, c client.Reader, ref caRef, i
 
 // doRefreshAuthConfig reads the OperatorConfig, resolves CA references, and atomically
 // swaps the OIDC authenticator if the config changed. Returns the current CA refs so
-// the caller can start watches without a second fetch; nil on error.
-func (a *APIServer) doRefreshAuthConfig() []caRef {
+// the caller can poll them without a second fetch, or an error if it could not
+// read the OperatorConfig.
+func (a *APIServer) doRefreshAuthConfig() ([]caRef, error) {
 	namespace := resolveNamespace()
 	k8sClient, err := getKubernetesClient()
 	if err != nil {
 		a.log.Error(err, "failed to get k8s client for auth config refresh", "namespace", namespace)
-		return nil
+		return nil, err
 	}
 	return a.refreshAuthConfig(k8sClient, namespace)
 }
 
+// caRefsAfterRefresh returns the CAs the watcher polls next. A failed refresh
+// says nothing about which CAs the config references, so it keeps polling the
+// ones it had, marked unapplied so they retry the refresh.
+func caRefsAfterRefresh(previous, refreshed []caRef, err error) []caRef {
+	if err != nil {
+		return unapplied(previous)
+	}
+	return refreshed
+}
+
 // refreshAuthConfig is doRefreshAuthConfig with its client and namespace.
-func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string) []caRef {
+// Refreshes run one at a time: each records the CA versions it built from, and
+// an older one finishing after a newer one would install a config other than
+// the one recorded.
+func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string) ([]caRef, error) {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+
 	operatorConfig := &automotivev1alpha1.OperatorConfig{}
 	key := types.NamespacedName{Name: "config", Namespace: namespace}
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer fetchCancel()
 	if err := k8sClient.Get(fetchCtx, key, operatorConfig); err != nil {
 		a.log.Error(err, "failed to get OperatorConfig during refresh", "namespace", namespace)
-		return nil
+		return nil, err
 	}
 
 	refs := caRefsFromConfig(operatorConfig, namespace)
@@ -297,7 +315,7 @@ func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string)
 		jwtCopy, resolveErr := toUpstreamJWTAuthenticators(refreshCtx, k8sClient, auth.JWT, namespace)
 		if resolveErr != nil {
 			a.log.Error(resolveErr, "failed to resolve JWT CA references during refresh, keeping existing config")
-			return unapplied(refs)
+			return unapplied(refs), nil
 		}
 
 		// Ensure Prefix pointers are non-nil when Claim is set (k8s OIDC authenticator requirement).
@@ -327,7 +345,7 @@ func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string)
 	// rebuilding the authenticator entirely.
 	if authConfigsEqual(a.authConfig, newConfig) {
 		a.authConfigMu.Unlock()
-		return refs
+		return refs, nil
 	}
 	a.authConfigMu.Unlock()
 
@@ -339,7 +357,7 @@ func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string)
 		authn, err = newJWTAuthenticator(context.Background(), *newConfig)
 		if err != nil {
 			a.log.Error(err, "failed to create JWT authenticator during refresh, keeping existing config")
-			return unapplied(refs)
+			return unapplied(refs), nil
 		}
 	}
 
@@ -349,7 +367,7 @@ func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string)
 	// Re-check under lock in case another refresh already applied the same config
 	// while authenticator construction was in flight.
 	if authConfigsEqual(a.authConfig, newConfig) {
-		return refs
+		return refs, nil
 	}
 
 	// Config changed - need to recreate authenticator
@@ -359,7 +377,7 @@ func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string)
 		a.authConfig = nil
 		a.externalJWT = nil
 		a.internalPrefix = ""
-		return refs
+		return refs, nil
 	}
 
 	// Update config fields
@@ -370,7 +388,7 @@ func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string)
 	}
 
 	a.externalJWT = authn
-	return refs
+	return refs, nil
 }
 
 func (a *APIServer) authenticateRequest(c *gin.Context) (string, string, *authError) {
