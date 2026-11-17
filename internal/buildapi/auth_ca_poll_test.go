@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,7 +49,7 @@ func expectSignal(t *testing.T, eventCh <-chan struct{}) {
 	select {
 	case <-eventCh:
 	case <-time.After(2 * time.Second):
-		t.Fatal("no signal after the CA changed")
+		t.Fatal("the poller never signalled")
 	}
 }
 
@@ -171,4 +172,46 @@ func TestPollCARefStopsWhenCancelled(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("poller did not stop when its context ended")
 	}
+}
+
+// A refresh that fails keeps the old authenticator, so its CAs' pollers must
+// retry it a poll interval later even if nothing changes, and not at once.
+func TestFailedRefreshRetriesAfterAPollInterval(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := automotivev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	config := &automotivev1alpha1.OperatorConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "ado"},
+		Spec: automotivev1alpha1.OperatorConfigSpec{BuildAPI: &automotivev1alpha1.BuildAPIConfig{
+			Authentication: &automotivev1alpha1.AuthenticationConfig{JWT: []automotivev1alpha1.JWTAuthenticatorConfig{{
+				Issuer: automotivev1alpha1.JWTIssuerConfig{
+					URL:                        "https://issuer.example",
+					CertificateAuthoritySecret: &automotivev1alpha1.SecretKeySelector{Name: "oidc-ca", Key: "ca.crt"},
+				},
+			}}},
+		}},
+	}
+	// The Secret lacks the key the issuer names, so resolving the CA fails.
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "oidc-ca", Namespace: "ado"}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config, secret).Build()
+	a := &APIServer{log: logr.Discard()}
+
+	refs := a.refreshAuthConfig(c, "ado")
+	if len(refs) != 1 {
+		t.Fatalf("got %d CA refs, want 1", len(refs))
+	}
+
+	const interval = 300 * time.Millisecond
+	eventCh := make(chan struct{}, 1)
+	go a.pollCARef(t.Context(), c, refs[0], interval, eventCh)
+	select {
+	case <-eventCh:
+		t.Fatal("retried before a poll interval passed")
+	case <-time.After(interval / 3):
+	}
+	expectSignal(t, eventCh)
 }
