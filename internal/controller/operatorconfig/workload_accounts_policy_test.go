@@ -58,7 +58,7 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 		&rbacv1.Role{
 			ObjectMeta: metav1.ObjectMeta{Name: "workloads", Namespace: ns},
 			Rules: []rbacv1.PolicyRule{
-				{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"create"}},
+				{APIGroups: []string{""}, Resources: []string{"pods", "secrets"}, Verbs: []string{"create"}},
 				{APIGroups: []string{"tekton.dev"}, Resources: []string{"taskruns", "pipelineruns"}, Verbs: []string{"create"}},
 				{APIGroups: []string{"shipwright.io"}, Resources: []string{"buildruns"}, Verbs: []string{"create"}},
 			},
@@ -132,6 +132,14 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 			obj: run("shipwright.io/v1beta1", "BuildRun", map[string]any{"serviceAccount": "ado-operator"})},
 		{name: "build API flash TaskRun", as: asBuildAPI, allowed: true,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName})},
+		// Kubernetes fills a Secret of this type with a token for the
+		// ServiceAccount it names.
+		{name: "operator token Secret", as: asController, obj: tokenSecret("ado-operator")},
+		{name: "build token Secret", as: asBuildAPI, obj: tokenSecret(automotivev1alpha1.BuildServiceAccountName)},
+		{name: "opaque Secret", as: asBuildAPI, allowed: true, obj: &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "secret-", Namespace: ns},
+			StringData: map[string]string{"token": "x"},
+		}},
 		{name: "build API operator TaskRun", as: asBuildAPI,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": "ado-operator"})},
 		{name: "other users unaffected", as: admin, obj: pod("ado-operator"), allowed: true},
@@ -168,6 +176,16 @@ func openCRD(group, version, kind, plural string) *apiextensionsv1.CustomResourc
 				}},
 			}},
 		},
+	}
+}
+
+func tokenSecret(sa string) client.Object {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "token-", Namespace: workloadTestNamespace,
+			Annotations: map[string]string{corev1.ServiceAccountNameKey: sa},
+		},
+		Type: corev1.SecretTypeServiceAccountToken,
 	}
 }
 
