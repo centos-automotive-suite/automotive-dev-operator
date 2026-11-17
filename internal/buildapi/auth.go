@@ -67,8 +67,18 @@ type caRef struct {
 }
 
 // caVersionUnknown never equals a resourceVersion, so a poller whose baseline
-// could not be read refreshes once it can read the CA.
+// could not be read, or whose CA a failed refresh did not apply, refreshes at
+// its next successful read.
 const caVersionUnknown = "unknown"
+
+// unapplied marks refs as not yet applied after a refresh that kept the old
+// config, so each one's poller retries the refresh at its next poll.
+func unapplied(refs []caRef) []caRef {
+	for i := range refs {
+		refs[i].version = caVersionUnknown
+	}
+	return refs
+}
 
 // caRefVersion returns the resourceVersion of the CA ref names, or "" if it
 // does not exist.
@@ -212,9 +222,16 @@ func (a *APIServer) pollCARef(ctx context.Context, c client.Reader, ref caRef, i
 		kind = "ConfigMap"
 	}
 	a.log.Info("polling CA reference for changes", "kind", kind, "namespace", ref.namespace, "name", ref.name)
+	// The first read waits an interval too: an unknown version differs from
+	// every read, so polling at once would retry a failing refresh in a loop.
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		current, err := caRefVersion(ctx, c, ref)
 		switch {
 		case err != nil:
@@ -230,11 +247,6 @@ func (a *APIServer) pollCARef(ctx context.Context, c client.Reader, ref caRef, i
 			}
 			return
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
 	}
 }
 
@@ -248,7 +260,11 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 		a.log.Error(err, "failed to get k8s client for auth config refresh", "namespace", namespace)
 		return nil
 	}
+	return a.refreshAuthConfig(k8sClient, namespace)
+}
 
+// refreshAuthConfig is doRefreshAuthConfig with its client and namespace.
+func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string) []caRef {
 	operatorConfig := &automotivev1alpha1.OperatorConfig{}
 	key := types.NamespacedName{Name: "config", Namespace: namespace}
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -281,7 +297,7 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 		jwtCopy, resolveErr := toUpstreamJWTAuthenticators(refreshCtx, k8sClient, auth.JWT, namespace)
 		if resolveErr != nil {
 			a.log.Error(resolveErr, "failed to resolve JWT CA references during refresh, keeping existing config")
-			return refs
+			return unapplied(refs)
 		}
 
 		// Ensure Prefix pointers are non-nil when Claim is set (k8s OIDC authenticator requirement).
@@ -319,10 +335,11 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 	// concurrent requests on slow network or crypto operations.
 	var authn authenticator.Token
 	if newConfig != nil {
+		var err error
 		authn, err = newJWTAuthenticator(context.Background(), *newConfig)
 		if err != nil {
 			a.log.Error(err, "failed to create JWT authenticator during refresh, keeping existing config")
-			return refs
+			return unapplied(refs)
 		}
 	}
 
