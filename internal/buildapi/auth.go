@@ -61,6 +61,27 @@ type caRef struct {
 	namespace   string
 	name        string
 	isConfigMap bool
+	// version is the resourceVersion read before the active config was built
+	// from the CA: empty if it did not exist, caVersionUnknown if unread.
+	version string
+}
+
+// caVersionUnknown never equals a resourceVersion, so a poller whose baseline
+// could not be read refreshes once it can read the CA.
+const caVersionUnknown = "unknown"
+
+// caRefVersion returns the resourceVersion of the CA ref names, or "" if it
+// does not exist.
+func caRefVersion(ctx context.Context, c client.Reader, ref caRef) (string, error) {
+	var obj client.Object = &corev1.Secret{}
+	if ref.isConfigMap {
+		obj = &corev1.ConfigMap{}
+	}
+	err := c.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, obj)
+	if k8serrors.IsNotFound(err) {
+		return "", nil
+	}
+	return obj.GetResourceVersion(), err
 }
 
 // caRefsFromConfig returns all CA Secret/ConfigMap refs from an already-fetched OperatorConfig.
@@ -181,43 +202,27 @@ func (a *APIServer) runOperatorConfigWatchOnce(ctx context.Context, watchClient 
 // caPollInterval is how often the build API rereads its OIDC issuers' CAs.
 const caPollInterval = time.Minute
 
-// pollCARef signals eventCh once the CA Secret or ConfigMap ref names is
-// changed, created or deleted. It polls by name because the build API may read
-// Secrets and ConfigMaps only by name: a watch needs list and watch on the
-// whole namespace.
+// pollCARef signals eventCh once the CA Secret or ConfigMap ref names differs
+// from ref.version, the version the active config was built from. It polls by
+// name because the build API may read Secrets and ConfigMaps only by name: a
+// watch needs list and watch on the whole namespace.
 func (a *APIServer) pollCARef(ctx context.Context, c client.Reader, ref caRef, interval time.Duration, eventCh chan<- struct{}) {
 	kind := "Secret"
 	if ref.isConfigMap {
 		kind = "ConfigMap"
 	}
-	version := func() (string, error) {
-		var obj client.Object = &corev1.Secret{}
-		if ref.isConfigMap {
-			obj = &corev1.ConfigMap{}
-		}
-		err := c.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, obj)
-		if k8serrors.IsNotFound(err) {
-			return "", nil
-		}
-		return obj.GetResourceVersion(), err
-	}
-
 	a.log.Info("polling CA reference for changes", "kind", kind, "namespace", ref.namespace, "name", ref.name)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	var last string
-	known := false
 	for {
-		current, err := version()
+		current, err := caRefVersion(ctx, c, ref)
 		switch {
 		case err != nil:
 			if ctx.Err() != nil {
 				return
 			}
 			a.log.Error(err, "failed to read CA reference", "kind", kind, "namespace", ref.namespace, "name", ref.name)
-		case !known:
-			last, known = current, true
-		case current != last:
+		case current != ref.version:
 			a.log.Info("CA reference changed", "kind", kind, "namespace", ref.namespace, "name", ref.name)
 			select {
 			case eventCh <- struct{}{}:
@@ -254,6 +259,16 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 	}
 
 	refs := caRefsFromConfig(operatorConfig, namespace)
+	// Read each CA's version before its contents, so a change after this
+	// differs from what the pollers compare against.
+	for i := range refs {
+		version, err := caRefVersion(fetchCtx, k8sClient, refs[i])
+		if err != nil {
+			a.log.Error(err, "failed to read CA reference version", "namespace", refs[i].namespace, "name", refs[i].name)
+			version = caVersionUnknown
+		}
+		refs[i].version = version
+	}
 
 	// Build new config from OperatorConfig, resolving any CA references from Secrets/ConfigMaps.
 	var newConfig *AuthenticationConfiguration
