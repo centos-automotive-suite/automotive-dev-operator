@@ -145,12 +145,21 @@ var _ = Describe("OperatorConfig Resources", func() {
 			Expect(sm.GroupVersionKind().Version).To(Equal("v1"))
 		})
 
-		It("should select services with control-plane=operator label", func() {
+		// The build controller runs the ImageBuild metrics tracker, so its
+		// metrics Service must be scraped along with the operator's.
+		It("should select the operator and build controller metrics services", func() {
 			config := &automotivev1alpha1.MonitoringConfig{Enabled: true}
 			sm := r.buildServiceMonitor("test-ns", config)
 			selector := sm.Object["spec"].(map[string]any)["selector"].(map[string]any)
-			matchLabels := selector["matchLabels"].(map[string]any)
-			Expect(matchLabels["control-plane"]).To(Equal("operator"))
+			Expect(selector).To(Equal(map[string]any{
+				"matchExpressions": []any{
+					map[string]any{
+						"key":      "control-plane",
+						"operator": "In",
+						"values":   []any{"operator", "build-controller"},
+					},
+				},
+			}))
 		})
 
 		It("should use bearerTokenSecret referencing the token secret", func() {
