@@ -190,11 +190,22 @@ var _ = Describe("OperatorConfig Resources", func() {
 		})
 	})
 
+	// The token sits in a Secret anything that reads the namespace's Secrets
+	// can see, so it must be for an account that can only read metrics.
 	Describe("buildMetricsTokenSecret", func() {
-		It("should be a ServiceAccountToken type referencing ado-operator", func() {
+		It("should be a ServiceAccountToken type referencing the metrics scraper", func() {
 			secret := r.buildMetricsTokenSecret("test-ns")
 			Expect(secret.Type).To(Equal(corev1.SecretTypeServiceAccountToken))
-			Expect(secret.Annotations["kubernetes.io/service-account.name"]).To(Equal("ado-operator"))
+			Expect(secret.Annotations["kubernetes.io/service-account.name"]).To(Equal("ado-metrics-scraper"))
+		})
+	})
+
+	Describe("buildMetricsScraperServiceAccount", func() {
+		It("should never mount its token", func() {
+			sa := r.buildMetricsScraperServiceAccount("test-ns")
+			Expect(sa.Name).To(Equal("ado-metrics-scraper"))
+			Expect(sa.Namespace).To(Equal("test-ns"))
+			Expect(sa.AutomountServiceAccountToken).To(HaveValue(BeFalse()))
 		})
 	})
 
@@ -211,12 +222,12 @@ var _ = Describe("OperatorConfig Resources", func() {
 	})
 
 	Describe("buildMetricsReaderClusterRoleBinding", func() {
-		It("should reference the installed ado-metrics-reader ClusterRole and ado-operator SA", func() {
+		It("should reference the installed ado-metrics-reader ClusterRole and the metrics scraper SA", func() {
 			binding := r.buildMetricsReaderClusterRoleBinding("test-ns")
 			Expect(binding.RoleRef.Name).To(Equal("ado-metrics-reader"))
 			Expect(binding.RoleRef.Kind).To(Equal("ClusterRole"))
 			Expect(binding.Subjects).To(HaveLen(1))
-			Expect(binding.Subjects[0].Name).To(Equal("ado-operator"))
+			Expect(binding.Subjects[0].Name).To(Equal("ado-metrics-scraper"))
 			Expect(binding.Subjects[0].Namespace).To(Equal("test-ns"))
 		})
 	})

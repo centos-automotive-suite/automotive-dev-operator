@@ -206,8 +206,8 @@ uninstall_operator() {
 
     # Cluster-scoped, so neither OLM nor namespace deletion removes them, and the
     # operator's own cleanup was skipped when the OperatorConfig finalizer was cleared.
-    echo "Deleting build pod patch admission policy..."
-    oc delete validatingadmissionpolicybinding,validatingadmissionpolicy "ado-build-pod-patch-${NAMESPACE}" --ignore-not-found=true 2>/dev/null || true
+    echo "Deleting admission policies..."
+    oc delete validatingadmissionpolicybinding,validatingadmissionpolicy "ado-build-pod-patch-${NAMESPACE}" "ado-build-controller-workloads-${NAMESPACE}" --ignore-not-found=true 2>/dev/null || true
 
     echo "Cleaning up legacy kustomize RBAC (pre-OLM)..."
     oc delete clusterrole ado-manager-role --ignore-not-found=true 2>/dev/null || true
