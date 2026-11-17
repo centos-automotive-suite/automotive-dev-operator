@@ -760,9 +760,15 @@ func (r *OperatorConfigReconciler) buildServiceMonitor(namespace string, config 
 	})
 
 	sm.Object["spec"] = map[string]any{
+		// The operator's metrics Service, and the build controller's, which
+		// runs the ImageBuild metrics tracker.
 		"selector": map[string]any{
-			"matchLabels": map[string]any{
-				"control-plane": "operator",
+			"matchExpressions": []any{
+				map[string]any{
+					"key":      "control-plane",
+					"operator": "In",
+					"values":   []any{"operator", "build-controller"},
+				},
 			},
 		},
 		"endpoints": []any{
