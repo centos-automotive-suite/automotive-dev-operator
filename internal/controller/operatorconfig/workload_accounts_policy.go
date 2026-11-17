@@ -5,6 +5,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 )
@@ -17,7 +18,8 @@ func workloadAccountsPolicyName(namespace string) string {
 // and the build API may run workloads as. RBAC lets them create pods and
 // Tekton and Shipwright runs but cannot say which ServiceAccount those use, so
 // without this either could start one as the operator and take its
-// permissions.
+// permissions. Both may create Secrets, so they may not create the type that
+// Kubernetes fills with a token for the ServiceAccount it names.
 func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicy {
 	users := fmt.Sprintf("[%q, %q]",
 		"system:serviceaccount:"+namespace+":"+automotivev1alpha1.BuildControllerServiceAccountName,
@@ -47,7 +49,7 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 			// field paths below hold for all of them.
 			MatchConstraints: &admissionregistrationv1.MatchResources{
 				ResourceRules: []admissionregistrationv1.NamedRuleWithOperations{
-					rule("", "v1", "pods"),
+					rule("", "v1", "pods", "secrets"),
 					rule("tekton.dev", "v1", "taskruns", "pipelineruns"),
 					rule("shipwright.io", "v1beta1", "buildruns"),
 				},
@@ -61,7 +63,8 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 				// namespace default, or Tekton's configured default.
 				{Name: "allowed", Expression: fmt.Sprintf("['', 'default', %q, %q]",
 					automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName)},
-				{Name: "serviceAccounts", Expression: "request.resource.resource == 'pipelineruns' ? " +
+				{Name: "serviceAccounts", Expression: "request.resource.resource == 'secrets' ? [] : " +
+					"request.resource.resource == 'pipelineruns' ? " +
 					"[object.spec.?taskRunTemplate.?serviceAccountName.orValue('')] + " +
 					"object.spec.?taskRunSpecs.orValue([]).map(s, s.?serviceAccountName.orValue('')) : " +
 					"request.resource.resource == 'buildruns' ? [object.spec.?serviceAccount.orValue('')] : " +
@@ -69,11 +72,18 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 					"[object.spec.?serviceAccountName.orValue(''), object.spec.?serviceAccount.orValue('')] : " +
 					"[object.spec.?serviceAccountName.orValue('')]"},
 			},
-			Validations: []admissionregistrationv1.Validation{{
-				Expression: "variables.serviceAccounts.all(sa, sa in variables.allowed)",
-				Message: fmt.Sprintf("build workloads may only run as %s or %s",
-					automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName),
-			}},
+			Validations: []admissionregistrationv1.Validation{
+				{
+					Expression: "variables.serviceAccounts.all(sa, sa in variables.allowed)",
+					Message: fmt.Sprintf("build workloads may only run as %s or %s",
+						automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName),
+				},
+				{
+					Expression: fmt.Sprintf("request.resource.resource != 'secrets' || object.?type.orValue('') != %q",
+						corev1.SecretTypeServiceAccountToken),
+					Message: "ServiceAccount token Secrets may not be created here",
+				},
+			},
 		},
 	}
 }
