@@ -26,13 +26,18 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 	imagev1 "github.com/openshift/api/image/v1"
+	routev1 "github.com/openshift/api/route/v1"
 	securityv1 "github.com/openshift/api/security/v1"
+	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -145,8 +150,6 @@ var _ = Describe("build identity reconciliation", func() {
 			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: pipelineSCCBindingName, Namespace: "test-ns"}},
 			&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: r.buildBuildPodPatchPolicy("test-ns").Name}},
 			&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: r.buildBuildPodPatchPolicyBinding("test-ns").Name}},
-			&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: r.buildWorkloadAccountsPolicy("test-ns").Name}},
-			&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: r.buildWorkloadAccountsPolicyBinding("test-ns").Name}},
 		}
 	}
 
@@ -201,6 +204,78 @@ var _ = Describe("build identity reconciliation", func() {
 		Expect(r.cleanupBuildIdentity(ctx, config)).To(Succeed())
 		for _, obj := range owned() {
 			Expect(errors.IsNotFound(r.Get(ctx, client.ObjectKeyFromObject(obj), obj))).To(BeTrue(), "%T %s", obj, obj.GetName())
+		}
+	})
+})
+
+// The build controller and the build API are static Deployments whose roles
+// let them create Pods and Secrets whether or not OS builds are enabled, so
+// the policy limiting which accounts they run workloads as must outlive OS
+// builds.
+var _ = Describe("workload accounts policy lifecycle", func() {
+	var (
+		r      *OperatorConfigReconciler
+		config *automotivev1alpha1.OperatorConfig
+	)
+
+	BeforeEach(func() {
+		scheme := runtime.NewScheme()
+		Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
+		Expect(automotivev1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(tektonv1.AddToScheme(scheme)).To(Succeed())
+		Expect(securityv1.Install(scheme)).To(Succeed())
+		Expect(apiextensionsv1.AddToScheme(scheme)).To(Succeed())
+		Expect(routev1.Install(scheme)).To(Succeed())
+		Expect(imagev1.Install(scheme)).To(Succeed())
+		config = &automotivev1alpha1.OperatorConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "test-ns", Finalizers: []string{finalizerName}},
+			Spec:       automotivev1alpha1.OperatorConfigSpec{OSBuilds: &automotivev1alpha1.OSBuildsConfig{Enabled: false}},
+		}
+		r = &OperatorConfigReconciler{
+			Client: fake.NewClientBuilder().WithScheme(scheme).
+				WithObjects(config).WithStatusSubresource(config).Build(),
+			Scheme:        scheme,
+			Log:           logr.Discard(),
+			IsOpenShift:   new(false),
+			IsJumpstarter: new(false),
+		}
+	})
+
+	policyObjects := func() []client.Object {
+		return []client.Object{
+			&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: workloadAccountsPolicyName("test-ns")}},
+			&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: workloadAccountsPolicyName("test-ns")}},
+		}
+	}
+	reconcile := func(ctx context.Context) {
+		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(config)})
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	It("deploys the policy while OS builds are disabled", func() {
+		ctx := context.Background()
+		reconcile(ctx)
+		for _, obj := range policyObjects() {
+			Expect(r.Get(ctx, client.ObjectKeyFromObject(obj), obj)).To(Succeed(), "%T", obj)
+		}
+	})
+
+	It("keeps the policy when OS builds are cleaned up", func() {
+		ctx := context.Background()
+		reconcile(ctx)
+		Expect(r.cleanupOSBuilds(ctx, config)).To(Succeed())
+		for _, obj := range policyObjects() {
+			Expect(r.Get(ctx, client.ObjectKeyFromObject(obj), obj)).To(Succeed(), "%T", obj)
+		}
+	})
+
+	It("removes the policy when the OperatorConfig is deleted", func() {
+		ctx := context.Background()
+		reconcile(ctx)
+		Expect(r.Delete(ctx, config)).To(Succeed())
+		reconcile(ctx)
+		for _, obj := range policyObjects() {
+			Expect(errors.IsNotFound(r.Get(ctx, client.ObjectKeyFromObject(obj), obj))).To(BeTrue(), "%T", obj)
 		}
 	})
 })
