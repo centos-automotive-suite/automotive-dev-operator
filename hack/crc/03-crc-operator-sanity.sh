@@ -74,6 +74,8 @@ echo -e "${CYAN}=== Operator ===${NC}"
 check "Namespace exists" oc get namespace "$NAMESPACE"
 check_non_empty "Operator pod running" oc get pods -n "$NAMESPACE" -l control-plane=operator --field-selector=status.phase=Running --no-headers
 check_output "Operator pod ready" "1/1" oc get pods -n "$NAMESPACE" -l control-plane=operator --no-headers
+check_non_empty "Build controller pod running" oc get pods -n "$NAMESPACE" -l control-plane=build-controller --field-selector=status.phase=Running --no-headers
+check_output "Build controller pod ready" "1/1" oc get pods -n "$NAMESPACE" -l control-plane=build-controller --no-headers
 check "OperatorConfig exists" oc get operatorconfig config -n "$NAMESPACE"
 check_output "OperatorConfig phase Ready" "Ready" oc get operatorconfig config -n "$NAMESPACE" -o jsonpath='{.status.phase}'
 
@@ -82,13 +84,13 @@ echo -e "${CYAN}=== Build API ===${NC}"
 echo -e "  ${CYAN}INFO${NC}  Waiting for Build API pod to be ready (up to 2 min)..."
 for _ in {1..24}; do
     POD_STATUS=$(oc get pods -n "$NAMESPACE" -l app.kubernetes.io/component=build-api --no-headers 2>/dev/null || echo "")
-    if echo "$POD_STATUS" | grep -q "2/2.*Running"; then
+    if echo "$POD_STATUS" | grep -q "1/1.*Running"; then
         break
     fi
     sleep 5
 done
 check_non_empty "Build API pod running" oc get pods -n "$NAMESPACE" -l app.kubernetes.io/component=build-api --field-selector=status.phase=Running --no-headers
-check_output "Build API pod ready" "2/2" oc get pods -n "$NAMESPACE" -l app.kubernetes.io/component=build-api --no-headers
+check_output "Build API pod ready" "1/1" oc get pods -n "$NAMESPACE" -l app.kubernetes.io/component=build-api --no-headers
 check "Build API service exists" oc get service ado-build-api -n "$NAMESPACE"
 check "Build API route exists" oc get route ado-build-api -n "$NAMESPACE"
 

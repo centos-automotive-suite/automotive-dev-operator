@@ -30,6 +30,9 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 		openCRD("tekton.dev", "v1", "PipelineRun", "pipelineruns"),
 		openCRD("shipwright.io", "v1beta1", "BuildRun", "buildruns"),
 	}}
+	// envtest turns off the plugin that gives a pod without a ServiceAccount
+	// its namespace's default one; clusters run it before admission policies.
+	env.ControlPlane.GetAPIServer().Configure().Disable("disable-admission-plugins")
 	cfg, err := env.Start()
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +54,7 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 	policy := r.buildWorkloadAccountsPolicy(ns)
 	objects := []client.Object{&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}}
 	buildAPISA := automotivev1alpha1.BuildAPIServiceAccountName
-	for _, sa := range []string{controllerSA, buildAPISA, "ado-operator", automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName} {
+	for _, sa := range []string{controllerSA, buildAPISA, "ado-operator", "default", automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName} {
 		objects = append(objects, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa, Namespace: ns}})
 	}
 	objects = append(objects,
@@ -115,12 +118,24 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 	}{
 		{name: "build pod", as: asController, obj: pod(automotivev1alpha1.BuildServiceAccountName), allowed: true},
 		{name: "workspace pod", as: asController, obj: pod(workspaceServiceAccountName), allowed: true},
+		// The upload pod names no account, so it runs as the default one.
+		{name: "pod naming no account", as: asController, obj: pod(""), allowed: true},
 		{name: "operator pod", as: asController, obj: pod("ado-operator")},
 		{name: "own identity pod", as: asController, obj: pod(controllerSA)},
 		{name: "build TaskRun", as: asController, allowed: true,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName})},
-		{name: "TaskRun with Tekton's default", as: asController, allowed: true,
+		// Tekton or Shipwright would pick the account, and theirs isn't ours.
+		{name: "TaskRun naming no account", as: asController,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{})},
+		{name: "PipelineRun naming no account", as: asController,
+			obj: run("tekton.dev/v1", "PipelineRun", map[string]any{})},
+		{name: "BuildRun naming no account", as: asController,
+			obj: run("shipwright.io/v1beta1", "BuildRun", map[string]any{})},
+		{name: "PipelineRun task inheriting its account", as: asController, allowed: true,
+			obj: run("tekton.dev/v1", "PipelineRun", map[string]any{
+				"taskRunTemplate": map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName},
+				"taskRunSpecs":    []any{map[string]any{"pipelineTaskName": "build"}},
+			})},
 		{name: "operator TaskRun", as: asController,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": "ado-operator"})},
 		{name: "build PipelineRun", as: asController, allowed: true,

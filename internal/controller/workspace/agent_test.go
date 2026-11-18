@@ -1,21 +1,26 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"maps"
+	"os"
 	"slices"
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent/agentconn"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -233,4 +238,37 @@ func TestAgentAccessLeavesCurrentObjectsAlone(t *testing.T) {
 			t.Errorf("%s was rewritten although it was current", obj.GetName())
 		}
 	}
+}
+
+// The build controller runs the workspace controller, which calls the agents'
+// API, so the policy must admit the labels its pod actually carries.
+func TestAgentNetworkPolicyAdmitsBuildControllerPod(t *testing.T) {
+	data, err := os.ReadFile("../../../config/manager/build_controller.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deployment appsv1.Deployment
+	if err := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(&deployment); err != nil {
+		t.Fatal(err)
+	}
+	podLabels := labels.Set(deployment.Spec.Template.Labels)
+
+	policy := agentNetworkPolicy("ado")
+	for _, rule := range policy.Spec.Ingress {
+		if !slices.ContainsFunc(rule.Ports, func(p networkingv1.NetworkPolicyPort) bool {
+			return p.Port.IntVal == workspaceagent.APIPort
+		}) {
+			continue
+		}
+		for _, peer := range rule.From {
+			selector, err := metav1.LabelSelectorAsSelector(peer.PodSelector)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if peer.NamespaceSelector == nil && selector.Matches(podLabels) {
+				return
+			}
+		}
+	}
+	t.Fatalf("no peer on the agent API port admits the build controller pod %v", podLabels)
 }

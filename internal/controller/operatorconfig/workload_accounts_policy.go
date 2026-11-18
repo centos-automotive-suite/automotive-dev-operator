@@ -2,6 +2,7 @@ package operatorconfig
 
 import (
 	"fmt"
+	"strings"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -21,6 +22,10 @@ func workloadAccountsPolicyName(namespace string) string {
 // permissions. Both may create Secrets, so they may not create the type that
 // Kubernetes fills with a token for the ServiceAccount it names.
 func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicy {
+	// A pod naming no account never gets here as such: the API server gives
+	// it the namespace's default one first. A run naming none would leave the
+	// choice to Tekton or Shipwright, so every run must name one of these.
+	accounts := []string{automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName, "default"}
 	users := fmt.Sprintf("[%q, %q]",
 		"system:serviceaccount:"+namespace+":"+automotivev1alpha1.BuildControllerServiceAccountName,
 		"system:serviceaccount:"+namespace+":"+automotivev1alpha1.BuildAPIServiceAccountName)
@@ -59,14 +64,12 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 				Expression: "request.userInfo.username in " + users,
 			}},
 			Variables: []admissionregistrationv1.Variable{
-				// An empty name leaves the choice to the cluster: the pod's
-				// namespace default, or Tekton's configured default.
-				{Name: "allowed", Expression: fmt.Sprintf("['', 'default', %q, %q]",
-					automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName)},
+				{Name: "allowed", Expression: "['" + strings.Join(accounts, "', '") + "']"},
 				{Name: "serviceAccounts", Expression: "request.resource.resource == 'secrets' ? [] : " +
 					"request.resource.resource == 'pipelineruns' ? " +
 					"[object.spec.?taskRunTemplate.?serviceAccountName.orValue('')] + " +
-					"object.spec.?taskRunSpecs.orValue([]).map(s, s.?serviceAccountName.orValue('')) : " +
+					// A task naming no account runs as the template's.
+					"object.spec.?taskRunSpecs.orValue([]).map(s, s.?serviceAccountName.orValue('')).filter(sa, sa != '') : " +
 					"request.resource.resource == 'buildruns' ? [object.spec.?serviceAccount.orValue('')] : " +
 					"request.resource.resource == 'pods' ? " +
 					"[object.spec.?serviceAccountName.orValue(''), object.spec.?serviceAccount.orValue('')] : " +
@@ -75,8 +78,7 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 			Validations: []admissionregistrationv1.Validation{
 				{
 					Expression: "variables.serviceAccounts.all(sa, sa in variables.allowed)",
-					Message: fmt.Sprintf("build workloads may only run as %s or %s",
-						automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName),
+					Message:    "build workloads may only run as " + strings.Join(accounts, ", "),
 				},
 				{
 					Expression: fmt.Sprintf("request.resource.resource != 'secrets' || object.?type.orValue('') != %q",
