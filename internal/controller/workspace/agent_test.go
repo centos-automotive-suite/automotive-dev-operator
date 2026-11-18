@@ -246,6 +246,16 @@ func TestAgentAccessLeavesCurrentObjectsAlone(t *testing.T) {
 // operator runs only the OperatorConfig controller, which never calls them.
 func TestAgentNetworkPolicyAdmitsOnlyTheBuildControllerPod(t *testing.T) {
 	policy := agentNetworkPolicy("ado")
+	// Its rules restrict only the pods it selects, which must be the
+	// workspaces'.
+	selected, err := metav1.LabelSelectorAsSelector(&policy.Spec.PodSelector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := &automotivev1alpha1.Workspace{ObjectMeta: metav1.ObjectMeta{Name: "ws", Namespace: "ado"}}
+	if podLabels := labels.Set(workspacePodLabels(ws, "amd64")); !selected.Matches(podLabels) {
+		t.Fatalf("policy selects %v, not the workspace pod %v", policy.Spec.PodSelector, podLabels)
+	}
 	for _, tc := range []struct {
 		manifest string
 		admitted bool

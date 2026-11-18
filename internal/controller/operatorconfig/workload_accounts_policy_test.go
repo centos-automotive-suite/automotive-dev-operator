@@ -112,7 +112,10 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 
 	// A denial must come from the validation meant to make it: a failure to
 	// evaluate an expression also denies, and also names the policy.
-	accountDenial, tokenDenial := policy.Spec.Validations[0].Message, policy.Spec.Validations[1].Message
+	const (
+		accountDenial = "build workloads may only run as ado-build, ado-workspace, default"
+		tokenDenial   = "ServiceAccount token Secrets may not be created here"
+	)
 	for _, tc := range []struct {
 		name string
 		as   client.Client
