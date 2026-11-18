@@ -1717,6 +1717,9 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 			},
 		},
 		Spec: corev1.PodSpec{
+			// The agent never calls the API, and a token for any account in
+			// the namespace can pull other users' images from the registry.
+			AutomountServiceAccountToken: new(false),
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsUser:    ptr.To[int64](1000),
 				RunAsGroup:   ptr.To[int64](1000),

@@ -241,19 +241,49 @@ func TestAgentAccessLeavesCurrentObjectsAlone(t *testing.T) {
 }
 
 // The build controller runs the workspace controller, which calls the agents'
-// API, so the policy must admit the labels its pod actually carries.
-func TestAgentNetworkPolicyAdmitsBuildControllerPod(t *testing.T) {
-	data, err := os.ReadFile("../../../config/manager/build_controller.yaml")
+// API, so the policy must admit the labels its pod actually carries. The
+// operator runs only the OperatorConfig controller, which never calls them.
+func TestAgentNetworkPolicyAdmitsOnlyTheBuildControllerPod(t *testing.T) {
+	policy := agentNetworkPolicy("ado")
+	for _, tc := range []struct {
+		manifest string
+		admitted bool
+	}{
+		{manifest: "build_controller.yaml", admitted: true},
+		{manifest: "manager.yaml", admitted: false},
+	} {
+		t.Run(tc.manifest, func(t *testing.T) {
+			podLabels := deploymentPodLabels(t, "../../../config/manager/"+tc.manifest)
+			if got := admitsAgentAPI(t, policy, podLabels); got != tc.admitted {
+				t.Fatalf("policy admits pod %v to the agent API: %v, want %v", podLabels, got, tc.admitted)
+			}
+		})
+	}
+}
+
+// deploymentPodLabels returns the pod labels of the Deployment in a manifest.
+func deploymentPodLabels(t *testing.T, path string) labels.Set {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var deployment appsv1.Deployment
-	if err := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(&deployment); err != nil {
-		t.Fatal(err)
+	decoder := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
+	for {
+		var deployment appsv1.Deployment
+		if err := decoder.Decode(&deployment); err != nil {
+			t.Fatalf("no Deployment in %s: %v", path, err)
+		}
+		if deployment.Kind == "Deployment" {
+			return deployment.Spec.Template.Labels
+		}
 	}
-	podLabels := labels.Set(deployment.Spec.Template.Labels)
+}
 
-	policy := agentNetworkPolicy("ado")
+// admitsAgentAPI reports whether the policy lets a pod in its namespace with
+// these labels reach the agent API port.
+func admitsAgentAPI(t *testing.T, policy *networkingv1.NetworkPolicy, podLabels labels.Set) bool {
+	t.Helper()
 	for _, rule := range policy.Spec.Ingress {
 		if !slices.ContainsFunc(rule.Ports, func(p networkingv1.NetworkPolicyPort) bool {
 			return p.Port.IntVal == workspaceagent.APIPort
@@ -266,9 +296,9 @@ func TestAgentNetworkPolicyAdmitsBuildControllerPod(t *testing.T) {
 				t.Fatal(err)
 			}
 			if peer.NamespaceSelector == nil && selector.Matches(podLabels) {
-				return
+				return true
 			}
 		}
 	}
-	t.Fatalf("no peer on the agent API port admits the build controller pod %v", podLabels)
+	return false
 }
