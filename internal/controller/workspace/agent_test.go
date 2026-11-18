@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -281,23 +282,53 @@ func deploymentPodLabels(t *testing.T, path string) labels.Set {
 }
 
 // admitsAgentAPI reports whether the policy lets a pod in its namespace with
-// these labels reach the agent API port.
+// these labels reach the agent API. It fails the test on policy features it
+// doesn't model, so a false answer can be trusted.
 func admitsAgentAPI(t *testing.T, policy *networkingv1.NetworkPolicy, podLabels labels.Set) bool {
 	t.Helper()
 	for _, rule := range policy.Spec.Ingress {
-		if !slices.ContainsFunc(rule.Ports, func(p networkingv1.NetworkPolicyPort) bool {
-			return p.Port.IntVal == workspaceagent.APIPort
-		}) {
+		if !coversAgentAPI(t, rule.Ports) {
 			continue
 		}
+		// A rule naming no sources admits every source.
+		if len(rule.From) == 0 {
+			return true
+		}
 		for _, peer := range rule.From {
+			if peer.NamespaceSelector != nil || peer.IPBlock != nil {
+				t.Fatalf("peer %+v: the test models only pod selectors", peer)
+			}
 			selector, err := metav1.LabelSelectorAsSelector(peer.PodSelector)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if peer.NamespaceSelector == nil && selector.Matches(podLabels) {
+			if selector.Matches(podLabels) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// coversAgentAPI reports whether a rule's ports include the agent API's TCP
+// port. No ports, no protocol and no port number each stand for all of them.
+func coversAgentAPI(t *testing.T, ports []networkingv1.NetworkPolicyPort) bool {
+	t.Helper()
+	if len(ports) == 0 {
+		return true
+	}
+	for _, p := range ports {
+		if p.Protocol != nil && *p.Protocol != corev1.ProtocolTCP {
+			continue
+		}
+		if p.Port == nil {
+			return true
+		}
+		if p.Port.Type != intstr.Int || p.EndPort != nil {
+			t.Fatalf("port %+v: the test models only single numbered ports", p)
+		}
+		if p.Port.IntVal == workspaceagent.APIPort {
+			return true
 		}
 	}
 	return false

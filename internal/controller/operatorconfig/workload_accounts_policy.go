@@ -22,9 +22,12 @@ func workloadAccountsPolicyName(namespace string) string {
 // permissions. Both may create Secrets, so they may not create the type that
 // Kubernetes fills with a token for the ServiceAccount it names.
 func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicy {
-	// A pod naming no account never gets here as such: the API server gives
-	// it the namespace's default one first. A run naming none would leave the
-	// choice to Tekton or Shipwright, so every run must name one of these.
+	// The policy checks the account each workload will run as, where the
+	// request shows it. Before the policy sees them, the API server gives a pod
+	// naming no account its namespace's default, and Tekton's webhook gives a
+	// run naming none its configured default (default upstream, pipeline on
+	// OpenShift Pipelines). Shipwright picks a BuildRun's account only later,
+	// pipeline if there is one, so a BuildRun naming none is refused.
 	accounts := []string{automotivev1alpha1.BuildServiceAccountName, workspaceServiceAccountName, "default"}
 	users := fmt.Sprintf("[%q, %q]",
 		"system:serviceaccount:"+namespace+":"+automotivev1alpha1.BuildControllerServiceAccountName,

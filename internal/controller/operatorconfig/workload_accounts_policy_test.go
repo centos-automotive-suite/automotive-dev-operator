@@ -110,71 +110,78 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
+	// A denial must come from the validation meant to make it: a failure to
+	// evaluate an expression also denies, and also names the policy.
+	accountDenial, tokenDenial := policy.Spec.Validations[0].Message, policy.Spec.Validations[1].Message
 	for _, tc := range []struct {
-		name    string
-		as      client.Client
-		obj     client.Object
-		allowed bool
+		name string
+		as   client.Client
+		obj  client.Object
+		// denial is the message the policy refuses obj with, empty if it
+		// admits it.
+		denial string
 	}{
-		{name: "build pod", as: asController, obj: pod(automotivev1alpha1.BuildServiceAccountName), allowed: true},
-		{name: "workspace pod", as: asController, obj: pod(workspaceServiceAccountName), allowed: true},
+		{name: "build pod", as: asController, obj: pod(automotivev1alpha1.BuildServiceAccountName)},
+		{name: "workspace pod", as: asController, obj: pod(workspaceServiceAccountName)},
 		// The upload pod names no account, so it runs as the default one.
-		{name: "pod naming no account", as: asController, obj: pod(""), allowed: true},
-		{name: "operator pod", as: asController, obj: pod("ado-operator")},
-		{name: "own identity pod", as: asController, obj: pod(controllerSA)},
-		{name: "build TaskRun", as: asController, allowed: true,
+		{name: "pod naming no account", as: asController, obj: pod("")},
+		{name: "operator pod", as: asController, denial: accountDenial, obj: pod("ado-operator")},
+		{name: "own identity pod", as: asController, denial: accountDenial, obj: pod(controllerSA)},
+		{name: "build TaskRun", as: asController,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName})},
-		// Tekton or Shipwright would pick the account, and theirs isn't ours.
-		{name: "TaskRun naming no account", as: asController,
+		// Tekton's webhook would name its default before the policy runs.
+		// Without it, as here, and for Shipwright, which picks one later, a
+		// run naming no account is refused.
+		{name: "TaskRun naming no account", as: asController, denial: accountDenial,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{})},
-		{name: "PipelineRun naming no account", as: asController,
+		{name: "PipelineRun naming no account", as: asController, denial: accountDenial,
 			obj: run("tekton.dev/v1", "PipelineRun", map[string]any{})},
-		{name: "BuildRun naming no account", as: asController,
+		{name: "BuildRun naming no account", as: asController, denial: accountDenial,
 			obj: run("shipwright.io/v1beta1", "BuildRun", map[string]any{})},
-		{name: "PipelineRun task inheriting its account", as: asController, allowed: true,
+		{name: "PipelineRun task inheriting its account", as: asController,
 			obj: run("tekton.dev/v1", "PipelineRun", map[string]any{
 				"taskRunTemplate": map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName},
 				"taskRunSpecs":    []any{map[string]any{"pipelineTaskName": "build"}},
 			})},
-		{name: "operator TaskRun", as: asController,
+		{name: "operator TaskRun", as: asController, denial: accountDenial,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": "ado-operator"})},
-		{name: "build PipelineRun", as: asController, allowed: true,
+		{name: "build PipelineRun", as: asController,
 			obj: run("tekton.dev/v1", "PipelineRun", map[string]any{
 				"taskRunTemplate": map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName},
 			})},
-		{name: "PipelineRun with an operator task", as: asController,
+		{name: "PipelineRun with an operator task", as: asController, denial: accountDenial,
 			obj: run("tekton.dev/v1", "PipelineRun", map[string]any{
 				"taskRunTemplate": map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName},
 				"taskRunSpecs":    []any{map[string]any{"pipelineTaskName": "build", "serviceAccountName": "ado-operator"}},
 			})},
-		{name: "build BuildRun", as: asController, allowed: true,
+		{name: "build BuildRun", as: asController,
 			obj: run("shipwright.io/v1beta1", "BuildRun", map[string]any{"serviceAccount": automotivev1alpha1.BuildServiceAccountName})},
-		{name: "operator BuildRun", as: asController,
+		{name: "operator BuildRun", as: asController, denial: accountDenial,
 			obj: run("shipwright.io/v1beta1", "BuildRun", map[string]any{"serviceAccount": "ado-operator"})},
-		{name: "build API flash TaskRun", as: asBuildAPI, allowed: true,
+		{name: "build API flash TaskRun", as: asBuildAPI,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": automotivev1alpha1.BuildServiceAccountName})},
 		// Kubernetes fills a Secret of this type with a token for the
 		// ServiceAccount it names.
-		{name: "operator token Secret", as: asController, obj: tokenSecret("ado-operator")},
-		{name: "build token Secret", as: asBuildAPI, obj: tokenSecret(automotivev1alpha1.BuildServiceAccountName)},
-		{name: "opaque Secret", as: asBuildAPI, allowed: true, obj: &corev1.Secret{
+		{name: "operator token Secret", as: asController, denial: tokenDenial, obj: tokenSecret("ado-operator")},
+		{name: "build token Secret", as: asBuildAPI, denial: tokenDenial, obj: tokenSecret(automotivev1alpha1.BuildServiceAccountName)},
+		{name: "opaque Secret", as: asBuildAPI, obj: &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{GenerateName: "secret-", Namespace: ns},
 			StringData: map[string]string{"token": "x"},
 		}},
-		{name: "build API operator TaskRun", as: asBuildAPI,
+		{name: "build API operator TaskRun", as: asBuildAPI, denial: accountDenial,
 			obj: run("tekton.dev/v1", "TaskRun", map[string]any{"serviceAccountName": "ado-operator"})},
-		{name: "other users unaffected", as: admin, obj: pod("ado-operator"), allowed: true},
+		{name: "other users unaffected", as: admin, obj: pod("ado-operator")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.as.Create(ctx, tc.obj)
-			if tc.allowed {
+			if tc.denial == "" {
 				if err != nil {
 					t.Fatalf("create denied: %v", err)
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), policy.Name) {
-				t.Fatalf("create was not denied by %s: %v", policy.Name, err)
+			if err == nil || !strings.Contains(err.Error(), policy.Name) || !strings.Contains(err.Error(), tc.denial) {
+				t.Fatalf("create was not denied by %s with %q: %v", policy.Name, tc.denial, err)
 			}
 		})
 	}

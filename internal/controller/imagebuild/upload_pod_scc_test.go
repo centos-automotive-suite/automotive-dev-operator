@@ -34,7 +34,7 @@ func TestBuildControllerMayUseOnlyTheNonRootSCC(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, rule := range role.Rules {
-			if slices.Contains(rule.APIGroups, "security.openshift.io") {
+			if slices.Contains(rule.APIGroups, "security.openshift.io") || slices.Contains(rule.APIGroups, "*") {
 				sccRules = append(sccRules, rule)
 			}
 		}
