@@ -179,6 +179,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - security.openshift.io
+  resourceNames:
+  - nonroot-v2
+  resources:
+  - securitycontextconstraints
+  verbs:
+  - use
+- apiGroups:
   - shipwright.io
   resources:
   - buildruns
