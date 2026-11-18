@@ -228,7 +228,6 @@ type hydrateJob struct {
 // +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreamtags,verbs=delete
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=tasks;pipelines;pipelineruns;taskruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=pods,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",namespace=system,resources=pods/exec,verbs=create;get
 // +kubebuilder:rbac:groups="",namespace=system,resources=pods/log,verbs=get
 // The upload pod's fixed non-root UID is outside restricted-v2's range, and a
 // pod may use any SCC its creator may.

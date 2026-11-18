@@ -20,7 +20,10 @@ func workloadAccountsPolicyName(namespace string) string {
 // Tekton and Shipwright runs but cannot say which ServiceAccount those use, so
 // without this either could start one as the operator and take its
 // permissions. Both may create Secrets, so they may not create the type that
-// Kubernetes fills with a token for the ServiceAccount it names.
+// Kubernetes fills with a token for the ServiceAccount it names. Nor can RBAC
+// say which pod an exec reaches, and the operator's pod holds its token, so
+// they may exec only into a build's source-local step, the Shipwright waiter
+// the build API streams container build context into.
 func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string) *admissionregistrationv1.ValidatingAdmissionPolicy {
 	// The policy checks the account each workload will run as, where the
 	// request shows it. Before the policy sees them, the API server gives a pod
@@ -32,10 +35,12 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 	users := fmt.Sprintf("[%q, %q]",
 		"system:serviceaccount:"+namespace+":"+automotivev1alpha1.BuildControllerServiceAccountName,
 		"system:serviceaccount:"+namespace+":"+automotivev1alpha1.BuildAPIServiceAccountName)
-	rule := func(group, version string, resources ...string) admissionregistrationv1.NamedRuleWithOperations {
+	write := []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update}
+	connect := []admissionregistrationv1.OperationType{admissionregistrationv1.Connect}
+	rule := func(operations []admissionregistrationv1.OperationType, group, version string, resources ...string) admissionregistrationv1.NamedRuleWithOperations {
 		return admissionregistrationv1.NamedRuleWithOperations{
 			RuleWithOperations: admissionregistrationv1.RuleWithOperations{
-				Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
+				Operations: operations,
 				Rule: admissionregistrationv1.Rule{
 					APIGroups: []string{group}, APIVersions: []string{version}, Resources: resources,
 				},
@@ -57,9 +62,10 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 			// field paths below hold for all of them.
 			MatchConstraints: &admissionregistrationv1.MatchResources{
 				ResourceRules: []admissionregistrationv1.NamedRuleWithOperations{
-					rule("", "v1", "pods", "secrets"),
-					rule("tekton.dev", "v1", "taskruns", "pipelineruns"),
-					rule("shipwright.io", "v1beta1", "buildruns"),
+					rule(write, "", "v1", "pods", "secrets"),
+					rule(write, "tekton.dev", "v1", "taskruns", "pipelineruns"),
+					rule(write, "shipwright.io", "v1beta1", "buildruns"),
+					rule(connect, "", "v1", "pods/exec"),
 				},
 			},
 			MatchConditions: []admissionregistrationv1.MatchCondition{{
@@ -68,7 +74,10 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 			}},
 			Variables: []admissionregistrationv1.Variable{
 				{Name: "allowed", Expression: "['" + strings.Join(accounts, "', '") + "']"},
-				{Name: "serviceAccounts", Expression: "request.resource.resource == 'secrets' ? [] : " +
+				// The only CONNECT matched is exec, whose object is its
+				// PodExecOptions.
+				{Name: "exec", Expression: "request.operation == 'CONNECT'"},
+				{Name: "serviceAccounts", Expression: "variables.exec || request.resource.resource == 'secrets' ? [] : " +
 					"request.resource.resource == 'pipelineruns' ? " +
 					"[object.spec.?taskRunTemplate.?serviceAccountName.orValue('')] + " +
 					// A task naming no account runs as the template's.
@@ -87,6 +96,11 @@ func (r *OperatorConfigReconciler) buildWorkloadAccountsPolicy(namespace string)
 					Expression: fmt.Sprintf("request.resource.resource != 'secrets' || object.?type.orValue('') != %q",
 						corev1.SecretTypeServiceAccountToken),
 					Message: "ServiceAccount token Secrets may not be created here",
+				},
+				{
+					// Naming no container picks the pod's first.
+					Expression: "!variables.exec || object.?container.orValue('').contains('source-local')",
+					Message:    "exec is only allowed into a build's source-local step",
 				},
 			},
 		},

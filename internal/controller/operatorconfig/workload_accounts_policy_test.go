@@ -1,6 +1,7 @@
 package operatorconfig
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -10,8 +11,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -61,7 +65,7 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 		&rbacv1.Role{
 			ObjectMeta: metav1.ObjectMeta{Name: "workloads", Namespace: ns},
 			Rules: []rbacv1.PolicyRule{
-				{APIGroups: []string{""}, Resources: []string{"pods", "secrets"}, Verbs: []string{"create"}},
+				{APIGroups: []string{""}, Resources: []string{"pods", "secrets", "pods/exec"}, Verbs: []string{"create"}},
 				{APIGroups: []string{"tekton.dev"}, Resources: []string{"taskruns", "pipelineruns"}, Verbs: []string{"create"}},
 				{APIGroups: []string{"shipwright.io"}, Resources: []string{"buildruns"}, Verbs: []string{"create"}},
 			},
@@ -83,8 +87,10 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 		}
 	}
 
-	asController := impersonateSA(t, cfg, ns, controllerSA)
-	asBuildAPI := impersonateSA(t, cfg, ns, buildAPISA)
+	controllerCfg := saConfig(cfg, ns, controllerSA)
+	buildAPICfg := saConfig(cfg, ns, buildAPISA)
+	asController := newClient(t, controllerCfg)
+	asBuildAPI := newClient(t, buildAPICfg)
 	pod := func(sa string) client.Object {
 		return &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{GenerateName: "pod-", Namespace: ns},
@@ -188,6 +194,49 @@ func TestWorkloadAccountsPolicy(t *testing.T) {
 			}
 		})
 	}
+
+	// RBAC cannot say which pod an exec may reach, and the operator's pod
+	// holds its token. Only the build API execs, to stream container build
+	// context into a Shipwright build's source step.
+	const execDenial = "exec is only allowed into a build's source-local step"
+	for _, tc := range []struct {
+		name      string
+		as        *rest.Config
+		container string
+		denial    string
+	}{
+		{name: "build API into a build's source step", as: buildAPICfg, container: "step-source-local"},
+		{name: "build API into the operator", as: buildAPICfg, container: "manager", denial: execDenial},
+		// The API server picks the pod's first container.
+		{name: "build API naming no container", as: buildAPICfg, denial: execDenial},
+		{name: "build controller into the operator", as: controllerCfg, container: "manager", denial: execDenial},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// No pod exists, so an exec the policy admits fails to find one.
+			err := execInto(ctx, t, tc.as, "missing", tc.container)
+			if tc.denial == "" {
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("exec = %v, want the pod not found", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), policy.Name) || !strings.Contains(err.Error(), tc.denial) {
+				t.Fatalf("exec was not denied by %s with %q: %v", policy.Name, tc.denial, err)
+			}
+		})
+	}
+}
+
+func execInto(ctx context.Context, t *testing.T, cfg *rest.Config, pod, container string) error {
+	t.Helper()
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return clientset.CoreV1().RESTClient().Post().
+		Namespace(workloadTestNamespace).Resource("pods").Name(pod).SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{Container: container, Command: []string{"true"}, Stdout: true}, scheme.ParameterCodec).
+		Do(ctx).Error()
 }
 
 // openCRD defines a namespaced kind that accepts any spec, standing in for
@@ -232,14 +281,18 @@ func run(apiVersion, kind string, spec map[string]any) client.Object {
 	return obj
 }
 
-func impersonateSA(t *testing.T, cfg *rest.Config, ns, sa string) client.Client {
-	t.Helper()
+func saConfig(cfg *rest.Config, ns, sa string) *rest.Config {
 	impersonated := rest.CopyConfig(cfg)
 	impersonated.Impersonate = rest.ImpersonationConfig{
 		UserName: "system:serviceaccount:" + ns + ":" + sa,
 		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + ns, "system:authenticated"},
 	}
-	c, err := client.New(impersonated, client.Options{})
+	return impersonated
+}
+
+func newClient(t *testing.T, cfg *rest.Config) client.Client {
+	t.Helper()
+	c, err := client.New(cfg, client.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
