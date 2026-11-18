@@ -96,9 +96,20 @@ help: ## Display this help.
 
 ##@ Development
 
+# Each Deployment gets a role generated from the RBAC markers of the code it
+# runs: the operator (manager-role) runs only the operatorconfig controller,
+# the build controller (--mode=build) every other controller package, and the
+# build API internal/buildapi.
+BUILD_CONTROLLER_PATHS = $(foreach d,$(filter-out internal/controller/operatorconfig/ internal/controller/test/,$(wildcard internal/controller/*/)),paths="./$(d)...")
+
+# Deployments in config/manager whose OPERATOR_IMAGE `make deploy` points at IMG.
+MANAGER_DEPLOYMENTS = manager.yaml build_controller.yaml
+
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./api/..." paths="./internal/controller/..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./api/..." paths="./internal/controller/operatorconfig/..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=build-controller-role $(BUILD_CONTROLLER_PATHS) output:rbac:artifacts:config=config/rbac/build-controller
+	$(CONTROLLER_GEN) rbac:roleName=build-api-role paths="./internal/buildapi/..." output:rbac:artifacts:config=config/rbac/build-api
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -201,13 +212,11 @@ NAMESPACE ?= automotive-dev-operator-system
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	@cd $(CURDIR)/config/default && $(KUSTOMIZE) edit set namespace $(NAMESPACE); \
-	cd $(CURDIR)/config/manager && cp manager.yaml manager.yaml.orig; \
-	trap 'cd $(CURDIR)/config/default && $(KUSTOMIZE) edit set namespace automotive-dev-operator-system; cd $(CURDIR)/config/manager && mv -f manager.yaml.orig manager.yaml 2>/dev/null || true' EXIT; \
+	cd $(CURDIR)/config/manager && for f in $(MANAGER_DEPLOYMENTS); do cp $$f $$f.orig; done; \
+	trap 'cd $(CURDIR)/config/default && $(KUSTOMIZE) edit set namespace automotive-dev-operator-system; cd $(CURDIR)/config/manager && for f in $(MANAGER_DEPLOYMENTS); do mv -f $$f.orig $$f 2>/dev/null || true; done' EXIT; \
 	cd $(CURDIR)/config/manager && $(KUSTOMIZE) edit set image controller=${IMG}; \
-	cd $(CURDIR)/config/manager && sed -i.bak 's|value: quay.io/rh-sdv-cloud/automotive-dev-operator:latest|value: ${IMG}|g' manager.yaml && rm -f manager.yaml.bak; \
-	cd $(CURDIR) && $(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -; \
-	cd $(CURDIR)/config/manager && sed -i.bak 's|value: ${IMG}|value: quay.io/rh-sdv-cloud/automotive-dev-operator:latest|g' manager.yaml && rm -f manager.yaml.bak; \
-	rm -f $(CURDIR)/config/manager/manager.yaml.orig
+	cd $(CURDIR)/config/manager && sed -i.bak 's|value: quay.io/rh-sdv-cloud/automotive-dev-operator:latest|value: ${IMG}|g' $(MANAGER_DEPLOYMENTS) && rm -f *.yaml.bak; \
+	cd $(CURDIR) && $(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.

@@ -1,0 +1,186 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: build-api-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - route.openshift.io
+  resourceNames:
+  - default-route
+  resources:
+  - routes
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: build-api-role
+  namespace: system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - create
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resourceNames:
+  - ado-registry
+  - ado-registry-pull
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - catalogimages
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - catalogimages/status
+  - containerbuilds/finalizers
+  - imagebuilds/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - containerbuilds
+  verbs:
+  - create
+  - get
+  - list
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - imagebuilds
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - imagereseals
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - operatorconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - webhookdeliveries
+  verbs:
+  - get
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - workspaces
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+- apiGroups:
+  - automotive.sdv.cloud.redhat.com
+  resources:
+  - workspaces/status
+  verbs:
+  - patch
+- apiGroups:
+  - image.openshift.io
+  resources:
+  - imagestreams
+  verbs:
+  - create
+  - delete
+  - get
+- apiGroups:
+  - image.openshift.io
+  resources:
+  - imagestreamtags
+  verbs:
+  - delete
+- apiGroups:
+  - tekton.dev
+  resources:
+  - pipelineruns
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - tekton.dev
+  resources:
+  - taskruns
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+- apiGroups:
+  - tekton.dev
+  resources:
+  - taskruns/finalizers
+  verbs:
+  - update

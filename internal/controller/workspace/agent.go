@@ -119,10 +119,10 @@ func (r *Reconciler) ensureAgentAccess(ctx context.Context, ws *automotivev1alph
 }
 
 // agentNetworkPolicy admits only the agent's ports into workspace pods: the
-// API from the build API and the workspace controller, and the file server
-// from image build pods, which Tekton labels with their ImageBuild. The
-// policy can't tell one user's builds from another's, which is why file URLs
-// carry a per-build grant.
+// API from the build API and the build controller, which runs the workspace
+// controller, and the file server from image build pods, which Tekton labels
+// with their ImageBuild. The policy can't tell one user's builds from
+// another's, which is why file URLs carry a per-build grant.
 func agentNetworkPolicy(namespace string) *networkingv1.NetworkPolicy {
 	tcp := corev1.ProtocolTCP
 	port := func(p int32) []networkingv1.NetworkPolicyPort {
@@ -143,14 +143,10 @@ func agentNetworkPolicy(namespace string) *networkingv1.NetworkPolicy {
 			Ingress: []networkingv1.NetworkPolicyIngressRule{
 				{
 					Ports: port(workspaceagent.APIPort),
-					From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{{
-							Key:      "app.kubernetes.io/component",
-							Operator: metav1.LabelSelectorOpIn,
-							Values:   []string{"build-api", "build-controller"},
-						}},
-					}}, {PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
-						"control-plane": "operator",
+					From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+						"app.kubernetes.io/component": "build-api",
+					}}}, {PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+						"control-plane": "build-controller",
 					}}}},
 				},
 				{

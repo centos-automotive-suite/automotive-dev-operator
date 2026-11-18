@@ -5,15 +5,6 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - ""
-  resources:
-  - namespaces
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
   - admissionregistration.k8s.io
   resources:
   - validatingadmissionpolicies
@@ -56,12 +47,6 @@ rules:
   verbs:
   - bind
 - apiGroups:
-  - route.openshift.io
-  resources:
-  - routes
-  verbs:
-  - get
-- apiGroups:
   - security.openshift.io
   resources:
   - securitycontextconstraints
@@ -85,8 +70,6 @@ rules:
   - ""
   resources:
   - configmaps
-  - persistentvolumeclaims
-  - pods
   - secrets
   - serviceaccounts
   - services
@@ -98,33 +81,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods/exec
-  verbs:
-  - create
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - pods/log
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts/token
-  verbs:
-  - create
-- apiGroups:
-  - ""
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
 - apiGroups:
   - apps
   resources:
@@ -140,14 +96,7 @@ rules:
 - apiGroups:
   - automotive.sdv.cloud.redhat.com
   resources:
-  - catalogimages
-  - containerbuilds
-  - imagebuilds
-  - imagereseals
-  - images
   - operatorconfigs
-  - scheduledimagebuilds
-  - workspaces
   verbs:
   - create
   - delete
@@ -159,56 +108,23 @@ rules:
 - apiGroups:
   - automotive.sdv.cloud.redhat.com
   resources:
-  - catalogimages/finalizers
-  - containerbuilds/finalizers
-  - imagebuilds/finalizers
-  - imagereseals/finalizers
-  - images/finalizers
   - operatorconfigs/finalizers
-  - scheduledimagebuilds/finalizers
-  - workspaces/finalizers
   verbs:
   - update
 - apiGroups:
   - automotive.sdv.cloud.redhat.com
   resources:
-  - catalogimages/status
-  - containerbuilds/status
-  - imagebuilds/status
-  - imagereseals/status
-  - images/status
   - operatorconfigs/status
-  - scheduledimagebuilds/status
-  - webhookdeliveries/status
-  - workspaces/status
   verbs:
   - get
   - patch
   - update
-- apiGroups:
-  - automotive.sdv.cloud.redhat.com
-  resources:
-  - webhookdeliveries
-  verbs:
-  - create
-  - get
-  - list
-  - watch
 - apiGroups:
   - image.openshift.io
   resources:
   - imagestreams
   verbs:
   - create
-  - delete
-  - get
-  - update
-- apiGroups:
-  - image.openshift.io
-  resources:
-  - imagestreamtags
-  verbs:
-  - delete
 - apiGroups:
   - monitoring.coreos.com
   resources:
@@ -231,16 +147,6 @@ rules:
   - get
   - list
   - patch
-  - update
-  - watch
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - networkpolicies
-  verbs:
-  - create
-  - get
-  - list
   - update
   - watch
 - apiGroups:
@@ -269,24 +175,10 @@ rules:
   - update
   - watch
 - apiGroups:
-  - shipwright.io
-  resources:
-  - buildruns
-  - builds
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - tekton.dev
   resources:
   - pipelineruns
   - pipelines
-  - taskruns
   - tasks
   verbs:
   - create
@@ -296,9 +188,3 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - tekton.dev
-  resources:
-  - taskruns/finalizers
-  verbs:
-  - update

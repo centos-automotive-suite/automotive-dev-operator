@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	watchpkg "k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
@@ -52,7 +53,7 @@ func (a *APIServer) refreshAuthConfigIfNeeded() {
 	a.lastAuthConfigCheck = time.Now()
 	a.authConfigMu.Unlock()
 
-	_ = a.doRefreshAuthConfig()
+	_, _ = a.doRefreshAuthConfig()
 }
 
 // caRef identifies a Secret or ConfigMap referenced as a CA certificate by a JWT issuer.
@@ -60,6 +61,37 @@ type caRef struct {
 	namespace   string
 	name        string
 	isConfigMap bool
+	// version is the resourceVersion read before the active config was built
+	// from the CA: empty if it did not exist, caVersionUnknown if unread.
+	version string
+}
+
+// caVersionUnknown never equals a resourceVersion, so a poller whose baseline
+// could not be read, or whose CA a failed refresh did not apply, refreshes at
+// its next successful read.
+const caVersionUnknown = "unknown"
+
+// unapplied marks refs as not yet applied after a refresh that kept the old
+// config, so each one's poller retries the refresh at its next poll.
+func unapplied(refs []caRef) []caRef {
+	for i := range refs {
+		refs[i].version = caVersionUnknown
+	}
+	return refs
+}
+
+// caRefVersion returns the resourceVersion of the CA ref names, or "" if it
+// does not exist.
+func caRefVersion(ctx context.Context, c client.Reader, ref caRef) (string, error) {
+	var obj client.Object = &corev1.Secret{}
+	if ref.isConfigMap {
+		obj = &corev1.ConfigMap{}
+	}
+	err := c.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, obj)
+	if k8serrors.IsNotFound(err) {
+		return "", nil
+	}
+	return obj.GetResourceVersion(), err
 }
 
 // caRefsFromConfig returns all CA Secret/ConfigMap refs from an already-fetched OperatorConfig.
@@ -89,7 +121,8 @@ func caRefsFromConfig(operatorConfig *automotivev1alpha1.OperatorConfig, default
 	return refs
 }
 
-// startResourceWatcher watches OperatorConfig and all referenced CA Secrets/ConfigMaps.
+// startResourceWatcher watches OperatorConfig and polls the CA Secrets and
+// ConfigMaps it references.
 // On any change it refreshes the auth config and restarts the session to pick up updated refs.
 func (a *APIServer) startResourceWatcher(ctx context.Context) {
 	watchClient, err := getWatchClient()
@@ -98,7 +131,7 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 		return
 	}
 
-	caRefs := a.doRefreshAuthConfig()
+	caRefs, _ := a.doRefreshAuthConfig()
 
 	for {
 		if ctx.Err() != nil {
@@ -112,7 +145,7 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 		go a.watchOperatorConfigSession(sessionCtx, watchClient, namespace, eventCh)
 
 		for _, ref := range caRefs {
-			go a.watchCARefSession(sessionCtx, watchClient, ref, eventCh)
+			go a.pollCARef(sessionCtx, watchClient, ref, caPollInterval, eventCh)
 		}
 
 		select {
@@ -121,7 +154,8 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 			return
 		case <-eventCh:
 			cancelSession()
-			caRefs = a.doRefreshAuthConfig()
+			refreshed, err := a.doRefreshAuthConfig()
+			caRefs = caRefsAfterRefresh(caRefs, refreshed, err)
 		}
 	}
 }
@@ -176,79 +210,78 @@ func (a *APIServer) runOperatorConfigWatchOnce(ctx context.Context, watchClient 
 	}
 }
 
-func (a *APIServer) watchCARefSession(ctx context.Context, watchClient client.WithWatch, ref caRef, eventCh chan<- struct{}) {
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		if err := a.runCARefWatchOnce(ctx, watchClient, ref, eventCh); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			a.log.Error(err, "CA ref watch error, reconnecting in 5s", "name", ref.name, "namespace", ref.namespace)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(5 * time.Second):
-			}
-		}
-	}
-}
+// caPollInterval is how often the build API rereads its OIDC issuers' CAs.
+const caPollInterval = time.Minute
 
-func (a *APIServer) runCARefWatchOnce(ctx context.Context, watchClient client.WithWatch, ref caRef, eventCh chan<- struct{}) error {
-	var (
-		watcher watchpkg.Interface
-		err     error
-		kind    = "Secret"
-	)
+// pollCARef signals eventCh once the CA Secret or ConfigMap ref names differs
+// from ref.version, the version the active config was built from. It polls by
+// name because the build API may read Secrets and ConfigMaps only by name: a
+// watch needs list and watch on the whole namespace.
+func (a *APIServer) pollCARef(ctx context.Context, c client.Reader, ref caRef, interval time.Duration, eventCh chan<- struct{}) {
+	kind := "Secret"
 	if ref.isConfigMap {
 		kind = "ConfigMap"
-		watcher, err = watchClient.Watch(ctx, &corev1.ConfigMapList{},
-			client.InNamespace(ref.namespace),
-			client.MatchingFields{"metadata.name": ref.name})
-	} else {
-		watcher, err = watchClient.Watch(ctx, &corev1.SecretList{},
-			client.InNamespace(ref.namespace),
-			client.MatchingFields{"metadata.name": ref.name})
 	}
-	if err != nil {
-		return fmt.Errorf("failed to start %s watch for %s/%s: %w", kind, ref.namespace, ref.name, err)
-	}
-	defer watcher.Stop()
-
-	a.log.Info("watching CA reference for changes", "kind", kind, "namespace", ref.namespace, "name", ref.name)
+	a.log.Info("polling CA reference for changes", "kind", kind, "namespace", ref.namespace, "name", ref.name)
+	// The first read waits an interval too: an unknown version differs from
+	// every read, so polling at once would retry a failing refresh in a loop.
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
-		case event, ok := <-watcher.ResultChan():
-			if !ok {
-				return fmt.Errorf("%s watch channel closed for %s/%s", kind, ref.namespace, ref.name)
+			return
+		case <-ticker.C:
+		}
+		current, err := caRefVersion(ctx, c, ref)
+		switch {
+		case err != nil:
+			if ctx.Err() != nil {
+				return
 			}
-			switch event.Type {
-			case watchpkg.Modified, watchpkg.Deleted:
-				a.log.Info("CA reference changed", "kind", kind, "namespace", ref.namespace, "name", ref.name, "event", event.Type)
-				select {
-				case eventCh <- struct{}{}:
-				default:
-				}
-			case watchpkg.Error:
-				return fmt.Errorf("%s watch error event for %s/%s", kind, ref.namespace, ref.name)
+			a.log.Error(err, "failed to read CA reference", "kind", kind, "namespace", ref.namespace, "name", ref.name)
+		case current != ref.version:
+			a.log.Info("CA reference changed", "kind", kind, "namespace", ref.namespace, "name", ref.name)
+			select {
+			case eventCh <- struct{}{}:
+			default:
 			}
+			return
 		}
 	}
 }
 
 // doRefreshAuthConfig reads the OperatorConfig, resolves CA references, and atomically
 // swaps the OIDC authenticator if the config changed. Returns the current CA refs so
-// the caller can start watches without a second fetch; nil on error.
-func (a *APIServer) doRefreshAuthConfig() []caRef {
+// the caller can poll them without a second fetch, or an error if it could not
+// read the OperatorConfig.
+func (a *APIServer) doRefreshAuthConfig() ([]caRef, error) {
 	namespace := resolveNamespace()
 	k8sClient, err := getKubernetesClient()
 	if err != nil {
 		a.log.Error(err, "failed to get k8s client for auth config refresh", "namespace", namespace)
-		return nil
+		return nil, err
 	}
+	return a.refreshAuthConfig(k8sClient, namespace)
+}
+
+// caRefsAfterRefresh returns the CAs the watcher polls next. A failed refresh
+// says nothing about which CAs the config references, so it keeps polling the
+// ones it had, marked unapplied so they retry the refresh.
+func caRefsAfterRefresh(previous, refreshed []caRef, err error) []caRef {
+	if err != nil {
+		return unapplied(previous)
+	}
+	return refreshed
+}
+
+// refreshAuthConfig is doRefreshAuthConfig with its client and namespace.
+// Refreshes run one at a time: each records the CA versions it built from, and
+// an older one finishing after a newer one would install a config other than
+// the one recorded.
+func (a *APIServer) refreshAuthConfig(k8sClient client.Client, namespace string) ([]caRef, error) {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
 
 	operatorConfig := &automotivev1alpha1.OperatorConfig{}
 	key := types.NamespacedName{Name: "config", Namespace: namespace}
@@ -256,10 +289,20 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 	defer fetchCancel()
 	if err := k8sClient.Get(fetchCtx, key, operatorConfig); err != nil {
 		a.log.Error(err, "failed to get OperatorConfig during refresh", "namespace", namespace)
-		return nil
+		return nil, err
 	}
 
 	refs := caRefsFromConfig(operatorConfig, namespace)
+	// Read each CA's version before its contents, so a change after this
+	// differs from what the pollers compare against.
+	for i := range refs {
+		version, err := caRefVersion(fetchCtx, k8sClient, refs[i])
+		if err != nil {
+			a.log.Error(err, "failed to read CA reference version", "namespace", refs[i].namespace, "name", refs[i].name)
+			version = caVersionUnknown
+		}
+		refs[i].version = version
+	}
 
 	// Build new config from OperatorConfig, resolving any CA references from Secrets/ConfigMaps.
 	var newConfig *AuthenticationConfiguration
@@ -272,7 +315,7 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 		jwtCopy, resolveErr := toUpstreamJWTAuthenticators(refreshCtx, k8sClient, auth.JWT, namespace)
 		if resolveErr != nil {
 			a.log.Error(resolveErr, "failed to resolve JWT CA references during refresh, keeping existing config")
-			return refs
+			return unapplied(refs), nil
 		}
 
 		// Ensure Prefix pointers are non-nil when Claim is set (k8s OIDC authenticator requirement).
@@ -302,7 +345,7 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 	// rebuilding the authenticator entirely.
 	if authConfigsEqual(a.authConfig, newConfig) {
 		a.authConfigMu.Unlock()
-		return refs
+		return refs, nil
 	}
 	a.authConfigMu.Unlock()
 
@@ -310,10 +353,11 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 	// concurrent requests on slow network or crypto operations.
 	var authn authenticator.Token
 	if newConfig != nil {
+		var err error
 		authn, err = newJWTAuthenticator(context.Background(), *newConfig)
 		if err != nil {
 			a.log.Error(err, "failed to create JWT authenticator during refresh, keeping existing config")
-			return refs
+			return unapplied(refs), nil
 		}
 	}
 
@@ -323,7 +367,7 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 	// Re-check under lock in case another refresh already applied the same config
 	// while authenticator construction was in flight.
 	if authConfigsEqual(a.authConfig, newConfig) {
-		return refs
+		return refs, nil
 	}
 
 	// Config changed - need to recreate authenticator
@@ -333,7 +377,7 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 		a.authConfig = nil
 		a.externalJWT = nil
 		a.internalPrefix = ""
-		return refs
+		return refs, nil
 	}
 
 	// Update config fields
@@ -344,7 +388,7 @@ func (a *APIServer) doRefreshAuthConfig() []caRef {
 	}
 
 	a.externalJWT = authn
-	return refs
+	return refs, nil
 }
 
 func (a *APIServer) authenticateRequest(c *gin.Context) (string, string, *authError) {

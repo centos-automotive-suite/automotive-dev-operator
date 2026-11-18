@@ -310,8 +310,9 @@ spec:
                                 certificateAuthorityConfigMap:
                                   description: |-
                                     CertificateAuthorityConfigMap references a Kubernetes ConfigMap containing the
-                                    PEM-encoded CA certificate. The build API watches the ConfigMap for changes so
-                                    CA rotations are picked up immediately without restarting the server.
+                                    PEM-encoded CA certificate. The build API rereads the ConfigMap every minute,
+                                    so CA rotations are picked up without restarting the server. A ConfigMap in
+                                    another namespace needs the build API granted get on it there.
                                   properties:
                                     key:
                                       description: Key within the ConfigMap whose
@@ -331,8 +332,9 @@ spec:
                                 certificateAuthoritySecret:
                                   description: |-
                                     CertificateAuthoritySecret references a Kubernetes Secret containing the
-                                    PEM-encoded CA certificate. The build API watches the Secret for changes so
-                                    CA rotations are picked up immediately without restarting the server.
+                                    PEM-encoded CA certificate. The build API rereads the Secret every minute,
+                                    so CA rotations are picked up without restarting the server. A Secret in
+                                    another namespace needs the build API granted get on it there.
                                   properties:
                                     key:
                                       description: Key within the Secret whose value
@@ -437,66 +439,6 @@ spec:
                       buildAPI:
                         description: BuildAPI defines resource requirements for the
                           Build API container
-                        properties:
-                          claims:
-                            description: |-
-                              Claims lists the names of resources, defined in spec.resourceClaims,
-                              that are used by this container.
-
-                              This field depends on the
-                              DynamicResourceAllocation feature gate.
-
-                              This field is immutable. It can only be set for containers.
-                            items:
-                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
-                              properties:
-                                name:
-                                  description: |-
-                                    Name must match the name of one entry in pod.spec.resourceClaims of
-                                    the Pod where this field is used. It makes that resource available
-                                    inside a container.
-                                  type: string
-                                request:
-                                  description: |-
-                                    Request is the name chosen for a request in the referenced claim.
-                                    If empty, everything from the claim is made available, otherwise
-                                    only the result of this request.
-                                  type: string
-                              required:
-                              - name
-                              type: object
-                            type: array
-                            x-kubernetes-list-map-keys:
-                            - name
-                            x-kubernetes-list-type: map
-                          limits:
-                            additionalProperties:
-                              anyOf:
-                              - type: integer
-                              - type: string
-                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                              x-kubernetes-int-or-string: true
-                            description: |-
-                              Limits describes the maximum amount of compute resources allowed.
-                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
-                            type: object
-                          requests:
-                            additionalProperties:
-                              anyOf:
-                              - type: integer
-                              - type: string
-                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                              x-kubernetes-int-or-string: true
-                            description: |-
-                              Requests describes the minimum amount of compute resources required.
-                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
-                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
-                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
-                            type: object
-                        type: object
-                      buildController:
-                        description: BuildController defines resource requirements
-                          for the build controller container
                         properties:
                           claims:
                             description: |-

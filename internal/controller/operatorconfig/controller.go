@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -244,6 +243,10 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			log.Error(err, "Failed to cleanup ServiceMonitor")
 			return ctrl.Result{}, err
 		}
+		if err := r.cleanupWorkloadAccountsPolicy(ctx, config); err != nil {
+			log.Error(err, "Failed to cleanup workload accounts policy")
+			return ctrl.Result{}, err
+		}
 		log.Info("Removing finalizer")
 		controllerutil.RemoveFinalizer(config, finalizerName)
 		if err := r.Update(ctx, config); err != nil {
@@ -255,6 +258,11 @@ func (r *OperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	r.setCondition(config, automotivev1alpha1.OperatorConfigConditionReconciling, metav1.ConditionTrue, "Reconciling", "Reconciliation in progress")
+
+	if err := r.deployWorkloadAccountsPolicy(ctx, config); err != nil {
+		log.Error(err, "Failed to deploy workload accounts policy")
+		return ctrl.Result{}, err
+	}
 
 	// Reconcile OSBuilds
 	log.Info("Processing OSBuilds configuration", "osBuilds", config.Spec.OSBuilds, "generation", config.Generation)
@@ -578,11 +586,6 @@ func (r *OperatorConfigReconciler) deployOSBuilds(
 ) error {
 	r.Log.Info("Starting OSBuilds deployment")
 
-	// Deploy build controller (runs ImageBuild/Image/CatalogImage controllers)
-	if err := r.deployBuildController(ctx, config); err != nil {
-		return fmt.Errorf("failed to deploy build controller: %w", err)
-	}
-
 	// Deploy build-api (required for CLI access to builds)
 	if err := r.deployBuildAPI(ctx, config); err != nil {
 		return fmt.Errorf("failed to deploy build-api: %w", err)
@@ -703,115 +706,6 @@ func (r *OperatorConfigReconciler) createOrUpdateTargetDefaults(ctx context.Cont
 	return nil
 }
 
-func (r *OperatorConfigReconciler) deployBuildController(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
-	// In "all" mode, build controllers run in-process; no separate deployment needed.
-	if os.Getenv("OPERATOR_MODE") == "all" {
-		r.Log.Info("Skipping build controller deployment (running in 'all' mode)")
-		return nil
-	}
-	r.Log.Info("Starting build controller deployment")
-
-	// Create/update ServiceAccount
-	sa := r.buildBuildControllerServiceAccount(config.Namespace)
-	if err := r.createOrUpdate(ctx, sa, config); err != nil {
-		return fmt.Errorf("failed to create/update build controller service account: %w", err)
-	}
-
-	// Create/update ClusterRole
-	clusterRole := r.buildBuildControllerClusterRole()
-	if err := r.createOrUpdate(ctx, clusterRole, config); err != nil {
-		return fmt.Errorf("failed to create/update build controller cluster role: %w", err)
-	}
-
-	// Create/update ClusterRoleBinding
-	clusterRoleBinding := r.buildBuildControllerClusterRoleBinding(config.Namespace)
-	if err := r.createOrUpdate(ctx, clusterRoleBinding, config); err != nil {
-		return fmt.Errorf("failed to create/update build controller cluster role binding: %w", err)
-	}
-
-	// Create/update leader election Role
-	leRole := r.buildBuildControllerLeaderElectionRole(config.Namespace)
-	if err := r.createOrUpdate(ctx, leRole, config); err != nil {
-		return fmt.Errorf("failed to create/update build controller leader election role: %w", err)
-	}
-
-	// Create/update leader election RoleBinding
-	leRoleBinding := r.buildBuildControllerLeaderElectionRoleBinding(config.Namespace)
-	if err := r.createOrUpdate(ctx, leRoleBinding, config); err != nil {
-		return fmt.Errorf("failed to create/update build controller leader election role binding: %w", err)
-	}
-
-	// Create/update Deployment with owner reference for reconciliation
-	deployment := r.buildBuildControllerDeployment(config.Namespace, config)
-	if err := controllerutil.SetControllerReference(config, deployment, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set controller reference on build controller deployment: %w", err)
-	}
-	if err := r.createOrUpdate(ctx, deployment, config); err != nil {
-		return fmt.Errorf("failed to create/update build controller deployment: %w", err)
-	}
-
-	r.Log.Info("Build controller deployment completed successfully")
-	return nil
-}
-
-func (r *OperatorConfigReconciler) cleanupBuildController(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
-	// In "all" mode, build controllers run in-process; nothing to clean up.
-	if os.Getenv("OPERATOR_MODE") == "all" {
-		r.Log.Info("Skipping build controller cleanup (running in 'all' mode)")
-		return nil
-	}
-	r.Log.Info("Cleaning up build controller resources")
-
-	// Delete Deployment
-	deployment := &appsv1.Deployment{}
-	deployment.Name = buildControllerName
-	deployment.Namespace = config.Namespace
-	if err := r.Delete(ctx, deployment); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build controller deployment: %w", err)
-	}
-
-	// Delete ServiceAccount
-	sa := &corev1.ServiceAccount{}
-	sa.Name = buildControllerName
-	sa.Namespace = config.Namespace
-	if err := r.Delete(ctx, sa); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build controller service account: %w", err)
-	}
-
-	// Delete ClusterRole
-	clusterRole := &rbacv1.ClusterRole{}
-	clusterRole.Name = buildControllerName
-	if err := r.Delete(ctx, clusterRole); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build controller cluster role: %w", err)
-	}
-
-	// Delete ClusterRoleBinding
-	clusterRoleBinding := &rbacv1.ClusterRoleBinding{}
-	clusterRoleBinding.Name = buildControllerName
-	if err := r.Delete(ctx, clusterRoleBinding); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build controller cluster role binding: %w", err)
-	}
-
-	// Delete leader election Role
-	leRole := &rbacv1.Role{}
-	leRole.Name = buildControllerName + "-leader-election"
-	leRole.Namespace = config.Namespace
-	if err := r.Delete(ctx, leRole); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build controller leader election role: %w", err)
-	}
-
-	// Delete leader election RoleBinding
-	leRoleBinding := &rbacv1.RoleBinding{}
-	leRoleBinding.Name = buildControllerName + "-leader-election"
-	leRoleBinding.Namespace = config.Namespace
-	if err := r.Delete(ctx, leRoleBinding); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete build controller leader election role binding: %w", err)
-	}
-
-	r.Log.Info("Build controller cleanup completed")
-	return nil
-}
-
 func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
 	r.Log.Info("Cleaning up OSBuilds resources")
 
@@ -852,11 +746,6 @@ func (r *OperatorConfigReconciler) cleanupOSBuilds(ctx context.Context, config *
 	// Cleanup build-api
 	if err := r.cleanupBuildAPI(ctx, config); err != nil {
 		return fmt.Errorf("failed to cleanup build-api: %w", err)
-	}
-
-	// Cleanup build controller
-	if err := r.cleanupBuildController(ctx, config); err != nil {
-		return fmt.Errorf("failed to cleanup build controller: %w", err)
 	}
 
 	if err := r.cleanupBuildIdentity(ctx, config); err != nil {
@@ -910,6 +799,39 @@ func (r *OperatorConfigReconciler) deployBuildIdentity(ctx context.Context, conf
 	}}
 	if err := r.Create(ctx, stream); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create builder cache ImageStream: %w", err)
+	}
+	return nil
+}
+
+// deployWorkloadAccountsPolicy reconciles the policy that limits which
+// accounts the build controller and the build API may run workloads as. Both
+// are static Deployments whose roles let them create Pods and Secrets whether
+// or not OS builds are enabled, so it is deployed whatever OS builds says and
+// removed only with the OperatorConfig.
+func (r *OperatorConfigReconciler) deployWorkloadAccountsPolicy(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	for _, obj := range []client.Object{
+		r.buildWorkloadAccountsPolicy(config.Namespace),
+		r.buildWorkloadAccountsPolicyBinding(config.Namespace),
+	} {
+		if err := r.createOrUpdate(ctx, obj, config); err != nil {
+			return fmt.Errorf("failed to create/update %T %s: %w", obj, obj.GetName(), err)
+		}
+	}
+	return nil
+}
+
+// cleanupWorkloadAccountsPolicy deletes the cluster-scoped objects
+// deployWorkloadAccountsPolicy creates, which namespace deletion would not
+// remove.
+func (r *OperatorConfigReconciler) cleanupWorkloadAccountsPolicy(ctx context.Context, config *automotivev1alpha1.OperatorConfig) error {
+	name := workloadAccountsPolicyName(config.Namespace)
+	for _, obj := range []client.Object{
+		&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: name}},
+	} {
+		if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete %T %s: %w", obj, obj.GetName(), err)
+		}
 	}
 	return nil
 }
@@ -1025,6 +947,11 @@ func (r *OperatorConfigReconciler) reconcileMonitoring(ctx context.Context, conf
 }
 
 func (r *OperatorConfigReconciler) deployServiceMonitor(ctx context.Context, config *automotivev1alpha1.OperatorConfig) (bool, error) {
+	// The token controller fills the Secret only once its ServiceAccount exists.
+	if err := r.createOrUpdate(ctx, r.buildMetricsScraperServiceAccount(config.Namespace), config); err != nil {
+		return false, fmt.Errorf("failed to create/update metrics scraper service account: %w", err)
+	}
+
 	tokenSecret := r.buildMetricsTokenSecret(config.Namespace)
 	if err := r.createOrUpdate(ctx, tokenSecret, config); err != nil {
 		return false, fmt.Errorf("failed to create/update metrics token secret: %w", err)
@@ -1094,6 +1021,11 @@ func (r *OperatorConfigReconciler) cleanupServiceMonitor(ctx context.Context, co
 	clusterBinding.Name = metricsReaderBindingName
 	if err := r.Delete(ctx, clusterBinding); err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete metrics reader cluster role binding: %w", err)
+	}
+
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: metricsScraperServiceAccountName, Namespace: config.Namespace}}
+	if err := r.Delete(ctx, sa); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete metrics scraper service account: %w", err)
 	}
 	return nil
 }

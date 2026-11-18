@@ -155,12 +155,12 @@ func deployOperator() {
 
 	openShiftCluster = utils.IsOpenShiftCluster()
 
-	By("scaling down existing operator to stop finalizer reconciliation")
-	cmd := exec.Command("kubectl", "scale", "deployment", "ado-operator",
+	By("scaling down existing operator and build controller to stop finalizer reconciliation")
+	cmd := exec.Command("kubectl", "scale", "deployment", "ado-operator", "ado-build-controller",
 		"-n", testNamespace, "--replicas=0")
 	_, _ = utils.Run(cmd)
-	// Give it a moment to stop before we try to strip finalizers
-	cmd = exec.Command("kubectl", "wait", "deployment/ado-operator",
+	// Give them a moment to stop before we try to strip finalizers
+	cmd = exec.Command("kubectl", "wait", "deployment/ado-operator", "deployment/ado-build-controller",
 		"-n", testNamespace, "--for=jsonpath={.status.readyReplicas}=0", "--timeout=30s")
 	_, _ = utils.Run(cmd)
 
@@ -201,9 +201,9 @@ func deployOperator() {
 	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
-	By("waiting for operator deployment to be available")
+	By("waiting for operator and build controller deployments to be available")
 	cmd = exec.Command("kubectl", "wait", "--for=condition=available",
-		"--timeout=10m", "deployment/ado-operator", "-n", testNamespace)
+		"--timeout=10m", "deployment/ado-operator", "deployment/ado-build-controller", "-n", testNamespace)
 	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 

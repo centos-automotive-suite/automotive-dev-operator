@@ -213,10 +213,12 @@ info "Running deploy-catalog.sh..."
 REGISTRY_TLS_VERIFY=false ./hack/deploy-catalog.sh -y --keep-config || fail "deploy-catalog.sh failed."
 ok "Operator deployed via OLM catalog."
 
-info "Ensuring image pull permissions for operator service account..."
-if ! oc policy add-role-to-user system:image-puller "system:serviceaccount:${NAMESPACE}:ado-operator" -n "$NAMESPACE" 2>/dev/null; then
-    warn "Failed to grant image-puller role to ado-operator SA. Pods may fail to pull images."
-fi
+info "Ensuring image pull permissions for the operator image's service accounts..."
+for sa in ado-operator ado-build-controller ado-build-api; do
+    if ! oc policy add-role-to-user system:image-puller "system:serviceaccount:${NAMESPACE}:${sa}" -n "$NAMESPACE" 2>/dev/null; then
+        warn "Failed to grant image-puller role to ${sa} SA. Its pods may fail to pull images."
+    fi
+done
 
 ###############################################################################
 # Step 5 — Label nodes for build scheduling

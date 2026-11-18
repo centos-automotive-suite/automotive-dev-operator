@@ -120,7 +120,7 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&mode, "mode", modeAll,
 		"Controller mode: 'platform' runs only OperatorConfig controller, "+
-			"'build' runs only ImageBuild/Image/CatalogImage/ContainerBuild controllers, "+
+			"'build' runs every other controller, "+
 			"'all' runs all controllers.")
 	opts := zap.Options{
 		Development: false,
@@ -180,13 +180,6 @@ func main() {
 	leaderElectionID := "930f6355.sdv.cloud.redhat.com"
 	if mode == modeBuild {
 		leaderElectionID = "930f6355-build.sdv.cloud.redhat.com"
-	}
-
-	// Expose mode to controllers so they can adjust behavior (e.g., skip deploying
-	// a separate build controller when all controllers run in-process).
-	if err := os.Setenv("OPERATOR_MODE", mode); err != nil {
-		setupLog.Error(err, "unable to set OPERATOR_MODE")
-		os.Exit(1)
 	}
 
 	// Support namespace-scoped operation for multi-instance deployment

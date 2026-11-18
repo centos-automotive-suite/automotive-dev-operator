@@ -1,21 +1,27 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"maps"
+	"os"
 	"slices"
 	"testing"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent/agentconn"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -233,4 +239,107 @@ func TestAgentAccessLeavesCurrentObjectsAlone(t *testing.T) {
 			t.Errorf("%s was rewritten although it was current", obj.GetName())
 		}
 	}
+}
+
+// The build controller runs the workspace controller, which calls the agents'
+// API, so the policy must admit the labels its pod actually carries. The
+// operator runs only the OperatorConfig controller, which never calls them.
+func TestAgentNetworkPolicyAdmitsOnlyTheBuildControllerPod(t *testing.T) {
+	policy := agentNetworkPolicy("ado")
+	// Its rules restrict only the pods it selects, which must be the
+	// workspaces'.
+	selected, err := metav1.LabelSelectorAsSelector(&policy.Spec.PodSelector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := &automotivev1alpha1.Workspace{ObjectMeta: metav1.ObjectMeta{Name: "ws", Namespace: "ado"}}
+	if podLabels := labels.Set(workspacePodLabels(ws, "amd64")); !selected.Matches(podLabels) {
+		t.Fatalf("policy selects %v, not the workspace pod %v", policy.Spec.PodSelector, podLabels)
+	}
+	for _, tc := range []struct {
+		manifest string
+		admitted bool
+	}{
+		{manifest: "build_controller.yaml", admitted: true},
+		{manifest: "manager.yaml", admitted: false},
+	} {
+		t.Run(tc.manifest, func(t *testing.T) {
+			podLabels := deploymentPodLabels(t, "../../../config/manager/"+tc.manifest)
+			if got := admitsAgentAPI(t, policy, podLabels); got != tc.admitted {
+				t.Fatalf("policy admits pod %v to the agent API: %v, want %v", podLabels, got, tc.admitted)
+			}
+		})
+	}
+}
+
+// deploymentPodLabels returns the pod labels of the Deployment in a manifest.
+func deploymentPodLabels(t *testing.T, path string) labels.Set {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
+	for {
+		var deployment appsv1.Deployment
+		if err := decoder.Decode(&deployment); err != nil {
+			t.Fatalf("no Deployment in %s: %v", path, err)
+		}
+		if deployment.Kind == "Deployment" {
+			return deployment.Spec.Template.Labels
+		}
+	}
+}
+
+// admitsAgentAPI reports whether the policy lets a pod in its namespace with
+// these labels reach the agent API. It fails the test on policy features it
+// doesn't model, so a false answer can be trusted.
+func admitsAgentAPI(t *testing.T, policy *networkingv1.NetworkPolicy, podLabels labels.Set) bool {
+	t.Helper()
+	for _, rule := range policy.Spec.Ingress {
+		if !coversAgentAPI(t, rule.Ports) {
+			continue
+		}
+		// A rule naming no sources admits every source.
+		if len(rule.From) == 0 {
+			return true
+		}
+		for _, peer := range rule.From {
+			if peer.NamespaceSelector != nil || peer.IPBlock != nil {
+				t.Fatalf("peer %+v: the test models only pod selectors", peer)
+			}
+			selector, err := metav1.LabelSelectorAsSelector(peer.PodSelector)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selector.Matches(podLabels) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// coversAgentAPI reports whether a rule's ports include the agent API's TCP
+// port. No ports, no protocol and no port number each stand for all of them.
+func coversAgentAPI(t *testing.T, ports []networkingv1.NetworkPolicyPort) bool {
+	t.Helper()
+	if len(ports) == 0 {
+		return true
+	}
+	for _, p := range ports {
+		if p.Protocol != nil && *p.Protocol != corev1.ProtocolTCP {
+			continue
+		}
+		if p.Port == nil {
+			return true
+		}
+		if p.Port.Type != intstr.Int || p.EndPort != nil {
+			t.Fatalf("port %+v: the test models only single numbered ports", p)
+		}
+		if p.Port.IntVal == workspaceagent.APIPort {
+			return true
+		}
+	}
+	return false
 }
