@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"testing"
 	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
@@ -14,7 +15,22 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 )
+
+// Without workspaces config only the default toolchain image is allowed.
+func TestWorkspaceCustomImageRejectedWithoutOperatorConfig(t *testing.T) {
+	k8s := newFakeClient()
+	response := postWorkspaceAs(t, k8s, "alice", `{"name":"demo","toolchainImage":"quay.io/evil/rogue:latest"}`)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("response: %d %s, want 403", response.Code, response.Body)
+	}
+	err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "test-ns", Name: "demo"}, &automotivev1alpha1.Workspace{})
+	if !k8serrors.IsNotFound(err) {
+		t.Fatalf("workspace created with a disallowed image: %v", err)
+	}
+}
 
 var _ = Describe("Workspace API", func() {
 	var (

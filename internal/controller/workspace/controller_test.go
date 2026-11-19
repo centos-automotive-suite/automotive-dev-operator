@@ -9,6 +9,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -19,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 const (
@@ -760,6 +762,64 @@ func TestEnsurePod_SkipsVerifyWhenDisabled(t *testing.T) {
 	}
 	if pod == nil {
 		t.Fatal("expected pod to be created")
+	}
+}
+
+// A failed OperatorConfig read must not skip the image checks.
+func TestEnsurePod_FailsWhenOperatorConfigUnreadable(t *testing.T) {
+	ws, pvc, _ := runningWorkspace("config-error-ws", "default")
+	scheme := newTestScheme()
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ws, pvc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*automotivev1alpha1.OperatorConfig); ok {
+					return k8serrors.NewServiceUnavailable("apiserver unavailable")
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	r := &Reconciler{Client: fc, Scheme: scheme, Log: logr.Discard()}
+	ctx := context.Background()
+
+	if _, err := r.ensurePod(ctx, ws, r.Log); !k8serrors.IsServiceUnavailable(err) {
+		t.Fatalf("ensurePod error = %v, want the OperatorConfig read error", err)
+	}
+	err := fc.Get(ctx, types.NamespacedName{Namespace: ws.Namespace, Name: "workspace-" + ws.Name}, &corev1.Pod{})
+	if !k8serrors.IsNotFound(err) {
+		t.Fatalf("pod created without reading OperatorConfig: %v", err)
+	}
+}
+
+// Without workspaces config only the default toolchain image is allowed.
+func TestEnsurePod_RejectsCustomImageWithoutWorkspacesConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		objs []client.Object
+	}{
+		{name: "no OperatorConfig"},
+		{name: "OperatorConfig without workspaces", objs: []client.Object{&automotivev1alpha1.OperatorConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "default"},
+		}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws, pvc, _ := runningWorkspace("custom-image-ws", "default")
+			ws.Spec.Image = "quay.io/evil/rogue:latest"
+			r, fc := newTestReconciler(append([]client.Object{ws, pvc}, tt.objs...)...)
+			ctx := context.Background()
+
+			_, err := r.ensurePod(ctx, ws, r.Log)
+			if err == nil || !strings.Contains(err.Error(), "not in the allowed images list") {
+				t.Fatalf("ensurePod error = %v, want 'not in the allowed images list'", err)
+			}
+			err = fc.Get(ctx, types.NamespacedName{Namespace: ws.Namespace, Name: "workspace-" + ws.Name}, &corev1.Pod{})
+			if !k8serrors.IsNotFound(err) {
+				t.Fatalf("pod created with a disallowed image: %v", err)
+			}
+		})
 	}
 }
 
