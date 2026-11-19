@@ -263,13 +263,28 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 
 	// Reseal pods push as ado-build, which can push to an ImageStream but not
 	// create one. Create it only now that the job is accepted, so a rejected
-	// request (a duplicate name, say) leaves no stream behind.
+	// request (a duplicate name, say) leaves no stream behind. The job owns the
+	// stream, so Kubernetes garbage-collects it once the last owning job is gone.
 	if outputStream != "" {
-		if _, err := imagestream.Ensure(ctx, k8sClient, namespace, outputStream, requestedBy); err != nil {
+		owner := metav1.OwnerReference{
+			APIVersion: automotivev1alpha1.GroupVersion.String(),
+			Kind:       "ImageReseal",
+			Name:       imageSealed.Name,
+			UID:        imageSealed.UID,
+		}
+		if _, err := imagestream.EnsureOwned(ctx, k8sClient, namespace, outputStream, requestedBy, owner); err != nil {
 			// Without the stream the job could only fail at its final push, so
 			// withdraw it. The Secrets are owned by the job by now, so garbage
 			// collection removes any that fail to delete here. The request may be
 			// what failed, so use a context of our own.
+			//
+			// EnsureOwned reports success the moment it creates the stream, so an
+			// error means this job never created and owns one: any stream here is a
+			// pre-existing one it did not create. Deleting the job is enough; its
+			// owner reference, if one was added, is garbage-collected with it, and
+			// that removes the stream only when no other job still owns it. Deleting
+			// the stream here instead could discard one a sibling request or a
+			// directly-applied job is using but has not yet recorded ownership of.
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			cleanupSealedSecrets(cleanupCtx, clientset, namespace, &req, refs)
