@@ -12,6 +12,7 @@ import (
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
 	imagev1 "github.com/openshift/api/image/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -45,8 +46,19 @@ func TestInternalImageStreamName(t *testing.T) {
 	}
 }
 
+func ownedByReseal(stream *imagev1.ImageStream, name string) bool {
+	for _, ref := range stream.OwnerReferences {
+		if ref.Kind == "ImageReseal" && ref.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Reseal pods push as ado-build, which may push to existing ImageStreams but
-// not create them, so the API creates the output's stream once it accepts the job.
+// not create them, so the API creates the output's stream once it accepts the
+// job and makes the job an owner, so Kubernetes garbage-collects the stream
+// once the last owning job is gone.
 func TestCreateSealedCreatesOutputImageStream(t *testing.T) {
 	k8s := newSealedTestClient(t, interceptor.Funcs{})
 	if response := postSealed(t, k8s); response.Code/100 != 2 {
@@ -55,6 +67,73 @@ func TestCreateSealedCreatesOutputImageStream(t *testing.T) {
 	stream := &imagev1.ImageStream{}
 	if err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "test-ns", Name: "resealed"}, stream); err != nil {
 		t.Fatalf("output ImageStream was not created: %v", err)
+	}
+	if !ownedByReseal(stream, "reseal-demo") {
+		t.Errorf("owner references = %+v, want the job reseal-demo", stream.OwnerReferences)
+	}
+}
+
+// A retry with the same output name reuses the stream its failed predecessor
+// left behind, and both jobs own it until each is deleted.
+func TestCreateSealedReusesAndOwnsExistingOutputImageStream(t *testing.T) {
+	existing := &imagev1.ImageStream{ObjectMeta: metav1.ObjectMeta{
+		Name:      "resealed",
+		Namespace: "test-ns",
+		Labels: map[string]string{
+			labels.ManagedBy: labels.ValueBuildAPI,
+			labels.Transient: labels.ValueTrue,
+		},
+		Annotations: map[string]string{
+			labels.RequestedBy: "user",
+		},
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "automotive.sdv.cloud.redhat.com/v1alpha1",
+			Kind:       "ImageReseal",
+			Name:       "failed-job",
+			UID:        "failed-job",
+		}},
+	}}
+	k8s := newSealedTestClient(t, interceptor.Funcs{}, existing)
+	if response := postSealed(t, k8s); response.Code/100 != 2 {
+		t.Fatalf("response: %d %s", response.Code, response.Body)
+	}
+	stream := &imagev1.ImageStream{}
+	if err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "test-ns", Name: "resealed"}, stream); err != nil {
+		t.Fatalf("output ImageStream was lost: %v", err)
+	}
+	if !ownedByReseal(stream, "failed-job") || !ownedByReseal(stream, "reseal-demo") {
+		t.Errorf("owner references = %+v, want both jobs", stream.OwnerReferences)
+	}
+}
+
+// Reusing a stream that already holds a published image must not add an owner
+// reference to it: owning it would let deleting this job garbage-collect the
+// existing image.
+func TestCreateSealedReusesPublishedStreamWithoutOwning(t *testing.T) {
+	existing := &imagev1.ImageStream{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "resealed",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				labels.ManagedBy: labels.ValueBuildAPI,
+				labels.Transient: labels.ValueTrue,
+			},
+			Annotations: map[string]string{labels.RequestedBy: "user"},
+		},
+		Status: imagev1.ImageStreamStatus{
+			Tags: []imagev1.NamedTagEventList{{Tag: "v1"}},
+		},
+	}
+	k8s := newSealedTestClient(t, interceptor.Funcs{}, existing)
+	if response := postSealed(t, k8s); response.Code/100 != 2 {
+		t.Fatalf("response: %d %s", response.Code, response.Body)
+	}
+	stream := &imagev1.ImageStream{}
+	if err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "test-ns", Name: "resealed"}, stream); err != nil {
+		t.Fatalf("output ImageStream was lost: %v", err)
+	}
+	if len(stream.OwnerReferences) != 0 {
+		t.Errorf("owner references = %+v, want none added to a published stream", stream.OwnerReferences)
 	}
 }
 

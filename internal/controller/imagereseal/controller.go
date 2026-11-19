@@ -40,6 +40,7 @@ import (
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 )
@@ -54,9 +55,13 @@ const (
 // Reconciler reconciles an ImageReseal object
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Log      logr.Logger
-	Recorder events.EventRecorder
+	// DirectClient reads and writes ImageStreams without the manager cache, so the
+	// delete decision sees the stream's current owner references and status.tags
+	// rather than a cached copy that may lag a retry's claim or a just-landed push.
+	DirectClient client.Client
+	Scheme       *runtime.Scheme
+	Log          logr.Logger
+	Recorder     events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagereseals,verbs=get;list;watch;create;update;patch;delete
@@ -79,17 +84,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
+	// A deleted job needs no cleanup here: the job owns its output ImageStream,
+	// so garbage collection removes its owner reference and deletes the stream
+	// once the last owner is gone.
+
 	switch sealed.Status.Phase {
 	case "", phasePending:
 		return r.handlePending(ctx, sealed)
 	case phaseRunning:
 		return r.handleRunning(ctx, sealed)
 	case phaseCompleted, phaseFailed:
-		// Retry cleanup of any transient secrets that failed to delete.
-		if err := r.cleanupTransientSecrets(ctx, sealed, log.FromContext(ctx)); err != nil {
+		// Retry cleanup of any transient secrets that failed to delete, and the
+		// release of the output ImageStream the job no longer needs.
+		cleanupErr := r.cleanupTransientSecrets(ctx, sealed, logger)
+		retryAfter, streamErr := r.releaseOutputStream(ctx, sealed, logger)
+		if cleanupErr != nil || streamErr != nil {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		return ctrl.Result{}, nil
+		// A zero retryAfter means the stream work is done; a positive one asks to
+		// come back once the delete grace period has elapsed.
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	default:
 		logger.Info("Unknown phase", "phase", sealed.Status.Phase)
 		return ctrl.Result{}, nil
@@ -563,6 +577,13 @@ func (r *Reconciler) updateStatus(ctx context.Context, sealed *automotivev1alpha
 	oldMessage := sealed.Status.Message
 	sealed.Status.Phase = phase
 	sealed.Status.Message = message
+	// A terminal phase reached here is often a failure detected without a run
+	// finishing (a missing TaskRun, say), so no CompletionTime was set. Stamp it
+	// now: the stream delete grace period is measured from it, and falling back
+	// to the creation time would skip the grace for a long-running job.
+	if (phase == phaseCompleted || phase == phaseFailed) && sealed.Status.CompletionTime == nil {
+		sealed.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	}
 	if err := r.Status().Update(ctx, sealed); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -706,6 +727,89 @@ func (r *Reconciler) emitEventf(
 // and should be cleaned up after the sealed operation completes.
 const transientLabel = "automotive.sdv.cloud.redhat.com/transient"
 
+// outputStreamDeleteGrace is how long after a reseal job fails the controller
+// waits before deleting its output stream. The internal registry records a push
+// in status.tags only after it processes the push, so an image uploaded just
+// before the job failed may not yet be visible when the controller first sees
+// the failure. Waiting out the grace lets it settle before the delete decision.
+const outputStreamDeleteGrace = 30 * time.Second
+
+// streamsClient reads and writes ImageStreams without the manager cache when a
+// direct client is available, so a release this reconcile just wrote is visible
+// to the delete decision that follows it.
+func (r *Reconciler) streamsClient() client.Client {
+	if r.DirectClient != nil {
+		return r.DirectClient
+	}
+	return r.Client
+}
+
+// releaseOutputStream handles a terminal job's output ImageStream. A completed
+// job keeps its output: the stream holds the published image, and its owner
+// reference ties the stream's lifetime to the job, so garbage collection removes
+// it once the job is deleted. A failed job releases its owner reference and, once
+// no other job owns the stream and nothing was published, deletes it; a shared
+// stream (another owner) or a published one is kept. It returns a positive
+// duration when the caller should requeue to retry the delete after the grace
+// period.
+func (r *Reconciler) releaseOutputStream(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, log logr.Logger) (time.Duration, error) {
+	name := imagestream.NameFromRef(sealed.Spec.OutputRef, sealed.Namespace)
+	if name == "" || sealed.Status.Phase != phaseFailed {
+		return 0, nil
+	}
+	// Wait out the grace period since the job settled before releasing: a push
+	// landing just before the failure reaches status.tags only after the registry
+	// processes it. CompletionTime is only set once a TaskRun or PipelineRun
+	// finishes, so an early failure that never ran falls back to the creation time.
+	settled := sealed.CreationTimestamp.Time
+	if sealed.Status.CompletionTime != nil {
+		settled = sealed.Status.CompletionTime.Time
+	}
+	if remaining := outputStreamDeleteGrace - time.Since(settled); remaining > 0 {
+		return remaining, nil
+	}
+	streams := r.streamsClient()
+	inUse, err := r.outputStreamInUse(ctx, streams, sealed, name)
+	if err != nil {
+		log.Error(err, "Failed to check whether the output ImageStream is in use (will retry)", "imagestream", name)
+		return 0, err
+	}
+	deleted, err := imagestream.ReleaseOwnerAndDeleteIfUnused(ctx, streams, sealed.Namespace, name, sealed.UID, inUse)
+	if err != nil {
+		log.Error(err, "Failed to release output ImageStream (will retry)", "imagestream", name)
+		return 0, err
+	}
+	if deleted {
+		log.Info("Deleted unused output ImageStream", "imagestream", name)
+	}
+	return 0, nil
+}
+
+// outputStreamInUse reports whether another running job targets the named stream.
+// It catches jobs that hold no owner reference on the stream, such as one applied
+// directly or before the API recorded ownership, which the owner-reference check
+// cannot see.
+func (r *Reconciler) outputStreamInUse(ctx context.Context, c client.Client, sealed *automotivev1alpha1.ImageReseal, name string) (bool, error) {
+	reseals := &automotivev1alpha1.ImageResealList{}
+	if err := c.List(ctx, reseals, client.InNamespace(sealed.Namespace)); err != nil {
+		return false, err
+	}
+	for i := range reseals.Items {
+		other := &reseals.Items[i]
+		if other.Name == sealed.Name || other.DeletionTimestamp != nil {
+			continue
+		}
+		switch other.Status.Phase {
+		case phaseCompleted, phaseFailed:
+			continue
+		}
+		if imagestream.NameFromRef(other.Spec.OutputRef, other.Namespace) == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // cleanupTransientSecrets attempts to delete all transient secrets for a
 // sealed operation. Returns an error if any deletion failed so the caller
 // can schedule a retry.
@@ -828,6 +932,13 @@ func (r *Reconciler) readRegistryAuth(ctx context.Context, namespace, secretName
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.DirectClient == nil {
+		direct, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()})
+		if err != nil {
+			return fmt.Errorf("create direct client: %w", err)
+		}
+		r.DirectClient = direct
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&automotivev1alpha1.ImageReseal{}).
 		Owns(&tektonv1.TaskRun{}).
