@@ -179,7 +179,7 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 		}
 	}
 
-	outputStream := internalImageStreamName(req.OutputRef, namespace)
+	outputStream := imagestream.NameFromRef(req.OutputRef, namespace)
 	if outputStream != "" {
 		if err := imagestream.CheckOwner(ctx, k8sClient, namespace, outputStream, requestedBy); err != nil {
 			spanError(span, err)
@@ -261,27 +261,11 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 		}
 	}
 
-	// Reseal pods push as ado-build, which can push to an ImageStream but not
-	// create one. Create it only now that the job is accepted, so a rejected
-	// request (a duplicate name, say) leaves no stream behind.
-	if outputStream != "" {
-		if _, err := imagestream.Ensure(ctx, k8sClient, namespace, outputStream, requestedBy); err != nil {
-			// Without the stream the job could only fail at its final push, so
-			// withdraw it. The Secrets are owned by the job by now, so garbage
-			// collection removes any that fail to delete here. The request may be
-			// what failed, so use a context of our own.
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			cleanupSealedSecrets(cleanupCtx, clientset, namespace, &req, refs)
-			if delErr := k8sClient.Delete(cleanupCtx, imageSealed); delErr != nil && !k8serrors.IsNotFound(delErr) {
-				err = fmt.Errorf("%w (deleting ImageReseal %s also failed: %v)", err, imageSealed.Name, delErr)
-			}
-			spanError(span, err)
-			SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
-			c.JSON(imageStreamErrorStatus(err), gin.H{"error": err.Error()})
-			return
-		}
-	}
+	// The output ImageStream, when the output targets the internal registry, is
+	// left to the imagereseal controller: it claims the stream for this job
+	// before the run starts, so a rejected request (a duplicate name, say)
+	// leaves no stream behind. Only the ownership check above runs here, so the
+	// request fails fast when another user already took the name.
 	SealedCreateRequestsTotal.WithLabelValues(opLabel, "accepted").Inc()
 
 	writeJSON(c, http.StatusAccepted, buildcontract.SealedResponse{

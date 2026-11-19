@@ -150,23 +150,6 @@ func createInternalRegistrySecret(ctx context.Context, restCfg *rest.Config, nam
 	return secretName, nil
 }
 
-// ensureImageStream creates an ImageStream if it doesn't already exist.
-// The OpenShift internal registry requires an ImageStream before oras can push to it.
-// internalImageStreamName returns the ImageStream that ref pushes to when it
-// points at namespace in the internal registry, and "" for any other ref.
-func internalImageStreamName(ref, namespace string) string {
-	path, ok := strings.CutPrefix(ref, defaultInternalRegistryURL+"/"+namespace+"/")
-	if !ok {
-		return ""
-	}
-	name, _, _ := strings.Cut(path, "@")
-	name, _, _ = strings.Cut(name, ":")
-	if name == "" || strings.Contains(name, "/") {
-		return ""
-	}
-	return name
-}
-
 // imageStreamErrorStatus maps an imagestream.Ensure or CheckOwner error to the
 // response status: naming another user's stream is the caller's fault.
 func imageStreamErrorStatus(err error) int {

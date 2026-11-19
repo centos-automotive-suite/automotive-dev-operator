@@ -19,6 +19,7 @@ package imagereseal
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -40,6 +41,8 @@ import (
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 )
@@ -50,6 +53,12 @@ const (
 	phaseCompleted = "Completed"
 	phaseFailed    = "Failed"
 )
+
+// isTerminalPhase reports whether phase is a terminal (finished) phase, after
+// which a job no longer needs a running TaskRun/PipelineRun.
+func isTerminalPhase(phase string) bool {
+	return phase == phaseCompleted || phase == phaseFailed
+}
 
 // Reconciler reconciles an ImageReseal object
 type Reconciler struct {
@@ -62,6 +71,7 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagereseals,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagereseals/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagereseals/finalizers,verbs=update
+// +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreams,verbs=get;create;update;delete
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=tasks;taskruns;pipelineruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
@@ -79,17 +89,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
+	// A deleted job needs no cleanup here: the job owns its output ImageStream,
+	// so garbage collection removes its owner reference and deletes the stream
+	// once the last owner is gone.
+
 	switch sealed.Status.Phase {
 	case "", phasePending:
 		return r.handlePending(ctx, sealed)
 	case phaseRunning:
 		return r.handleRunning(ctx, sealed)
-	case phaseCompleted, phaseFailed:
-		// Retry cleanup of any transient secrets that failed to delete.
-		if err := r.cleanupTransientSecrets(ctx, sealed, log.FromContext(ctx)); err != nil {
+	case phaseCompleted:
+		// A completed job keeps its output stream: the stream holds the published
+		// image and its owner reference ties it to the job, so garbage collection
+		// removes it when the job is deleted. Only retry transient-secret cleanup.
+		if err := r.cleanupTransientSecrets(ctx, sealed, logger); err != nil {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return ctrl.Result{}, nil
+	case phaseFailed:
+		// Retry cleanup of any transient secrets that failed to delete, and the
+		// release of the output ImageStream the job no longer needs.
+		cleanupErr := r.cleanupTransientSecrets(ctx, sealed, logger)
+		retryAfter, streamErr := r.releaseOutputStream(ctx, sealed, logger)
+		if cleanupErr != nil || streamErr != nil {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		// A zero retryAfter means the stream work is done; a positive one asks to
+		// come back once the delete grace period has elapsed.
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	default:
 		logger.Info("Unknown phase", "phase", sealed.Status.Phase)
 		return ctrl.Result{}, nil
@@ -116,6 +143,19 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 		sealed.Spec.OutputRef,
 		sealed.Spec.Architecture,
 	)
+
+	// Claim the output stream before the run starts: reseal pods push as
+	// ado-build, which can push to an ImageStream but not create one, and the
+	// job becomes an owner of the stream, so Kubernetes garbage-collects it
+	// once the last owning job is gone. A stream another user has taken under
+	// this name since the request fails the job; anything else is transient
+	// and retried.
+	if err := r.ensureOutputStream(ctx, sealed); err != nil {
+		if stderrors.Is(err, imagestream.ErrNotOwned) {
+			return r.updateStatus(ctx, sealed, phaseFailed, err.Error())
+		}
+		return ctrl.Result{}, err
+	}
 
 	// Auto-detect architecture from source container image if not specified
 	if sealed.Spec.Architecture == "" && sealed.Spec.InputRef != "" {
@@ -191,6 +231,15 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 }
 
 func (r *Reconciler) handleRunning(ctx context.Context, sealed *automotivev1alpha1.ImageReseal) (ctrl.Result, error) {
+	// A job that started before the operator recorded output-stream ownership
+	// — upgraded in flight, say — uses its stream with no owner reference, so a
+	// failed job sharing the output name could delete the stream out from
+	// under it. Backfill the claim: a job that settled it (or needs no stream)
+	// skips this without a call, and the run keeps going even while the
+	// backfill retries.
+	if err := r.ensureOutputStream(ctx, sealed); err != nil && !stderrors.Is(err, imagestream.ErrNotOwned) {
+		log.FromContext(ctx).Error(err, "Failed to backfill output ImageStream claim (will retry)")
+	}
 	if sealed.Status.TaskRunName != "" {
 		return r.handleRunningTaskRun(ctx, sealed)
 	}
@@ -563,6 +612,13 @@ func (r *Reconciler) updateStatus(ctx context.Context, sealed *automotivev1alpha
 	oldMessage := sealed.Status.Message
 	sealed.Status.Phase = phase
 	sealed.Status.Message = message
+	// A terminal phase reached here is often a failure detected without a run
+	// finishing (a missing TaskRun, say), so no CompletionTime was set. Stamp it
+	// now: the stream delete grace period is measured from it, and falling back
+	// to the creation time would skip the grace for a long-running job.
+	if isTerminalPhase(phase) && sealed.Status.CompletionTime == nil {
+		sealed.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	}
 	if err := r.Status().Update(ctx, sealed); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -705,6 +761,117 @@ func (r *Reconciler) emitEventf(
 // transientLabel is the label used to mark secrets that were created by the API server
 // and should be cleaned up after the sealed operation completes.
 const transientLabel = "automotive.sdv.cloud.redhat.com/transient"
+
+// outputStreamDeleteGrace is how long after a reseal job fails the controller
+// waits before deleting its output stream. The internal registry records a push
+// in status.tags only after it processes the push, so an image uploaded just
+// before the job failed may not yet be visible when the controller first sees
+// the failure. Waiting out the grace lets it settle before the delete decision.
+const outputStreamDeleteGrace = 30 * time.Second
+
+const (
+	// outputStreamClaimAnnotation records the state of a job's claim on its
+	// output ImageStream: claimed once the job owns the stream, or rejected
+	// once the stream proved to be another user's and no retry can change
+	// that. A running job with no recorded state may predate the claim logic
+	// (upgraded in flight, or applied directly), so its reconcile backfills
+	// the claim. A recorded rejection is re-reported on every later call, so a
+	// caller whose reaction to it failed to persist (the Failed phase, say)
+	// sees it again rather than skipping the check.
+	outputStreamClaimAnnotation = "automotive.sdv.cloud.redhat.com/output-stream-claim"
+	claimStateClaimed           = "claimed"
+	claimStateRejected          = "rejected"
+)
+
+// ensureOutputStream claims the job's output ImageStream: it creates the stream
+// for the user that requested the job, with the job among its owner references,
+// or adds the job to the stream an earlier job of the same output left behind.
+// Jobs applied directly carry no requesting user and claim nothing; the stream
+// their push needs is then one the API already created. A settled claim or
+// rejection is recorded on the job so a running job does not redo the check on
+// every reconcile; any other error is left for the caller to retry.
+func (r *Reconciler) ensureOutputStream(ctx context.Context, sealed *automotivev1alpha1.ImageReseal) error {
+	switch sealed.Annotations[outputStreamClaimAnnotation] {
+	case claimStateClaimed:
+		return nil
+	case claimStateRejected:
+		return fmt.Errorf("%w: ImageStream %s", imagestream.ErrNotOwned,
+			imagestream.NameFromRef(sealed.Spec.OutputRef, sealed.Namespace))
+	}
+	name := imagestream.NameFromRef(sealed.Spec.OutputRef, sealed.Namespace)
+	if name == "" {
+		return nil
+	}
+	requestedBy := sealed.Annotations[labels.RequestedBy]
+	if requestedBy == "" {
+		return nil
+	}
+	owner := metav1.OwnerReference{
+		APIVersion: automotivev1alpha1.GroupVersion.String(),
+		Kind:       "ImageReseal",
+		Name:       sealed.Name,
+		UID:        sealed.UID,
+	}
+	if err := imagestream.EnsureOwned(ctx, r.Client, sealed.Namespace, name, requestedBy, owner); err != nil {
+		if !stderrors.Is(err, imagestream.ErrNotOwned) {
+			return err
+		}
+		// Record the rejection so a later reconcile re-reports it instead of
+		// skipping the check. Failing to record it is harmless: the caller
+		// still sees the rejection, and the next attempt records it again.
+		if markErr := r.markOutputStreamClaim(ctx, sealed, claimStateRejected); markErr != nil {
+			return fmt.Errorf("%w (also failed to record the rejection: %v)", err, markErr)
+		}
+		return err
+	}
+	return r.markOutputStreamClaim(ctx, sealed, claimStateClaimed)
+}
+
+// markOutputStreamClaim records the claim state on the job. Patch returns the
+// updated object, so writes that follow with it (the phase transition below,
+// say) carry the current resource version.
+func (r *Reconciler) markOutputStreamClaim(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, state string) error {
+	original := sealed.DeepCopy()
+	if sealed.Annotations == nil {
+		sealed.Annotations = map[string]string{}
+	}
+	sealed.Annotations[outputStreamClaimAnnotation] = state
+	if err := r.Patch(ctx, sealed, client.MergeFrom(original)); err != nil {
+		return fmt.Errorf("record output stream claim state: %w", err)
+	}
+	return nil
+}
+
+// releaseOutputStream releases a failed job's output ImageStream: it drops the
+// job's owner reference and, once no other job owns the stream and nothing was
+// published, deletes it; a shared stream (another owner) or a published one is
+// kept. It is called only for a failed job — a completed job keeps its output,
+// since the stream holds the published image and its owner reference ties its
+// lifetime to the job. It returns a positive duration when the caller should
+// requeue to retry the delete after the grace period.
+func (r *Reconciler) releaseOutputStream(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, log logr.Logger) (time.Duration, error) {
+	name := imagestream.NameFromRef(sealed.Spec.OutputRef, sealed.Namespace)
+	if name == "" {
+		return 0, nil
+	}
+	// Wait out the grace period since the job settled before releasing: a push
+	// landing just before the failure reaches status.tags only after the registry
+	// processes it. Every terminal transition stamps CompletionTime; a job failed
+	// by an older operator version, or one written directly, may lack it, so fall
+	// back to the creation time rather than dereferencing nil.
+	settled := sealed.CreationTimestamp.Time
+	if sealed.Status.CompletionTime != nil {
+		settled = sealed.Status.CompletionTime.Time
+	}
+	if remaining := outputStreamDeleteGrace - time.Since(settled); remaining > 0 {
+		return remaining, nil
+	}
+	if err := imagestream.ReleaseOwnerAndDeleteIfUnused(ctx, r.Client, sealed.Namespace, name, sealed.UID); err != nil {
+		log.Error(err, "Failed to release output ImageStream (will retry)", "imagestream", name)
+		return 0, err
+	}
+	return 0, nil
+}
 
 // cleanupTransientSecrets attempts to delete all transient secrets for a
 // sealed operation. Returns an error if any deletion failed so the caller
