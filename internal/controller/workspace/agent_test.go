@@ -296,6 +296,11 @@ func deploymentPodLabels(t *testing.T, path string) labels.Set {
 // doesn't model, so a false answer can be trusted.
 func admitsAgentAPI(t *testing.T, policy *networkingv1.NetworkPolicy, podLabels labels.Set) bool {
 	t.Helper()
+	// A policy limits ingress only if its types include Ingress, as they do
+	// when it names none.
+	if len(policy.Spec.PolicyTypes) > 0 && !slices.Contains(policy.Spec.PolicyTypes, networkingv1.PolicyTypeIngress) {
+		return true
+	}
 	for _, rule := range policy.Spec.Ingress {
 		if !coversAgentAPI(t, rule.Ports) {
 			continue

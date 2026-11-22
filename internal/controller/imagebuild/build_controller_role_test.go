@@ -39,7 +39,8 @@ func TestBuildControllerMayUseOnlyTheNonRootSCC(t *testing.T) {
 func TestBuildControllerMayNotExecIntoPods(t *testing.T) {
 	for _, rule := range buildControllerRules(t) {
 		for _, resource := range rule.Resources {
-			if slices.Contains([]string{"pods/exec", "pods/*", "*"}, resource) {
+			// The resources RBAC matches pods/exec with.
+			if slices.Contains([]string{"pods/exec", "*/exec", "*"}, resource) {
 				t.Errorf("rule %+v grants %s", rule, resource)
 			}
 		}
