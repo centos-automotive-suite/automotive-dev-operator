@@ -19,7 +19,7 @@ import (
 
 // newRefreshClient returns a client holding an OperatorConfig whose one JWT
 // issuer takes its CA from Secret oidc-ca, and that Secret.
-func newRefreshClient(t *testing.T, secret *corev1.Secret, funcs interceptor.Funcs) client.Client {
+func newRefreshClient(t *testing.T, secret *corev1.Secret, funcs interceptor.Funcs) client.WithWatch {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -60,21 +60,38 @@ func TestRefreshAuthConfigReportsAReadFailure(t *testing.T) {
 	}
 }
 
-// After a failed refresh the watcher keeps polling the CAs it had, marked
-// unapplied, so fixing one still triggers a refresh.
-func TestCARefsAfterRefresh(t *testing.T) {
-	previous := []caRef{{namespace: "ado", name: "oidc-ca", version: "7"}}
-	refreshed := []caRef{{namespace: "ado", name: "other-ca", version: "3"}}
+// A refresh that cannot read the OperatorConfig, as when the API server is
+// briefly unreachable at startup, leaves no CA pollers to retry it, and the
+// OperatorConfig may never change again. The watcher must retry it an interval
+// later, not at once, and then poll the CAs it finds.
+func TestWatcherRetriesAFailedRefresh(t *testing.T) {
+	var configReads atomic.Int32
+	// The Secret lacks the CA key, so every refresh that reads the config
+	// leaves its CA unapplied, and the CA's poller retries one interval later.
+	c := newRefreshClient(t, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "oidc-ca", Namespace: "ado"}}, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*automotivev1alpha1.OperatorConfig); ok && configReads.Add(1) == 1 {
+				return errors.New("apiserver unavailable")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	a := &APIServer{log: logr.Discard()}
 
-	got := caRefsAfterRefresh(previous, refreshed, nil)
-	if len(got) != 1 || got[0] != refreshed[0] {
-		t.Errorf("after a successful refresh got %+v, want %+v", got, refreshed)
+	const interval = 300 * time.Millisecond
+	go a.watchResources(t.Context(), c, "ado", func() ([]caRef, error) { return a.refreshAuthConfig(c, "ado") }, interval)
+
+	time.Sleep(interval / 3)
+	if n := configReads.Load(); n != 1 {
+		t.Fatalf("got %d OperatorConfig reads before an interval passed, want 1", n)
 	}
-
-	got = caRefsAfterRefresh(previous, nil, errors.New("read failed"))
-	want := caRef{namespace: "ado", name: "oidc-ca", version: caVersionUnknown}
-	if len(got) != 1 || got[0] != want {
-		t.Errorf("after a failed refresh got %+v, want %+v", got, want)
+	// The second read retries the failed one; the third is the CA's poller.
+	deadline := time.Now().Add(5 * time.Second)
+	for configReads.Load() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("got %d OperatorConfig reads, want a retry and then a CA poll", configReads.Load())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

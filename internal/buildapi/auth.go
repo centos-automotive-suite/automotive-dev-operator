@@ -131,7 +131,15 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 		return
 	}
 
-	caRefs, _ := a.doRefreshAuthConfig()
+	a.watchResources(ctx, watchClient, resolveNamespace(), a.doRefreshAuthConfig, caPollInterval)
+}
+
+// watchResources refreshes the auth config whenever the OperatorConfig or a CA
+// it references changes, then watches again and polls the CAs the refresh
+// returned, every interval.
+func (a *APIServer) watchResources(ctx context.Context, watchClient client.WithWatch, namespace string,
+	refresh func() ([]caRef, error), interval time.Duration) {
+	caRefs, err := refresh()
 
 	for {
 		if ctx.Err() != nil {
@@ -141,11 +149,17 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 		sessionCtx, cancelSession := context.WithCancel(ctx)
 		eventCh := make(chan struct{}, 1)
 
-		namespace := resolveNamespace()
 		go a.watchOperatorConfigSession(sessionCtx, watchClient, namespace, eventCh)
 
 		for _, ref := range caRefs {
-			go a.pollCARef(sessionCtx, watchClient, ref, caPollInterval, eventCh)
+			go a.pollCARef(sessionCtx, watchClient, ref, interval, eventCh)
+		}
+
+		// A refresh that failed kept the old config, and nothing the watch or
+		// the pollers see need change again, so it retries an interval later.
+		var retry <-chan time.Time
+		if err != nil {
+			retry = time.After(interval)
 		}
 
 		select {
@@ -153,9 +167,15 @@ func (a *APIServer) startResourceWatcher(ctx context.Context) {
 			cancelSession()
 			return
 		case <-eventCh:
-			cancelSession()
-			refreshed, err := a.doRefreshAuthConfig()
-			caRefs = caRefsAfterRefresh(caRefs, refreshed, err)
+		case <-retry:
+		}
+		cancelSession()
+		// A failed refresh says nothing about which CAs the config references,
+		// so the watcher keeps polling the ones the active config was built
+		// from.
+		var refreshed []caRef
+		if refreshed, err = refresh(); err == nil {
+			caRefs = refreshed
 		}
 	}
 }
@@ -263,16 +283,6 @@ func (a *APIServer) doRefreshAuthConfig() ([]caRef, error) {
 		return nil, err
 	}
 	return a.refreshAuthConfig(k8sClient, namespace)
-}
-
-// caRefsAfterRefresh returns the CAs the watcher polls next. A failed refresh
-// says nothing about which CAs the config references, so it keeps polling the
-// ones it had, marked unapplied so they retry the refresh.
-func caRefsAfterRefresh(previous, refreshed []caRef, err error) []caRef {
-	if err != nil {
-		return unapplied(previous)
-	}
-	return refreshed
 }
 
 // refreshAuthConfig is doRefreshAuthConfig with its client and namespace.
