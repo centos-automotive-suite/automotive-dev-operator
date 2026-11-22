@@ -1511,6 +1511,15 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					},
 				},
 				{
+					Name:        "flash-workspace-lease",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Lease of the build's workspace, reused only while it is active and for the flash target",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
 					Name:        "flash-lease-tags",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Comma-separated key=value tags for the Jumpstarter lease",
@@ -1946,6 +1955,13 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 							},
 						},
 						{
+							Name: "workspace-lease-name",
+							Value: tektonv1.ParamValue{
+								Type:      tektonv1.ParamTypeString,
+								StringVal: "$(params.flash-workspace-lease)",
+							},
+						},
+						{
 							Name: "lease-tags",
 							Value: tektonv1.ParamValue{
 								Type:      tektonv1.ParamTypeString,
@@ -2330,6 +2346,15 @@ func GenerateFlashTask(namespace string, buildConfig *BuildConfig) *tektonv1.Tas
 					},
 				},
 				{
+					Name:        "workspace-lease-name",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Workspace lease to reuse while it is active and matches the exporter selector",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
 					Name:        "lease-tags",
 					Type:        tektonv1.ParamTypeString,
 					Description: "Comma-separated key=value tags for the Jumpstarter lease",
@@ -2394,6 +2419,10 @@ func GenerateFlashTask(namespace string, buildConfig *BuildConfig) *tektonv1.Tas
 						{
 							Name:  "EXISTING_LEASE",
 							Value: "$(params.lease-name)",
+						},
+						{
+							Name:  "WORKSPACE_LEASE",
+							Value: "$(params.workspace-lease-name)",
 						},
 						{
 							Name:  "LEASE_TAGS",

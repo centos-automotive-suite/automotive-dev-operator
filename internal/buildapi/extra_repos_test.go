@@ -297,6 +297,24 @@ func TestResolveWorkspaceForBuild_GrantsExportToBuild(t *testing.T) {
 	}
 }
 
+// A workspace build passes on only an explicit --lease; the controller gives
+// the flash task the workspace's lease to reuse while it fits.
+func TestResolveWorkspaceForBuild_LeavesWorkspaceLeaseOutOfFlashLeaseName(t *testing.T) {
+	for _, explicit := range []string{"", "lease-explicit"} {
+		ws, pod := runningWorkspace("bob-ws", "bob")
+		ws.Spec.LeaseID = "lease-ws"
+		a, _ := stubWorkspaceGrants(t)
+		req := &buildcontract.BuildRequest{FlashEnabled: true, FlashLeaseName: explicit}
+
+		if _, err := a.resolveWorkspaceForBuild(context.Background(), newFakeClient(ws, pod), "default", "bob-ws", "bob", req); err != nil {
+			t.Fatal(err)
+		}
+		if req.FlashLeaseName != explicit {
+			t.Errorf("FlashLeaseName = %q, want %q", req.FlashLeaseName, explicit)
+		}
+	}
+}
+
 // Build pods must be able to parse the grant URL on IPv6 clusters too.
 func TestGrantWorkspaceFilesBracketsIPv6PodIP(t *testing.T) {
 	ws, _ := runningWorkspace("bob-ws", "bob")

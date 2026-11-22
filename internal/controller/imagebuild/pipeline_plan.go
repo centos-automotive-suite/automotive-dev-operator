@@ -30,6 +30,9 @@ type flashTarget struct {
 	selector string
 	command  string
 	imageRef string
+	// workspaceLease is the lease of the build's workspace. The flash task
+	// reuses it only while it is active and for this target.
+	workspaceLease string
 }
 
 // pipelineRunInputs contains resolved values; constructing a run does no I/O.
@@ -186,6 +189,7 @@ func flashParams(imageBuild *automotivev1alpha1.ImageBuild, operatorConfig *auto
 		stringParam("flash-cmd", flash.command),
 		stringParam("flash-lease-duration", imageBuild.Spec.GetFlashLeaseDuration()),
 		stringParam("flash-lease-name", imageBuild.Spec.GetFlashLeaseName()),
+		stringParam("flash-workspace-lease", flash.workspaceLease),
 		stringParam("flash-lease-tags", jumpstarter.BuildLeaseTags(operatorConfig.Spec.Jumpstarter.GetDefaultLeaseTags(), imageBuild.Name, imageBuild.Spec.GetFlashLeaseTags())),
 		stringParam("jumpstarter-image", operatorConfig.Spec.Jumpstarter.GetJumpstarterImage()),
 	}

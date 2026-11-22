@@ -1143,6 +1143,11 @@ func (r *ImageBuildReconciler) createBuildPipelineRun(
 	if err != nil {
 		return err
 	}
+	if flash != nil && imageBuild.Spec.Workspace != "" {
+		if flash.workspaceLease, err = r.workspaceLease(ctx, imageBuild); err != nil {
+			return err
+		}
+	}
 	if err := validateManifestConfigMapContents(imageBuild); err != nil {
 		return fmt.Errorf("failed to create manifest ConfigMap: %w", err)
 	}

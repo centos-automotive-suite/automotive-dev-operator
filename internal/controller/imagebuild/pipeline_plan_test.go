@@ -209,6 +209,80 @@ func TestNewPipelineRunBundleAndFlash(t *testing.T) {
 	}
 }
 
+// A flash build in a workspace passes the workspace's lease for the flash task
+// to reuse while it fits; a missing workspace passes none.
+func TestFlashWorkspaceLeaseParam(t *testing.T) {
+	getErr := errors.New("workspace lookup failed")
+	for _, tc := range []struct {
+		name      string
+		workspace *automotivev1alpha1.Workspace
+		getErr    error
+		want      string
+	}{
+		{name: "workspace lease", workspace: &automotivev1alpha1.Workspace{
+			ObjectMeta: metav1.ObjectMeta{Name: "dev-ws", Namespace: "test-ns"},
+			Spec:       automotivev1alpha1.WorkspaceSpec{LeaseID: "lease-ws"},
+		}, want: "lease-ws"},
+		{name: "workspace not found"},
+		{name: "workspace lookup error", getErr: getErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			build := newTestImageBuild("flash-ws", automotivev1alpha1.ImageBuildPhasePending, "", 0)
+			build.TypeMeta = metav1.TypeMeta{APIVersion: automotivev1alpha1.GroupVersion.String(), Kind: "ImageBuild"}
+			build.Spec.Architecture = "arm64"
+			build.Spec.Workspace = "dev-ws"
+			build.Spec.AIB = &automotivev1alpha1.AIBSpec{Mode: "package", Manifest: "name: example\n", Target: "board"}
+			build.Spec.Flash = &automotivev1alpha1.FlashSpec{ClientConfigSecretRef: "jumpstarter-client"}
+			config := &automotivev1alpha1.OperatorConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: controllerutils.OperatorNamespace()},
+				Spec: automotivev1alpha1.OperatorConfigSpec{
+					OSBuilds: &automotivev1alpha1.OSBuildsConfig{ClusterRegistryRoute: "registry.example", UsePVCScratchVolumes: new(false)},
+					Jumpstarter: &automotivev1alpha1.JumpstarterConfig{TargetMappings: map[string]automotivev1alpha1.JumpstarterTargetMapping{
+						"board": {Selector: "model=board"},
+					}},
+				},
+			}
+			objs := []client.Object{&build, config}
+			if tc.workspace != nil {
+				objs = append(objs, tc.workspace)
+			}
+			scheme := newTestSchemeWithTekton()
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&build).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, ok := obj.(*automotivev1alpha1.Workspace); ok && tc.getErr != nil {
+							return tc.getErr
+						}
+						return c.Get(ctx, key, obj, opts...)
+					},
+				}).Build()
+			r := &ImageBuildReconciler{Client: fakeClient, Scheme: scheme, Log: logr.Discard()}
+
+			err := r.createBuildPipelineRun(t.Context(), &build)
+			runs := &tektonv1.PipelineRunList{}
+			if listErr := fakeClient.List(t.Context(), runs); listErr != nil {
+				t.Fatal(listErr)
+			}
+			if tc.getErr != nil {
+				if !errors.Is(err, tc.getErr) || len(runs.Items) != 0 {
+					t.Fatalf("error = %v, runs = %d; want the lookup error and no PipelineRun", err, len(runs.Items))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runs.Items) != 1 {
+				t.Fatalf("got %d runs", len(runs.Items))
+			}
+			got, ok := planParamValues(&runs.Items[0])["flash-workspace-lease"]
+			if !ok || got != tc.want {
+				t.Fatalf("flash-workspace-lease = %q, present=%t; want %q", got, ok, tc.want)
+			}
+		})
+	}
+}
+
 func TestSharedWorkspaceSelectionAndPVCSize(t *testing.T) {
 	build := planTestBuild()
 	config := &automotivev1alpha1.OperatorConfig{}
