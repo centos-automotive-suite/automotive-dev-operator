@@ -751,30 +751,39 @@ func (h *Handler) resolveRootPassword() (string, error) {
 }
 
 // resolveRepoFlags processes --extra-repo and --local-repo into workspace repos,
-// OCI image refs, and whether local-repo mode is active.
-func resolveRepoFlags(extraRepos []string, localRepoFlag string) (workspaceRepos []string, ociImages []string, isLocalRepo bool, err error) {
+// OCI image refs, whether the OCI image is the local repo, and the workspace
+// local repo.
+func resolveRepoFlags(extraRepos []string, localRepoFlag string) (workspaceRepos []string, ociImages []string, isLocalRepo bool, localWorkspaceRepo string, err error) {
 	workspaceRepos, ociImages, err = splitExtraRepos(extraRepos)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, false, "", err
 	}
 
 	if len(ociImages) > 1 {
-		return nil, nil, false, fmt.Errorf("at most one --extra-repo oci: is supported, got %d", len(ociImages))
+		return nil, nil, false, "", fmt.Errorf("at most one --extra-repo oci: is supported, got %d", len(ociImages))
 	}
 
 	localRef := strings.TrimSpace(localRepoFlag)
 	if localRef == "" {
-		return workspaceRepos, ociImages, false, nil
+		return workspaceRepos, ociImages, false, "", nil
+	}
+
+	// An OCI reference never contains ":/" (a registry port reads host:5000/...),
+	// so <workspace>:/<path> is a workspace repo.
+	if !strings.HasPrefix(localRef, "oci:") {
+		if _, repoPath, _ := strings.Cut(localRef, ":"); strings.HasPrefix(repoPath, "/") {
+			return workspaceRepos, ociImages, false, localRef, nil
+		}
 	}
 
 	localRef = strings.TrimPrefix(localRef, "oci:")
 	if localRef == "" {
-		return nil, nil, false, fmt.Errorf("--local-repo requires an OCI image reference (e.g. quay.io/org/rpms:latest)")
+		return nil, nil, false, "", fmt.Errorf("--local-repo requires an OCI image reference (e.g. quay.io/org/rpms:latest)")
 	}
 	if len(ociImages) > 0 {
-		return nil, nil, false, fmt.Errorf("--local-repo and --extra-repo oci: are mutually exclusive")
+		return nil, nil, false, "", fmt.Errorf("--local-repo and --extra-repo oci: are mutually exclusive")
 	}
-	return workspaceRepos, []string{localRef}, true, nil
+	return workspaceRepos, []string{localRef}, true, "", nil
 }
 
 func parseDevMode(mode string) (buildcontract.Mode, error) {
@@ -1076,7 +1085,7 @@ func (h *Handler) runManifestBuild(ctx context.Context, cmd *cobra.Command, mani
 		pushFlag = "--push"
 	}
 
-	workspaceRepos, ociRepoImages, localRepo, err := resolveRepoFlags(h.opts.Build.ExtraRepos, h.opts.Build.LocalRepo)
+	workspaceRepos, ociRepoImages, localRepo, localWorkspaceRepo, err := resolveRepoFlags(h.opts.Build.ExtraRepos, h.opts.Build.LocalRepo)
 	if err != nil {
 		h.handleError(err)
 		return
@@ -1101,6 +1110,7 @@ func (h *Handler) runManifestBuild(ctx context.Context, cmd *cobra.Command, mani
 		ExtraRepos:             workspaceRepos,
 		OCIRepoImages:          ociRepoImages,
 		LocalRepo:              localRepo,
+		LocalWorkspaceRepo:     localWorkspaceRepo,
 		Workspace:              h.opts.Build.Workspace,
 		Compression:            buildcontract.Compression(h.opts.Build.CompressionAlgo),
 		ArtifactName:           h.opts.Build.ArtifactName,

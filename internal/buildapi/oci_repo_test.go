@@ -64,6 +64,28 @@ func TestInvalidOCIRepoRejectedBeforeWorkspaceResolution(t *testing.T) {
 	}
 }
 
+// --local-repo takes one source: the API rejects an OCI and a workspace local
+// repo in the same request.
+func TestCreateBuildRejectsBothLocalRepos(t *testing.T) {
+	server := newTestServer(t, nil)
+	body, err := json.Marshal(buildcontract.BuildRequest{
+		Name: "both-local", Manifest: "name: test",
+		OCIRepoImages: []string{"quay.io/org/rpms:v1"}, LocalRepo: true,
+		LocalWorkspaceRepo: "dev:/workspace/export/rpms",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/builds", strings.NewReader(string(body)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	server.createBuild(c)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "localWorkspaceRepo") {
+		t.Fatalf("unexpected response: %d %s", response.Code, response.Body)
+	}
+}
+
 func TestResolveOCIRepoImages_Idempotent(t *testing.T) {
 	for _, ref := range []string{"rpms:v1", "internal.svc:5000/org/rpms:v1", "quay.io/org/rpms:v1@sha256:" + strings.Repeat("a", 64)} {
 		t.Run(ref, func(t *testing.T) {

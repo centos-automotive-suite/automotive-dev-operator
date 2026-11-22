@@ -184,10 +184,11 @@ type BuildRequest struct {
 	CustomDefs             []string             `json:"customDefs"`
 	AIBExtraArgs           []string             `json:"aibExtraArgs"`
 	RootPassword           string               `json:"rootPassword,omitempty"`
-	ExtraRepos             []string             `json:"extraRepos,omitempty"`    // workspace-name:/path pairs
-	OCIRepoImages          []string             `json:"ociRepoImages,omitempty"` // OCI image refs containing RPM repos
-	LocalRepo              bool                 `json:"localRepo,omitempty"`     // prefer OCI repo over network repos (priority=1)
-	Workspace              string               `json:"workspace,omitempty"`     // workspace name for build caching and lease forwarding
+	ExtraRepos             []string             `json:"extraRepos,omitempty"`         // workspace-name:/path pairs
+	OCIRepoImages          []string             `json:"ociRepoImages,omitempty"`      // OCI image refs containing RPM repos
+	LocalRepo              bool                 `json:"localRepo,omitempty"`          // prefer OCI repo over network repos (priority=1)
+	LocalWorkspaceRepo     string               `json:"localWorkspaceRepo,omitempty"` // workspace-name:/path repo preferred over network repos (priority=1)
+	Workspace              string               `json:"workspace,omitempty"`          // workspace name for build caching and lease forwarding
 	Compression            Compression          `json:"compression,omitempty"`
 	ArtifactName           string               `json:"artifactName,omitempty"` // disk artifact base name (default: <distro>-<target>)
 	RegistryCredentials    *RegistryCredentials `json:"registryCredentials,omitempty"`

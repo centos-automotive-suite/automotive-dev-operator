@@ -332,7 +332,8 @@ caib image build-dev <manifest.aib.yml> [flags]
 | `-D`, `--define` | | Custom definition `KEY=VALUE` (repeatable) |
 | `--define-file` | | Load defines from YAML dictionary file (repeatable) |
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |
-| `--extra-repo` | | Serve RPMs from a directory under `/workspace/export` as an extra repo (`workspace:/workspace/export/<dir>`, repeatable) |
+| `--extra-repo` | | Supplementary RPM repo at DNF's default priority, so distro packages win (`<workspace>:/workspace/export/<dir>` or `oci:<ref>`, repeatable) |
+| `--local-repo` | | Primary RPM repo at DNF priority 1, so its packages win over the distro's (`<workspace>:/workspace/export/<dir>` or an OCI image ref) |
 | `--workspace` | | Workspace name for build caching and lease forwarding |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `true` | Wait for build to complete |

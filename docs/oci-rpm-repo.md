@@ -17,8 +17,11 @@ Two CLI flags control this:
 |------|---------|-------------|
 | `--extra-repo oci:<ref>` | Add RPMs as a supplementary repo | Default (99) — network repos take precedence |
 | `--local-repo <ref>` | Add RPMs as the *primary* repo | 1 — prefers local RPMs over network |
+| `--local-repo <workspace>:/workspace/export/<dir>` | Add workspace RPMs as the *primary* repo | 1 — prefers local RPMs over network |
 
 Both flags accept an OCI image reference (e.g. `quay.io/myorg/my-rpms:latest`).
+`--local-repo` also accepts a workspace path (see
+[Workspace RPMs as the local repo](#workspace-rpms-as-the-local-repo)).
 
 Before submission, `caib` attempts to resolve tags using the user's registry
 credentials (`--registry-auth-file`, environment credentials, or local registry
@@ -135,6 +138,26 @@ caib image build manifest.aib.yml \
 
 Note: `--local-repo` does not need the `oci:` prefix.
 
+Some AIB targets also define repos at priority 1 (for example
+`targets/rpi4.ipp.yml`). DNF has nothing above 1, so for a package those repos
+also ship, the priorities tie and DNF falls back to picking the higher version.
+
+### Workspace RPMs as the local repo
+
+RPMs built in a workspace and placed under `/workspace/export/<dir>` can be the
+local repo too, so they win over distro packages with a higher version:
+
+```bash
+caib image build-dev manifest.aib.yml \
+  --mode image --format qcow2 \
+  --local-repo my-ws:/workspace/export/my-app \
+  -o ./disk.qcow2
+```
+
+A value whose part after the first `:` starts with `/` is a workspace path; an
+OCI reference never contains `:/`. The repo is served like an `--extra-repo`
+workspace entry, with the same ownership and running-workspace checks.
+
 ### Secure and reproducible builds
 
 Supply an immutable repository reference for secure builds:
@@ -163,7 +186,8 @@ caib image build images/manifest.aib.yml \
 
 This also works with `build-dev`. Use `--local-repo` instead of
 `--extra-repo oci:` when the OCI RPMs should take precedence over network repos.
-Git builds still cannot use workspace-served repositories or local file uploads.
+Git builds still cannot use workspace-served repositories (including a workspace
+`--local-repo`) or local file uploads.
 
 ### Combining with workspace repos
 
@@ -181,7 +205,8 @@ caib image build-dev manifest.aib.yml \
 
 - Only one OCI repo image is supported per build. Multiple `--extra-repo oci:`
   entries will be rejected.
-- `--local-repo` and `--extra-repo oci:` are mutually exclusive.
+- An OCI `--local-repo` and `--extra-repo oci:` are mutually exclusive. A
+  workspace `--local-repo` can be combined with `--extra-repo oci:`.
 - The image must be pullable from the build cluster. The kubelet pulls the repo
   image using the build pod's image pull secrets. For a private registry, link a
   pull secret to the `ado-build` service account, or rely on the cluster global
