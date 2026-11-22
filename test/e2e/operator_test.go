@@ -33,41 +33,12 @@ var _ = Describe("Operator Health", Label("operator", "smoke"), Ordered, func() 
 		ensureOperatorDeployed()
 	})
 
-	It("should have the controller pod running", func() {
-		verifyControllerUp := func() error {
-			cmd := exec.Command("kubectl", "get",
-				"pods", "-l", "control-plane=operator",
-				"-o", "go-template={{ range .items }}"+
-					"{{ if not .metadata.deletionTimestamp }}"+
-					"{{ .metadata.name }}"+
-					"{{ \"\\n\" }}{{ end }}{{ end }}",
-				"-n", testNamespace,
-			)
-			podOutput, err := utils.Run(cmd)
-			if err != nil {
-				return err
-			}
-			podNames := utils.GetNonEmptyLines(string(podOutput))
-			if len(podNames) != 1 {
-				return fmt.Errorf("expect 1 controller pods running, but got %d", len(podNames))
-			}
-			ExpectWithOffset(2, podNames[0]).Should(ContainSubstring("operator"))
+	It("should have the operator pod running", func() {
+		EventuallyWithOffset(1, func() error { return verifyPodRunning("operator") }, time.Minute, time.Second).Should(Succeed())
+	})
 
-			cmd = exec.Command("kubectl", "get",
-				"pods", podNames[0], "-o", "jsonpath={.status.phase}",
-				"-n", testNamespace,
-			)
-			status, err := utils.Run(cmd)
-			if err != nil {
-				return err
-			}
-			phase := strings.TrimSpace(string(status))
-			if phase != statusRunning {
-				return fmt.Errorf("controller pod in %s status", phase)
-			}
-			return nil
-		}
-		EventuallyWithOffset(1, verifyControllerUp, time.Minute, time.Second).Should(Succeed())
+	It("should have the build controller pod running", func() {
+		EventuallyWithOffset(1, func() error { return verifyPodRunning("build-controller") }, time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("should have Tekton Tasks created", func() {
@@ -126,3 +97,37 @@ var _ = Describe("Operator Health", Label("operator", "smoke"), Ordered, func() 
 		EventuallyWithOffset(1, verifyBuildAPIDeployment, 3*time.Minute, 5*time.Second).Should(Succeed())
 	})
 })
+
+// verifyPodRunning checks that exactly one live pod with the given
+// control-plane label exists and is running.
+func verifyPodRunning(controlPlane string) error {
+	cmd := exec.Command("kubectl", "get",
+		"pods", "-l", "control-plane="+controlPlane,
+		"-o", "go-template={{ range .items }}"+
+			"{{ if not .metadata.deletionTimestamp }}"+
+			"{{ .metadata.name }}"+
+			"{{ \"\\n\" }}{{ end }}{{ end }}",
+		"-n", testNamespace,
+	)
+	podOutput, err := utils.Run(cmd)
+	if err != nil {
+		return err
+	}
+	podNames := utils.GetNonEmptyLines(string(podOutput))
+	if len(podNames) != 1 {
+		return fmt.Errorf("expect 1 %s pod running, but got %d", controlPlane, len(podNames))
+	}
+
+	cmd = exec.Command("kubectl", "get",
+		"pods", podNames[0], "-o", "jsonpath={.status.phase}",
+		"-n", testNamespace,
+	)
+	status, err := utils.Run(cmd)
+	if err != nil {
+		return err
+	}
+	if phase := strings.TrimSpace(string(status)); phase != statusRunning {
+		return fmt.Errorf("%s pod in %s status", controlPlane, phase)
+	}
+	return nil
+}

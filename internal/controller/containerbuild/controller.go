@@ -72,7 +72,6 @@ type ContainerBuildReconciler struct {
 //+kubebuilder:rbac:groups=shipwright.io,namespace=system,resources=buildruns,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=shipwright.io,namespace=system,resources=builds,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",namespace=system,resources=pods,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",namespace=system,resources=pods/exec,verbs=create
 //+kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=events.k8s.io,namespace=system,resources=events,verbs=create;patch
 

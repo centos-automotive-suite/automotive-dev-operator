@@ -24,15 +24,17 @@ import (
 )
 
 const (
-	buildControllerName         = "ado-build-controller"
 	pipelineSCCBindingName      = "ado-build-privileged"
 	sccPrivilegedRoleName       = "ado-build-privileged"
 	workspaceServiceAccountName = "ado-workspace"
 	workspaceSCCName            = "ado-workspace-scc"
 	serviceMonitorName          = "ado-operator-metrics"
 	serviceMonitorTokenSecret   = "ado-operator-metrics-token"
-	metricsReaderRoleName       = "ado-metrics-reader"
-	metricsReaderBindingName    = "ado-metrics-reader"
+	// metricsScraperServiceAccountName may only read metrics. Prometheus
+	// scrapes with its token, kept in a Secret of the operator's namespace.
+	metricsScraperServiceAccountName = "ado-metrics-scraper"
+	metricsReaderRoleName            = "ado-metrics-reader"
+	metricsReaderBindingName         = "ado-metrics-reader"
 )
 
 // getOperatorImage returns the operator image from env var, then config, then default constant
@@ -175,7 +177,7 @@ func (r *OperatorConfigReconciler) buildBuildAPIDeployment(namespace string, con
 					},
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "ado-operator",
+					ServiceAccountName: automotivev1alpha1.BuildAPIServiceAccountName,
 					Containers:         r.buildBuildAPIContainers(namespace, config),
 					// No volumes needed - Build API reads directly from OperatorConfig CRD
 				},
@@ -366,417 +368,6 @@ func generateRandomToken(length int) (string, error) {
 		bytes[i] = charset[int(bytes[i])%len(charset)]
 	}
 	return string(bytes), nil
-}
-
-func (r *OperatorConfigReconciler) buildBuildControllerDeployment(namespace string, config *automotivev1alpha1.OperatorConfig) *appsv1.Deployment {
-	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      buildControllerName,
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "build-controller",
-				"app.kubernetes.io/part-of":   "automotive-dev-operator",
-			},
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To[int32](1),
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"app.kubernetes.io/name":      "automotive-dev-operator",
-					"app.kubernetes.io/component": "build-controller",
-				},
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app.kubernetes.io/name":      "automotive-dev-operator",
-						"app.kubernetes.io/component": "build-controller",
-					},
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: buildControllerName,
-					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: new(true),
-					},
-					Containers: []corev1.Container{
-						{
-							Name:    "manager",
-							Image:   getOperatorImage(config.Spec.GetImages()),
-							Command: []string{"/manager"},
-							Args: []string{
-								"--mode=build",
-								"--leader-elect",
-								"--health-probe-bind-address=:8081",
-								"--metrics-bind-address=:8443",
-							},
-							Env: []corev1.EnvVar{
-								{
-									Name:  "OPERATOR_IMAGE",
-									Value: getOperatorImage(config.Spec.GetImages()),
-								},
-								{
-									Name:  "WATCH_NAMESPACE",
-									Value: namespace,
-								},
-							},
-							Ports: []corev1.ContainerPort{
-								{
-									Name:          "health",
-									ContainerPort: 8081,
-									Protocol:      corev1.ProtocolTCP,
-								},
-								{
-									Name:          "https",
-									ContainerPort: 8443,
-									Protocol:      corev1.ProtocolTCP,
-								},
-							},
-							LivenessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									HTTPGet: &corev1.HTTPGetAction{
-										Path: "/healthz",
-										Port: intstr.FromInt(8081),
-									},
-								},
-								InitialDelaySeconds: 15,
-								PeriodSeconds:       20,
-							},
-							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									HTTPGet: &corev1.HTTPGetAction{
-										Path: "/readyz",
-										Port: intstr.FromInt(8081),
-									},
-								},
-								InitialDelaySeconds: 5,
-								PeriodSeconds:       10,
-							},
-							Resources: func() corev1.ResourceRequirements {
-								var resourcesCfg *automotivev1alpha1.BuildAPIResourcesConfig
-								if config.Spec.BuildAPI != nil {
-									resourcesCfg = config.Spec.BuildAPI.Resources
-								}
-								return resourcesCfg.GetBuildControllerResources()
-							}(),
-							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: new(false),
-								Capabilities: &corev1.Capabilities{
-									Drop: []corev1.Capability{"ALL"},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func (r *OperatorConfigReconciler) buildBuildControllerServiceAccount(namespace string) *corev1.ServiceAccount {
-	return &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      buildControllerName,
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "build-controller",
-				"app.kubernetes.io/part-of":   "automotive-dev-operator",
-			},
-		},
-	}
-}
-
-func (r *OperatorConfigReconciler) buildBuildControllerClusterRole() *rbacv1.ClusterRole {
-	return &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: buildControllerName,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "build-controller",
-				"app.kubernetes.io/part-of":   "automotive-dev-operator",
-			},
-		},
-		Rules: []rbacv1.PolicyRule{
-			// ImageBuild controller RBAC
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"imagebuilds"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"imagebuilds/status"},
-				Verbs:     []string{"get", "update", "patch"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"imagebuilds/finalizers"},
-				Verbs:     []string{"update"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"webhookdeliveries"},
-				Verbs:     []string{"get", "list", "watch", "create"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"webhookdeliveries/status"},
-				Verbs:     []string{"get", "update", "patch"},
-			},
-			// Image controller RBAC
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"images"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"images/status"},
-				Verbs:     []string{"get", "update", "patch"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"images/finalizers"},
-				Verbs:     []string{"update"},
-			},
-			// CatalogImage controller RBAC
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"catalogimages"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"catalogimages/status"},
-				Verbs:     []string{"get", "update", "patch"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"catalogimages/finalizers"},
-				Verbs:     []string{"update"},
-			},
-			// Workspace controller RBAC
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"workspaces"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"workspaces/status"},
-				Verbs:     []string{"get", "update", "patch"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"workspaces/finalizers"},
-				Verbs:     []string{"update"},
-			},
-			// Read-only access to OperatorConfig (for build config)
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"operatorconfigs"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"operatorconfigs/status"},
-				Verbs:     []string{"get", "patch"},
-			},
-			// Core resources needed by ImageBuild controller
-			{
-				APIGroups: []string{""},
-				Resources: []string{"namespaces"},
-				Verbs:     []string{"get", "list", "watch", "create"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"configmaps"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"persistentvolumeclaims"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"secrets"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"serviceaccounts"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"serviceaccounts/token"},
-				Verbs:     []string{"create"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"pods"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"pods/exec"},
-				Verbs:     []string{"create"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"pods/log"},
-				Verbs:     []string{"get"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"services"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{"", "events.k8s.io"},
-				Resources: []string{"events"},
-				Verbs:     []string{"create", "patch"},
-			},
-			// OpenShift-specific
-			{
-				APIGroups: []string{"image.openshift.io"},
-				Resources: []string{"imagestreams"},
-				Verbs:     []string{"get", "create", "update"},
-			},
-			{
-				APIGroups: []string{"image.openshift.io"},
-				Resources: []string{"imagestreamtags"},
-				Verbs:     []string{"delete"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"imagereseals"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{"route.openshift.io"},
-				Resources: []string{"routes"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			// Tekton resources
-			{
-				APIGroups: []string{"tekton.dev"},
-				Resources: []string{"tasks", "pipelines", "pipelineruns", "taskruns"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{"tekton.dev"},
-				Resources: []string{"taskruns/finalizers"},
-				Verbs:     []string{"update"},
-			},
-			// ContainerBuild controller RBAC
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"containerbuilds"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"containerbuilds/status"},
-				Verbs:     []string{"get", "update", "patch"},
-			},
-			{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"containerbuilds/finalizers"},
-				Verbs:     []string{"update"},
-			},
-			// Shipwright resources (used by ContainerBuild controller)
-			{
-				APIGroups: []string{"shipwright.io"},
-				Resources: []string{"builds", "buildruns"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-		},
-	}
-}
-
-func (r *OperatorConfigReconciler) buildBuildControllerClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
-	return &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: buildControllerName,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "build-controller",
-				"app.kubernetes.io/part-of":   "automotive-dev-operator",
-			},
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     buildControllerName,
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      buildControllerName,
-				Namespace: namespace,
-			},
-		},
-	}
-}
-
-func (r *OperatorConfigReconciler) buildBuildControllerLeaderElectionRole(namespace string) *rbacv1.Role {
-	return &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      buildControllerName + "-leader-election",
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "build-controller",
-				"app.kubernetes.io/part-of":   "automotive-dev-operator",
-			},
-		},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{""},
-				Resources: []string{"configmaps"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{"coordination.k8s.io"},
-				Resources: []string{"leases"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"events"},
-				Verbs:     []string{"create", "patch"},
-			},
-		},
-	}
-}
-
-func (r *OperatorConfigReconciler) buildBuildControllerLeaderElectionRoleBinding(namespace string) *rbacv1.RoleBinding {
-	return &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      buildControllerName + "-leader-election",
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "automotive-dev-operator",
-				"app.kubernetes.io/component": "build-controller",
-				"app.kubernetes.io/part-of":   "automotive-dev-operator",
-			},
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "Role",
-			Name:     buildControllerName + "-leader-election",
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      buildControllerName,
-				Namespace: namespace,
-			},
-		},
-	}
 }
 
 func (r *OperatorConfigReconciler) buildWorkspaceServiceAccount(namespace string) *corev1.ServiceAccount {
@@ -1063,13 +654,29 @@ func (r *OperatorConfigReconciler) buildWorkspaceSCC() *securityv1.SecurityConte
 	}
 }
 
+func (r *OperatorConfigReconciler) buildMetricsScraperServiceAccount(namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      metricsScraperServiceAccountName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "automotive-dev-operator",
+				"app.kubernetes.io/component": "monitoring",
+				"app.kubernetes.io/part-of":   "automotive-dev-operator",
+			},
+		},
+		// No pod runs as it; Prometheus only uses the token Secret below.
+		AutomountServiceAccountToken: new(false),
+	}
+}
+
 func (r *OperatorConfigReconciler) buildMetricsTokenSecret(namespace string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      serviceMonitorTokenSecret,
 			Namespace: namespace,
 			Annotations: map[string]string{
-				"kubernetes.io/service-account.name": "ado-operator",
+				"kubernetes.io/service-account.name": metricsScraperServiceAccountName,
 			},
 		},
 		Type: corev1.SecretTypeServiceAccountToken,
@@ -1127,7 +734,7 @@ func (r *OperatorConfigReconciler) buildMetricsReaderClusterRoleBinding(namespac
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      "ado-operator",
+				Name:      metricsScraperServiceAccountName,
 				Namespace: namespace,
 			},
 		},
@@ -1153,9 +760,15 @@ func (r *OperatorConfigReconciler) buildServiceMonitor(namespace string, config 
 	})
 
 	sm.Object["spec"] = map[string]any{
+		// The operator's metrics Service, and the build controller's, which
+		// runs the ImageBuild metrics tracker.
 		"selector": map[string]any{
-			"matchLabels": map[string]any{
-				"control-plane": "operator",
+			"matchExpressions": []any{
+				map[string]any{
+					"key":      "control-plane",
+					"operator": "In",
+					"values":   []any{"operator", "build-controller"},
+				},
 			},
 		},
 		"endpoints": []any{

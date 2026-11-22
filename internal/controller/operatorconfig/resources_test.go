@@ -48,9 +48,9 @@ var _ = Describe("OperatorConfig Resources", func() {
 	})
 
 	Describe("buildBuildAPIDeployment", func() {
-		It("should use ado-operator service account", func() {
+		It("should use its own service account, not the operator's", func() {
 			deployment := r.buildBuildAPIDeployment("test-namespace", defaultTestConfig())
-			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-operator"))
+			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-build-api"))
 		})
 	})
 
@@ -145,12 +145,21 @@ var _ = Describe("OperatorConfig Resources", func() {
 			Expect(sm.GroupVersionKind().Version).To(Equal("v1"))
 		})
 
-		It("should select services with control-plane=operator label", func() {
+		// The build controller runs the ImageBuild metrics tracker, so its
+		// metrics Service must be scraped along with the operator's.
+		It("should select the operator and build controller metrics services", func() {
 			config := &automotivev1alpha1.MonitoringConfig{Enabled: true}
 			sm := r.buildServiceMonitor("test-ns", config)
 			selector := sm.Object["spec"].(map[string]any)["selector"].(map[string]any)
-			matchLabels := selector["matchLabels"].(map[string]any)
-			Expect(matchLabels["control-plane"]).To(Equal("operator"))
+			Expect(selector).To(Equal(map[string]any{
+				"matchExpressions": []any{
+					map[string]any{
+						"key":      "control-plane",
+						"operator": "In",
+						"values":   []any{"operator", "build-controller"},
+					},
+				},
+			}))
 		})
 
 		It("should use bearerTokenSecret referencing the token secret", func() {
@@ -190,11 +199,22 @@ var _ = Describe("OperatorConfig Resources", func() {
 		})
 	})
 
+	// The token sits in a Secret anything that reads the namespace's Secrets
+	// can see, so it must be for an account that can only read metrics.
 	Describe("buildMetricsTokenSecret", func() {
-		It("should be a ServiceAccountToken type referencing ado-operator", func() {
+		It("should be a ServiceAccountToken type referencing the metrics scraper", func() {
 			secret := r.buildMetricsTokenSecret("test-ns")
 			Expect(secret.Type).To(Equal(corev1.SecretTypeServiceAccountToken))
-			Expect(secret.Annotations["kubernetes.io/service-account.name"]).To(Equal("ado-operator"))
+			Expect(secret.Annotations["kubernetes.io/service-account.name"]).To(Equal("ado-metrics-scraper"))
+		})
+	})
+
+	Describe("buildMetricsScraperServiceAccount", func() {
+		It("should never mount its token", func() {
+			sa := r.buildMetricsScraperServiceAccount("test-ns")
+			Expect(sa.Name).To(Equal("ado-metrics-scraper"))
+			Expect(sa.Namespace).To(Equal("test-ns"))
+			Expect(sa.AutomountServiceAccountToken).To(HaveValue(BeFalse()))
 		})
 	})
 
@@ -211,12 +231,12 @@ var _ = Describe("OperatorConfig Resources", func() {
 	})
 
 	Describe("buildMetricsReaderClusterRoleBinding", func() {
-		It("should reference the installed ado-metrics-reader ClusterRole and ado-operator SA", func() {
+		It("should reference the installed ado-metrics-reader ClusterRole and the metrics scraper SA", func() {
 			binding := r.buildMetricsReaderClusterRoleBinding("test-ns")
 			Expect(binding.RoleRef.Name).To(Equal("ado-metrics-reader"))
 			Expect(binding.RoleRef.Kind).To(Equal("ClusterRole"))
 			Expect(binding.Subjects).To(HaveLen(1))
-			Expect(binding.Subjects[0].Name).To(Equal("ado-operator"))
+			Expect(binding.Subjects[0].Name).To(Equal("ado-metrics-scraper"))
 			Expect(binding.Subjects[0].Namespace).To(Equal("test-ns"))
 		})
 	})
@@ -231,100 +251,4 @@ var _ = Describe("OperatorConfig Resources", func() {
 		})
 	})
 
-	Describe("buildBuildControllerDeployment", func() {
-		It("should use ado-build-controller service account", func() {
-			deployment := r.buildBuildControllerDeployment("test-namespace", defaultTestConfig())
-			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("ado-build-controller"))
-		})
-
-		It("should run in build mode", func() {
-			deployment := r.buildBuildControllerDeployment("test-namespace", defaultTestConfig())
-			container := deployment.Spec.Template.Spec.Containers[0]
-			Expect(container.Args).To(ContainElement("--mode=build"))
-		})
-
-		It("should set pod-level RunAsNonRoot", func() {
-			deployment := r.buildBuildControllerDeployment("test-namespace", defaultTestConfig())
-			podSec := deployment.Spec.Template.Spec.SecurityContext
-			Expect(podSec).NotTo(BeNil())
-			Expect(podSec.RunAsNonRoot).NotTo(BeNil())
-			Expect(*podSec.RunAsNonRoot).To(BeTrue())
-		})
-
-		It("should drop all capabilities and disallow privilege escalation", func() {
-			deployment := r.buildBuildControllerDeployment("test-namespace", defaultTestConfig())
-			container := deployment.Spec.Template.Spec.Containers[0]
-			sec := container.SecurityContext
-			Expect(sec).NotTo(BeNil())
-			Expect(sec.AllowPrivilegeEscalation).NotTo(BeNil())
-			Expect(*sec.AllowPrivilegeEscalation).To(BeFalse())
-			Expect(sec.Capabilities).NotTo(BeNil())
-			Expect(sec.Capabilities.Drop).To(ContainElement(corev1.Capability("ALL")))
-		})
-
-		It("should set WATCH_NAMESPACE environment variable to provided namespace", func() {
-			testNamespace := "custom-test-namespace"
-			deployment := r.buildBuildControllerDeployment(testNamespace, defaultTestConfig())
-			container := deployment.Spec.Template.Spec.Containers[0]
-
-			var foundWatchNamespace bool
-			for _, envVar := range container.Env {
-				if envVar.Name == "WATCH_NAMESPACE" {
-					foundWatchNamespace = true
-					Expect(envVar.Value).To(Equal(testNamespace))
-					break
-				}
-			}
-			Expect(foundWatchNamespace).To(BeTrue(), "WATCH_NAMESPACE environment variable should be present")
-		})
-	})
-
-	Describe("buildBuildControllerClusterRole", func() {
-		It("should allow retaining and expiring helper tags in split-controller mode", func() {
-			role := r.buildBuildControllerClusterRole()
-			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
-				APIGroups: []string{"image.openshift.io"},
-				Resources: []string{"imagestreams"},
-				Verbs:     []string{"get", "create", "update"},
-			}))
-			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
-				APIGroups: []string{"image.openshift.io"},
-				Resources: []string{"imagestreamtags"},
-				Verbs:     []string{"delete"},
-			}))
-			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"imagereseals"},
-				Verbs:     []string{"get", "list", "watch"},
-			}))
-			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"operatorconfigs/status"},
-				Verbs:     []string{"get", "patch"},
-			}))
-			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
-				APIGroups: []string{"", "events.k8s.io"},
-				Resources: []string{"events"},
-				Verbs:     []string{"create", "patch"},
-			}))
-		})
-		It("should grant webhook delivery controller permissions", func() {
-			role := r.buildBuildControllerClusterRole()
-			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"webhookdeliveries"},
-				Verbs:     []string{"get", "list", "watch", "create"},
-			}))
-			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
-				APIGroups: []string{"automotive.sdv.cloud.redhat.com"},
-				Resources: []string{"webhookdeliveries/status"},
-				Verbs:     []string{"get", "update", "patch"},
-			}))
-			Expect(role.Rules).To(ContainElement(rbacv1.PolicyRule{
-				APIGroups: []string{"tekton.dev"},
-				Resources: []string{"taskruns/finalizers"},
-				Verbs:     []string{"update"},
-			}))
-		})
-	})
 })

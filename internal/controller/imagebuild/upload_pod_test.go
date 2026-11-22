@@ -93,6 +93,11 @@ func TestCreateUploadPodRunsTheAgent(t *testing.T) {
 			t.Errorf("the pod doesn't mount %s", name)
 		}
 	}
+	// The agent never calls the API, and a token for any account in the
+	// namespace can pull other users' images from the registry.
+	if automount := pod.Spec.AutomountServiceAccountToken; automount == nil || *automount {
+		t.Errorf("automountServiceAccountToken = %v, want false", automount)
+	}
 	bundle := &corev1.ConfigMap{}
 	getObject(t, r, agentconn.CABundleConfigMap, bundle)
 	if bundle.Annotations[agentconn.InjectCABundleAnn] != "true" {

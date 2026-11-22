@@ -223,13 +223,15 @@ type hydrateJob struct {
 // +kubebuilder:rbac:groups="",namespace=system,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",namespace=system,resources=serviceaccounts/token,verbs=create
+// +kubebuilder:rbac:groups="",namespace=system,resources=serviceaccounts/token,resourceNames=ado-registry-pull,verbs=create
 // +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreams,verbs=get;create;update;delete
 // +kubebuilder:rbac:groups=image.openshift.io,namespace=system,resources=imagestreamtags,verbs=delete
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=tasks;pipelines;pipelineruns;taskruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=pods,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",namespace=system,resources=pods/exec,verbs=create;get
 // +kubebuilder:rbac:groups="",namespace=system,resources=pods/log,verbs=get
+// The upload pod's fixed non-root UID is outside restricted-v2's range, and a
+// pod may use any SCC its creator may.
+// +kubebuilder:rbac:groups=security.openshift.io,namespace=system,resources=securitycontextconstraints,resourceNames=nonroot-v2,verbs=use
 // +kubebuilder:rbac:groups="",namespace=system,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get
 // +kubebuilder:rbac:groups=route.openshift.io,namespace=system,resources=routes,verbs=get;list;watch;create;update;patch;delete
@@ -1714,6 +1716,9 @@ func (r *ImageBuildReconciler) createUploadPod(ctx context.Context, imageBuild *
 			},
 		},
 		Spec: corev1.PodSpec{
+			// The agent never calls the API, and a token for any account in
+			// the namespace can pull other users' images from the registry.
+			AutomountServiceAccountToken: new(false),
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsUser:    ptr.To[int64](1000),
 				RunAsGroup:   ptr.To[int64](1000),

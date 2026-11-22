@@ -55,7 +55,7 @@ spec:
       - command:
         - /manager
         args:
-          - --mode=all
+          - --mode=platform
           - --leader-elect
           - --health-probe-bind-address=:8081
           - --metrics-bind-address=:8443

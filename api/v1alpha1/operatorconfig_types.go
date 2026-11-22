@@ -96,6 +96,14 @@ const (
 	// Tokens handed to users and to flash jobs are for this SA, so they cannot
 	// overwrite tags in shared streams such as the builder cache.
 	RegistryPullServiceAccountName = "ado-registry-pull"
+
+	// BuildControllerServiceAccountName is the SA the build controller
+	// Deployment runs as (config/rbac/build-controller, with the ado- prefix).
+	BuildControllerServiceAccountName = "ado-build-controller"
+
+	// BuildAPIServiceAccountName is the SA the build API Deployment runs as
+	// (config/rbac/build-api, with the ado- prefix).
+	BuildAPIServiceAccountName = "ado-build-api"
 )
 
 // ImagesConfig defines container image references used by the operator
@@ -176,10 +184,6 @@ type BuildAPIResourcesConfig struct {
 	// BuildAPI defines resource requirements for the Build API container
 	// +optional
 	BuildAPI *corev1.ResourceRequirements `json:"buildAPI,omitempty"`
-
-	// BuildController defines resource requirements for the build controller container
-	// +optional
-	BuildController *corev1.ResourceRequirements `json:"buildController,omitempty"`
 }
 
 // GetBuildAPIResources returns the Build API resource requirements with defaults
@@ -194,23 +198,6 @@ func (c *BuildAPIResourcesConfig) GetBuildAPIResources() corev1.ResourceRequirem
 		},
 		Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("200m"),
-			corev1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-	}
-}
-
-// GetBuildControllerResources returns the build controller resource requirements with defaults
-func (c *BuildAPIResourcesConfig) GetBuildControllerResources() corev1.ResourceRequirements {
-	if c != nil && c.BuildController != nil {
-		return *c.BuildController
-	}
-	return corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("100m"),
-			corev1.ResourceMemory: resource.MustParse("256Mi"),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("1000m"),
 			corev1.ResourceMemory: resource.MustParse("512Mi"),
 		},
 	}
@@ -409,14 +396,16 @@ type JWTIssuerConfig struct {
 	CertificateAuthority string `json:"certificateAuthority,omitempty"`
 
 	// CertificateAuthoritySecret references a Kubernetes Secret containing the
-	// PEM-encoded CA certificate. The build API watches the Secret for changes so
-	// CA rotations are picked up immediately without restarting the server.
+	// PEM-encoded CA certificate. The build API rereads the Secret every minute,
+	// so CA rotations are picked up without restarting the server. A Secret in
+	// another namespace needs the build API granted get on it there.
 	// +optional
 	CertificateAuthoritySecret *SecretKeySelector `json:"certificateAuthoritySecret,omitempty"`
 
 	// CertificateAuthorityConfigMap references a Kubernetes ConfigMap containing the
-	// PEM-encoded CA certificate. The build API watches the ConfigMap for changes so
-	// CA rotations are picked up immediately without restarting the server.
+	// PEM-encoded CA certificate. The build API rereads the ConfigMap every minute,
+	// so CA rotations are picked up without restarting the server. A ConfigMap in
+	// another namespace needs the build API granted get on it there.
 	// +optional
 	CertificateAuthorityConfigMap *ConfigMapKeySelector `json:"certificateAuthorityConfigMap,omitempty"`
 }
