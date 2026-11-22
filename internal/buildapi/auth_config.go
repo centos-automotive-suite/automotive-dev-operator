@@ -187,7 +187,17 @@ func authConfigsEqual(a, b *AuthenticationConfiguration) bool {
 	return jwtConfigsEqual(a.JWT, b.JWT)
 }
 
-func newJWTAuthenticator(ctx context.Context, config AuthenticationConfiguration) (authenticator.Token, error) {
+// newJWTAuthenticator builds an authenticator for each issuer, each of which
+// discovers its provider in the background for as long as its context lasts.
+// The authenticator returned keeps them running for the rest of lifecycleCtx;
+// a construction that fails stops the ones it started.
+func newJWTAuthenticator(lifecycleCtx context.Context, config AuthenticationConfiguration) (_ authenticator.Token, err error) {
+	ctx, cancel := context.WithCancel(lifecycleCtx)
+	defer func() {
+		if err != nil {
+			cancel()
+		}
+	}()
 	logger := log.FromContext(ctx)
 	if len(config.JWT) == 0 {
 		logger.Info("No JWT issuers configured")
