@@ -95,6 +95,29 @@ func TestCreateSealedImageStreamFailureRemovesJob(t *testing.T) {
 	}
 }
 
+// A create that reports an error but landed (e.g. a timed-out request the API
+// server still processed) must be adopted, not rolled back: rolling back would
+// delete the Secrets the job references.
+func TestCreateSealedAdoptsLandedImageResealOnCreateError(t *testing.T) {
+	k8s := newSealedTestClient(t, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*api.ImageReseal); ok {
+				if err := c.Create(ctx, obj, opts...); err != nil {
+					return err
+				}
+				return errors.New("connection reset after create")
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+	if response := postSealed(t, k8s); response.Code != http.StatusAccepted {
+		t.Fatalf("response: %d %s, want 202", response.Code, response.Body)
+	}
+	if err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "test-ns", Name: "reseal-demo"}, &api.ImageReseal{}); err != nil {
+		t.Fatalf("landed ImageReseal was rolled back: %v", err)
+	}
+}
+
 // The transient Secrets hold registry credentials and signing keys. If the
 // job is withdrawn and deleting a Secret fails, the Secret must already be
 // owned by the job so that garbage collection still removes it.

@@ -16,6 +16,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	// CreationTimeout bounds how long the build API may take to create a
+	// request's transient Secrets and its ImageReseal. It must stay below
+	// OrphanGracePeriod so a request still in flight is never mistaken for an
+	// abandoned one.
+	CreationTimeout = 2 * time.Minute
+	// OrphanGracePeriod is how long a transient Secret without an ImageReseal
+	// must exist before the sweep may treat it as an orphan.
+	OrphanGracePeriod = 10 * time.Minute
+)
+
 // Suffixes of the transient Secrets the build API creates for a sealed
 // request. The Secret name is the ImageReseal name plus one of these, so the
 // sweep can tell them apart from any other labelled Secret in the namespace.

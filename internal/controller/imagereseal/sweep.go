@@ -12,15 +12,12 @@ const (
 	// orphanSweepInterval is how often the controller looks for transient
 	// Secrets whose ImageReseal no longer exists.
 	orphanSweepInterval = 5 * time.Minute
-	// orphanSweepGracePeriod keeps a Secret that has no ImageReseal yet from
-	// being mistaken for an orphan: the API creates the Secrets before the job.
-	orphanSweepGracePeriod = 10 * time.Minute
 )
 
 // sweepOrphanedTransientSecrets removes transient Secrets left behind by
 // sealed-image requests whose ImageReseal is gone.
 func (r *Reconciler) sweepOrphanedTransientSecrets(ctx context.Context) error {
-	_, err := sealedsecrets.SweepOrphaned(ctx, r.Client, log.FromContext(ctx), orphanSweepGracePeriod)
+	_, err := sealedsecrets.SweepOrphaned(ctx, r.Client, log.FromContext(ctx), sealedsecrets.OrphanGracePeriod)
 	return err
 }
 
@@ -31,7 +28,7 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	ctx = log.IntoContext(ctx, logger)
 
 	runSweep := func() {
-		deleted, err := sealedsecrets.SweepOrphaned(ctx, r.Client, logger, orphanSweepGracePeriod)
+		deleted, err := sealedsecrets.SweepOrphaned(ctx, r.Client, logger, sealedsecrets.OrphanGracePeriod)
 		if err != nil {
 			logger.Error(err, "Orphaned transient Secret sweep incomplete; will retry", "deleted", deleted)
 			return

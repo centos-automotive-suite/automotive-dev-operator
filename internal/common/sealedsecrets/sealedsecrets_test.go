@@ -308,3 +308,11 @@ func TestSweepOrphanedLeavesReplacementSecret(t *testing.T) {
 		t.Fatalf("replacement Secret was deleted: %v", err)
 	}
 }
+
+// The API's creation window must stay below the sweep's grace period, or a
+// stalled request could be swept mid-flight.
+func TestCreationTimeoutBelowOrphanGracePeriod(t *testing.T) {
+	if CreationTimeout >= OrphanGracePeriod {
+		t.Fatalf("CreationTimeout (%s) must be below OrphanGracePeriod (%s)", CreationTimeout, OrphanGracePeriod)
+	}
+}

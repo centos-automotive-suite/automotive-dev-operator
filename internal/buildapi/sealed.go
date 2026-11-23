@@ -16,6 +16,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/sealedsecrets"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
@@ -193,7 +194,14 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 		}
 	}
 
-	refs, err := createSealedSecrets(ctx, clientset, namespace, &req)
+	// The sweep treats a transient Secret without an ImageReseal as an orphan
+	// once it is older than its grace period. Bound this creation below that
+	// so a stalled API call cannot leave a Secret sweepable while the request
+	// is still in flight.
+	createCtx, cancelCreate := context.WithTimeout(ctx, sealedsecrets.CreationTimeout)
+	defer cancelCreate()
+
+	refs, err := createSealedSecrets(createCtx, clientset, namespace, &req)
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
 			spanError(span, err)
@@ -241,18 +249,30 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 		},
 	}
 
-	if err := k8sClient.Create(ctx, imageSealed); err != nil {
-		cleanupSealedSecrets(ctx, clientset, namespace, &req, refs)
+	if err := k8sClient.Create(createCtx, imageSealed); err != nil {
 		if k8serrors.IsAlreadyExists(err) {
+			cleanupSealedSecrets(ctx, clientset, namespace, &req, refs)
 			spanError(span, err)
 			SealedCreateRequestsTotal.WithLabelValues(opLabel, "conflict").Inc()
 			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("job %s already exists", req.Name)})
 			return
 		}
-		spanError(span, err)
-		SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create ImageReseal: %v", err)})
-		return
+		// A timed-out or interrupted create may still have landed. Adopt it
+		// rather than deleting the Secrets its job references.
+		landed := &automotivev1alpha1.ImageReseal{}
+		getErr := k8sClient.Get(ctx, client.ObjectKeyFromObject(imageSealed), landed)
+		ours := getErr == nil &&
+			landed.Spec.SecretRef == refs.secretRef &&
+			landed.Spec.KeySecretRef == refs.keySecretRef &&
+			landed.Spec.KeyPasswordSecretRef == refs.keyPasswordSecretRef
+		if !ours {
+			cleanupSealedSecrets(ctx, clientset, namespace, &req, refs)
+			spanError(span, err)
+			SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create ImageReseal: %v", err)})
+			return
+		}
+		imageSealed = landed
 	}
 
 	for _, secretName := range transientSealedSecretRefs(&req, refs) {
