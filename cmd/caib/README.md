@@ -333,7 +333,7 @@ caib image build-dev <manifest.aib.yml> [flags]
 | `--define-file` | | Load defines from YAML dictionary file (repeatable) |
 | `--extra-args` | | Extra arguments to pass to AIB (repeatable) |
 | `--extra-repo` | | Serve RPMs from a directory under `/workspace/export` as an extra repo (`workspace:/workspace/export/<dir>`, repeatable) |
-| `--workspace` | | Workspace name for build caching and lease forwarding |
+| `--workspace` | | Workspace name for build caching; with `--flash` and no `--lease`, reuses the workspace's lease while it is active and for the build's target |
 | `--timeout` | `60` | Timeout in minutes |
 | `-w`, `--wait` | `true` | Wait for build to complete |
 | `-f`, `--follow` | `false` | Follow build logs instead of showing progress |

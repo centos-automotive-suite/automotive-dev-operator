@@ -37,6 +37,7 @@ FLASH_CMD=$(echo "${FLASH_CMD}" | sed "s|{image_uri}|${IMAGE_REF}|g")
 
 LEASE_DURATION="${LEASE_DURATION:-03:00:00}"
 EXISTING_LEASE="${EXISTING_LEASE:-}"
+WORKSPACE_LEASE="${WORKSPACE_LEASE:-}"
 LEASE_TAGS="${LEASE_TAGS:-}"
 
 TAG_ARGS=()
@@ -50,13 +51,29 @@ fi
 
 echo "Flash command: ${FLASH_CMD}"
 
-USER_PROVIDED_LEASE=false
+# Only a lease this script creates is released when the flash fails.
+CREATED_LEASE=false
+LEASE_NAME=""
 
 if [[ -n "${EXISTING_LEASE}" ]]; then
     echo "Using existing lease: ${EXISTING_LEASE}"
     LEASE_NAME="${EXISTING_LEASE}"
-    USER_PROVIDED_LEASE=true
-else
+elif [[ -n "${WORKSPACE_LEASE}" ]]; then
+    # jmp lists the active leases this client can use whose selector contains
+    # EXPORTER_SELECTOR, so the workspace lease fits when it is listed.
+    if ! ACTIVE_LEASES=$(jmp get leases --client-config "${JMP_CLIENT_CONFIG}" -l "${EXPORTER_SELECTOR}" -o name); then
+        echo "ERROR: Failed to look up workspace lease ${WORKSPACE_LEASE}"
+        exit 1
+    fi
+    if grep -qxF "${WORKSPACE_LEASE}" <<< "${ACTIVE_LEASES}"; then
+        echo "Reusing workspace lease: ${WORKSPACE_LEASE}"
+        LEASE_NAME="${WORKSPACE_LEASE}"
+    else
+        echo "Workspace lease ${WORKSPACE_LEASE} was not reused because it has ended or is for another target; release it with: jmp delete leases ${WORKSPACE_LEASE}"
+    fi
+fi
+
+if [[ -z "${LEASE_NAME}" ]]; then
     echo "Lease duration: ${LEASE_DURATION}"
     if [[ -n "${LEASE_TAGS}" ]]; then
         echo "Lease tags: ${LEASE_TAGS}"
@@ -71,6 +88,7 @@ else
         echo "ERROR: Failed to create lease"
         exit 1
     fi
+    CREATED_LEASE=true
 
     echo ""
     echo "Lease acquired: ${LEASE_NAME}"
@@ -86,7 +104,7 @@ fi
 FLASH_SUCCESS=false
 
 cleanup() {
-    if [[ "${FLASH_SUCCESS}" != "true" ]] && [[ "${USER_PROVIDED_LEASE}" != "true" ]]; then
+    if [[ "${FLASH_SUCCESS}" != "true" ]] && [[ "${CREATED_LEASE}" == "true" ]]; then
         echo ""
         echo "Releasing lease ${LEASE_NAME} due to failure..."
         if jmp delete leases --client-config "${JMP_CLIENT_CONFIG}" "${LEASE_NAME}"; then

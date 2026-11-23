@@ -957,7 +957,6 @@ type workspaceBuildResolution struct {
 // resolveWorkspaceForBuild resolves a workspace reference for a build:
 // - Finds the workspace or auto-creates it if it doesn't exist
 // - Creates/finds a build-cache PVC for osbuild checkpoint persistence
-// - Forwards the workspace's lease if the build has flash enabled but no explicit lease
 // - Serves /workspace/export over HTTP from the workspace pod and injects workspace_url as a custom define
 func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient client.Client, namespace, wsName, requester string, req *buildcontract.BuildRequest) (workspaceBuildResolution, error) {
 	var res workspaceBuildResolution
@@ -994,11 +993,6 @@ func (a *APIServer) resolveWorkspaceForBuild(ctx context.Context, k8sClient clie
 		if ws.Spec.Owner != requester {
 			return workspaceBuildResolution{}, fmt.Errorf("workspace %q not found", wsName)
 		}
-	}
-
-	// Forward workspace lease if flash is enabled and no explicit lease was provided
-	if req.FlashEnabled && req.FlashLeaseName == "" && ws.Spec.LeaseID != "" {
-		req.FlashLeaseName = ws.Spec.LeaseID
 	}
 
 	// Grant this build the workspace's /workspace/export and inject

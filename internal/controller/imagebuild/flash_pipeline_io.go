@@ -37,6 +37,19 @@ func (r *ImageBuildReconciler) clusterRegistryRoute(ctx context.Context, config 
 	return route.Spec.Host, nil
 }
 
+// workspaceLease returns the Jumpstarter lease of the build's workspace, or
+// none when the workspace no longer exists.
+func (r *ImageBuildReconciler) workspaceLease(ctx context.Context, build *automotivev1alpha1.ImageBuild) (string, error) {
+	ws := &automotivev1alpha1.Workspace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: build.Spec.Workspace, Namespace: build.Namespace}, ws); err != nil {
+		if errors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get workspace %q for its flash lease: %w", build.Spec.Workspace, err)
+	}
+	return ws.Spec.LeaseID, nil
+}
+
 type flashOCICredentials struct {
 	username []byte
 	password []byte
