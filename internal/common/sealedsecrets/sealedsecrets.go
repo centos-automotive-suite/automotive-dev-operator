@@ -56,7 +56,8 @@ func ImageResealName(secret *corev1.Secret) (string, bool) {
 // Secrets younger than minAge are also left alone, so a Secret created before
 // its ImageReseal (the API creates the Secrets first) is never mistaken for an
 // orphan. User-provided Secrets carry none of the sealed-secret labels and are
-// never considered.
+// never considered. Deletion is pinned to the listed Secret's UID, so a name
+// reused by a new request between the list and the delete is not removed.
 //
 // It returns the number of Secrets deleted and the first error encountered, so
 // callers can retry the ones that failed.
@@ -98,7 +99,18 @@ func SweepOrphaned(
 			continue
 		}
 
-		if err := c.Delete(ctx, secret); err != nil && !k8serrors.IsNotFound(err) {
+		// Pin the delete to the Secret we listed. If another cleanup removed it
+		// and a new request reused the name, the API server reports a conflict
+		// and the replacement is left for the next sweep to evaluate.
+		err = c.Delete(ctx, secret, client.Preconditions{UID: &secret.UID})
+		switch {
+		case err == nil:
+		case k8serrors.IsNotFound(err):
+			// Already gone; nothing left to remove.
+		case k8serrors.IsConflict(err):
+			logger.V(1).Info("Transient Secret was replaced during the sweep; leaving it", "secret", secret.Name, "job", job)
+			continue
+		default:
 			logger.Error(err, "Failed to delete orphaned transient Secret; will retry", "secret", secret.Name, "job", job)
 			if firstErr == nil {
 				firstErr = err
