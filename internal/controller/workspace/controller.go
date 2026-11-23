@@ -405,11 +405,14 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 		return nil, err
 	}
 
-	// Load OperatorConfig only when creating a new pod
+	// Load OperatorConfig only when creating a new pod. NotFound means no
+	// config; any other error must not skip the image checks below.
 	var operatorConfig *automotivev1alpha1.OperatorConfig
 	oc := &automotivev1alpha1.OperatorConfig{}
 	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: ws.Namespace}, oc); err == nil {
 		operatorConfig = oc
+	} else if !k8serrors.IsNotFound(err) {
+		return nil, fmt.Errorf("reading OperatorConfig: %w", err)
 	}
 
 	var wsConfig *automotivev1alpha1.WorkspacesConfig
@@ -417,7 +420,7 @@ func (r *Reconciler) ensurePod(ctx context.Context, ws *automotivev1alpha1.Works
 		wsConfig = operatorConfig.Spec.Workspaces
 	}
 	image := resolveWorkspaceImage(ws, wsConfig)
-	if wsConfig != nil && !wsConfig.IsImageAllowed(image) {
+	if !wsConfig.IsImageAllowed(image) {
 		return nil, fmt.Errorf("image %q is not in the allowed images list", image)
 	}
 	if wsConfig != nil && wsConfig.ImageVerify {
