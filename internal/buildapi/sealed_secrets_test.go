@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
 	. "github.com/onsi/gomega"    //nolint:revive // Dot import is standard for Gomega
 )
@@ -71,6 +72,20 @@ var _ = Describe("Sealed secret helpers", func() {
 			_, err := buildSealedRegistrySecretData(creds)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("required for username-password authentication"))
+		})
+	})
+
+	Describe("sealedSecretLabels", func() {
+		It("uses the same standard labels as build Secrets", func() {
+			got := sealedSecretLabels("job", "seal-key")
+			Expect(got).To(Equal(map[string]string{
+				labels.ImageReseal:  "job",
+				labels.Transient:    labels.ValueTrue,
+				labels.ManagedBy:    labels.ValueBuildAPI,
+				labels.PartOf:       labels.ValueAutomotiveDev,
+				labels.CreatedBy:    labels.ValueBuildAPICreator,
+				labels.ResourceType: "seal-key",
+			}))
 		})
 	})
 

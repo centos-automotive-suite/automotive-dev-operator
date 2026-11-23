@@ -10,6 +10,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/sealedsecrets"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -22,6 +23,20 @@ type sealedSecretRefs struct {
 	keyPasswordSecretRef string
 }
 
+// sealedSecretLabels returns the labels for a transient Secret created for a
+// sealed request. They match the label set build Secrets carry, plus the
+// ImageReseal name so the sweep can tell which job a leftover Secret belongs to.
+func sealedSecretLabels(job, resourceType string) map[string]string {
+	return map[string]string{
+		labels.ImageReseal:  job,
+		labels.Transient:    labels.ValueTrue,
+		labels.ManagedBy:    labels.ValueBuildAPI,
+		labels.PartOf:       labels.ValueAutomotiveDev,
+		labels.CreatedBy:    labels.ValueBuildAPICreator,
+		labels.ResourceType: resourceType,
+	}
+}
+
 // createSealedSecrets creates any transient secrets needed for a sealed operation (registry auth, seal key, key password).
 func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, req *buildcontract.SealedRequest) (*sealedSecretRefs, error) {
 	refs := &sealedSecretRefs{
@@ -31,7 +46,7 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 
 	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled {
 		creds := req.RegistryCredentials
-		secretName := req.Name + "-registry-auth"
+		secretName := req.Name + sealedsecrets.RegistryAuthSuffix
 		secretData, err := buildSealedRegistrySecretData(creds)
 		if err != nil {
 			return nil, err
@@ -41,10 +56,7 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      secretName,
 				Namespace: namespace,
-				Labels: map[string]string{
-					labels.ImageReseal: req.Name,
-					labels.Transient:   labels.ValueTrue,
-				},
+				Labels:    sealedSecretLabels(req.Name, "registry-auth"),
 			},
 			Type: corev1.SecretTypeOpaque,
 			Data: secretData,
@@ -56,15 +68,12 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 	}
 
 	if strings.TrimSpace(req.KeyContent) != "" && refs.keySecretRef == "" {
-		keySecretName := req.Name + "-seal-key"
+		keySecretName := req.Name + sealedsecrets.SealKeySuffix
 		keySecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      keySecretName,
 				Namespace: namespace,
-				Labels: map[string]string{
-					labels.ImageReseal: req.Name,
-					labels.Transient:   labels.ValueTrue,
-				},
+				Labels:    sealedSecretLabels(req.Name, "seal-key"),
 			},
 			Type: corev1.SecretTypeOpaque,
 			Data: map[string][]byte{
@@ -78,15 +87,12 @@ func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, na
 		refs.keySecretRef = keySecretName
 
 		if strings.TrimSpace(req.KeyPassword) != "" {
-			keyPwSecretName := req.Name + "-seal-key-password"
+			keyPwSecretName := req.Name + sealedsecrets.SealKeyPasswordSuffix
 			keyPwSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      keyPwSecretName,
 					Namespace: namespace,
-					Labels: map[string]string{
-						labels.ImageReseal: req.Name,
-						labels.Transient:   labels.ValueTrue,
-					},
+					Labels:    sealedSecretLabels(req.Name, "seal-key-password"),
 				},
 				Type: corev1.SecretTypeOpaque,
 				Data: map[string][]byte{

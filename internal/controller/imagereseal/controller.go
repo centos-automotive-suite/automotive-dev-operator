@@ -40,6 +40,7 @@ import (
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	controllerutils "github.com/centos-automotive-suite/automotive-dev-operator/internal/controller/controllerutils"
 )
@@ -63,7 +64,7 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagereseals/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=automotive.sdv.cloud.redhat.com,namespace=system,resources=imagereseals/finalizers,verbs=update
 // +kubebuilder:rbac:groups=tekton.dev,namespace=system,resources=tasks;taskruns;pipelineruns,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",namespace=system,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=events.k8s.io,namespace=system,resources=events,verbs=create;patch
 
@@ -74,6 +75,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	sealed := &automotivev1alpha1.ImageReseal{}
 	if err := r.Get(ctx, req.NamespacedName, sealed); err != nil {
 		if k8serrors.IsNotFound(err) {
+			// A withdrawn or deleted job can leave transient Secrets behind
+			// when the API server could not delete them. Sweep now; the
+			// periodic sweep retries anything that is not cleanable yet.
+			if sweepErr := r.sweepOrphanedTransientSecrets(ctx); sweepErr != nil {
+				logger.Error(sweepErr, "Failed to sweep orphaned transient Secrets")
+			}
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -702,13 +709,9 @@ func (r *Reconciler) emitEventf(
 	r.Recorder.Eventf(sealed, nil, eventType, reason, reason, messageFmt, args...)
 }
 
-// transientLabel is the label used to mark secrets that were created by the API server
-// and should be cleaned up after the sealed operation completes.
-const transientLabel = "automotive.sdv.cloud.redhat.com/transient"
-
 // cleanupTransientSecrets attempts to delete all transient secrets for a
-// sealed operation. Returns an error if any deletion failed so the caller
-// can schedule a retry.
+// sealed operation. Returns an error if any read or deletion failed so the
+// caller can schedule a retry.
 func (r *Reconciler) cleanupTransientSecrets(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, log logr.Logger) error {
 	var firstErr error
 	for _, ref := range []struct {
@@ -722,23 +725,39 @@ func (r *Reconciler) cleanupTransientSecrets(ctx context.Context, sealed *automo
 		if ref.name == "" {
 			continue
 		}
-		if r.isTransientSecret(ctx, sealed.Namespace, ref.name) {
-			if err := r.deleteSecret(ctx, sealed.Namespace, ref.name, ref.secretType, log); err != nil && firstErr == nil {
+		secret, err := r.transientSecret(ctx, sealed.Namespace, ref.name)
+		if err != nil {
+			log.Error(err, "Failed to read "+ref.secretType+" secret (will retry)", "secret", ref.name)
+			if firstErr == nil {
 				firstErr = err
 			}
-		} else {
+			continue
+		}
+		if secret == nil {
 			log.V(1).Info("Skipping deletion of user-provided secret", "secret", ref.name, "type", ref.secretType)
+			continue
+		}
+		if err := r.deleteSecret(ctx, secret, ref.secretType, log); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	return firstErr
 }
 
-func (r *Reconciler) isTransientSecret(ctx context.Context, namespace, name string) bool {
+// transientSecret returns the named Secret if the API server created it for a
+// sealed operation. It returns nil, nil for an absent or user-provided Secret.
+func (r *Reconciler) transientSecret(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, secret); err != nil {
-		return false
+		if k8serrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	return secret.Labels[transientLabel] == "true"
+	if secret.Labels[labels.Transient] != labels.ValueTrue {
+		return nil, nil
+	}
+	return secret, nil
 }
 
 func (r *Reconciler) resolveBuildConfig(ctx context.Context) (*tasks.BuildConfig, error) {
@@ -758,25 +777,18 @@ func (r *Reconciler) resolveBuildConfig(ctx context.Context) (*tasks.BuildConfig
 	return bc, nil
 }
 
-// deleteSecret attempts to delete a secret. Returns nil on success or if
-// the secret is already gone (NotFound). Returns the error on transient
-// failure so the caller can schedule a retry.
-func (r *Reconciler) deleteSecret(ctx context.Context, namespace, secretName, secretType string, log logr.Logger) error {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: namespace,
-		},
-	}
-	err := r.Delete(ctx, secret)
+// deleteSecret deletes the given Secret, pinned to the UID it was read with so
+// a Secret recreated under the same name by a new request is left alone.
+func (r *Reconciler) deleteSecret(ctx context.Context, secret *corev1.Secret, secretType string, log logr.Logger) error {
+	err := r.Delete(ctx, secret, client.Preconditions{UID: &secret.UID})
 	if err == nil {
-		log.Info("Deleted "+secretType+" secret", "secret", secretName)
+		log.Info("Deleted "+secretType+" secret", "secret", secret.Name)
 		return nil
 	}
 	if k8serrors.IsNotFound(err) {
 		return nil
 	}
-	log.Error(err, "Failed to delete "+secretType+" secret (will retry)", "secret", secretName)
+	log.Error(err, "Failed to delete "+secretType+" secret (will retry)", "secret", secret.Name)
 	return err
 }
 
@@ -828,9 +840,13 @@ func (r *Reconciler) readRegistryAuth(ctx context.Context, namespace, secretName
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&automotivev1alpha1.ImageReseal{}).
 		Owns(&tektonv1.TaskRun{}).
 		Owns(&tektonv1.PipelineRun{}).
-		Complete(r)
+		Complete(r); err != nil {
+		return err
+	}
+	// Also run as a manager Runnable to sweep orphaned transient Secrets.
+	return mgr.Add(r)
 }

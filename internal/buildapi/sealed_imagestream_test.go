@@ -12,13 +12,18 @@ import (
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/sealedsecrets"
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 	imagev1 "github.com/openshift/api/image/v1"
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -164,6 +169,117 @@ func TestCreateSealedRollbackLeavesSecretsOwnedByJob(t *testing.T) {
 		}
 	}
 	t.Fatalf("Secret left without an owner after its job was withdrawn: %+v", secret.OwnerReferences)
+}
+
+// If setting the owner reference fails and then the ImageStream cannot be
+// created, the rollback's Secret delete also fails, leaving a Secret with no
+// owner and no ImageReseal. Garbage collection can never reach it, so the
+// orphan sweep must remove it once the failures clear -- while leaving the
+// requester's own Secrets alone.
+func TestCreateSealedOwnerRefFailureLeavesSweepableOrphan(t *testing.T) {
+	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		t.Skip("set KUBEBUILDER_ASSETS or run make test for reseal rollback tests")
+	}
+	env := &envtest.Environment{CRDDirectoryPaths: []string{"../../config/crd/bases"}, ErrorIfCRDPathMissing: true}
+	cfg, err := env.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Error(err)
+		}
+	})
+	scheme := runtime.NewScheme()
+	if err := api.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	base, err := client.NewWithWatch(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	isStream := func(obj client.Object) bool { return obj.GetObjectKind().GroupVersionKind().Kind == "ImageStream" }
+	// envtest has no ImageStream API; act as an OpenShift cluster that refuses the create.
+	k8s := interceptor.NewClient(base, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if isStream(obj) {
+				return k8serrors.NewNotFound(imagev1.Resource("imagestreams"), key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if isStream(obj) {
+				return errors.New("imagestream create failed")
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A Secret the requester supplied: the API must never delete it.
+	userSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "user-seal-key",
+			Namespace:   "default",
+			Annotations: map[string]string{labels.RequestedBy: "user"},
+		},
+	}
+	if _, err := cs.CoreV1().Secrets("default").Create(t.Context(), userSecret, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Owner-reference updates and deletes on Secrets both fail.
+	failingSecretWrites := rest.CopyConfig(cfg)
+	failingSecretWrites.Wrap(func(rt http.RoundTripper) http.RoundTripper {
+		return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			if (r.Method == http.MethodDelete || r.Method == http.MethodPut) && strings.Contains(r.URL.Path, "/secrets/") {
+				return &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{},
+					Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+			}
+			return rt.RoundTrip(r)
+		})
+	})
+
+	body := `{"name":"reseal-demo","inputRef":"quay.io/example/input:v1",` +
+		`"outputRef":"` + defaultInternalRegistryURL + `/default/resealed:v1",` +
+		`"keySecretRef":"user-seal-key",` +
+		`"registryCredentials":{"enabled":true,"authType":"username-password",` +
+		`"registryUrl":"quay.io","username":"user","password":"secret"}}`
+	if response := postSealedRequest(t, k8s, failingSecretWrites, "default", body); response.Code != http.StatusInternalServerError {
+		t.Fatalf("response: %d %s, want 500", response.Code, response.Body)
+	}
+
+	if err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "reseal-demo"}, &api.ImageReseal{}); !k8serrors.IsNotFound(err) {
+		t.Fatalf("ImageReseal kept after its output stream failed: %v", err)
+	}
+	orphan := &corev1.Secret{}
+	if err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "reseal-demo" + sealedsecrets.RegistryAuthSuffix}, orphan); err != nil {
+		t.Fatalf("transient Secret missing after the rollback: %v", err)
+	}
+	if len(orphan.OwnerReferences) != 0 {
+		t.Fatalf("transient Secret unexpectedly owned: %+v", orphan.OwnerReferences)
+	}
+
+	// The failures clear: the sweep now removes the orphan and only the orphan.
+	deleted, err := sealedsecrets.SweepOrphaned(t.Context(), k8s, logr.Discard(), 0)
+	if err != nil {
+		t.Fatalf("SweepOrphaned returned error: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("SweepOrphaned deleted %d Secrets, want 1", deleted)
+	}
+	if err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: orphan.Name}, &corev1.Secret{}); !k8serrors.IsNotFound(err) {
+		t.Fatalf("orphaned Secret was not swept: %v", err)
+	}
+	if _, err := cs.CoreV1().Secrets("default").Get(t.Context(), userSecret.Name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("user-provided Secret was removed by the sweep: %v", err)
+	}
 }
 
 func newSealedTestClient(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) client.WithWatch {
