@@ -44,7 +44,8 @@ func UploadPodReady(ctx context.Context, k8sClient client.Client, namespace, bui
 // files as a zstd-compressed tar stream, to the agent in the build's upload
 // pod without decoding it, as a workspace sync goes to the workspace's agent.
 // The agent applies all of it or none, bounded by the build API's limits,
-// and takes only regular files with plain names.
+// and takes only regular files with plain names. It accepts files only while
+// the build is uploading and before its uploads are marked complete.
 func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
@@ -58,6 +59,14 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	}
 	if build.Annotations[labels.RequestedBy] != a.resolveRequester(c) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "you can only upload to your own builds"})
+		return
+	}
+	if build.Annotations[labels.UploadsComplete] == labels.ValueTrue {
+		c.JSON(http.StatusConflict, gin.H{"error": "uploads for this build are already complete"})
+		return
+	}
+	if build.Status.Phase != phaseUploading {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("build is %q; uploads are accepted only while it is %q", build.Status.Phase, phaseUploading)})
 		return
 	}
 	ready, err := UploadPodReady(c.Request.Context(), k8sClient, namespace, name)

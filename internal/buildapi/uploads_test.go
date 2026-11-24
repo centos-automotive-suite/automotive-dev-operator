@@ -31,6 +31,7 @@ func newTestImageBuild() *automotivev1alpha1.ImageBuild {
 			Namespace:   "test-ns",
 			Annotations: map[string]string{labels.RequestedBy: "test-user"},
 		},
+		Status: automotivev1alpha1.ImageBuildStatus{Phase: automotivev1alpha1.ImageBuildPhaseUploading},
 	}
 }
 
@@ -192,6 +193,44 @@ func TestUploadFilesPassOnTheAgentsRejection(t *testing.T) {
 	}
 	if uploadsComplete(t, kube) {
 		t.Error("the build is marked as having its uploads")
+	}
+}
+
+// Files land only while the build is Uploading and before its uploads are
+// marked complete. Later ones would change inputs the build is already using.
+func TestUploadFilesOnlyWhileUploading(t *testing.T) {
+	cases := map[string]func(*automotivev1alpha1.ImageBuild){
+		"pending": func(b *automotivev1alpha1.ImageBuild) {
+			b.Status.Phase = phasePending
+		},
+		"building": func(b *automotivev1alpha1.ImageBuild) {
+			b.Status.Phase = phaseBuilding
+		},
+		"completed": func(b *automotivev1alpha1.ImageBuild) {
+			b.Status.Phase = automotivev1alpha1.ImageBuildPhaseCompleted
+		},
+		"failed": func(b *automotivev1alpha1.ImageBuild) {
+			b.Status.Phase = automotivev1alpha1.ImageBuildPhaseFailed
+		},
+		"uploads already complete": func(b *automotivev1alpha1.ImageBuild) {
+			b.Annotations[labels.UploadsComplete] = labels.ValueTrue
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			build := newTestImageBuild()
+			change(build)
+			workdir := t.TempDir()
+			api, _ := uploadTestClient(t, workdir, build, newTestUploadPod(true))
+			source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+			err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+			if err == nil || !strings.Contains(err.Error(), "409") {
+				t.Errorf("err = %v, want a 409", err)
+			}
+			if entries, err := os.ReadDir(workdir); err != nil || len(entries) != 0 {
+				t.Errorf("files reached the upload pod: %v, %v", entries, err)
+			}
+		})
 	}
 }
 
