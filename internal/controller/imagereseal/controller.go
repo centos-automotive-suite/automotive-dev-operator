@@ -128,18 +128,26 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 		}
 	}
 
-	buildConfig, err := r.resolveBuildConfig(ctx)
+	// Read the OperatorConfig once and pass it down: a missing config is accepted
+	// here, and reading it again later could fail the job on a lookup the first
+	// read already tolerated.
+	operatorConfig, err := r.resolveOperatorConfig(ctx)
 	if err != nil {
-		return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to resolve build config: %v", err))
+		// A temporary API failure must not mark the job Failed for good; return it
+		// so the reconcile retries.
+		return ctrl.Result{}, err
 	}
+	buildConfig := buildConfigFromOperatorConfig(operatorConfig)
 	if err := r.ensureSealedTasks(ctx, sealed.Namespace, buildConfig); err != nil {
-		return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to ensure reseal tasks: %v", err))
+		// Updating the sealed Tasks can fail transiently (a conflict is enough);
+		// retry rather than failing the job.
+		return ctrl.Result{}, fmt.Errorf("ensure reseal tasks: %w", err)
 	}
 
 	if len(stages) == 1 {
-		tr, err := r.createSealedTaskRun(ctx, sealed, stages[0])
+		tr, err := r.createSealedTaskRun(ctx, sealed, stages[0], operatorConfig)
 		if err != nil {
-			return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to create TaskRun: %v", err))
+			return ctrl.Result{}, err
 		}
 		sealed.Status.TaskRunName = tr.Name
 		r.emitEventf(
@@ -151,9 +159,9 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 			stages[0],
 		)
 	} else {
-		pr, err := r.createSealedPipelineRun(ctx, sealed, stages)
+		pr, err := r.createSealedPipelineRun(ctx, sealed, stages, operatorConfig)
 		if err != nil {
-			return r.updateStatus(ctx, sealed, phaseFailed, fmt.Sprintf("Failed to create PipelineRun: %v", err))
+			return ctrl.Result{}, err
 		}
 		sealed.Status.PipelineRunName = pr.Name
 		r.emitEventf(
@@ -315,7 +323,7 @@ func (r *Reconciler) ensureSealedTask(ctx context.Context, task *tektonv1.Task) 
 	return r.Update(ctx, existing)
 }
 
-func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, operation string) (*tektonv1.TaskRun, error) {
+func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, operation string, operatorConfig *automotivev1alpha1.OperatorConfig) (*tektonv1.TaskRun, error) {
 	taskRunName := sealed.Name
 	existingTR := &tektonv1.TaskRun{}
 	if err := r.Get(ctx, client.ObjectKey{Name: taskRunName, Namespace: sealed.Namespace}, existingTR); err == nil {
@@ -351,11 +359,6 @@ func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotive
 		signedRef = sealed.Spec.SignedRef
 	}
 
-	operatorConfig := &automotivev1alpha1.OperatorConfig{}
-	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: controllerutils.OperatorNamespace()}, operatorConfig); err != nil {
-		return nil, fmt.Errorf("failed to fetch OperatorConfig: %w", err)
-	}
-
 	params := []tektonv1.Param{
 		{Name: "input-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.InputRef}},
 		{Name: "output-ref", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.OutputRef}},
@@ -363,7 +366,7 @@ func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotive
 		{Name: "aib-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.GetAIBImage()}},
 		{Name: "builder-image", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.BuilderImage}},
 		{Name: "architecture", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: sealed.Spec.Architecture}},
-		{Name: "insecure-registry", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: fmt.Sprintf("%t", operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.InsecureRegistry)}},
+		{Name: "insecure-registry", Value: tektonv1.ParamValue{Type: tektonv1.ParamTypeString, StringVal: insecureRegistryValue(operatorConfig)}},
 	}
 
 	trSpec := tektonv1.TaskRunSpec{
@@ -398,7 +401,7 @@ func (r *Reconciler) createSealedTaskRun(ctx context.Context, sealed *automotive
 	return tr, nil
 }
 
-func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, stages []string) (*tektonv1.PipelineRun, error) {
+func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automotivev1alpha1.ImageReseal, stages []string, operatorConfig *automotivev1alpha1.OperatorConfig) (*tektonv1.PipelineRun, error) {
 	prName := sealed.Name
 	existing := &tektonv1.PipelineRun{}
 	if err := r.Get(ctx, client.ObjectKey{Name: prName, Namespace: sealed.Namespace}, existing); err == nil {
@@ -440,11 +443,7 @@ func (r *Reconciler) createSealedPipelineRun(ctx context.Context, sealed *automo
 		pipelineWorkspaceRefs = append(pipelineWorkspaceRefs, tektonv1.WorkspacePipelineTaskBinding{Name: "sealing-key-password", Workspace: "sealing-key-password"})
 	}
 
-	operatorConfig := &automotivev1alpha1.OperatorConfig{}
-	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: controllerutils.OperatorNamespace()}, operatorConfig); err != nil {
-		return nil, fmt.Errorf("failed to fetch OperatorConfig: %w", err)
-	}
-	insecureRegistry := fmt.Sprintf("%t", operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.InsecureRegistry)
+	insecureRegistry := insecureRegistryValue(operatorConfig)
 
 	pipelineTasks := make([]tektonv1.PipelineTask, 0, len(stages))
 	for i, op := range stages {
@@ -741,21 +740,38 @@ func (r *Reconciler) isTransientSecret(ctx context.Context, namespace, name stri
 	return secret.Labels[transientLabel] == "true"
 }
 
-func (r *Reconciler) resolveBuildConfig(ctx context.Context) (*tasks.BuildConfig, error) {
+// resolveOperatorConfig reads the cluster OperatorConfig once per reconcile. A
+// missing config is not an error — the caller falls back to defaults — but any
+// other read failure is returned so the reconcile retries instead of failing the
+// job for good.
+func (r *Reconciler) resolveOperatorConfig(ctx context.Context) (*automotivev1alpha1.OperatorConfig, error) {
 	operatorConfig := &automotivev1alpha1.OperatorConfig{}
 	if err := r.Get(ctx, client.ObjectKey{Name: "config", Namespace: controllerutils.OperatorNamespace()}, operatorConfig); err != nil {
 		if k8serrors.IsNotFound(err) {
-			return &tasks.BuildConfig{}, nil
+			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("fetch OperatorConfig: %w", err)
 	}
-	bc := &tasks.BuildConfig{
-		AutomotiveImageBuilderImage: operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage(),
+	return operatorConfig, nil
+}
+
+// buildConfigFromOperatorConfig derives the task-generation defaults from the
+// OperatorConfig. A nil config (none installed) yields an empty config.
+func buildConfigFromOperatorConfig(operatorConfig *automotivev1alpha1.OperatorConfig) *tasks.BuildConfig {
+	bc := &tasks.BuildConfig{}
+	if operatorConfig == nil {
+		return bc
 	}
+	bc.AutomotiveImageBuilderImage = operatorConfig.Spec.GetImages().GetAutomotiveImageBuilderImage()
 	if operatorConfig.Spec.OSBuilds != nil {
 		controllerutils.ApplyTrustedCABundleFromOSBuilds(bc, operatorConfig.Spec.OSBuilds)
 	}
-	return bc, nil
+	return bc
+}
+
+// insecureRegistryValue reports the OperatorConfig's insecure-registry setting.
+func insecureRegistryValue(operatorConfig *automotivev1alpha1.OperatorConfig) string {
+	return fmt.Sprintf("%t", operatorConfig != nil && operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.InsecureRegistry)
 }
 
 // deleteSecret attempts to delete a secret. Returns nil on success or if

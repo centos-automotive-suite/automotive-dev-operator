@@ -48,7 +48,11 @@ func TestCreateSealedTaskRun_ServiceAccount(t *testing.T) {
 		},
 	}
 
-	tr, err := r.createSealedTaskRun(context.Background(), sealed, "reseal")
+	operatorConfig, err := r.resolveOperatorConfig(context.Background())
+	if err != nil {
+		t.Fatalf("resolveOperatorConfig returned error: %v", err)
+	}
+	tr, err := r.createSealedTaskRun(context.Background(), sealed, "reseal", operatorConfig)
 	if err != nil {
 		t.Fatalf("createSealedTaskRun returned error: %v", err)
 	}

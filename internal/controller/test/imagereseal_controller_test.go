@@ -70,29 +70,22 @@ var _ = Describe("ImageReseal Controller", func() {
 			}
 		})
 
-		It("should reconcile and update status appropriately", func() {
+		It("should retry setup failures instead of failing the job", func() {
 			By("Reconciling the ImageReseal resource")
 			r := &imagereseal.Reconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
-			// First reconcile: without Tekton CRDs in envtest, ensureSealedTasks will fail
-			// and the controller should set status to Failed with a descriptive message.
+			// Without Tekton CRDs in envtest, ensureSealedTasks fails. That is a
+			// transient setup/API failure, not an invalid spec, so the controller
+			// must return the error for a retry rather than marking the job Failed
+			// for good.
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).To(HaveOccurred())
 
 			sealed := &automotivev1alpha1.ImageReseal{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, sealed)).To(Succeed())
-
-			if err != nil {
-				// Reconciler returned an error (e.g., status update itself failed) — still a valid path
-				Expect(sealed.Status.Phase).To(BeElementOf("", "Pending", "Failed"))
-			} else {
-				// Reconciler handled the error gracefully: expect Failed (Tekton CRDs absent) or Running (CRDs present)
-				Expect(sealed.Status.Phase).To(BeElementOf("Failed", "Running"))
-				if sealed.Status.Phase == "Failed" {
-					Expect(sealed.Status.Message).To(ContainSubstring("reseal tasks"))
-				}
-			}
+			Expect(sealed.Status.Phase).NotTo(Equal("Failed"))
 		})
 	})
 
