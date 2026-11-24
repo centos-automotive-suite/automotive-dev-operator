@@ -3,6 +3,7 @@ package buildapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -76,7 +77,17 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 		return
 	}
 	resp, err := agent.SyncUpload(c.Request.Context(), c.Request.Body)
-	if a.workspaceAgentError(c, err) {
+	if err != nil {
+		var agentErr *workspaceagent.Error
+		if errors.As(err, &agentErr) {
+			c.JSON(agentErr.Code, gin.H{"error": agentErr.Message})
+		} else {
+			// The agent did not answer, as when its pod turns ready a moment
+			// before its Service routes to it. That is the not-ready state the
+			// CLI retries.
+			a.log.Error(err, "Upload agent is unreachable", "build", name)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upload pod not ready"})
+		}
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()

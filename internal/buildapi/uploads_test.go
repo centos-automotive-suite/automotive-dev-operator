@@ -58,6 +58,20 @@ func newTestUploadPod(ready bool) *corev1.Pod {
 // sees.
 func uploadTestClient(t *testing.T, workdir string, objs ...ctrlclient.Object) (*buildapiclient.Client, ctrlclient.Client) {
 	t.Helper()
+	agent, err := workspaceagent.New(filepath.Join(t.TempDir(), "runs"), workdir, workdir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.TakeBuildUploads()
+	server := httptest.NewServer(agent.Handler("secret", nil))
+	t.Cleanup(server.Close)
+	return uploadTestAPI(t, server.URL, objs...)
+}
+
+// uploadTestAPI returns a client for a build API whose upload pod's agent is
+// at agentURL, and the cluster it sees.
+func uploadTestAPI(t *testing.T, agentURL string, objs ...ctrlclient.Object) (*buildapiclient.Client, ctrlclient.Client) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	t.Setenv("BUILD_API_NAMESPACE", "test-ns")
 	scheme := runtime.NewScheme()
@@ -68,20 +82,13 @@ func uploadTestClient(t *testing.T, workdir string, objs ...ctrlclient.Object) (
 		t.Fatal(err)
 	}
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&automotivev1alpha1.ImageBuild{}).Build()
-	agent, err := workspaceagent.New(filepath.Join(t.TempDir(), "runs"), workdir, workdir, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent.TakeBuildUploads()
-	server := httptest.NewServer(agent.Handler("secret", nil))
-	t.Cleanup(server.Close)
 	a := newTestServer(t, func(deps *apiDependencies) {
 		deps.getClientFromRequest = func(*gin.Context) (ctrlclient.Client, error) { return kube, nil }
 		deps.uploadAgent = func(_ context.Context, _ ctrlclient.Client, build *automotivev1alpha1.ImageBuild) (*workspaceagent.Client, error) {
 			if build.Namespace != "test-ns" || build.Name != "test-build" {
 				t.Errorf("wrong upload agent: %s/%s", build.Namespace, build.Name)
 			}
-			return workspaceagent.NewClient(server.URL, "secret", nil), nil
+			return workspaceagent.NewClient(agentURL, "secret", nil), nil
 		}
 	})
 	router := gin.New()
@@ -156,6 +163,22 @@ func TestUploadFilesWaitForTheUploadAgent(t *testing.T) {
 				t.Error("the build is marked as having its uploads")
 			}
 		})
+	}
+}
+
+// An agent that refuses connections is the not-ready state the CLI retries:
+// the upload pod turns ready a moment before its Service routes to it.
+func TestUploadFilesRetryWhenTheAgentIsUnreachable(t *testing.T) {
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	api, kube := uploadTestAPI(t, gone.URL, newTestImageBuild(), newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	if err == nil || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "upload pod not ready") {
+		t.Errorf("err = %v, want a 503 for the upload pod not ready", err)
+	}
+	if uploadsComplete(t, kube) {
+		t.Error("the build is marked as having its uploads")
 	}
 }
 
