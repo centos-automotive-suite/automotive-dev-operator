@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -15,6 +16,55 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 )
+
+// uploadSlots admits one upload at a time to each build. The Build API runs a
+// single replica, so this covers every upload. An upload holds its build's slot
+// from its checks through the agent's commit and the completion mark, so no
+// upload can commit after another has completed the build.
+type uploadSlots struct {
+	mu    sync.Mutex
+	slots map[string]*uploadSlot
+}
+
+type uploadSlot struct {
+	busy  chan struct{} // holds a token while an upload owns the slot
+	users int           // uploads that hold or wait for the slot
+}
+
+// acquire waits for the build's slot and returns the func that releases it.
+// It gives up with ctx's error if ctx ends first.
+func (s *uploadSlots) acquire(ctx context.Context, build string) (func(), error) {
+	s.mu.Lock()
+	if s.slots == nil {
+		s.slots = map[string]*uploadSlot{}
+	}
+	slot := s.slots[build]
+	if slot == nil {
+		slot = &uploadSlot{busy: make(chan struct{}, 1)}
+		s.slots[build] = slot
+	}
+	slot.users++
+	s.mu.Unlock()
+
+	leave := func() {
+		s.mu.Lock()
+		slot.users--
+		if slot.users == 0 {
+			delete(s.slots, build)
+		}
+		s.mu.Unlock()
+	}
+	select {
+	case slot.busy <- struct{}{}:
+		return func() {
+			<-slot.busy
+			leave()
+		}, nil
+	case <-ctx.Done():
+		leave()
+		return nil, ctx.Err()
+	}
+}
 
 // UploadPodReady reports whether the build's upload pod is ready, which it is
 // once its agent answers. The controller uses it to defer starting a
@@ -45,7 +95,8 @@ func UploadPodReady(ctx context.Context, k8sClient client.Client, namespace, bui
 // pod without decoding it, as a workspace sync goes to the workspace's agent.
 // The agent applies all of it or none, bounded by the build API's limits,
 // and takes only regular files with plain names. It accepts files only while
-// the build is uploading and before its uploads are marked complete.
+// the build is uploading and before its uploads are marked complete. Uploads
+// to one build run one at a time, so each one's checks see the uploads before it.
 func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	namespace := resolveNamespace()
 
@@ -53,6 +104,12 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 	if err != nil {
 		return
 	}
+	release, err := a.uploads.acquire(c.Request.Context(), namespace+"/"+name)
+	if err != nil {
+		// The client has gone, so there is no one to answer.
+		return
+	}
+	defer release()
 	build := &automotivev1alpha1.ImageBuild{}
 	if err := getResourceOrFail(c.Request.Context(), c, k8sClient, name, namespace, build, "build"); err != nil {
 		return

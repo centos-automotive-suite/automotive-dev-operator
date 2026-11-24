@@ -138,6 +138,8 @@ type APIServer struct {
 	// shellPingInterval is how often a workspace shell's client is pinged;
 	// zero means defaultShellPingInterval.
 	shellPingInterval time.Duration
+	// uploads admits one upload at a time to each build.
+	uploads uploadSlots
 }
 
 //go:embed openapi.yaml

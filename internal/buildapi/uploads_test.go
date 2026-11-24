@@ -3,13 +3,17 @@ package buildapi
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -231,6 +235,58 @@ func TestUploadFilesOnlyWhileUploading(t *testing.T) {
 				t.Errorf("files reached the upload pod: %v, %v", entries, err)
 			}
 		})
+	}
+}
+
+// Two uploads to one build overlap: the second is admitted while the first is
+// still in the agent. Only the first may reach the agent, and the second must
+// find the build complete instead of committing after it.
+func TestUploadFilesDoNotCommitAfterCompletion(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var agentUploads atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if agentUploads.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"files":1,"deleted":0}`))
+	}))
+	t.Cleanup(agent.Close)
+	api, kube := uploadTestAPI(t, agent.URL, newTestImageBuild(), newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	upload := func() error {
+		return api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	}
+	first := make(chan error, 1)
+	go func() { first <- upload() }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first upload never reached the agent")
+	}
+	second := make(chan error, 1)
+	go func() { second <- upload() }()
+	// Give the second upload time to reach the API while the first is in the
+	// agent. A local request takes milliseconds.
+	time.Sleep(200 * time.Millisecond)
+	unblock()
+	if err := <-first; err != nil {
+		t.Errorf("first upload: %v", err)
+	}
+	if err := <-second; err == nil || !strings.Contains(err.Error(), "409") {
+		t.Errorf("second upload err = %v, want a 409 once the build is complete", err)
+	}
+	if n := agentUploads.Load(); n != 1 {
+		t.Errorf("the agent got %d uploads, want 1", n)
+	}
+	if !uploadsComplete(t, kube) {
+		t.Error("the first upload did not mark the build complete")
 	}
 }
 
