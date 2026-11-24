@@ -20,9 +20,12 @@ var digestPinnedRef = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
 
 var artifactNameRE = regexp.MustCompile(automotivev1alpha1.ArtifactNamePattern)
 
-func validateBuildRequest(req *buildcontract.BuildRequest) error {
+func validateRepoRequest(req *buildcontract.BuildRequest) error {
 	if err := validateOCIRepoImages(req.OCIRepoImages); err != nil {
 		return err
+	}
+	if req.LocalRepo && req.LocalWorkspaceRepo != "" {
+		return fmt.Errorf("localRepo and localWorkspaceRepo are mutually exclusive")
 	}
 	if req.SecureBuild {
 		for _, ref := range req.OCIRepoImages {
@@ -30,6 +33,13 @@ func validateBuildRequest(req *buildcontract.BuildRequest) error {
 				return fmt.Errorf("secure builds require digest-pinned OCI repository images: %q", ref)
 			}
 		}
+	}
+	return nil
+}
+
+func validateBuildRequest(req *buildcontract.BuildRequest) error {
+	if err := validateRepoRequest(req); err != nil {
+		return err
 	}
 	if !buildcontract.ValidBuilderCachePolicy(req.BuilderCachePolicy) {
 		return fmt.Errorf("invalid builderCachePolicy %q: must be validate or reuse", req.BuilderCachePolicy)
@@ -119,7 +129,7 @@ func validateGitSourceRequest(req *buildcontract.BuildRequest) error {
 	if err := automotivev1alpha1.ValidateGitSourceSpec(spec); err != nil {
 		return err
 	}
-	if len(req.ExtraRepos) > 0 {
+	if len(req.ExtraRepos) > 0 || req.LocalWorkspaceRepo != "" {
 		return fmt.Errorf("git source cannot be combined with workspace repository overlays")
 	}
 	return nil

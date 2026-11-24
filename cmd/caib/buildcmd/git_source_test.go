@@ -55,6 +55,7 @@ func TestReadGitBuildSourceRepositories(t *testing.T) {
 		{name: "local OCI", local: "quay.io/example/rpms:v1"},
 		{name: "workspace", workspace: "dev", invalid: true},
 		{name: "workspace repo", extra: []string{"dev:/rpms"}, invalid: true},
+		{name: "workspace local repo", local: "dev:/workspace/export/rpms", invalid: true},
 		{name: "mixed repos", extra: []string{"oci:quay.io/example/rpms:v1", "dev:/rpms"}, invalid: true},
 		{name: "multiple OCI", extra: []string{"oci:quay.io/example/rpms:v1", "oci:quay.io/example/rpms:v2"}, invalid: true},
 		{name: "conflicting OCI flags", extra: []string{"oci:quay.io/example/rpms:v1"}, local: "quay.io/example/rpms:v2", invalid: true},

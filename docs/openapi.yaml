@@ -785,6 +785,9 @@ components:
           type: string
         localRepo:
           type: boolean
+        localWorkspaceRepo:
+          description: Workspace repo as workspace-name:/workspace/export/dir, used at DNF priority 1 so its packages win over the distro's. Cannot be combined with localRepo or gitSource.
+          type: string
         manifest:
           description: Inline AIB YAML. Maximum 900 KiB UTF-8 bytes.
           maxLength: 921600

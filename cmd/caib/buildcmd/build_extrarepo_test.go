@@ -111,6 +111,7 @@ func TestResolveRepoFlags(t *testing.T) {
 		wantWorkspace  []string
 		wantOCI        []string
 		wantLocal      bool
+		wantLocalWS    string
 		wantErrContain string
 	}{
 		{
@@ -170,11 +171,29 @@ func TestResolveRepoFlags(t *testing.T) {
 			wantOCI:       []string{"just-a-name"},
 			wantLocal:     true,
 		},
+		{
+			name:          "local-repo with registry port is OCI",
+			localRepoFlag: "localhost:5000/x:tag",
+			wantOCI:       []string{"localhost:5000/x:tag"},
+			wantLocal:     true,
+		},
+		{
+			name:          "local-repo workspace path",
+			localRepoFlag: "my-ws:/workspace/export/my-app",
+			wantLocalWS:   "my-ws:/workspace/export/my-app",
+		},
+		{
+			name:          "workspace local-repo with oci extra-repo allowed",
+			extraRepos:    []string{"oci:quay.io/a:v1"},
+			localRepoFlag: "my-ws:/workspace/export/my-app",
+			wantOCI:       []string{"quay.io/a:v1"},
+			wantLocalWS:   "my-ws:/workspace/export/my-app",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			workspace, oci, isLocal, err := resolveRepoFlags(tt.extraRepos, tt.localRepoFlag)
+			workspace, oci, isLocal, localWS, err := resolveRepoFlags(tt.extraRepos, tt.localRepoFlag)
 
 			if tt.wantErrContain != "" {
 				if err == nil {
@@ -197,6 +216,9 @@ func TestResolveRepoFlags(t *testing.T) {
 			}
 			if isLocal != tt.wantLocal {
 				t.Errorf("isLocalRepo = %v, want %v", isLocal, tt.wantLocal)
+			}
+			if localWS != tt.wantLocalWS {
+				t.Errorf("localWorkspaceRepo = %q, want %q", localWS, tt.wantLocalWS)
 			}
 		})
 	}

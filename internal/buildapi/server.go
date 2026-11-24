@@ -733,48 +733,65 @@ func (a *APIServer) setupInternalRegistryBuild(
 // nothing about the cluster is leaked to the client.
 var errWorkspaceLookup = errors.New("failed to look up workspace")
 
-// resolveExtraRepos processes --extra-repo flags (workspace:path pairs), serves
-// each repo from its workspace's file server, and injects the repos into the
-// image and build depsolver CustomDefs. Repos must be under /workspace/export,
+// repoEntry is one repo in the extra_repos and extra_build_repos defines. Only
+// --local-repo sets Priority; other repos keep DNF's default.
+type repoEntry struct {
+	ID       string `json:"id"`
+	BaseURL  string `json:"baseurl"`
+	Priority *int   `json:"priority,omitempty"`
+}
+
+// resolveExtraRepos processes --extra-repo flags (workspace:path pairs) and a
+// workspace --local-repo (DNF priority 1), serves each repo from its
+// workspace's file server, and injects the repos into the image and build
+// depsolver CustomDefs. Repos must be under /workspace/export,
 // the only directory the file server serves. Every referenced workspace is
 // validated (ownership, running, pod IP) before any server is started, so an
 // unauthorized or invalid entry rejects the whole request before any exec
 // occurs.
 func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Client, requester string, req *buildcontract.BuildRequest) error {
-	if len(req.ExtraRepos) == 0 {
+	type requestedRepo struct {
+		flag     string
+		entry    string
+		priority *int
+	}
+	requested := make([]requestedRepo, 0, len(req.ExtraRepos)+1)
+	for _, entry := range req.ExtraRepos {
+		requested = append(requested, requestedRepo{flag: "--extra-repo", entry: entry})
+	}
+	if req.LocalWorkspaceRepo != "" {
+		requested = append(requested, requestedRepo{flag: "--local-repo", entry: req.LocalWorkspaceRepo, priority: new(1)})
+	}
+	if len(requested) == 0 {
 		return nil
 	}
 
 	namespace := resolveNamespace()
 
-	type repoEntry struct {
-		ID      string `json:"id"`
-		BaseURL string `json:"baseurl"`
-	}
-
 	// resolvedRepo carries everything needed to serve a repo, gathered in a
 	// validation pass that completes before any side effects run.
 	type resolvedRepo struct {
-		wsName  string
-		ws      *automotivev1alpha1.Workspace
-		podIP   string
-		urlPath string
+		wsName   string
+		ws       *automotivev1alpha1.Workspace
+		podIP    string
+		urlPath  string
+		priority *int
 	}
-	resolved := make([]resolvedRepo, 0, len(req.ExtraRepos))
+	resolved := make([]resolvedRepo, 0, len(requested))
 
 	// validate every entry (path, ownership, running, pod IP). No side
 	// effects here, so a later unauthorized/invalid entry rejects the request
 	// before any server is started.
-	for _, entry := range req.ExtraRepos {
-		parts := strings.SplitN(entry, ":", 2)
+	for _, repo := range requested {
+		parts := strings.SplitN(repo.entry, ":", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return fmt.Errorf("invalid --extra-repo %q: must be workspace-name:/path", entry)
+			return fmt.Errorf("invalid %s %q: must be workspace-name:/path", repo.flag, repo.entry)
 		}
 		wsName, repoPath := parts[0], parts[1]
 		urlPath, ok := workspacemanifest.ExportURLPath(repoPath)
 		if !ok {
-			return fmt.Errorf("invalid --extra-repo %q: only %s is served to builds: move the repo under %s and pass %s:%s/<dir>",
-				entry, workspacemanifest.WorkspaceExportRoot, workspacemanifest.WorkspaceExportRoot, wsName, workspacemanifest.WorkspaceExportRoot)
+			return fmt.Errorf("invalid %s %q: only %s is served to builds: move the repo under %s and pass %s:%s/<dir>",
+				repo.flag, repo.entry, workspacemanifest.WorkspaceExportRoot, workspacemanifest.WorkspaceExportRoot, wsName, workspacemanifest.WorkspaceExportRoot)
 		}
 
 		// Look up the workspace
@@ -810,10 +827,11 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 		}
 
 		resolved = append(resolved, resolvedRepo{
-			wsName:  wsName,
-			ws:      ws,
-			podIP:   podIP,
-			urlPath: urlPath,
+			wsName:   wsName,
+			ws:       ws,
+			podIP:    podIP,
+			urlPath:  urlPath,
+			priority: repo.priority,
 		})
 	}
 
@@ -841,7 +859,7 @@ func (a *APIServer) resolveExtraRepos(ctx context.Context, k8sClient client.Clie
 			id = fmt.Sprintf("%s-%d", id, n)
 		}
 		repoURL := base + r.urlPath
-		repos = append(repos, repoEntry{ID: id, BaseURL: repoURL})
+		repos = append(repos, repoEntry{ID: id, BaseURL: repoURL, Priority: r.priority})
 		a.log.Info("Extra repo configured", "workspace", r.wsName, "path", r.urlPath)
 	}
 
@@ -886,12 +904,6 @@ func resolveOCIRepoImages(req *buildcontract.BuildRequest) error {
 	}
 	if err := validateOCIRepoImages(req.OCIRepoImages); err != nil {
 		return err
-	}
-
-	type repoEntry struct {
-		ID       string `json:"id"`
-		BaseURL  string `json:"baseurl"`
-		Priority *int   `json:"priority,omitempty"`
 	}
 
 	ref := strings.TrimSpace(req.OCIRepoImages[0])
@@ -1265,10 +1277,8 @@ func (a *APIServer) applyExtraRepos(ctx context.Context, c *gin.Context, span tr
 // applyAllExtraRepos resolves workspace extra repos and OCI RPM repo images,
 // merging both into a single extra_repos CustomDef entry.
 func (a *APIServer) applyAllExtraRepos(ctx context.Context, c *gin.Context, span trace.Span, k8sClient client.Client, requester string, req *buildcontract.BuildRequest) bool {
-	if len(req.ExtraRepos) > 0 {
-		if !a.applyExtraRepos(ctx, c, span, k8sClient, requester, req) {
-			return false
-		}
+	if !a.applyExtraRepos(ctx, c, span, k8sClient, requester, req) {
+		return false
 	}
 	if err := resolveOCIRepoImages(req); err != nil {
 		spanError(span, err)

@@ -15,7 +15,9 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/tasks"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
+	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -256,6 +258,74 @@ func TestResolveExtraRepos_SharesGrantPerWorkspace(t *testing.T) {
 		`{"id":"workspace-bob-ws-3","baseurl":"http://10.0.0.1:9091/f/tok1/"}]`
 	if len(req.CustomDefs) == 0 || req.CustomDefs[0] != want {
 		t.Fatalf("CustomDefs = %#v, want first entry %s", req.CustomDefs, want)
+	}
+}
+
+// A workspace --local-repo is served like --extra-repo workspace entries, but
+// at DNF priority 1 so its packages win over the distro's.
+func TestResolveExtraRepos_LocalWorkspaceRepoPriority(t *testing.T) {
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	a, grants := stubWorkspaceGrants(t)
+	req := &buildcontract.BuildRequest{
+		ExtraRepos:         []string{"bob-ws:/workspace/export/rpms"},
+		LocalWorkspaceRepo: "bob-ws:/workspace/export/my-app",
+	}
+
+	if err := a.resolveExtraRepos(context.Background(), newFakeClient(ws, pod), "bob", req); err != nil {
+		t.Fatalf("resolveExtraRepos: %v", err)
+	}
+	if len(*grants) != 1 {
+		t.Fatalf("grants = %v, want 1 per workspace", *grants)
+	}
+	repos := `[{"id":"workspace-bob-ws","baseurl":"http://10.0.0.1:9091/f/tok1/rpms"},` +
+		`{"id":"workspace-bob-ws-2","baseurl":"http://10.0.0.1:9091/f/tok1/my-app","priority":1}]`
+	want := []string{"extra_repos=" + repos, "extra_build_repos=" + repos}
+	if !reflect.DeepEqual(req.CustomDefs, want) {
+		t.Fatalf("CustomDefs = %#v, want %#v", req.CustomDefs, want)
+	}
+}
+
+// A workspace --local-repo gets the same ownership and path checks as
+// --extra-repo, before any grant is minted.
+func TestResolveExtraRepos_LocalWorkspaceRepoChecks(t *testing.T) {
+	bobWS, bobPod := runningWorkspace("bob-ws", "bob")
+	aliceWS, alicePod := runningWorkspace("alice-ws", "alice")
+	a, grants := stubWorkspaceGrants(t)
+	for local, wantErr := range map[string]string{
+		"alice-ws:/workspace/export/rpms": `workspace "alice-ws" not found`,
+		"bob-ws:/workspace/rpms":          "invalid --local-repo",
+	} {
+		req := &buildcontract.BuildRequest{LocalWorkspaceRepo: local}
+		err := a.resolveExtraRepos(context.Background(), newFakeClient(bobWS, bobPod, aliceWS, alicePod), "bob", req)
+		if err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Errorf("%s: err = %v, want %q", local, err, wantErr)
+		}
+		if len(req.CustomDefs) != 0 {
+			t.Errorf("%s: CustomDefs = %#v, want none", local, req.CustomDefs)
+		}
+	}
+	if len(*grants) != 0 {
+		t.Fatalf("expected no grants on rejection, got %v", *grants)
+	}
+}
+
+// A workspace --local-repo keeps priority 1 when an --extra-repo oci: entry is
+// merged into the same extra_repos array.
+func TestApplyAllExtraRepos_LocalWorkspaceRepoWithOCIExtraRepo(t *testing.T) {
+	ws, pod := runningWorkspace("bob-ws", "bob")
+	a, _ := stubWorkspaceGrants(t)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, span := apiTracer.Start(t.Context(), "test")
+	defer span.End()
+	req := &buildcontract.BuildRequest{LocalWorkspaceRepo: "bob-ws:/workspace/export/my-app", OCIRepoImages: []string{"quay.io/org/rpms:v1"}}
+
+	if !a.applyAllExtraRepos(ctx, c, span, newFakeClient(ws, pod), "bob", req) {
+		t.Fatal("applyAllExtraRepos rejected the request")
+	}
+	repos := parseTestExtraRepos(t, req.CustomDefs)
+	if len(repos) != 2 || repos[0].ID != "workspace-bob-ws" || repos[0].Priority == nil || *repos[0].Priority != 1 ||
+		repos[1].ID != tasks.OCIRepoVolumeName || repos[1].Priority != nil {
+		t.Fatalf("extra_repos = %+v, want the workspace repo at priority 1 and the OCI repo without priority", repos)
 	}
 }
 

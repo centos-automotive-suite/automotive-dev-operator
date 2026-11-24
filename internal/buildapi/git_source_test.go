@@ -37,6 +37,7 @@ func TestGitSourceRequest(t *testing.T) {
 			r.LocalRepo = true
 		}, false},
 		{"workspace repository", func(r *buildcontract.BuildRequest) { r.ExtraRepos = []string{"dev:/rpms"} }, true},
+		{"local workspace repository", func(r *buildcontract.BuildRequest) { r.LocalWorkspaceRepo = "dev:/workspace/export/rpms" }, true},
 		{"inline manifest", func(r *buildcontract.BuildRequest) { r.Manifest = "name: demo" }, true},
 		{"local lockfile", func(r *buildcontract.BuildRequest) { r.Lockfile = `{"version":1}` }, true},
 		{"upload", func(r *buildcontract.BuildRequest) { r.HasLocalFiles = true }, true},
