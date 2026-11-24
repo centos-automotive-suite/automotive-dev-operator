@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,5 +100,77 @@ func TestHandleFileUploadsTakesOnlyRegularFiles(t *testing.T) {
 	err = NewHandler(Options{}).handleFileUploads(t.Context(), api, "build", []map[string]string{{"source_path": dir, "dest": "file"}})
 	if err == nil || !strings.Contains(err.Error(), dir+" is not a regular file") {
 		t.Fatalf("err = %v, want the directory refused", err)
+	}
+}
+
+// uploadAttemptServer reports the build as Uploading and answers each upload
+// attempt with reply, which is passed the attempt's number, starting at 1.
+func uploadAttemptServer(t *testing.T, reply func(attempt int32, w http.ResponseWriter)) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(buildcontract.BuildResponse{Name: "build", Phase: phaseUploading})
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		reply(attempts.Add(1), w)
+	}))
+	t.Cleanup(server.Close)
+	return server, &attempts
+}
+
+// Only a 503, the upload pod not being ready yet, is retried.
+func TestHandleFileUploadsRetriesServiceUnavailable(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, attempts := uploadAttemptServer(t, func(attempt int32, w http.ResponseWriter) {
+		if attempt == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"upload pod not ready"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	api, err := buildapiclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = NewHandler(Options{}).handleFileUploads(t.Context(), api, "build", []map[string]string{{"source_path": src, "dest": "file"}})
+	if err != nil || attempts.Load() != 2 {
+		t.Fatalf("attempts = %d, err = %v; want a retry that succeeds", attempts.Load(), err)
+	}
+}
+
+// The status decides a retry, not the message. A 400 that repeats the retried
+// message is the client's error, and retrying it would repeat it until the
+// ten-minute deadline.
+func TestHandleFileUploadsDoesNotRetryByMessage(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	server, attempts := uploadAttemptServer(t, func(attempt int32, w http.ResponseWriter) {
+		if attempt > 1 {
+			// Only a retry on the message gets here, so stop the loop.
+			cancel()
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"upload pod not ready"}`))
+	})
+	api, err := buildapiclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = NewHandler(Options{}).handleFileUploads(ctx, api, "build", []map[string]string{{"source_path": src, "dest": "file"}})
+	if err == nil || attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, err = %v; want one attempt and its error", attempts.Load(), err)
 	}
 }

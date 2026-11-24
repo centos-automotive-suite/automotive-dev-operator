@@ -4,7 +4,9 @@ package buildcmd
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1258,14 +1260,11 @@ func (h *Handler) handleFileUploads(
 		}
 		err := api.UploadFiles(ctx, buildName, uploads)
 		if err != nil {
-			lower := strings.ToLower(err.Error())
 			if time.Now().After(uploadDeadline) {
 				return fmt.Errorf("upload files failed: %w", err)
 			}
-			isServiceUnavailable := strings.Contains(lower, "503") ||
-				strings.Contains(lower, "service unavailable") ||
-				strings.Contains(lower, "upload pod not ready")
-			if isServiceUnavailable {
+			var statusErr buildapiclient.HTTPError
+			if errors.As(err, &statusErr) && statusErr.HTTPStatusCode() == http.StatusServiceUnavailable {
 				clilog.Infoln("Upload server not ready yet. Retrying...")
 				time.Sleep(5 * time.Second)
 				continue
