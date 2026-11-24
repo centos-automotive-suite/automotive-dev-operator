@@ -60,8 +60,8 @@ test-e2e-features:
 	E2E_NAMESPACE=$${E2E_NAMESPACE:-e2e-features} go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="features" -timeout $(E2E_TIMEOUT_features)
 
 # Prints a lane-grouped index of all e2e specs (name + source location),
-# generated via `ginkgo --dry-run`. Use it to check e2e-test-summary.md's
-# Lane/Label/Test/File columns for drift; requires no live cluster.
+# generated via `ginkgo --dry-run`. Use it to check test/e2e/README.md's
+# lanes, labels, and files for drift; requires no live cluster.
 .PHONY: e2e-spec-index
 e2e-spec-index:
 	./test/e2e/scripts/gen-spec-index.sh

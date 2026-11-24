@@ -19,7 +19,9 @@ package e2e
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -622,7 +624,7 @@ func setupDexOIDC() {
 	setupDexPortForward()
 
 	By("patching OperatorConfig with Dex OIDC configuration")
-	patchOperatorConfigWithDex()
+	patchDexIssuer("certificateAuthority", dexCACert)
 
 	By("waiting for Build API to serve Dex OIDC config")
 	waitForOIDCConfig()
@@ -661,36 +663,149 @@ func validateDexEndpoint() {
 	}, 30*time.Second, 1*time.Second).Should(Succeed(), "Dex endpoint did not become ready")
 }
 
-func patchOperatorConfigWithDex() {
-	escapedCA := strings.ReplaceAll(dexCACert, "\n", "\\n")
-	oidcPatch := fmt.Sprintf(
-		`{"spec":{"buildAPI":{"authentication":{"clientId":%q,"jwt":[{"issuer":{"url":%q,"audiences":[%q],"certificateAuthority":"%s"},"claimMappings":{"username":{"claim":"name","prefix":"dex:"}}}]}}}}`,
-		dexClientID, dexIssuerURL, dexClientID, escapedCA,
-	)
-	cmd := exec.Command("kubectl", "patch", "operatorconfig", "config",
-		"-n", testNamespace, "--type=merge", "-p", oidcPatch)
-	_, err := utils.Run(cmd)
+// patchDexIssuer points the OperatorConfig's one JWT issuer at Dex and trusts
+// the CA set in caField: certificateAuthority takes an inline PEM, and
+// certificateAuthoritySecret or certificateAuthorityConfigMap take a reference
+// from caKeyRef.
+func patchDexIssuer(caField string, ca any) {
+	patch, err := json.Marshal(map[string]any{"spec": map[string]any{"buildAPI": map[string]any{
+		"authentication": map[string]any{
+			"clientId": dexClientID,
+			"jwt": []any{map[string]any{
+				"issuer": map[string]any{
+					"url":       dexIssuerURL,
+					"audiences": []string{dexClientID},
+					caField:     ca,
+				},
+				"claimMappings": map[string]any{
+					"username": map[string]any{"claim": "name", "prefix": "dex:"},
+				},
+			}},
+		},
+	}}})
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	cmd := exec.Command("kubectl", "patch", "operatorconfig", "config",
+		"-n", testNamespace, "--type=merge", "-p", string(patch))
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+}
+
+// caKeyRef references the ca.crt key of the named Secret or ConfigMap.
+func caKeyRef(name string) map[string]string {
+	return map[string]string{"name": name, "key": "ca.crt"}
+}
+
+// dexIssuerServed reports whether /v1/auth/config is serving the Dex issuer.
+// A 401 from /v1/builds only counts as the wrong CA once this is true: cleared
+// auth is 404 here and also rejects every token.
+func dexIssuerServed(client *http.Client) error {
+	resp, err := client.Get(caibServer + "/v1/auth/config")
+	if err != nil {
+		return err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("/v1/auth/config returned %d, want the Dex issuer published: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "dex.dex.svc.cluster.local") {
+		return fmt.Errorf("OIDC config does not name the Dex issuer: %s", body)
+	}
+	return nil
 }
 
 func waitForOIDCConfig() {
 	httpClient := newInsecureHTTPClient()
 	EventuallyWithOffset(1, func() error {
-		resp, err := httpClient.Get(caibServer + "/v1/auth/config")
+		return dexIssuerServed(httpClient)
+	}, 3*time.Minute, 5*time.Second).Should(Succeed(),
+		"Build API did not serve Dex OIDC config in time")
+}
+
+// authedBuildsStatus returns the status of GET /v1/builds with a bearer token.
+func authedBuildsStatus(client *http.Client, token string) (int, error) {
+	req, err := http.NewRequest("GET", caibServer+"/v1/builds", nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, nil
+}
+
+// expectDexTokenAccepted waits for GET /v1/builds to accept the Dex token, as
+// it does once the Build API has applied the Dex issuer and a CA that verifies
+// it.
+func expectDexTokenAccepted(token, failMsg string) {
+	client := newInsecureHTTPClient()
+	EventuallyWithOffset(1, func() error {
+		code, err := authedBuildsStatus(client, token)
 		if err != nil {
 			return err
 		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("/v1/auth/config returned %d, waiting for OIDC config", resp.StatusCode)
-		}
-		b, _ := io.ReadAll(resp.Body)
-		if !strings.Contains(string(b), "dex.dex.svc.cluster.local") {
-			return fmt.Errorf("OIDC config does not contain Dex issuer yet: %s", string(b))
+		if code != http.StatusOK {
+			return fmt.Errorf("expected 200 with a valid Dex token, got %d", code)
 		}
 		return nil
-	}, 3*time.Minute, 5*time.Second).Should(Succeed(),
-		"Build API did not serve Dex OIDC config in time")
+	}, 3*time.Minute, 5*time.Second).Should(Succeed(), failMsg)
+}
+
+// useDexCASecret (re)creates the named Secret holding caPEM under ca.crt and
+// patches the OperatorConfig to reference it as the JWT issuer CA. It deletes
+// first with --ignore-not-found, so it works both when the Secret is already
+// there from an earlier spec and on a focused run.
+func useDexCASecret(name, caPEM string) {
+	By("referencing the JWT issuer CA from Secret " + name)
+	cmd := exec.Command("kubectl", "delete", "secret", name,
+		"-n", testNamespace, "--ignore-not-found")
+	_, err := utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	cmd = exec.Command("kubectl", "create", "secret", "generic", name,
+		"-n", testNamespace, "--from-literal=ca.crt="+caPEM)
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	patchDexIssuer("certificateAuthoritySecret", caKeyRef(name))
+}
+
+// expectCAFailsToVerifyDex asserts that caPEM cannot verify the certificate
+// Dex serves through the e2e port-forward, the precondition that makes a
+// wrong-CA 401 meaningful. The HTTPS request makes the checks the Build API
+// makes: the served chain with its intermediates, and the issuer host name.
+// Only an unknown-authority error passes. Go checks expiry and the host name
+// before it builds the chain, so an unreachable Dex, or a certificate that is
+// expired or names another host, fails here instead of passing for the wrong
+// reason.
+func expectCAFailsToVerifyDex(caPEM string) {
+	roots := x509.NewCertPool()
+	ExpectWithOffset(1, roots.AppendCertsFromPEM([]byte(caPEM))).To(BeTrue(),
+		"CA PEM contains no parseable certificates")
+	issuer, err := url.Parse(dexIssuerURL)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+	client := &http.Client{
+		Timeout: defaultHTTPClientTimeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			RootCAs:    roots,
+			ServerName: issuer.Hostname(),
+			MinVersion: tls.VersionTLS12,
+		}},
+	}
+	defer client.CloseIdleConnections()
+	resp, err := client.Get(dexEndpoint + "/.well-known/openid-configuration")
+	if err == nil {
+		_ = resp.Body.Close()
+		Fail("this CA verifies Dex's serving certificate, so a 401 with it would not show the CA is checked", 1)
+	}
+	var unknownCA x509.UnknownAuthorityError
+	ExpectWithOffset(1, errors.As(err, &unknownCA)).To(BeTrue(),
+		"want Dex's serving certificate rejected as signed by an unknown authority, got: %v", err)
 }
 
 // getDexToken obtains an OIDC id_token from Dex using the password grant.

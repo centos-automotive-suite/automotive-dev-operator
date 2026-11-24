@@ -2,9 +2,8 @@
 #
 # Generates a lane-grouped index (group + test name + labels + source)
 # of every Ginkgo `It(...)` spec in test/e2e, via `ginkgo --dry-run`.
-# Use this to cross-check Lane/Label/Test/File alignment in
-# e2e-test-summary.md; it cannot produce prerequisites/steps/pass-check
-# columns, which stay hand-maintained.
+# Use this to cross-check the lanes, labels, and files listed in
+# test/e2e/README.md.
 #
 # Usage:
 #   test/e2e/scripts/gen-spec-index.sh                           # print to stdout
