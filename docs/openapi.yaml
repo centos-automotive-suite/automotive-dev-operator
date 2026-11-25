@@ -151,7 +151,16 @@ paths:
                   error:
                     type: string
                 type: object
-          description: Build is not uploading, or its uploads are already complete
+          description: Build is not uploading
+        "410":
+          content:
+            application/json:
+              schema:
+                properties:
+                  error:
+                    type: string
+                type: object
+          description: Uploads for this build are already complete
         "413":
           description: Upload past the configured size limits
         "503":

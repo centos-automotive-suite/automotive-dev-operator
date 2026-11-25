@@ -221,9 +221,6 @@ func TestUploadFilesOnlyWhileUploading(t *testing.T) {
 		"failed": func(b *automotivev1alpha1.ImageBuild) {
 			b.Status.Phase = automotivev1alpha1.ImageBuildPhaseFailed
 		},
-		"uploads already complete": func(b *automotivev1alpha1.ImageBuild) {
-			b.Annotations[labels.UploadsComplete] = labels.ValueTrue
-		},
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -243,6 +240,23 @@ func TestUploadFilesOnlyWhileUploading(t *testing.T) {
 	}
 }
 
+// Once the uploads are complete, a retry gets 410 Gone. The CLI reads that as
+// done, while 409 means the build is not taking uploads at all.
+func TestUploadFilesAfterCompletionIsGone(t *testing.T) {
+	build := newTestImageBuild()
+	build.Annotations[labels.UploadsComplete] = labels.ValueTrue
+	workdir := t.TempDir()
+	api, _ := uploadTestClient(t, workdir, build, newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	if err == nil || !strings.Contains(err.Error(), "410") {
+		t.Errorf("err = %v, want a 410", err)
+	}
+	if entries, err := os.ReadDir(workdir); err != nil || len(entries) != 0 {
+		t.Errorf("files reached the upload pod: %v, %v", entries, err)
+	}
+}
+
 // Uploads to one build may overlap. Each commits at most once, and the agent
 // closes once the build is complete, so none commits after the mark and the
 // agent refuses later uploads on its own.
@@ -258,8 +272,8 @@ func TestUploadFilesDoNotCommitAfterCompletion(t *testing.T) {
 		}()
 	}
 	for range uploads {
-		if err := <-results; err != nil && !strings.Contains(err.Error(), "409") {
-			t.Errorf("upload: %v, want success or a 409", err)
+		if err := <-results; err != nil && !strings.Contains(err.Error(), "410") {
+			t.Errorf("upload: %v, want success or a 410", err)
 		}
 	}
 	if !uploadsComplete(t, kube) {
@@ -283,8 +297,8 @@ func TestUploadFilesRecoverFromAClosedAgent(t *testing.T) {
 	api, kube := uploadTestAPI(t, server.URL, newTestImageBuild(), newTestUploadPod(true))
 	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
 	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
-	if err == nil || !strings.Contains(err.Error(), "409") {
-		t.Errorf("err = %v, want a 409", err)
+	if err == nil || !strings.Contains(err.Error(), "410") {
+		t.Errorf("err = %v, want a 410", err)
 	}
 	if !uploadsComplete(t, kube) {
 		t.Error("the build is not marked as having its uploads")

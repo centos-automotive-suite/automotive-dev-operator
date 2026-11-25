@@ -1260,10 +1260,15 @@ func (h *Handler) handleFileUploads(
 		}
 		err := api.UploadFiles(ctx, buildName, uploads)
 		if err != nil {
+			var statusErr buildapiclient.HTTPError
+			if errors.As(err, &statusErr) && statusErr.HTTPStatusCode() == http.StatusGone {
+				// An earlier attempt committed these files and marked the build,
+				// so this upload is done.
+				break
+			}
 			if time.Now().After(uploadDeadline) {
 				return fmt.Errorf("upload files failed: %w", err)
 			}
-			var statusErr buildapiclient.HTTPError
 			if errors.As(err, &statusErr) && statusErr.HTTPStatusCode() == http.StatusServiceUnavailable {
 				clilog.Infoln("Upload server not ready yet. Retrying...")
 				time.Sleep(5 * time.Second)

@@ -65,7 +65,7 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 		return
 	}
 	if build.Annotations[labels.UploadsComplete] == labels.ValueTrue {
-		c.JSON(http.StatusConflict, gin.H{"error": "uploads for this build are already complete"})
+		c.JSON(http.StatusGone, gin.H{"error": "uploads for this build are already complete"})
 		return
 	}
 	if build.Status.Phase != phaseUploading {
@@ -99,7 +99,7 @@ func (a *APIServer) uploadFiles(c *gin.Context, name string) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("mark complete failed: %v", markErr)})
 				return
 			}
-			c.JSON(http.StatusConflict, gin.H{"error": "uploads for this build are already complete"})
+			c.JSON(http.StatusGone, gin.H{"error": "uploads for this build are already complete"})
 		case errors.As(err, &agentErr):
 			c.JSON(agentErr.Code, gin.H{"error": agentErr.Message})
 		default:

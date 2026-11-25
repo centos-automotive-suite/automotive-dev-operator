@@ -174,3 +174,40 @@ func TestHandleFileUploadsDoesNotRetryByMessage(t *testing.T) {
 		t.Fatalf("attempts = %d, err = %v; want one attempt and its error", attempts.Load(), err)
 	}
 }
+
+// answerUploads runs one upload against a server that answers each attempt
+// with status and body, and returns the attempts and the upload's error.
+func answerUploads(t *testing.T, status int, body string) (int32, error) {
+	t.Helper()
+	src := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, attempts := uploadAttemptServer(t, func(_ int32, w http.ResponseWriter) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	})
+	api, err := buildapiclient.New(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = NewHandler(Options{}).handleFileUploads(t.Context(), api, "build", []map[string]string{{"source_path": src, "dest": "file"}})
+	return attempts.Load(), err
+}
+
+// 410 Gone means an earlier attempt committed the files and marked the build,
+// so this upload is done.
+func TestHandleFileUploadsTreatsGoneAsDone(t *testing.T) {
+	attempts, err := answerUploads(t, http.StatusGone, `{"error":"uploads for this build are already complete"}`)
+	if err != nil || attempts != 1 {
+		t.Fatalf("attempts = %d, err = %v; want one attempt and no error", attempts, err)
+	}
+}
+
+// 409 means the build is not taking uploads, which is a failure.
+func TestHandleFileUploadsFailsOnConflict(t *testing.T) {
+	attempts, err := answerUploads(t, http.StatusConflict, `{"error":"build is \"Building\"; uploads are accepted only while it is \"Uploading\""}`)
+	if err == nil || attempts != 1 {
+		t.Fatalf("attempts = %d, err = %v; want one attempt and an error", attempts, err)
+	}
+}
