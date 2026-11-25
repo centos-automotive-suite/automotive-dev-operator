@@ -90,6 +90,9 @@ type Agent struct {
 	buildUploads bool
 	// uploading lets one sync upload use the staging directory at a time.
 	uploading sync.Mutex
+	// uploadsClosed refuses every sync upload from then on. It is guarded by
+	// uploading.
+	uploadsClosed bool
 
 	mu      sync.Mutex
 	records map[string]*record
