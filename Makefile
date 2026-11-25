@@ -2,7 +2,10 @@
 # The default is read from the VERSION file at the project root.
 # To override for a single command: make bundle VERSION=0.0.2
 # To override via environment: export VERSION=0.0.2
-VERSION ?= $(shell cat $(dir $(lastword $(MAKEFILE_LIST)))VERSION 2>/dev/null || echo 0.0.0)
+# MAKEFILE_DIR is read now: once Makefile.e2e includes hack/e2e/timeouts.env,
+# MAKEFILE_LIST's last word is no longer this file.
+MAKEFILE_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
+VERSION ?= $(shell cat $(MAKEFILE_DIR)VERSION 2>/dev/null || echo 0.0.0)
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
