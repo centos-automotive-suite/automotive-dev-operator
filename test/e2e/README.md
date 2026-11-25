@@ -89,7 +89,7 @@ Tests are split into independently-runnable lanes, each deployed into its own na
 | `features` | `features` | `e2e-features` | TTL expiry, image propagation in Tekton Tasks, Build API log streaming |
 | `auth` | `auth` | `e2e-auth` | OIDC authentication (OpenShift or Kind+Dex), including `caib login` reuse of a Jumpstarter token |
 | `bootc` | `bootc` | `e2e-bootc` | Bootc container build via caib CLI |
-| `internal-registry` | `internal-registry` | `e2e-internal-registry` | Internal-registry build path via `--internal-registry` (OpenShift only) |
+| `internal-registry` | `internal-registry` | `e2e-internal-registry` | Internal-registry build path via `--internal-registry`, and a hybrid build that pushes the container with `--push` and the disk to the internal registry (OpenShift only; the hybrid spec also needs `REGISTRY_HOST`) |
 | `package-mode` | `package-mode`, `smoke` | `e2e-package-mode` | Package mode disk image build (OpenShift only) |
 | `container-build` | `container-build` | `e2e-container-build` | Shipwright container builds via `caib container build` (OpenShift only) |
 | `manifest-validation` | `manifest-validation` | `e2e-manifest-validation` | AIB manifest schema/unknown-field validation behavior |
@@ -136,7 +136,7 @@ Times measured on CRC (cluster already running):
 | `features` | ~4 min | ~4 min | 5m |
 | `bootc` | ~7 min | ~7 min | 15m |
 | `package-mode` | ~4 min | ~4 min | 15m |
-| all | ~8 min | ~36 min | 45m |
+| all | ~8 min | ~36 min | 60m |
 
 ## Spec Index
 
@@ -153,7 +153,7 @@ Run `make e2e-spec-index` (or `test/e2e/scripts/gen-spec-index.sh`) to print an 
 - `imagebuild_lifecycle_test.go`: Export/push phase and build cancellation (`Label("operator")`)
 - `operatorconfig_e2e_test.go`: OperatorConfig osBuilds toggle (`Label("operator")`)
 - `error_handling_test.go`: Concurrent builds isolation (`Label("operator")`)
-- `bootc_build_test.go`: Bootc build and internal-registry build via caib (`Label("bootc")`, `Label("internal-registry")`)
+- `bootc_build_test.go`: Bootc build, internal-registry build, and hybrid `--push` + `--internal-registry --disk` build via caib (`Label("bootc")`, `Label("internal-registry")`)
 - `auth_test.go`: OIDC authentication and `caib login` reuse of a `jmp login` token (`Label("auth")`)
 - `package_build_test.go`: Package mode disk image build (`Label("package-mode", "smoke")`)
 - `features_e2e_test.go`: TTL expiry, image propagation, Build API log streaming (`Label("features")`)

@@ -47,7 +47,7 @@ func IsTerminalBuildPhase(phase string) bool {
 // +kubebuilder:printcolumn:name="StorageClass",type=string,JSONPath=`.spec.storageClass`
 // +kubebuilder:validation:XValidation:rule="!has(self.reproducible) || !self.reproducible || self.secureBuild",message="reproducible builds require secureBuild to be true"
 // +kubebuilder:validation:XValidation:rule="!has(self.secureBuild) || !self.secureBuild || !has(self.aib) || !has(self.aib.ociRepoImages) || self.aib.ociRepoImages.all(ref, ref.matches('^.+@sha256:[a-fA-F0-9]{64}$'))",message="secure builds require digest-pinned OCI repository images"
-// +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.disk) && has(self.export.disk.oci) && size(self.export.disk.oci) > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)",message="secretRef is required when export.disk.oci is set (unless useServiceAccountAuth is true)"
+// +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.disk) && has(self.export.disk.oci) && size(self.export.disk.oci) > 0) || (has(self.pushSecretRef) && size(self.pushSecretRef) > 0)",message="pushSecretRef is required when export.disk.oci is set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.export) && has(self.export.container) && size(self.export.container) > 0) || size(self.secretRef) > 0 || (has(self.export) && has(self.export.useServiceAccountAuth) && self.export.useServiceAccountAuth)",message="secretRef is required when export.container is set (unless useServiceAccountAuth is true)"
 // +kubebuilder:validation:XValidation:rule="!has(self.aib) || !has(self.aib.gitSource) || ((!has(self.workspace) || size(self.workspace) == 0) && (!has(self.buildCachePVC) || size(self.buildCachePVC) == 0))",message="Git sources cannot be combined with workspace or build cache PVC"
 type ImageBuildSpec struct {
@@ -69,12 +69,15 @@ type ImageBuildSpec struct {
 	// RuntimeClassName specifies the runtime class to use for the build pod
 	RuntimeClassName string `json:"runtimeClassName,omitempty"`
 
-	// SecretRef is the name of the secret containing credentials for registry operations
+	// SecretRef is the name of the secret with the registry credentials the build task
+	// uses, such as for the export.container push.
 	// The secret should contain keys like REGISTRY_AUTH_FILE for authentication
 	SecretRef string `json:"secretRef,omitempty"`
 
-	// PushSecretRef is the name of the kubernetes.io/dockerconfigjson secret for pushing artifacts
-	// This is separate from SecretRef because push operations require docker config format
+	// PushSecretRef is the name of the kubernetes.io/dockerconfigjson secret the
+	// export.disk.oci push authenticates with. It is separate from SecretRef because
+	// the disk can go to a different registry than the container (for example the
+	// internal registry while export.container is external).
 	PushSecretRef string `json:"pushSecretRef,omitempty"`
 
 	// ─── Nested configuration ───

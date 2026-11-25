@@ -3,6 +3,7 @@ package imagebuild
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -86,6 +88,82 @@ func planParamValues(run *tektonv1.PipelineRun) map[string]string {
 		values[param.Name] = param.Value.StringVal
 	}
 	return values
+}
+
+// resolvePipelineParam resolves a "$(params.<name>)" reference in the
+// Pipeline the way Tekton does: the PipelineRun's value, else the default.
+func resolvePipelineParam(t *testing.T, pipeline *tektonv1.Pipeline, run *tektonv1.PipelineRun, ref string) string {
+	t.Helper()
+	name, ok := strings.CutPrefix(ref, "$(params.")
+	if !ok || !strings.HasSuffix(name, ")") {
+		t.Fatalf("%q is not a pipeline param reference", ref)
+	}
+	name = strings.TrimSuffix(name, ")")
+	spec := slices.IndexFunc(pipeline.Spec.Params, func(p tektonv1.ParamSpec) bool { return p.Name == name })
+	if spec < 0 {
+		t.Fatalf("pipeline does not declare param %q", name)
+	}
+	for _, param := range run.Spec.Params {
+		if param.Name == name {
+			return param.Value.StringVal
+		}
+	}
+	if def := pipeline.Spec.Params[spec].Default; def != nil {
+		return def.StringVal
+	}
+	t.Fatalf("pipeline param %q has no value", name)
+	return ""
+}
+
+// TestHybridRegistryDiskPushUsesPushSecret: with the container pushed to an
+// external registry and the disk to the internal one, the disk push must
+// authenticate with spec.pushSecretRef while the build keeps spec.secretRef.
+func TestHybridRegistryDiskPushUsesPushSecret(t *testing.T) {
+	build := planTestBuild()
+	build.Spec.SecretRef = "demo-external-registry-auth"
+	build.Spec.PushSecretRef = "demo-internal-registry-auth"
+	build.Spec.Export = &automotivev1alpha1.ExportSpec{
+		UseServiceAccountAuth: true,
+		Container:             "ghcr.io/example/bootc-test:latest",
+		Disk:                  &automotivev1alpha1.DiskExport{OCI: tasks.DefaultInternalRegistryURL + "/builds/demo:disk"},
+	}
+	run, err := newPipelineRun(pipelineRunInputs{
+		build: build, operatorConfig: &automotivev1alpha1.OperatorConfig{}, manifestConfigMap: "manifest",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline := tasks.GenerateTektonPipeline(buildPipelineName, build.Namespace, nil)
+
+	task := slices.IndexFunc(pipeline.Spec.Tasks, func(pt tektonv1.PipelineTask) bool { return pt.Name == pipelineTaskPushDisk })
+	if task < 0 {
+		t.Fatalf("pipeline has no %s task", pipelineTaskPushDisk)
+	}
+	push := pipeline.Spec.Tasks[task]
+	for _, when := range push.When {
+		if when.Operator != selection.NotIn {
+			t.Fatalf("unexpected when operator %q on %s", when.Operator, when.Input)
+		}
+		if got := resolvePipelineParam(t, pipeline, run, when.Input); slices.Contains(when.Values, got) {
+			t.Fatalf("%s would be skipped: %s = %q", pipelineTaskPushDisk, when.Input, got)
+		}
+	}
+	secretParam := slices.IndexFunc(push.Params, func(p tektonv1.Param) bool { return p.Name == "secret-ref" })
+	if secretParam < 0 {
+		t.Fatalf("%s has no secret-ref param", pipelineTaskPushDisk)
+	}
+	if got := resolvePipelineParam(t, pipeline, run, push.Params[secretParam].Value.StringVal); got != build.Spec.PushSecretRef {
+		t.Errorf("disk push mounts Secret %q, want the push Secret %q", got, build.Spec.PushSecretRef)
+	}
+
+	if got := planParamValues(run)["secret-ref"]; got != build.Spec.SecretRef {
+		t.Errorf("secret-ref = %q, want %q for task bundles that predate push-secret-ref", got, build.Spec.SecretRef)
+	}
+
+	auth := slices.IndexFunc(run.Spec.Workspaces, func(w tektonv1.WorkspaceBinding) bool { return w.Name == "registry-auth" })
+	if auth < 0 || run.Spec.Workspaces[auth].Secret == nil || run.Spec.Workspaces[auth].Secret.SecretName != build.Spec.SecretRef {
+		t.Errorf("registry-auth workspace does not bind the build Secret %q: %+v", build.Spec.SecretRef, run.Spec.Workspaces)
+	}
 }
 
 func TestNewPipelineRunInputs(t *testing.T) {

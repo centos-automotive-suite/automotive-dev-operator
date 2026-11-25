@@ -149,7 +149,10 @@ func baseParams(imageBuild *automotivev1alpha1.ImageBuild, operatorConfig *autom
 		stringParam("builder-image", imageBuild.Spec.GetBuilderImage()),
 		boolParam("rebuild-builder", imageBuild.Spec.GetRebuildBuilder()),
 		stringParam("builder-cache-policy", imageBuild.Spec.GetBuilderCachePolicy()),
+		// Pipelines from task bundles built before push-secret-ref read secret-ref
+		// for the disk push, and --task-bundle-ref can pin such a bundle.
 		stringParam("secret-ref", imageBuild.Spec.SecretRef),
+		stringParam("push-secret-ref", imageBuild.Spec.PushSecretRef),
 		boolParam("use-persistent-cache", imageBuild.Spec.BuildCachePVC != ""),
 		boolParam("secure-build", imageBuild.Spec.SecureBuild),
 		boolParam("insecure-registry", operatorConfig.Spec.OSBuilds != nil && operatorConfig.Spec.OSBuilds.InsecureRegistry),

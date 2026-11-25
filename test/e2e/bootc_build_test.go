@@ -30,8 +30,9 @@ import (
 )
 
 const (
-	caibBuildManifest = "test/config/test-manifest.aib.yml"
-	caibBuildTimeout  = 30 * time.Minute
+	caibBuildManifest   = "test/config/test-manifest.aib.yml"
+	caibBuildTimeout    = 30 * time.Minute
+	internalRegistryURL = "image-registry.openshift-image-registry.svc:5000"
 )
 
 var _ = Describe("Bootc Container Build", Label("bootc"), Ordered, func() {
@@ -189,5 +190,57 @@ var _ = Describe("Internal Registry Build", Label("internal-registry"), Ordered,
 
 		By("verifying build appears in caib list")
 		verifyCaibList(buildName)
+	})
+
+	// Hybrid build: --push sends the container elsewhere with the user's
+	// credentials, while the disk goes to the internal registry with the SA
+	// token Secret (spec.pushSecretRef).
+	It("should push the disk to the internal registry when --push sends the container elsewhere", func() {
+		if registryHost == "" {
+			Skip("REGISTRY_HOST not set; the hybrid build needs a registry for the container push")
+		}
+		ensureRegistryConfigured()
+
+		buildName := "e2e-test-hybrid-registry"
+		pushURL := fmt.Sprintf("%s:5000/%s/%s", registryHost, testNamespace, artifactImageName)
+
+		ctx, cancel := context.WithTimeout(context.Background(), caibBuildTimeout)
+		defer cancel()
+
+		By("launching a build with --push, --internal-registry and --disk")
+		output, err := runCaibCommand(ctx,
+			"image", "build",
+			caibBuildManifest,
+			"--name", buildName,
+			"--arch", arch,
+			"--push", pushURL,
+			"--internal-registry",
+			"--disk",
+			"--follow",
+		)
+		_, _ = fmt.Fprintf(GinkgoWriter, "\n--- caib hybrid-registry build (%s) ---\n%s\n", buildName, string(output))
+		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("hybrid registry build failed:\n%sError: %v\n", string(output), err))
+
+		actualBuildName := getImageBuildCRName(buildName)
+		jsonPath := func(kind, name, path string) string {
+			out, err := utils.Run(exec.Command("kubectl", "get", kind, name, "-n", testNamespace, "-o", "jsonpath="+path))
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			return strings.TrimSpace(string(out))
+		}
+
+		By("verifying the disk push mounted the push Secret, not the build Secret")
+		secretRef := jsonPath("imagebuild", actualBuildName, "{.spec.secretRef}")
+		pushSecretRef := jsonPath("imagebuild", actualBuildName, "{.spec.pushSecretRef}")
+		Expect(pushSecretRef).NotTo(BeEmpty())
+		Expect(pushSecretRef).NotTo(Equal(secretRef), "a hybrid build needs separate container and disk push Secrets")
+		pipelineRun := jsonPath("imagebuild", actualBuildName, "{.status.pipelineRunName}")
+		taskRun := jsonPath("pipelinerun", pipelineRun,
+			`{.status.childReferences[?(@.pipelineTaskName=="push-disk-artifact")].name}`)
+		Expect(taskRun).NotTo(BeEmpty(), "push-disk-artifact TaskRun should exist in PipelineRun childReferences")
+		Expect(jsonPath("taskrun", taskRun, `{.spec.params[?(@.name=="secret-ref")].value}`)).To(Equal(pushSecretRef))
+
+		By("verifying the disk artifact is in the internal registry")
+		Expect(jsonPath("imagebuild", actualBuildName, `{.status.artifacts[?(@.kind=="disk")].url}`)).To(
+			HavePrefix(internalRegistryURL + "/" + testNamespace + "/"))
 	})
 })

@@ -140,7 +140,7 @@ All 19 smoke tests implemented. CI runs smoke on every PR.
 | `package_build_test.go` | #23 | `package-mode` |
 | `features_e2e_test.go` | #24–25, #38, #44, #60 | `features` |
 | `auth_test.go` | #48–51 | `auth` |
-| `bootc_build_test.go` | #20, bootc build, internal registry | `bootc`, `internal-registry` |
+| `bootc_build_test.go` | #20, bootc build, internal registry, hybrid external container + internal disk push | `bootc`, `internal-registry` |
 | `manifest_validation_test.go` | manifest validation (no proposal #) | `manifest-validation` |
 
 ---
