@@ -246,7 +246,7 @@ func TestUploadFilesDoNotCommitAfterCompletion(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
-	t.Cleanup(unblock)
+	defer unblock()
 	var agentUploads atomic.Int32
 	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
