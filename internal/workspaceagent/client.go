@@ -125,6 +125,12 @@ func (c *Client) SyncUpload(ctx context.Context, body io.Reader) (*http.Response
 	return c.request(ctx, http.MethodPost, "/sync/upload", body)
 }
 
+// CloseUploads refuses the agent's later sync uploads, once any in progress
+// has finished.
+func (c *Client) CloseUploads(ctx context.Context) error {
+	return c.call(ctx, http.MethodPost, "/sync/close", nil, nil)
+}
+
 // Version returns the agent's protocol version.
 func (c *Client) Version(ctx context.Context) (int, error) {
 	var version VersionResponse

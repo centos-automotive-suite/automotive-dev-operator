@@ -90,6 +90,9 @@ type Agent struct {
 	buildUploads bool
 	// uploading lets one sync upload use the staging directory at a time.
 	uploading sync.Mutex
+	// uploadsClosed refuses every sync upload from then on. It is guarded by
+	// uploading.
+	uploadsClosed bool
 
 	mu      sync.Mutex
 	records map[string]*record
@@ -133,6 +136,14 @@ func New(root, workdir, workspace string, log *slog.Logger) (*Agent, error) {
 		broken:     map[string]error{},
 		live:       map[string]*run{},
 		changed:    make(chan struct{}),
+	}
+	// A marker from before a restart keeps uploads closed after it.
+	_, err := os.Stat(filepath.Join(root, closeMarker))
+	switch {
+	case err == nil:
+		a.uploadsClosed = true
+	case !errors.Is(err, fs.ErrNotExist):
+		return nil, err
 	}
 	// An agent that died mid-upload left its staging directory behind.
 	if err := os.RemoveAll(filepath.Join(workdir, syncStaging)); err != nil {

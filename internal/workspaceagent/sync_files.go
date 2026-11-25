@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -47,6 +48,22 @@ func (a *Agent) TakeBuildUploads() {
 	a.buildUploads = true
 }
 
+// CloseUploads refuses every later sync upload, and the refusal survives a
+// restart of the agent. It waits for an upload in progress, so none is still
+// committing when it returns. Repeat calls do nothing.
+func (a *Agent) CloseUploads() error {
+	a.uploading.Lock()
+	defer a.uploading.Unlock()
+	if a.uploadsClosed {
+		return nil
+	}
+	if err := os.WriteFile(filepath.Join(a.root, closeMarker), nil, 0o600); err != nil {
+		return fmt.Errorf("recording the closed uploads: %w", err)
+	}
+	a.uploadsClosed = true
+	return nil
+}
+
 // syncUploadIdle bounds how long an upload may go without sending anything,
 // so a stalled client can't hold the upload lock or keep the workspace
 // active.
@@ -59,6 +76,10 @@ const syncUploadIdle = time.Minute
 // remove it when they finish, and New removes one an agent that died
 // mid-upload left behind.
 const syncStaging = ".caib-sync"
+
+// closeMarker names the file in the agent's root that records closed uploads.
+// It is not a run directory, so New skips it with the run records.
+const closeMarker = "uploads-closed"
 
 // SyncUploadRequest starts the body of POST /sync/upload, and the
 // zstd-compressed tar stream follows it: files to delete, relative to the working directory, as the
@@ -98,6 +119,9 @@ func (a *Agent) SyncUpload(req SyncUploadRequest, archive io.Reader) (SyncUpload
 	defer a.syncing.Add(-1)
 	a.uploading.Lock()
 	defer a.uploading.Unlock()
+	if a.uploadsClosed {
+		return SyncUploadResponse{}, apiError(http.StatusGone, "uploads for this build are closed")
+	}
 	if err := os.MkdirAll(a.workdir, 0o755); err != nil {
 		return SyncUploadResponse{}, err
 	}

@@ -3,6 +3,7 @@ package buildapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,7 @@ func newTestImageBuild() *automotivev1alpha1.ImageBuild {
 			Namespace:   "test-ns",
 			Annotations: map[string]string{labels.RequestedBy: "test-user"},
 		},
+		Status: automotivev1alpha1.ImageBuildStatus{Phase: automotivev1alpha1.ImageBuildPhaseUploading},
 	}
 }
 
@@ -58,6 +60,28 @@ func newTestUploadPod(ready bool) *corev1.Pod {
 // sees.
 func uploadTestClient(t *testing.T, workdir string, objs ...ctrlclient.Object) (*buildapiclient.Client, ctrlclient.Client) {
 	t.Helper()
+	_, server := newUploadAgent(t, workdir)
+	return uploadTestAPI(t, server.URL, objs...)
+}
+
+// newUploadAgent starts an upload pod's agent, as the controller starts it,
+// serving workdir.
+func newUploadAgent(t *testing.T, workdir string) (*workspaceagent.Agent, *httptest.Server) {
+	t.Helper()
+	agent, err := workspaceagent.New(filepath.Join(t.TempDir(), "runs"), workdir, workdir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.TakeBuildUploads()
+	server := httptest.NewServer(agent.Handler("secret", nil))
+	t.Cleanup(server.Close)
+	return agent, server
+}
+
+// uploadTestAPI returns a client for a build API whose upload pod's agent is
+// at agentURL, and the cluster it sees.
+func uploadTestAPI(t *testing.T, agentURL string, objs ...ctrlclient.Object) (*buildapiclient.Client, ctrlclient.Client) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	t.Setenv("BUILD_API_NAMESPACE", "test-ns")
 	scheme := runtime.NewScheme()
@@ -68,20 +92,13 @@ func uploadTestClient(t *testing.T, workdir string, objs ...ctrlclient.Object) (
 		t.Fatal(err)
 	}
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&automotivev1alpha1.ImageBuild{}).Build()
-	agent, err := workspaceagent.New(filepath.Join(t.TempDir(), "runs"), workdir, workdir, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent.TakeBuildUploads()
-	server := httptest.NewServer(agent.Handler("secret", nil))
-	t.Cleanup(server.Close)
 	a := newTestServer(t, func(deps *apiDependencies) {
 		deps.getClientFromRequest = func(*gin.Context) (ctrlclient.Client, error) { return kube, nil }
 		deps.uploadAgent = func(_ context.Context, _ ctrlclient.Client, build *automotivev1alpha1.ImageBuild) (*workspaceagent.Client, error) {
 			if build.Namespace != "test-ns" || build.Name != "test-build" {
 				t.Errorf("wrong upload agent: %s/%s", build.Namespace, build.Name)
 			}
-			return workspaceagent.NewClient(server.URL, "secret", nil), nil
+			return workspaceagent.NewClient(agentURL, "secret", nil), nil
 		}
 	})
 	router := gin.New()
@@ -139,7 +156,7 @@ func TestUploadFilesReachTheUploadPod(t *testing.T) {
 	}
 }
 
-// The CLI retries while the upload pod's agent isn't ready, on this message.
+// The CLI retries on the 503 status while the upload pod's agent isn't ready.
 func TestUploadFilesWaitForTheUploadAgent(t *testing.T) {
 	for name, objs := range map[string][]ctrlclient.Object{
 		"no pod":          {newTestImageBuild()},
@@ -149,13 +166,29 @@ func TestUploadFilesWaitForTheUploadAgent(t *testing.T) {
 			api, kube := uploadTestClient(t, t.TempDir(), objs...)
 			source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
 			err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
-			if err == nil || !strings.Contains(err.Error(), "upload pod not ready") {
-				t.Errorf("err = %v, want the upload pod not ready", err)
+			if err == nil || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "upload pod not ready") {
+				t.Errorf("err = %v, want a 503 for the upload pod not ready", err)
 			}
 			if uploadsComplete(t, kube) {
 				t.Error("the build is marked as having its uploads")
 			}
 		})
+	}
+}
+
+// An agent that refuses connections is the not-ready state the CLI retries:
+// the upload pod turns ready a moment before its Service routes to it.
+func TestUploadFilesRetryWhenTheAgentIsUnreachable(t *testing.T) {
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	api, kube := uploadTestAPI(t, gone.URL, newTestImageBuild(), newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	if err == nil || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "upload pod not ready") {
+		t.Errorf("err = %v, want a 503 for the upload pod not ready", err)
+	}
+	if uploadsComplete(t, kube) {
+		t.Error("the build is marked as having its uploads")
 	}
 }
 
@@ -169,6 +202,106 @@ func TestUploadFilesPassOnTheAgentsRejection(t *testing.T) {
 	}
 	if uploadsComplete(t, kube) {
 		t.Error("the build is marked as having its uploads")
+	}
+}
+
+// Files land only while the build is Uploading and before its uploads are
+// marked complete. Later ones would change inputs the build is already using.
+func TestUploadFilesOnlyWhileUploading(t *testing.T) {
+	cases := map[string]func(*automotivev1alpha1.ImageBuild){
+		"pending": func(b *automotivev1alpha1.ImageBuild) {
+			b.Status.Phase = phasePending
+		},
+		"building": func(b *automotivev1alpha1.ImageBuild) {
+			b.Status.Phase = phaseBuilding
+		},
+		"completed": func(b *automotivev1alpha1.ImageBuild) {
+			b.Status.Phase = automotivev1alpha1.ImageBuildPhaseCompleted
+		},
+		"failed": func(b *automotivev1alpha1.ImageBuild) {
+			b.Status.Phase = automotivev1alpha1.ImageBuildPhaseFailed
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			build := newTestImageBuild()
+			change(build)
+			workdir := t.TempDir()
+			api, _ := uploadTestClient(t, workdir, build, newTestUploadPod(true))
+			source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+			err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+			if err == nil || !strings.Contains(err.Error(), "409") {
+				t.Errorf("err = %v, want a 409", err)
+			}
+			if entries, err := os.ReadDir(workdir); err != nil || len(entries) != 0 {
+				t.Errorf("files reached the upload pod: %v, %v", entries, err)
+			}
+		})
+	}
+}
+
+// Once the uploads are complete, a retry gets 410 Gone. The CLI reads that as
+// done, while 409 means the build is not taking uploads at all.
+func TestUploadFilesAfterCompletionIsGone(t *testing.T) {
+	build := newTestImageBuild()
+	build.Annotations[labels.UploadsComplete] = labels.ValueTrue
+	workdir := t.TempDir()
+	api, _ := uploadTestClient(t, workdir, build, newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	if err == nil || !strings.Contains(err.Error(), "410") {
+		t.Errorf("err = %v, want a 410", err)
+	}
+	if entries, err := os.ReadDir(workdir); err != nil || len(entries) != 0 {
+		t.Errorf("files reached the upload pod: %v, %v", entries, err)
+	}
+}
+
+// Uploads to one build may overlap. Each commits at most once, and the agent
+// closes once the build is complete, so none commits after the mark and the
+// agent refuses later uploads on its own.
+func TestUploadFilesDoNotCommitAfterCompletion(t *testing.T) {
+	agent, server := newUploadAgent(t, t.TempDir())
+	api, kube := uploadTestAPI(t, server.URL, newTestImageBuild(), newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	const uploads = 4
+	results := make(chan error, uploads)
+	for range uploads {
+		go func() {
+			results <- api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+		}()
+	}
+	for range uploads {
+		if err := <-results; err != nil && !strings.Contains(err.Error(), "410") {
+			t.Errorf("upload: %v, want success or a 410", err)
+		}
+	}
+	if !uploadsComplete(t, kube) {
+		t.Error("the build is not marked as having its uploads")
+	}
+	_, err := agent.SyncUpload(workspaceagent.SyncUploadRequest{}, strings.NewReader(""))
+	var agentErr *workspaceagent.Error
+	if !errors.As(err, &agentErr) || agentErr.Code != http.StatusGone {
+		t.Errorf("upload to the agent after completion: %v, want 410", err)
+	}
+}
+
+// The agent closes once a commit is followed by the completion mark. If the
+// Build API stopped before writing the mark, the next upload finds the agent
+// closed, and it writes the mark then.
+func TestUploadFilesRecoverFromAClosedAgent(t *testing.T) {
+	agent, server := newUploadAgent(t, t.TempDir())
+	if err := agent.CloseUploads(); err != nil {
+		t.Fatal(err)
+	}
+	api, kube := uploadTestAPI(t, server.URL, newTestImageBuild(), newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	if err == nil || !strings.Contains(err.Error(), "410") {
+		t.Errorf("err = %v, want a 410", err)
+	}
+	if !uploadsComplete(t, kube) {
+		t.Error("the build is not marked as having its uploads")
 	}
 }
 
