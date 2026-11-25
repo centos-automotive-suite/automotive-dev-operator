@@ -277,7 +277,9 @@ func TestUploadFilesDoNotCommitAfterCompletion(t *testing.T) {
 // closed, and it writes the mark then.
 func TestUploadFilesRecoverFromAClosedAgent(t *testing.T) {
 	agent, server := newUploadAgent(t, t.TempDir())
-	agent.CloseUploads()
+	if err := agent.CloseUploads(); err != nil {
+		t.Fatal(err)
+	}
 	api, kube := uploadTestAPI(t, server.URL, newTestImageBuild(), newTestUploadPod(true))
 	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
 	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})

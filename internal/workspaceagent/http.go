@@ -55,7 +55,10 @@ func (a *Agent) Handler(token string, files *Files) http.Handler {
 	api.HandleFunc("POST /sync/plan", a.handleSyncPlan)
 	api.HandleFunc("POST /sync/upload", a.handleSyncUpload)
 	api.HandleFunc("POST /sync/close", func(w http.ResponseWriter, _ *http.Request) {
-		a.CloseUploads()
+		if err := a.CloseUploads(); err != nil {
+			writeError(w, err)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	api.HandleFunc("GET /shell", a.handleShell)

@@ -137,6 +137,14 @@ func New(root, workdir, workspace string, log *slog.Logger) (*Agent, error) {
 		live:       map[string]*run{},
 		changed:    make(chan struct{}),
 	}
+	// A marker from before a restart keeps uploads closed after it.
+	_, err := os.Stat(filepath.Join(root, closeMarker))
+	switch {
+	case err == nil:
+		a.uploadsClosed = true
+	case !errors.Is(err, fs.ErrNotExist):
+		return nil, err
+	}
 	// An agent that died mid-upload left its staging directory behind.
 	if err := os.RemoveAll(filepath.Join(workdir, syncStaging)); err != nil {
 		log.Warn("Could not remove an interrupted sync upload", "error", err)

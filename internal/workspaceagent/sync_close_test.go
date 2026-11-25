@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,11 +30,8 @@ func TestSyncUploadCloseWaitsForAnUploadAndRefusesLater(t *testing.T) {
 	if _, err := writer.Write(first[:512+2]); err != nil {
 		t.Fatal(err)
 	}
-	closed := make(chan struct{})
-	go func() {
-		a.CloseUploads()
-		close(closed)
-	}()
+	closed := make(chan error, 1)
+	go func() { closed <- a.CloseUploads() }()
 	select {
 	case <-closed:
 		t.Fatal("close returned while an upload was in progress")
@@ -48,7 +46,9 @@ func TestSyncUploadCloseWaitsForAnUploadAndRefusesLater(t *testing.T) {
 	if err := <-firstDone; err != nil {
 		t.Fatalf("the upload in progress: %v", err)
 	}
-	<-closed
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := a.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t, entry(tarFile("late.txt", "late", 0o644)))))
 	var agentErr *Error
@@ -57,6 +57,28 @@ func TestSyncUploadCloseWaitsForAnUploadAndRefusesLater(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(a.workdir, "late.txt")); !os.IsNotExist(err) {
 		t.Errorf("an upload after close wrote its file: %v", err)
+	}
+}
+
+// A restarted agent keeps refusing the uploads that were closed before it
+// restarted, as when its container is restarted during a build.
+func TestSyncUploadCloseSurvivesRestart(t *testing.T) {
+	root, workdir := filepath.Join(t.TempDir(), "runs"), t.TempDir()
+	before, err := New(root, workdir, workdir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := before.CloseUploads(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := New(root, workdir, workdir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = after.SyncUpload(SyncUploadRequest{}, bytes.NewReader(archive(t, entry(tarFile("late.txt", "late", 0o644)))))
+	var agentErr *Error
+	if !errors.As(err, &agentErr) || agentErr.Code != http.StatusGone {
+		t.Fatalf("upload after restart: %v, want 410", err)
 	}
 }
 
