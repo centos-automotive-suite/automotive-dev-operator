@@ -235,10 +235,19 @@ func TestWorkspaceRunPolicyFlowsFromOperatorConfig(t *testing.T) {
 			RunDefaultTimeoutMinutes: 10, RunMaxTimeoutMinutes: 20, RunMaxLogSizeMiB: 5, RunRetentionDays: 3, RunMaxRecords: 50, RunCompletedLogBudgetMiB: 200,
 		}}}, nil
 	}
+	// Only timeout is user-controlled. A hand-written client that also sends
+	// retention or log fields is refused before anything reaches the agent.
 	rec := httptest.NewRecorder()
-	// Only timeout is user-controlled; unknown retention/log fields cannot
-	// override the operator policy even if a hand-written client supplies them.
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/workspaces/dev/runs", strings.NewReader(`{"id":"policy","command":"true","timeoutSeconds":90,"maxLogBytes":99999999,"retentionSeconds":99999999,"maxRecords":99999999}`)))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/workspaces/dev/runs", strings.NewReader(`{"id":"policy","command":"true","timeoutSeconds":90,"maxLogBytes":99999999}`)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `unknown field \"maxLogBytes\"`) {
+		t.Fatalf("policy override: %d %s, want the unknown field refused", rec.Code, rec.Body.String())
+	}
+	if got.ID != "" {
+		t.Fatalf("the refused request reached the agent: %+v", got)
+	}
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/workspaces/dev/runs", strings.NewReader(`{"id":"policy","command":"true","timeoutSeconds":90}`)))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("policy create: %d %s", rec.Code, rec.Body.String())
 	}

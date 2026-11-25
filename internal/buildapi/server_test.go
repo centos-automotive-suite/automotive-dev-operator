@@ -14,6 +14,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive // Dot import is standard for Ginkgo
@@ -70,6 +71,31 @@ var _ = Describe("APIServer", func() {
 
 			Expect(w.Code).To(Equal(http.StatusOK))
 			Expect(w.Body.String()).To(Equal("ok"))
+		})
+	})
+
+	Context("Version header", func() {
+		serverVersionAt := func(path string) string {
+			req, err := http.NewRequest(http.MethodGet, path, nil)
+			Expect(err).NotTo(HaveOccurred())
+			w := httptest.NewRecorder()
+			server.router.ServeHTTP(w, req)
+			return w.Header().Get(version.Header)
+		}
+
+		It("reports the server version on every response, including unknown routes", func() {
+			DeferCleanup(func(v string) { version.Version = v }, version.Version)
+			version.Version = "0.3.0"
+
+			Expect(serverVersionAt("/v1/healthz")).To(Equal("0.3.0"))
+			Expect(serverVersionAt("/v1/no-such-route")).To(Equal("0.3.0"))
+		})
+
+		It("reports dev when the binary was not stamped", func() {
+			DeferCleanup(func(v string) { version.Version = v }, version.Version)
+			version.Version = ""
+
+			Expect(serverVersionAt("/v1/healthz")).To(Equal("dev"))
 		})
 	})
 
@@ -201,6 +227,24 @@ var _ = Describe("APIServer", func() {
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			Expect(w.Body.String()).To(ContainSubstring("cannot specify both"))
+		})
+
+		It("should reject a field it does not know instead of ignoring it", func() {
+			// Rejected before the handler looks up the cluster: the test server
+			// fails on any dependency call.
+			body := `{"name": "test-build", "manifest": "name: test", "noSuchOption": true}`
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request, _ = http.NewRequest(http.MethodPost, "/v1/builds", strings.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			server.createBuild(c)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			var response map[string]string
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response["error"]).To(ContainSubstring(`unknown field "noSuchOption"`))
 		})
 
 		It("should accept s3Bucket without credentials for IAM-based auth", func() {

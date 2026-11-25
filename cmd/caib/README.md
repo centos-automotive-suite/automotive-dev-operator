@@ -873,6 +873,8 @@ Inline access keys (`access_key_id`/`secret_access_key`) are not supported in th
 caib --version
 ```
 
+Use the caib release that matches the operator. The Build API rejects options it does not know, so a caib newer than the operator fails on the option instead of building without it. When a request fails, caib names both versions if they differ. Build APIs before 0.3.0 silently ignore options they don't know; they don't report their version, and caib warns once per command when it talks to one. `caib status` shows the server's version, which the Build API sends in the `X-Build-API-Version` response header.
+
 ## Auth Commands
 
 ### auth status

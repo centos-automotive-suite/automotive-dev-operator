@@ -25,7 +25,9 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/terminal"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/workspacemanifest"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/notifications"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -257,8 +259,21 @@ func (a *APIServer) Start(ctx context.Context) error {
 }
 
 func (a *APIServer) createRouter() *gin.Engine {
+	// Make ShouldBindJSON reject request fields the server doesn't know instead
+	// of dropping them, as decodeStrict does for builds and flashes, so a caib
+	// newer than the server fails on the option the server can't honour rather
+	// than running without it. gin has no per-engine setting.
+	binding.EnableDecoderDisallowUnknownFields = true
+
 	router := gin.New()
 	router.Use(gin.Recovery())
+
+	// caib compares this with its own version to warn when the two are
+	// different releases.
+	router.Use(func(c *gin.Context) {
+		c.Header(version.Header, version.String())
+		c.Next()
+	})
 
 	router.Use(func(c *gin.Context) {
 		reqID := uuid.New().String()

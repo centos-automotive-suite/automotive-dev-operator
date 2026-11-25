@@ -19,15 +19,17 @@ import (
 
 	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/catalogcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
 )
 
 // Client provides access to the build API server.
 type Client struct {
-	baseURL    *url.URL
-	httpClient *http.Client
-	authToken  string
+	baseURL              *url.URL
+	httpClient           *http.Client
+	authToken            string
+	observeServerVersion func(serverVersion string)
 }
 
 // New creates a new build API client with the given base URL and options.
@@ -40,8 +42,9 @@ func New(base string, opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("base URL must include scheme and host (e.g., https://api.example.com)")
 	}
 	c := &Client{
-		baseURL:    u,
-		httpClient: &http.Client{}, // No global timeout to avoid aborting large uploads
+		baseURL:              u,
+		httpClient:           &http.Client{}, // No global timeout to avoid aborting large uploads
+		observeServerVersion: func(string) {},
 	}
 	for _, o := range opts {
 		o(c)
@@ -54,6 +57,14 @@ type Option func(*Client)
 
 // WithHTTPClient sets a custom HTTP client for the build API client.
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.httpClient = h } }
+
+// WithServerVersionObserver calls observe with the version the Build API
+// reports in each successful response, or "" when it reports none, as servers
+// before 0.3.0 don't. Failed responses are skipped: they can come from a proxy
+// in front of the Build API, which would look like a server without a version.
+func WithServerVersionObserver(observe func(serverVersion string)) Option {
+	return func(c *Client) { c.observeServerVersion = observe }
+}
 
 // WithAuthToken sets an authentication token for API requests.
 func WithAuthToken(t string) Option { return func(c *Client) { c.authToken = t } }
@@ -128,14 +139,26 @@ func (c *Client) doRequest(req *http.Request, action string, isOK func(statusCod
 		return nil, err
 	}
 	if isOK(resp.StatusCode) {
+		c.observeServerVersion(resp.Header.Get(version.Header))
 		return resp, nil
 	}
 	// Read enough to keep a JSON error message whole.
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	_ = resp.Body.Close()
-	response := newHTTPError(resp.StatusCode, "%s failed: %s: %s", action, resp.Status, string(b))
+	response := newHTTPError(resp.StatusCode, "%s failed: %s: %s%s", action, resp.Status, string(b), versionNote(resp.Header))
 	response.missingRoute = resp.StatusCode == http.StatusNotFound && !json.Valid(b) && !strings.Contains(resp.Header.Get("Content-Type"), "json")
 	return nil, response
+}
+
+// versionNote names both versions when a Build API of another version than
+// this client answered a failed request, since the mismatch may be why it
+// failed: an option the server doesn't know, or a route it doesn't have.
+func versionNote(h http.Header) string {
+	server := h.Get(version.Header)
+	if server == "" || strings.TrimPrefix(server, "v") == strings.TrimPrefix(version.String(), "v") {
+		return ""
+	}
+	return fmt.Sprintf(" (caib %s, Build API %s)", version.String(), server)
 }
 
 // closeBody closes resp.Body, logging a warning if closing fails.

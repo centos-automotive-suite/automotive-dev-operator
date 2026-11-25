@@ -11,6 +11,7 @@ import (
 
 	caibcommon "github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/common"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/config"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -46,9 +47,10 @@ type statusInfo struct {
 }
 
 type serverInfo struct {
-	URL    string `json:"url" yaml:"url"`
-	Source string `json:"source" yaml:"source"`
-	Status string `json:"status" yaml:"status"`
+	URL     string `json:"url" yaml:"url"`
+	Source  string `json:"source" yaml:"source"`
+	Status  string `json:"status" yaml:"status"`
+	Version string `json:"version,omitempty" yaml:"version,omitempty"`
 }
 
 func runStatus(outputFormat string, insecure bool) {
@@ -71,7 +73,10 @@ func gatherStatus(insecure bool) statusInfo {
 	info.Server.URL, info.Server.Source = resolveServerWithSource()
 
 	if info.Server.URL != "" {
-		info.Server.Status = checkServerHealth(info.Server.URL, insecure)
+		info.Server.Status, info.Server.Version = checkServerHealth(info.Server.URL, insecure)
+		if info.Server.Status == statusReachable {
+			caibcommon.CheckServerVersion(info.Server.Version)
+		}
 	} else {
 		info.Server.Status = statusNotConfigured
 	}
@@ -101,7 +106,9 @@ func resolveServerWithSource() (string, string) {
 	return "", ""
 }
 
-func checkServerHealth(serverURL string, insecure bool) string {
+// checkServerHealth returns the server's status and the version it reports,
+// which is "" for servers before 0.3.0 and for unhealthy ones.
+func checkServerHealth(serverURL string, insecure bool) (string, string) {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
@@ -111,14 +118,14 @@ func checkServerHealth(serverURL string, insecure bool) string {
 
 	resp, err := client.Get(serverURL + "/v1/healthz")
 	if err != nil {
-		return fmt.Sprintf("unreachable (%v)", err)
+		return fmt.Sprintf("unreachable (%v)", err), ""
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
-		return statusReachable
+		return statusReachable, resp.Header.Get(version.Header)
 	}
-	return fmt.Sprintf("unhealthy (HTTP %d)", resp.StatusCode)
+	return fmt.Sprintf("unhealthy (HTTP %d)", resp.StatusCode), ""
 }
 
 func printStatusTable(info statusInfo) {
@@ -134,6 +141,9 @@ func printStatusTable(info statusInfo) {
 		{"Source", valueOrNone(info.Server.Source)},
 	})
 	printServerStatus(w, info.Server.Status)
+	if info.Server.Version != "" {
+		writeRows(w, [][2]string{{"Version", info.Server.Version}})
+	}
 }
 
 func writeRows(w *tabwriter.Writer, rows [][2]string) {

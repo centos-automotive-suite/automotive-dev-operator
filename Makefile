@@ -7,6 +7,9 @@
 MAKEFILE_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 VERSION ?= $(shell cat $(MAKEFILE_DIR)VERSION 2>/dev/null || echo 0.0.0)
 
+# Stamps VERSION into caib and the Build API, which compare their versions.
+VERSION_LDFLAGS = -X github.com/centos-automotive-suite/automotive-dev-operator/internal/version.Version=$(VERSION)
+
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
 # To re-generate a bundle for other specific channels without changing the standard setup, you can:
@@ -412,11 +415,11 @@ catalog-update: opm ## Generate catalog configuration for current version
 
 .PHONY: build-caib
 build-caib: ## Build the caib tool
-	go build -tags containers_image_openpgp -ldflags "-X main.version=$(VERSION)" -o bin/caib ./cmd/caib
+	go build -tags containers_image_openpgp -ldflags "$(VERSION_LDFLAGS)" -o bin/caib ./cmd/caib
 
 .PHONY: build-api-server
 build-api-server: ## Build the api server
-	go build -o bin/build-api cmd/build-api/main.go
+	go build -ldflags "$(VERSION_LDFLAGS)" -o bin/build-api cmd/build-api/main.go
 
 # Tekton Bundle configuration
 TEKTON_TASKS_DIR ?= _output/tasks

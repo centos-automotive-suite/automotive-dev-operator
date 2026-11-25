@@ -16,8 +16,6 @@ const (
 	archARM64 = "arm64"
 )
 
-var version string
-
 func main() {
 	if err := execute(newRootCmd()); err != nil {
 		fmt.Fprintln(os.Stderr, caibcommon.FormatError(err))

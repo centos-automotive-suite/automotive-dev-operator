@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +23,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	buildapiclient "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi/client"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 )
 
@@ -367,5 +369,40 @@ func TestUploadFilesSendsTheAgentsFormat(t *testing.T) {
 	zstdMagic := []byte{0x28, 0xb5, 0x2f, 0xfd}
 	if !bytes.HasPrefix(body, append([]byte("{}"), zstdMagic...)) {
 		t.Errorf("the body starts %q, want {} and a zstd frame", body[:min(len(body), 8)])
+	}
+}
+
+// caib before 0.3.0 uploads files as a multipart form, which the upload agent
+// can't read. It hears why, before the server looks up anything.
+func TestUploadFilesExplainTheFormatToCaibBefore030(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	a := newTestServer(t, func(*apiDependencies) {})
+	router := gin.New()
+	router.POST("/v1/builds/:name/uploads", a.wrapNamedHandler("uploads", a.uploadFiles))
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	if err := form.WriteField("path", "a.rpm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/builds/test-build/uploads", &body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusUnsupportedMediaType)
+	}
+	if got := w.Body.String(); !strings.Contains(got, "older than") || !strings.Contains(got, version.ReleasesURL) {
+		t.Errorf("body = %s, want it to tell the user to install a newer caib", got)
+	}
+	// caib 0.2 retries uploads whose error mentions these, until its deadline.
+	for _, retried := range []string{"503", "service unavailable", "upload pod not ready"} {
+		if strings.Contains(strings.ToLower(w.Body.String()), retried) {
+			t.Errorf("body mentions %q, which makes caib 0.2 retry", retried)
+		}
 	}
 }

@@ -7,6 +7,7 @@ WORKDIR /workspace
 
 COPY go.mod go.mod
 COPY go.sum go.sum
+COPY VERSION VERSION
 COPY vendor/ vendor/
 COPY cmd/main.go cmd/main.go
 COPY cmd/build-api/main.go cmd/build-api/main.go
@@ -21,7 +22,10 @@ USER 1001
 ENV CGO_ENABLED=0
 ENV GOCACHE=/workspace/.cache
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o manager cmd/main.go
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o build-api cmd/build-api/main.go
+# Stamp the version, which caib compares with its own.
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath \
+    -ldflags "-s -w -X github.com/centos-automotive-suite/automotive-dev-operator/internal/version.Version=$(cat VERSION)" \
+    -o build-api cmd/build-api/main.go
 # Static, so it runs in any workspace image, including ones without glibc.
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -trimpath -ldflags "-s -w" -o workspace-agent cmd/workspace-agent/main.go
 

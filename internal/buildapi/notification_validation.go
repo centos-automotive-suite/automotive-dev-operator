@@ -1,6 +1,7 @@
 package buildapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -93,16 +94,31 @@ func (a *APIServer) validateCallbackAdmission(
 	return nil
 }
 
+// decodeStrict decodes body, which must hold a single JSON value, into req.
+// Fields req doesn't have are an error rather than dropped, so a caib newer
+// than the server fails on the option the server can't honour.
+func decodeStrict(body []byte, req any) error {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(req); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("unexpected data after the JSON value")
+	}
+	return nil
+}
+
 func bindOperationRequest(c *gin.Context, req any) bool {
 	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, MaxOperationRequestBytes))
 	if err == nil {
-		err = json.Unmarshal(body, req)
+		err = decodeStrict(body, req)
 	}
 	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "operation request exceeds 4 MiB", "code": "RequestTooLarge"})
 		} else {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request", "code": "InvalidRequest"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request: " + err.Error(), "code": "InvalidRequest"})
 		}
 		return false
 	}

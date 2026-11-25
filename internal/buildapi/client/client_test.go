@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	buildapi "github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive
 	. "github.com/onsi/gomega"    //nolint:revive
 )
@@ -316,5 +317,76 @@ var _ = Describe("Workspace Start/Stop", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.Name).To(Equal("my app"))
 		})
+	})
+})
+
+var _ = Describe("WithServerVersionObserver", func() {
+	serve := func(status int, serverVersion string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if serverVersion != "" {
+				w.Header().Set(version.Header, serverVersion)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`[]`))
+		}))
+		DeferCleanup(srv.Close)
+		return srv
+	}
+
+	observedVersions := func(srv *httptest.Server) []string {
+		var seen []string
+		c, err := New(srv.URL, WithServerVersionObserver(func(v string) { seen = append(seen, v) }))
+		Expect(err).NotTo(HaveOccurred())
+		_, _ = c.ListBuilds(context.Background())
+		return seen
+	}
+
+	It("passes the version the server reports", func() {
+		Expect(observedVersions(serve(http.StatusOK, "0.2.1"))).To(Equal([]string{"0.2.1"}))
+	})
+
+	It("passes an empty version when the server reports none", func() {
+		Expect(observedVersions(serve(http.StatusOK, ""))).To(Equal([]string{""}))
+	})
+
+	It("skips failed responses, which can come from a proxy in front of the Build API", func() {
+		Expect(observedVersions(serve(http.StatusServiceUnavailable, ""))).To(BeEmpty())
+	})
+})
+
+var _ = Describe("Errors from a Build API of another version", func() {
+	BeforeEach(func() {
+		DeferCleanup(func(v string) { version.Version = v }, version.Version)
+		version.Version = "v0.4.0"
+	})
+
+	listBuildsError := func(serverVersion string) error {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if serverVersion != "" {
+				w.Header().Set(version.Header, serverVersion)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid JSON request"}`))
+		}))
+		DeferCleanup(srv.Close)
+		c, err := New(srv.URL)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = c.ListBuilds(context.Background())
+		Expect(err).To(HaveOccurred())
+		return err
+	}
+
+	It("name both versions", func() {
+		Expect(listBuildsError("0.3.0")).To(MatchError(ContainSubstring("(caib v0.4.0, Build API 0.3.0)")))
+	})
+
+	It("don't name versions that match", func() {
+		Expect(listBuildsError("0.4.0").Error()).NotTo(ContainSubstring("Build API 0.4.0"))
+	})
+
+	It("don't name versions when the server reports none", func() {
+		Expect(listBuildsError("").Error()).NotTo(ContainSubstring("caib v0.4.0"))
 	})
 })
