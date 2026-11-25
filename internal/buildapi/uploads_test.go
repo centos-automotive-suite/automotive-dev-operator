@@ -156,7 +156,7 @@ func TestUploadFilesReachTheUploadPod(t *testing.T) {
 	}
 }
 
-// The CLI retries while the upload pod's agent isn't ready, on this message.
+// The CLI retries on the 503 status while the upload pod's agent isn't ready.
 func TestUploadFilesWaitForTheUploadAgent(t *testing.T) {
 	for name, objs := range map[string][]ctrlclient.Object{
 		"no pod":          {newTestImageBuild()},
@@ -166,8 +166,8 @@ func TestUploadFilesWaitForTheUploadAgent(t *testing.T) {
 			api, kube := uploadTestClient(t, t.TempDir(), objs...)
 			source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
 			err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
-			if err == nil || !strings.Contains(err.Error(), "upload pod not ready") {
-				t.Errorf("err = %v, want the upload pod not ready", err)
+			if err == nil || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "upload pod not ready") {
+				t.Errorf("err = %v, want a 503 for the upload pod not ready", err)
 			}
 			if uploadsComplete(t, kube) {
 				t.Error("the build is marked as having its uploads")
