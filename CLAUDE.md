@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project-Specific Rules
 
-- **`.claude/rules/e2e-doc-sync.md`**: Rules for keeping `test/e2e/README.md` and `test/e2e/e2e-test-summary.md` aligned with E2E tests, runners, and CI labels (mirrors `.cursor/rules/e2e-doc-sync.mdc`). Read this when changing E2E behavior or E2E documentation.
+- **`.claude/rules/e2e-doc-sync.md`**: Rules for keeping `test/e2e/README.md` aligned with E2E tests, runners, and CI labels (mirrors `.cursor/rules/e2e-doc-sync.mdc`). Read this when changing E2E behavior or E2E documentation.
 
 ### When to Read This Rule
 
-- **When modifying E2E tests or E2E docs**: Read `e2e-doc-sync.md` and keep `test/e2e/README.md` and `test/e2e/e2e-test-summary.md` synchronized in the same PR.
+- **When modifying E2E tests or E2E docs**: Read `e2e-doc-sync.md` and keep `test/e2e/README.md` synchronized in the same PR.
 
 ## Build and Development Commands
 

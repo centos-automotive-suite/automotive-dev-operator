@@ -138,15 +138,12 @@ Times measured on CRC (cluster already running):
 | `package-mode` | ~4 min | ~4 min | 15m |
 | all | ~8 min | ~36 min | 45m |
 
-## E2E Tests Summary
+## Spec Index
 
-Per-test inventory (file, lane, Ginkgo label(s), prerequisites, steps, and pass checks) is in [e2e-test-summary.md](e2e-test-summary.md).
-
-Run `make e2e-spec-index` (or `test/e2e/scripts/gen-spec-index.sh`) to print an auto-generated, lane-grouped index of every spec's group, test name, labels, and source location straight from `ginkgo --dry-run`. It needs no live cluster and is useful for catching drift in the Lane/Label/Test/File columns above before hand-editing them; it still cannot generate the prerequisites/steps/pass-check columns.
+Run `make e2e-spec-index` (or `test/e2e/scripts/gen-spec-index.sh`) to print an auto-generated, lane-grouped index of every spec's group, test name, labels, and source location straight from `ginkgo --dry-run`. It needs no live cluster.
 
 ## Test Structure
 
-- `e2e-test-summary.md`: Per-test inventory of every e2e spec
 - `e2e_suite_test.go`: Suite setup, `BeforeSuite`/`AfterSuite`
 - `helpers_test.go`: Shared helpers — `sync.Once`-based operator deploy, Build API access, caib credentials, and utility functions (`applyImageBuildCR`, `createBuildViaCaib`, `waitForImageBuildPhase`, etc.)
 - `service_ca_test.go`: On Kind, stands in for OpenShift's service CA, which issues the serving certificates of the upload and workspace agents (Services annotated `service.beta.openshift.io/serving-cert-secret-name`) and fills the CA bundle ConfigMaps annotated `service.beta.openshift.io/inject-cabundle`
