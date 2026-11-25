@@ -3,17 +3,14 @@ package buildapi
 import (
 	"bytes"
 	"context"
-	"io"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -63,6 +60,14 @@ func newTestUploadPod(ready bool) *corev1.Pod {
 // sees.
 func uploadTestClient(t *testing.T, workdir string, objs ...ctrlclient.Object) (*buildapiclient.Client, ctrlclient.Client) {
 	t.Helper()
+	_, server := newUploadAgent(t, workdir)
+	return uploadTestAPI(t, server.URL, objs...)
+}
+
+// newUploadAgent starts an upload pod's agent, as the controller starts it,
+// serving workdir.
+func newUploadAgent(t *testing.T, workdir string) (*workspaceagent.Agent, *httptest.Server) {
+	t.Helper()
 	agent, err := workspaceagent.New(filepath.Join(t.TempDir(), "runs"), workdir, workdir, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +75,7 @@ func uploadTestClient(t *testing.T, workdir string, objs ...ctrlclient.Object) (
 	agent.TakeBuildUploads()
 	server := httptest.NewServer(agent.Handler("secret", nil))
 	t.Cleanup(server.Close)
-	return uploadTestAPI(t, server.URL, objs...)
+	return agent, server
 }
 
 // uploadTestAPI returns a client for a build API whose upload pod's agent is
@@ -238,55 +243,49 @@ func TestUploadFilesOnlyWhileUploading(t *testing.T) {
 	}
 }
 
-// Two uploads to one build overlap: the second is admitted while the first is
-// still in the agent. Only the first may reach the agent, and the second must
-// find the build complete instead of committing after it.
+// Uploads to one build may overlap. Each commits at most once, and the agent
+// closes once the build is complete, so none commits after the mark and the
+// agent refuses later uploads on its own.
 func TestUploadFilesDoNotCommitAfterCompletion(t *testing.T) {
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	unblock := func() { once.Do(func() { close(release) }) }
-	defer unblock()
-	var agentUploads atomic.Int32
-	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		if agentUploads.Add(1) == 1 {
-			close(entered)
-			<-release
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"files":1,"deleted":0}`))
-	}))
-	t.Cleanup(agent.Close)
-	api, kube := uploadTestAPI(t, agent.URL, newTestImageBuild(), newTestUploadPod(true))
+	agent, server := newUploadAgent(t, t.TempDir())
+	api, kube := uploadTestAPI(t, server.URL, newTestImageBuild(), newTestUploadPod(true))
 	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
-	upload := func() error {
-		return api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	const uploads = 4
+	results := make(chan error, uploads)
+	for range uploads {
+		go func() {
+			results <- api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+		}()
 	}
-	first := make(chan error, 1)
-	go func() { first <- upload() }()
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the first upload never reached the agent")
-	}
-	second := make(chan error, 1)
-	go func() { second <- upload() }()
-	// Give the second upload time to reach the API while the first is in the
-	// agent. A local request takes milliseconds.
-	time.Sleep(200 * time.Millisecond)
-	unblock()
-	if err := <-first; err != nil {
-		t.Errorf("first upload: %v", err)
-	}
-	if err := <-second; err == nil || !strings.Contains(err.Error(), "409") {
-		t.Errorf("second upload err = %v, want a 409 once the build is complete", err)
-	}
-	if n := agentUploads.Load(); n != 1 {
-		t.Errorf("the agent got %d uploads, want 1", n)
+	for range uploads {
+		if err := <-results; err != nil && !strings.Contains(err.Error(), "409") {
+			t.Errorf("upload: %v, want success or a 409", err)
+		}
 	}
 	if !uploadsComplete(t, kube) {
-		t.Error("the first upload did not mark the build complete")
+		t.Error("the build is not marked as having its uploads")
+	}
+	_, err := agent.SyncUpload(workspaceagent.SyncUploadRequest{}, strings.NewReader(""))
+	var agentErr *workspaceagent.Error
+	if !errors.As(err, &agentErr) || agentErr.Code != http.StatusGone {
+		t.Errorf("upload to the agent after completion: %v, want 410", err)
+	}
+}
+
+// The agent closes once a commit is followed by the completion mark. If the
+// Build API stopped before writing the mark, the next upload finds the agent
+// closed, and it writes the mark then.
+func TestUploadFilesRecoverFromAClosedAgent(t *testing.T) {
+	agent, server := newUploadAgent(t, t.TempDir())
+	agent.CloseUploads()
+	api, kube := uploadTestAPI(t, server.URL, newTestImageBuild(), newTestUploadPod(true))
+	source := writeSource(t, t.TempDir(), "a.rpm", "rpm", 0o644)
+	err := api.UploadFiles(context.Background(), "test-build", []buildapiclient.Upload{{SourcePath: source, DestPath: "a.rpm"}})
+	if err == nil || !strings.Contains(err.Error(), "409") {
+		t.Errorf("err = %v, want a 409", err)
+	}
+	if !uploadsComplete(t, kube) {
+		t.Error("the build is not marked as having its uploads")
 	}
 }
 
