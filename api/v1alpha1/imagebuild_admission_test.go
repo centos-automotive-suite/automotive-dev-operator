@@ -38,6 +38,7 @@ func TestImageBuildDiskPushSecretAdmission(t *testing.T) {
 
 	const internalDisk = "image-registry.openshift-image-registry.svc:5000/default/demo:disk"
 	const missingPushSecret = "pushSecretRef is required when export.disk.oci is set"
+	const missingBuildSecret = "secretRef is required when export.disk.oci is set"
 	for _, tc := range []struct {
 		name    string
 		spec    ImageBuildSpec
@@ -62,6 +63,15 @@ func TestImageBuildDiskPushSecretAdmission(t *testing.T) {
 				Export:    &ExportSpec{Disk: &DiskExport{OCI: "quay.io/example/demo:disk"}},
 			},
 			wantErr: missingPushSecret,
+		},
+		{
+			// Flash pulls an external disk with the build Secret.
+			name: "external disk push with only the push Secret",
+			spec: ImageBuildSpec{
+				PushSecretRef: "demo-push-auth",
+				Export:        &ExportSpec{Disk: &DiskExport{OCI: "quay.io/example/demo:disk"}},
+			},
+			wantErr: missingBuildSecret,
 		},
 		{
 			name: "internal disk push without a Secret",

@@ -1840,11 +1840,6 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 							Operator: "notin",
 							Values:   []string{"", "null"},
 						},
-						{
-							Input:    "$(params.push-secret-ref)",
-							Operator: "notin",
-							Values:   []string{"", "null"},
-						},
 					},
 				},
 				{
