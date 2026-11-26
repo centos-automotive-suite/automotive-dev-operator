@@ -12,6 +12,7 @@ import (
 
 	api "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
 	"github.com/gin-gonic/gin"
 	imagev1 "github.com/openshift/api/image/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -87,6 +88,58 @@ func TestCreateSealedImageStreamFailureRemovesJob(t *testing.T) {
 	err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "test-ns", Name: "reseal-demo"}, &api.ImageReseal{})
 	if !k8serrors.IsNotFound(err) {
 		t.Fatalf("ImageReseal kept after its output stream failed: %v", err)
+	}
+}
+
+// A create that reports an error but landed (e.g. a timed-out request the API
+// server still processed) must be withdrawn, so the client can retry the name.
+func TestCreateSealedCreateErrorWithdrawsLandedJob(t *testing.T) {
+	k8s := newSealedTestClient(t, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*api.ImageReseal); ok {
+				if err := c.Create(ctx, obj, opts...); err != nil {
+					return err
+				}
+				return errors.New("connection reset after create")
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+	if response := postSealed(t, k8s); response.Code != http.StatusInternalServerError {
+		t.Fatalf("response: %d %s, want 500", response.Code, response.Body)
+	}
+	err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "test-ns", Name: "reseal-demo"}, &api.ImageReseal{})
+	if !k8serrors.IsNotFound(err) {
+		t.Fatalf("landed ImageReseal was kept after the failed create: %v", err)
+	}
+}
+
+// A job another request landed under the name is not the failed create's to
+// withdraw, even when the create reports a generic error.
+func TestCreateSealedCreateErrorLeavesForeignJob(t *testing.T) {
+	foreign := &api.ImageReseal{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "reseal-demo",
+			Namespace: "test-ns",
+			Annotations: map[string]string{
+				labels.RequestedBy: "someone-else",
+			},
+		},
+		Spec: api.ImageResealSpec{InputRef: "quay.io/example/other:v1"},
+	}
+	k8s := newSealedTestClient(t, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*api.ImageReseal); ok {
+				return errors.New("connection reset before create")
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}, foreign)
+	if response := postSealed(t, k8s); response.Code != http.StatusInternalServerError {
+		t.Fatalf("response: %d %s, want 500", response.Code, response.Body)
+	}
+	if err := k8s.Get(t.Context(), types.NamespacedName{Namespace: "test-ns", Name: "reseal-demo"}, &api.ImageReseal{}); err != nil {
+		t.Fatalf("another request's job was withdrawn by a failed create: %v", err)
 	}
 }
 
