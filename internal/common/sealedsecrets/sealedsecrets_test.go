@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
@@ -41,14 +40,12 @@ func newTestClientWithInterceptor(t *testing.T, funcs interceptor.Funcs, objs ..
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithInterceptorFuncs(funcs).Build()
 }
 
-// transientSecret builds a Secret the way the build API does, with an explicit
-// creation time so the sweep's age check is deterministic.
-func transientSecret(suffix string, created time.Time) *corev1.Secret {
+// transientSecret builds a Secret the way the build API does.
+func transientSecret(suffix string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              testJob + suffix,
-			Namespace:         testNamespace,
-			CreationTimestamp: metav1.NewTime(created),
+			Name:      testJob + suffix,
+			Namespace: testNamespace,
 			Labels: map[string]string{
 				labels.Transient:   labels.ValueTrue,
 				labels.ImageReseal: testJob,
@@ -68,107 +65,64 @@ func getSecret(t *testing.T, c client.Client, name string) error {
 	return c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: name}, &corev1.Secret{})
 }
 
-func TestSweepOrphanedDeletesSecretWithoutReseal(t *testing.T) {
-	old := time.Now().Add(-time.Hour)
-	secret := transientSecret(RegistryAuthSuffix, old)
-	c := newTestClient(t, secret)
-
-	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), 0)
-	if err != nil {
-		t.Fatalf("SweepOrphaned returned error: %v", err)
-	}
-	if deleted != 1 {
-		t.Fatalf("SweepOrphaned deleted %d Secrets, want 1", deleted)
-	}
-	if err := getSecret(t, c, secret.Name); err == nil {
-		t.Fatalf("orphaned Secret %s was not deleted", secret.Name)
-	}
-}
-
-func TestSweepOrphanedKeepsSecretWhileResealExists(t *testing.T) {
-	old := time.Now().Add(-time.Hour)
-	secret := transientSecret(SealKeySuffix, old)
-	c := newTestClient(t, secret, reseal())
-
-	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), 0)
-	if err != nil {
-		t.Fatalf("SweepOrphaned returned error: %v", err)
-	}
-	if deleted != 0 {
-		t.Fatalf("SweepOrphaned deleted %d Secrets, want 0", deleted)
-	}
-	if err := getSecret(t, c, secret.Name); err != nil {
-		t.Fatalf("active Secret %s was deleted: %v", secret.Name, err)
-	}
-}
-
-// The API creates the Secrets before the ImageReseal, so a Secret without a
-// job is not proof of an orphan until it is older than the grace period.
-func TestSweepOrphanedKeepsRecentSecret(t *testing.T) {
-	secret := transientSecret(RegistryAuthSuffix, time.Now())
-	c := newTestClient(t, secret)
-
-	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), time.Hour)
-	if err != nil {
-		t.Fatalf("SweepOrphaned returned error: %v", err)
-	}
-	if deleted != 0 {
-		t.Fatalf("SweepOrphaned deleted %d Secrets, want 0", deleted)
-	}
-	if err := getSecret(t, c, secret.Name); err != nil {
-		t.Fatalf("recent Secret %s was deleted: %v", secret.Name, err)
-	}
-}
-
-func TestSweepOrphanedKeepsUserAndUnrelatedSecrets(t *testing.T) {
-	old := time.Now().Add(-time.Hour)
-	objs := []client.Object{
+func TestSweepOrphaned(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		objs        []client.Object
+		wantDeleted int
+		wantKept    []string
+	}{
+		{name: "orphaned transient Secret", objs: []client.Object{transientSecret(RegistryAuthSuffix)}, wantDeleted: 1},
+		{name: "Secret with its job", objs: []client.Object{transientSecret(SealKeySuffix), reseal()}, wantKept: []string{testJob + SealKeySuffix}},
 		// A Secret the requester supplied through keySecretRef.
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "user-key", Namespace: testNamespace,
+		{name: "user-provided Secret", objs: []client.Object{&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:        "user-key",
+			Namespace:   testNamespace,
 			Annotations: map[string]string{labels.RequestedBy: "user"},
-		}},
+		}}}, wantKept: []string{"user-key"}},
 		// A transient Secret belonging to an ImageBuild, not a sealed request.
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "build-secret", Namespace: testNamespace,
-			Labels: map[string]string{labels.Transient: labels.ValueTrue, labels.BuildName: "build"},
-		}},
+		{name: "transient Secret of another type", objs: []client.Object{&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      "build-secret",
+			Namespace: testNamespace,
+			Labels:    map[string]string{labels.Transient: labels.ValueTrue, labels.BuildName: "build"},
+		}}}, wantKept: []string{"build-secret"}},
 		// Labelled like a sealed request but not a name the API creates.
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "not-a-derived-name", Namespace: testNamespace,
-			CreationTimestamp: metav1.NewTime(old),
+		{name: "sealed labels, foreign name", objs: []client.Object{&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      "not-a-derived-name",
+			Namespace: testNamespace,
 			Labels: map[string]string{
 				labels.Transient:   labels.ValueTrue,
-				labels.ImageReseal: "job",
+				labels.ImageReseal: testJob,
 			},
-		}},
+		}}}, wantKept: []string{"not-a-derived-name"}},
 		// A user Secret named like ours but not created by the API.
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "job" + SealKeySuffix, Namespace: testNamespace,
-			CreationTimestamp: metav1.NewTime(old),
-			Labels:            map[string]string{labels.ImageReseal: "job"},
-		}},
-	}
-	c := newTestClient(t, objs...)
-
-	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), 0)
-	if err != nil {
-		t.Fatalf("SweepOrphaned returned error: %v", err)
-	}
-	if deleted != 0 {
-		t.Fatalf("SweepOrphaned deleted %d Secrets, want 0", deleted)
-	}
-	for _, obj := range objs {
-		if err := getSecret(t, c, obj.GetName()); err != nil {
-			t.Fatalf("Secret %s was deleted: %v", obj.GetName(), err)
-		}
+		{name: "derived name, no transient label", objs: []client.Object{&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      testJob + SealKeySuffix,
+			Namespace: testNamespace,
+			Labels:    map[string]string{labels.ImageReseal: testJob},
+		}}}, wantKept: []string{testJob + SealKeySuffix}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(t, tc.objs...)
+			deleted, err := SweepOrphaned(context.Background(), c, logr.Discard())
+			if err != nil {
+				t.Fatalf("SweepOrphaned returned error: %v", err)
+			}
+			if deleted != tc.wantDeleted {
+				t.Fatalf("SweepOrphaned deleted %d Secrets, want %d", deleted, tc.wantDeleted)
+			}
+			for _, name := range tc.wantKept {
+				if err := getSecret(t, c, name); err != nil {
+					t.Fatalf("Secret %s was deleted: %v", name, err)
+				}
+			}
+		})
 	}
 }
 
 // A failed delete must not be forgotten: the next sweep removes the orphan.
 func TestSweepOrphanedRetriesAfterDeleteFailure(t *testing.T) {
-	old := time.Now().Add(-time.Hour)
-	secret := transientSecret(RegistryAuthSuffix, old)
+	secret := transientSecret(RegistryAuthSuffix)
 	failures := 1
 	c := newTestClientWithInterceptor(t, interceptor.Funcs{
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
@@ -180,7 +134,7 @@ func TestSweepOrphanedRetriesAfterDeleteFailure(t *testing.T) {
 		},
 	}, secret)
 
-	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), 0)
+	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard())
 	if err == nil {
 		t.Fatal("SweepOrphaned returned no error while deletes failed")
 	}
@@ -191,7 +145,7 @@ func TestSweepOrphanedRetriesAfterDeleteFailure(t *testing.T) {
 		t.Fatalf("Secret %s was deleted despite the delete failure: %v", secret.Name, err)
 	}
 
-	deleted, err = SweepOrphaned(context.Background(), c, logr.Discard(), 0)
+	deleted, err = SweepOrphaned(context.Background(), c, logr.Discard())
 	if err != nil {
 		t.Fatalf("retry returned error: %v", err)
 	}
@@ -206,19 +160,18 @@ func TestSweepOrphanedRetriesAfterDeleteFailure(t *testing.T) {
 // Losing the ImageReseal after the Secret exists makes it an orphan that the
 // next sweep removes.
 func TestSweepOrphanedRemovesSecretAfterResealIsDeleted(t *testing.T) {
-	old := time.Now().Add(-time.Hour)
-	secret := transientSecret(SealKeyPasswordSuffix, old)
+	secret := transientSecret(SealKeyPasswordSuffix)
 	job := reseal()
 	c := newTestClient(t, secret, job)
 
-	if deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), 0); err != nil || deleted != 0 {
+	if deleted, err := SweepOrphaned(context.Background(), c, logr.Discard()); err != nil || deleted != 0 {
 		t.Fatalf("sweep with the job present = (%d, %v), want (0, nil)", deleted, err)
 	}
 	if err := c.Delete(context.Background(), job); err != nil {
 		t.Fatalf("delete ImageReseal: %v", err)
 	}
 
-	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), 0)
+	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard())
 	if err != nil {
 		t.Fatalf("SweepOrphaned returned error: %v", err)
 	}
@@ -232,7 +185,7 @@ func TestSweepOrphanedRemovesSecretAfterResealIsDeleted(t *testing.T) {
 
 // The delete must be pinned to the UID the sweep listed, not just the name.
 func TestSweepOrphanedDeletesWithUIDPrecondition(t *testing.T) {
-	secret := transientSecret(RegistryAuthSuffix, time.Now().Add(-time.Hour))
+	secret := transientSecret(RegistryAuthSuffix)
 	secret.UID = "listed-uid"
 	seen := false
 	c := newTestClientWithInterceptor(t, interceptor.Funcs{
@@ -251,7 +204,7 @@ func TestSweepOrphanedDeletesWithUIDPrecondition(t *testing.T) {
 		},
 	}, secret)
 
-	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), 0)
+	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard())
 	if err != nil {
 		t.Fatalf("SweepOrphaned returned error: %v", err)
 	}
@@ -266,7 +219,7 @@ func TestSweepOrphanedDeletesWithUIDPrecondition(t *testing.T) {
 // If the name is reused after the sweep listed the old Secret, the delete
 // conflicts and the replacement (an active Secret) survives.
 func TestSweepOrphanedLeavesReplacementSecret(t *testing.T) {
-	replacement := transientSecret(RegistryAuthSuffix, time.Now().Add(-time.Hour))
+	replacement := transientSecret(RegistryAuthSuffix)
 	replacement.UID = "new-uid"
 	c := newTestClientWithInterceptor(t, interceptor.Funcs{
 		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -297,7 +250,7 @@ func TestSweepOrphanedLeavesReplacementSecret(t *testing.T) {
 		},
 	}, replacement)
 
-	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard(), 0)
+	deleted, err := SweepOrphaned(context.Background(), c, logr.Discard())
 	if err != nil {
 		t.Fatalf("SweepOrphaned returned error: %v", err)
 	}
@@ -306,13 +259,5 @@ func TestSweepOrphanedLeavesReplacementSecret(t *testing.T) {
 	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(replacement), &corev1.Secret{}); err != nil {
 		t.Fatalf("replacement Secret was deleted: %v", err)
-	}
-}
-
-// The API's creation window must stay below the sweep's grace period, or a
-// stalled request could be swept mid-flight.
-func TestCreationTimeoutBelowOrphanGracePeriod(t *testing.T) {
-	if CreationTimeout >= OrphanGracePeriod {
-		t.Fatalf("CreationTimeout (%s) must be below OrphanGracePeriod (%s)", CreationTimeout, OrphanGracePeriod)
 	}
 }

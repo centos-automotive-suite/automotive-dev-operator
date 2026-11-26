@@ -6,7 +6,6 @@ package sealedsecrets
 import (
 	"context"
 	"fmt"
-	"time"
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
@@ -14,17 +13,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-)
-
-const (
-	// CreationTimeout bounds how long the build API may take to create a
-	// request's transient Secrets and its ImageReseal. It must stay below
-	// OrphanGracePeriod so a request still in flight is never mistaken for an
-	// abandoned one.
-	CreationTimeout = 2 * time.Minute
-	// OrphanGracePeriod is how long a transient Secret without an ImageReseal
-	// must exist before the sweep may treat it as an orphan.
-	OrphanGracePeriod = 10 * time.Minute
 )
 
 // Suffixes of the transient Secrets the build API creates for a sealed
@@ -58,41 +46,31 @@ func ImageResealName(secret *corev1.Secret) (string, bool) {
 }
 
 // SweepOrphaned deletes transient Secrets created for sealed requests whose
-// ImageReseal no longer exists. Such a Secret is unreachable by the
-// ImageReseal controller and unowned (the API's rollback can fail to set the
-// owner reference and to delete it), so only a sweep can remove it.
+// ImageReseal no longer exists. The API creates a job's Secrets owned by it,
+// so garbage collection normally removes them with the job; this sweep covers
+// the ones it cannot reach — left behind before Secrets were born owned, or by
+// any failure that strips the owner.
 //
 // Secrets are left alone while their ImageReseal exists, including while the
 // job is still running: the controller cleans them up when the job finishes.
-// Secrets younger than minAge are also left alone, so a Secret created before
-// its ImageReseal (the API creates the Secrets first) is never mistaken for an
-// orphan. User-provided Secrets carry none of the sealed-secret labels and are
-// never considered. Deletion is pinned to the listed Secret's UID, so a name
-// reused by a new request between the list and the delete is not removed.
+// User-provided Secrets carry none of the sealed-secret labels and are never
+// considered. Deletion is pinned to the listed Secret's UID, so a name reused
+// by a new request between the list and the delete is not removed.
 //
 // It returns the number of Secrets deleted and the first error encountered, so
 // callers can retry the ones that failed.
-func SweepOrphaned(
-	ctx context.Context,
-	c client.Client,
-	logger logr.Logger,
-	minAge time.Duration,
-) (int, error) {
+func SweepOrphaned(ctx context.Context, c client.Client, logger logr.Logger) (int, error) {
 	secrets := &corev1.SecretList{}
 	if err := c.List(ctx, secrets, client.MatchingLabels{labels.Transient: labels.ValueTrue}); err != nil {
 		return 0, fmt.Errorf("list transient Secrets: %w", err)
 	}
 
-	now := time.Now()
 	deleted := 0
 	var firstErr error
 	for i := range secrets.Items {
 		secret := &secrets.Items[i]
 		job, ok := ImageResealName(secret)
 		if !ok {
-			continue
-		}
-		if minAge > 0 && now.Sub(secret.CreationTimestamp.Time) < minAge {
 			continue
 		}
 

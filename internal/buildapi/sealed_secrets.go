@@ -37,77 +37,85 @@ func sealedSecretLabels(job, resourceType string) map[string]string {
 	}
 }
 
-// createSealedSecrets creates any transient secrets needed for a sealed operation (registry auth, seal key, key password).
-func createSealedSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, req *buildcontract.SealedRequest) (*sealedSecretRefs, error) {
+// planSealedSecrets resolves which transient Secrets the request needs and the
+// names they will carry. The names derive from the request, so the API can
+// record them on the ImageReseal before creating the Secrets themselves.
+func planSealedSecrets(req *buildcontract.SealedRequest) *sealedSecretRefs {
 	refs := &sealedSecretRefs{
 		keySecretRef:         req.KeySecretRef,
 		keyPasswordSecretRef: req.KeyPasswordSecretRef,
 	}
-
 	if req.RegistryCredentials != nil && req.RegistryCredentials.Enabled {
-		creds := req.RegistryCredentials
-		secretName := req.Name + sealedsecrets.RegistryAuthSuffix
-		secretData, err := buildSealedRegistrySecretData(creds)
-		if err != nil {
-			return nil, err
+		refs.secretRef = req.Name + sealedsecrets.RegistryAuthSuffix
+	}
+	if strings.TrimSpace(req.KeyContent) != "" && refs.keySecretRef == "" {
+		refs.keySecretRef = req.Name + sealedsecrets.SealKeySuffix
+		if strings.TrimSpace(req.KeyPassword) != "" {
+			refs.keyPasswordSecretRef = req.Name + sealedsecrets.SealKeyPasswordSuffix
 		}
+	}
+	return refs
+}
 
+// createSealedSecrets materializes the planned transient Secrets (registry
+// auth, seal key, key password), each born with the job as its owner so
+// garbage collection removes it even if the API dies mid-request. A ref the
+// requester supplied is left for the job to mount as-is.
+func createSealedSecrets(
+	ctx context.Context,
+	clientset kubernetes.Interface,
+	namespace string,
+	req *buildcontract.SealedRequest,
+	refs *sealedSecretRefs,
+	job *automotivev1alpha1.ImageReseal,
+) error {
+	owner := metav1.OwnerReference{
+		APIVersion: automotivev1alpha1.GroupVersion.String(),
+		Kind:       "ImageReseal",
+		Name:       job.Name,
+		UID:        job.UID,
+	}
+	create := func(name, resourceType string, data map[string][]byte) error {
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: namespace,
-				Labels:    sealedSecretLabels(req.Name, "registry-auth"),
+				Name:            name,
+				Namespace:       namespace,
+				Labels:          sealedSecretLabels(job.Name, resourceType),
+				OwnerReferences: []metav1.OwnerReference{owner},
 			},
 			Type: corev1.SecretTypeOpaque,
-			Data: secretData,
+			Data: data,
 		}
 		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-			return nil, fmt.Errorf("failed to create registry secret: %w", err)
+			return fmt.Errorf("failed to create %s secret: %w", resourceType, err)
 		}
-		refs.secretRef = secretName
+		return nil
 	}
 
-	if strings.TrimSpace(req.KeyContent) != "" && refs.keySecretRef == "" {
-		keySecretName := req.Name + sealedsecrets.SealKeySuffix
-		keySecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      keySecretName,
-				Namespace: namespace,
-				Labels:    sealedSecretLabels(req.Name, "seal-key"),
-			},
-			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{
-				"private-key": []byte(req.KeyContent),
-			},
+	if refs.secretRef != "" {
+		data, err := buildSealedRegistrySecretData(req.RegistryCredentials)
+		if err != nil {
+			return err
 		}
-		if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keySecret, metav1.CreateOptions{}); err != nil {
-			cleanupSealedSecrets(ctx, clientset, namespace, req, refs)
-			return nil, fmt.Errorf("failed to create seal-key secret: %w", err)
-		}
-		refs.keySecretRef = keySecretName
-
-		if strings.TrimSpace(req.KeyPassword) != "" {
-			keyPwSecretName := req.Name + sealedsecrets.SealKeyPasswordSuffix
-			keyPwSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      keyPwSecretName,
-					Namespace: namespace,
-					Labels:    sealedSecretLabels(req.Name, "seal-key-password"),
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: map[string][]byte{
-					"password": []byte(req.KeyPassword),
-				},
-			}
-			if _, err := clientset.CoreV1().Secrets(namespace).Create(ctx, keyPwSecret, metav1.CreateOptions{}); err != nil {
-				cleanupSealedSecrets(ctx, clientset, namespace, req, refs)
-				return nil, fmt.Errorf("failed to create seal-key-password secret: %w", err)
-			}
-			refs.keyPasswordSecretRef = keyPwSecretName
+		if err := create(refs.secretRef, "registry-auth", data); err != nil {
+			return err
 		}
 	}
-
-	return refs, nil
+	if refs.keySecretRef != "" && refs.keySecretRef != req.KeySecretRef {
+		if err := create(refs.keySecretRef, "seal-key", map[string][]byte{
+			"private-key": []byte(req.KeyContent),
+		}); err != nil {
+			return err
+		}
+	}
+	if refs.keyPasswordSecretRef != "" && refs.keyPasswordSecretRef != req.KeyPasswordSecretRef {
+		if err := create(refs.keyPasswordSecretRef, "seal-key-password", map[string][]byte{
+			"password": []byte(req.KeyPassword),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildSealedRegistrySecretData(creds *buildcontract.RegistryCredentials) (map[string][]byte, error) {
@@ -164,48 +172,4 @@ func cleanupSealedSecrets(ctx context.Context, clientset kubernetes.Interface, n
 	if refs.keyPasswordSecretRef != "" && refs.keyPasswordSecretRef != req.KeyPasswordSecretRef {
 		_ = clientset.CoreV1().Secrets(namespace).Delete(ctx, refs.keyPasswordSecretRef, metav1.DeleteOptions{})
 	}
-}
-
-func transientSealedSecretRefs(req *buildcontract.SealedRequest, refs *sealedSecretRefs) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	add := func(name string) {
-		if name == "" {
-			return
-		}
-		if _, exists := seen[name]; exists {
-			return
-		}
-		seen[name] = struct{}{}
-		out = append(out, name)
-	}
-
-	add(refs.secretRef)
-	if refs.keySecretRef != "" && refs.keySecretRef != req.KeySecretRef {
-		add(refs.keySecretRef)
-	}
-	if refs.keyPasswordSecretRef != "" && refs.keyPasswordSecretRef != req.KeyPasswordSecretRef {
-		add(refs.keyPasswordSecretRef)
-	}
-	return out
-}
-
-func setImageResealSecretOwnerRef(
-	ctx context.Context,
-	clientset kubernetes.Interface,
-	namespace, secretName string,
-	imageSealed *automotivev1alpha1.ImageReseal,
-) error {
-	createdSecret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-	createdSecret.OwnerReferences = []metav1.OwnerReference{{
-		APIVersion: automotivev1alpha1.GroupVersion.String(),
-		Kind:       "ImageReseal",
-		Name:       imageSealed.Name,
-		UID:        imageSealed.UID,
-	}}
-	_, err = clientset.CoreV1().Secrets(namespace).Update(ctx, createdSecret, metav1.UpdateOptions{})
-	return err
 }

@@ -124,6 +124,15 @@ func (r *Reconciler) handlePending(ctx context.Context, sealed *automotivev1alph
 		sealed.Spec.Architecture,
 	)
 
+	// The API creates the job before its transient Secrets, so a just-admitted
+	// job can be reconciled before they land; starting the run without them
+	// would only fail at mounting the workspaces. Wait instead: the retry
+	// backs off, and a Secret that never appears leaves a visible Pending job
+	// its requester can delete.
+	if err := r.missingSetupSecret(ctx, sealed); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Auto-detect architecture from source container image if not specified
 	if sealed.Spec.Architecture == "" && sealed.Spec.InputRef != "" {
 		arch, err := r.detectImageArch(ctx, sealed.Spec.InputRef, sealed.Namespace, sealed.Spec.SecretRef)
@@ -709,6 +718,26 @@ func (r *Reconciler) emitEventf(
 	r.Recorder.Eventf(sealed, nil, eventType, reason, reason, messageFmt, args...)
 }
 
+// missingSetupSecret reports the first Secret the job references that does not
+// exist yet. The API creates a job before its transient Secrets, so a
+// just-admitted job can be reconciled in that window; user-provided Secrets
+// are validated at admission but may have been deleted since.
+func (r *Reconciler) missingSetupSecret(ctx context.Context, sealed *automotivev1alpha1.ImageReseal) error {
+	for _, name := range []string{sealed.Spec.SecretRef, sealed.Spec.KeySecretRef, sealed.Spec.KeyPasswordSecretRef} {
+		if name == "" {
+			continue
+		}
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: sealed.Namespace}, secret); err != nil {
+			if k8serrors.IsNotFound(err) {
+				return fmt.Errorf("setup secret %s does not exist yet", name)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 // cleanupTransientSecrets attempts to delete all transient secrets for a
 // sealed operation. Returns an error if any read or deletion failed so the
 // caller can schedule a retry.
@@ -786,6 +815,12 @@ func (r *Reconciler) deleteSecret(ctx context.Context, secret *corev1.Secret, se
 		return nil
 	}
 	if k8serrors.IsNotFound(err) {
+		return nil
+	}
+	if k8serrors.IsConflict(err) {
+		// The name was reused by a newer request between the read and the
+		// delete; the replacement is not this job's to remove.
+		log.V(1).Info(secretType+" secret was replaced before the delete; leaving it", "secret", secret.Name)
 		return nil
 	}
 	log.Error(err, "Failed to delete "+secretType+" secret (will retry)", "secret", secret.Name)

@@ -17,7 +17,7 @@ const (
 // sweepOrphanedTransientSecrets removes transient Secrets left behind by
 // sealed-image requests whose ImageReseal is gone.
 func (r *Reconciler) sweepOrphanedTransientSecrets(ctx context.Context) error {
-	_, err := sealedsecrets.SweepOrphaned(ctx, r.Client, log.FromContext(ctx), sealedsecrets.OrphanGracePeriod)
+	_, err := sealedsecrets.SweepOrphaned(ctx, r.Client, log.FromContext(ctx))
 	return err
 }
 
@@ -28,7 +28,7 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	ctx = log.IntoContext(ctx, logger)
 
 	runSweep := func() {
-		deleted, err := sealedsecrets.SweepOrphaned(ctx, r.Client, logger, sealedsecrets.OrphanGracePeriod)
+		deleted, err := sealedsecrets.SweepOrphaned(ctx, r.Client, logger)
 		if err != nil {
 			logger.Error(err, "Orphaned transient Secret sweep incomplete; will retry", "deleted", deleted)
 			return

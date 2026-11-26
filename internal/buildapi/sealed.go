@@ -16,7 +16,6 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildcontract"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/imagestream"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
-	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/sealedsecrets"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
@@ -194,26 +193,11 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 		}
 	}
 
-	// The sweep treats a transient Secret without an ImageReseal as an orphan
-	// once it is older than its grace period. Bound this creation below that
-	// so a stalled API call cannot leave a Secret sweepable while the request
-	// is still in flight.
-	createCtx, cancelCreate := context.WithTimeout(ctx, sealedsecrets.CreationTimeout)
-	defer cancelCreate()
-
-	refs, err := createSealedSecrets(createCtx, clientset, namespace, &req)
-	if err != nil {
-		if k8serrors.IsAlreadyExists(err) {
-			spanError(span, err)
-			SealedCreateRequestsTotal.WithLabelValues(opLabel, "conflict").Inc()
-			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("job %s already exists", req.Name)})
-			return
-		}
-		spanError(span, err)
-		SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	// Create the job first and let its transient Secrets be born owned by it:
+	// a request that dies mid-way leaves no Secret garbage collection cannot
+	// reach, so there is no creation window to bound. The controller waits for
+	// the Secrets before starting the job's run.
+	refs := planSealedSecrets(&req)
 
 	aibImage := req.AIBImage
 	if aibImage == "" {
@@ -249,36 +233,49 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 		},
 	}
 
-	if err := k8sClient.Create(createCtx, imageSealed); err != nil {
+	if err := k8sClient.Create(ctx, imageSealed); err != nil {
 		if k8serrors.IsAlreadyExists(err) {
-			cleanupSealedSecrets(ctx, clientset, namespace, &req, refs)
 			spanError(span, err)
 			SealedCreateRequestsTotal.WithLabelValues(opLabel, "conflict").Inc()
 			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("job %s already exists", req.Name)})
 			return
 		}
-		// A timed-out or interrupted create may still have landed. Adopt it
-		// rather than deleting the Secrets its job references.
+		// A timed-out or interrupted create may still have landed. Withdraw it
+		// when it is ours so the client can retry the name; a job another
+		// request landed under this name is left alone.
 		landed := &automotivev1alpha1.ImageReseal{}
-		getErr := k8sClient.Get(ctx, client.ObjectKeyFromObject(imageSealed), landed)
-		ours := getErr == nil &&
-			landed.Spec.SecretRef == refs.secretRef &&
-			landed.Spec.KeySecretRef == refs.keySecretRef &&
-			landed.Spec.KeyPasswordSecretRef == refs.keyPasswordSecretRef
-		if !ours {
-			cleanupSealedSecrets(ctx, clientset, namespace, &req, refs)
-			spanError(span, err)
-			SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create ImageReseal: %v", err)})
-			return
+		if getErr := k8sClient.Get(ctx, client.ObjectKeyFromObject(imageSealed), landed); getErr == nil &&
+			landed.Annotations[labels.RequestedBy] == requestedBy && landed.Spec.InputRef == req.InputRef {
+			if delErr := k8sClient.Delete(ctx, landed, client.Preconditions{UID: &landed.UID}); delErr != nil && !k8serrors.IsNotFound(delErr) {
+				err = fmt.Errorf("%w (deleting the landed ImageReseal %s also failed: %v)", err, landed.Name, delErr)
+			}
 		}
-		imageSealed = landed
+		spanError(span, err)
+		SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create ImageReseal: %v", err)})
+		return
 	}
 
-	for _, secretName := range transientSealedSecretRefs(&req, refs) {
-		if err := setImageResealSecretOwnerRef(ctx, clientset, namespace, secretName, imageSealed); err != nil {
-			a.log.Error(err, "failed to set owner reference on sealed secret", "secret", secretName, "job", imageSealed.Name)
+	if err := createSealedSecrets(ctx, clientset, namespace, &req, refs, imageSealed); err != nil {
+		// Withdraw the job so the name frees up for a retry. The Secrets
+		// created so far are owned by the job, so garbage collection removes
+		// any the eager cleanup below misses. The request may be what failed,
+		// so use a context of our own.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		cleanupSealedSecrets(cleanupCtx, clientset, namespace, &req, refs)
+		if delErr := k8sClient.Delete(cleanupCtx, imageSealed, client.Preconditions{UID: &imageSealed.UID}); delErr != nil && !k8serrors.IsNotFound(delErr) {
+			err = fmt.Errorf("%w (deleting ImageReseal %s also failed: %v)", err, imageSealed.Name, delErr)
 		}
+		spanError(span, err)
+		if k8serrors.IsAlreadyExists(err) {
+			SealedCreateRequestsTotal.WithLabelValues(opLabel, "conflict").Inc()
+			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("job %s already exists", req.Name)})
+			return
+		}
+		SealedCreateRequestsTotal.WithLabelValues(opLabel, "error").Inc()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
 	// Reseal pods push as ado-build, which can push to an ImageStream but not
@@ -287,7 +284,7 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 	if outputStream != "" {
 		if _, err := imagestream.Ensure(ctx, k8sClient, namespace, outputStream, requestedBy); err != nil {
 			// Without the stream the job could only fail at its final push, so
-			// withdraw it. The Secrets are owned by the job by now, so garbage
+			// withdraw it. The Secrets are born owned by the job, so garbage
 			// collection removes any that fail to delete here. The request may be
 			// what failed, so use a context of our own.
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
