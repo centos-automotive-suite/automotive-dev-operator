@@ -1326,7 +1326,16 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 				{
 					Name:        "secret-ref",
 					Type:        tektonv1.ParamTypeString,
-					Description: "Secret reference for registry credentials",
+					Description: "Secret reference for registry credentials (unused; task bundles built before push-secret-ref read it for the disk push)",
+					Default: &tektonv1.ParamValue{
+						Type:      tektonv1.ParamTypeString,
+						StringVal: "",
+					},
+				},
+				{
+					Name:        "push-secret-ref",
+					Type:        tektonv1.ParamTypeString,
+					Description: "Name of the dockerconfigjson Secret the disk artifact push authenticates with",
 					Default: &tektonv1.ParamValue{
 						Type:      tektonv1.ParamTypeString,
 						StringVal: "",
@@ -1725,7 +1734,7 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 							Name: "secret-ref",
 							Value: tektonv1.ParamValue{
 								Type:      tektonv1.ParamTypeString,
-								StringVal: "$(params.secret-ref)",
+								StringVal: "$(params.push-secret-ref)",
 							},
 						},
 						{
@@ -1828,11 +1837,6 @@ func GenerateTektonPipeline(name, namespace string, buildConfig *BuildConfig) *t
 					When: []tektonv1.WhenExpression{
 						{
 							Input:    "$(params.export-oci)",
-							Operator: "notin",
-							Values:   []string{"", "null"},
-						},
-						{
-							Input:    "$(params.secret-ref)",
 							Operator: "notin",
 							Values:   []string{"", "null"},
 						},
