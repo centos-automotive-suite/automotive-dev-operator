@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // Anyone may read a build, but only its requester may change what goes into it.
@@ -83,7 +82,7 @@ func TestInternalRegistryBuildRequiresStreamOwner(t *testing.T) {
 			if tc.stream != nil {
 				objs = append(objs, tc.stream)
 			}
-			k8s := newSealedTestClient(t, interceptor.Funcs{}, objs...)
+			k8s := newSealedTestClient(t, objs...)
 			server := newTestServer(t, func(deps *apiDependencies) {
 				deps.getRESTConfigFromRequest = func(*gin.Context) (*rest.Config, error) { return &rest.Config{}, nil }
 				deps.loadOperatorConfig = func(context.Context, client.Client, string) (*api.OperatorConfig, error) {
@@ -121,7 +120,7 @@ func TestInternalRegistryBuildRequiresStreamOwner(t *testing.T) {
 }
 
 func TestContainerBuildRequiresStreamOwner(t *testing.T) {
-	k8s := newSealedTestClient(t, interceptor.Funcs{}, ownedStream("shared", "bob"))
+	k8s := newSealedTestClient(t, ownedStream("shared", "bob"))
 	secretCreated := false
 	server := newTestServer(t, func(deps *apiDependencies) {
 		deps.getClientFromRequest = func(*gin.Context) (client.Client, error) { return k8s, nil }
@@ -145,7 +144,7 @@ func TestContainerBuildRequiresStreamOwner(t *testing.T) {
 }
 
 func TestResealRequiresOutputStreamOwner(t *testing.T) {
-	k8s := newSealedTestClient(t, interceptor.Funcs{}, ownedStream("resealed", "bob"))
+	k8s := newSealedTestClient(t, ownedStream("resealed", "bob"))
 	body := `{"name":"reseal-demo","inputRef":"quay.io/example/input:v1",` +
 		`"outputRef":"` + defaultInternalRegistryURL + `/test-ns/resealed:v1"}`
 	if response := postResealAs(t, k8s, "alice", body); response.Code != http.StatusForbidden {
@@ -180,7 +179,7 @@ func TestDeleteBuildOnlyRemovesTagsFromOwnStream(t *testing.T) {
 				}},
 			}
 			tag := &imagev1.ImageStreamTag{ObjectMeta: metav1.ObjectMeta{Name: "shared:disk", Namespace: "test-ns"}}
-			k8s := newSealedTestClient(t, interceptor.Funcs{}, build, ownedStream("shared", tc.streamOwner), tag)
+			k8s := newSealedTestClient(t, build, ownedStream("shared", tc.streamOwner), tag)
 			server := newTestServer(t, func(deps *apiDependencies) {
 				deps.getClientFromRequest = func(*gin.Context) (client.Client, error) { return k8s, nil }
 			})
