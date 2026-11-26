@@ -22,6 +22,7 @@ import (
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/buildapi"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/telemetry"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 )
 
 func main() {
@@ -93,6 +94,7 @@ func main() {
 	}()
 
 	slog.Info("starting build-api server",
+		"version", version.String(),
 		"addr", addr,
 		"gin_mode", os.Getenv("GIN_MODE"),
 		"kubeconfig", os.Getenv("KUBECONFIG"),

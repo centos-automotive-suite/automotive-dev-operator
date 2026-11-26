@@ -125,7 +125,7 @@ func (a *APIServer) createSealed(c *gin.Context, pathOp buildcontract.SealedOper
 	if err := c.ShouldBindJSON(&req); err != nil {
 		spanError(span, err)
 		SealedCreateRequestsTotal.WithLabelValues(opLabel, "bad_request").Inc()
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request: " + err.Error()})
 		return
 	}
 

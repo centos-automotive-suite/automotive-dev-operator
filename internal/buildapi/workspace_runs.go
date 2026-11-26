@@ -89,7 +89,7 @@ func (a *APIServer) createWorkspaceRun(c *gin.Context, name string) {
 	var req buildcontract.WorkspaceRunRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRunRequestBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request: " + err.Error()})
 		return
 	}
 	if strings.TrimSpace(req.Command) == "" || len(req.Command) > buildcontract.MaxWorkspaceRunCommandBytes || strings.ContainsRune(req.Command, 0) {

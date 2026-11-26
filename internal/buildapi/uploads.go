@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -13,6 +14,7 @@ import (
 
 	automotivev1alpha1 "github.com/centos-automotive-suite/automotive-dev-operator/api/v1alpha1"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/common/labels"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	"github.com/centos-automotive-suite/automotive-dev-operator/internal/workspaceagent"
 )
 
@@ -50,6 +52,14 @@ func UploadPodReady(ctx context.Context, k8sClient client.Client, namespace, bui
 // the mark, so no upload commits after the build is complete. The checks here
 // only answer early.
 func (a *APIServer) uploadFiles(c *gin.Context, name string) {
+	// caib before 0.3.0 uploads a multipart form, which the upload agent can't
+	// read. Tell its users why instead of relaying the agent's rejection.
+	if strings.HasPrefix(c.ContentType(), "multipart/") {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": fmt.Sprintf(
+			"this caib is older than the Build API (%s) and sends files in a format it no longer accepts. Install the caib release that matches the operator: %s",
+			version.String(), version.ReleasesURL)})
+		return
+	}
 	namespace := resolveNamespace()
 
 	k8sClient, err := a.getK8sClientOrFail(c)

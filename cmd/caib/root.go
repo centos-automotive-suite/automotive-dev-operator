@@ -11,6 +11,7 @@ import (
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/container"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/image"
 	"github.com/centos-automotive-suite/automotive-dev-operator/cmd/caib/workspace"
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -22,15 +23,11 @@ var validOutputFormats = map[string]bool{
 }
 
 func fullVersion() string {
-	v := version
-	if v == "" {
-		v = "dev"
-	}
+	v := version.String()
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, s := range info.Settings {
 			if s.Key == "vcs.revision" && len(s.Value) >= 7 {
-				v += " (" + s.Value[:7] + ")"
-				break
+				return v + " (" + s.Value[:7] + ")"
 			}
 		}
 	}

@@ -74,7 +74,10 @@ func CreateBuildAPIClient(serverURL string, authToken *string, insecureSkipTLS b
 		return nil, err
 	}
 
-	opts := []buildapiclient.Option{buildapiclient.WithAuthToken(tokenValue)}
+	opts := []buildapiclient.Option{
+		buildapiclient.WithAuthToken(tokenValue),
+		buildapiclient.WithServerVersionObserver(CheckServerVersion),
+	}
 
 	if insecureSkipTLS {
 		opts = append(opts, buildapiclient.WithInsecureTLS())

@@ -68,7 +68,7 @@ func (a *APIServer) stopWorkspace(c *gin.Context, name string) {
 func (a *APIServer) createWorkspace(c *gin.Context) {
 	var req buildcontract.WorkspaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request: " + err.Error()})
 		return
 	}
 
@@ -309,7 +309,7 @@ func (a *APIServer) handleSetWorkspaceLease(c *gin.Context) {
 		LeaseID string `json:"leaseID"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "leaseID required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request: " + err.Error()})
 		return
 	}
 
@@ -541,7 +541,7 @@ func (a *APIServer) deployWorkspace(c *gin.Context, name string) {
 	var req buildcontract.WorkspaceDeployRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRunRequestBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request: " + err.Error()})
 		return
 	}
 	if len(req.Artifacts) == 0 {

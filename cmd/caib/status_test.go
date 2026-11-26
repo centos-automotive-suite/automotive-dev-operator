@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/centos-automotive-suite/automotive-dev-operator/internal/version"
 	"gopkg.in/yaml.v3"
 )
 
@@ -93,9 +94,34 @@ func TestCheckServerHealth_Reachable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	status := checkServerHealth(srv.URL, false)
+	status, _ := checkServerHealth(srv.URL, false)
 	if status != statusReachable {
 		t.Errorf("expected %q, got %q", statusReachable, status)
+	}
+}
+
+func TestCheckServerHealth_ReportsServerVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(version.Header, "0.3.0")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	_, serverVersion := checkServerHealth(srv.URL, false)
+	if serverVersion != "0.3.0" {
+		t.Errorf("expected server version %q, got %q", "0.3.0", serverVersion)
+	}
+}
+
+func TestCheckServerHealth_ServerWithoutVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	status, serverVersion := checkServerHealth(srv.URL, false)
+	if status != statusReachable || serverVersion != "" {
+		t.Errorf("expected (%q, \"\"), got (%q, %q)", statusReachable, status, serverVersion)
 	}
 }
 
@@ -105,7 +131,7 @@ func TestCheckServerHealth_Unhealthy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	status := checkServerHealth(srv.URL, false)
+	status, _ := checkServerHealth(srv.URL, false)
 	expected := "unhealthy (HTTP 503)"
 	if status != expected {
 		t.Errorf("expected %q, got %q", expected, status)
@@ -113,7 +139,7 @@ func TestCheckServerHealth_Unhealthy(t *testing.T) {
 }
 
 func TestCheckServerHealth_Unreachable(t *testing.T) {
-	status := checkServerHealth("http://127.0.0.1:1", false)
+	status, _ := checkServerHealth("http://127.0.0.1:1", false)
 	if len(status) < 12 || status[:11] != "unreachable" {
 		t.Errorf("expected 'unreachable (...)', got %q", status)
 	}

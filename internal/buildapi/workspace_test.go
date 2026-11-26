@@ -125,7 +125,23 @@ var _ = Describe("Workspace API", func() {
 			server.router.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(MatchJSON(`{"error":"invalid JSON request"}`))
+			Expect(w.Body.String()).To(ContainSubstring("invalid JSON request"))
+		})
+
+		It("should reject a field it does not know instead of ignoring it", func() {
+			body := []byte(`{"name": "my-ws", "noSuchOption": true}`)
+			req, err := http.NewRequest("POST", "/v1/workspaces", bytes.NewReader(body))
+			Expect(err).NotTo(HaveOccurred())
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+authToken)
+
+			w := httptest.NewRecorder()
+			server.router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			var response map[string]string
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response["error"]).To(ContainSubstring(`unknown field "noSuchOption"`))
 		})
 	})
 
