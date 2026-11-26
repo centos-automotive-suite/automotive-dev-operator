@@ -112,6 +112,7 @@ type BuildResult struct {
 	Message                 string                            `json:"message,omitempty" yaml:"message,omitempty"`
 	ContainerImage          string                            `json:"containerImage,omitempty" yaml:"containerImage,omitempty"`
 	DiskImage               string                            `json:"diskImage,omitempty" yaml:"diskImage,omitempty"`
+	Artifacts               []buildcontract.ArtifactStatus    `json:"artifacts,omitempty" yaml:"artifacts,omitempty"`
 	LeaseID                 string                            `json:"leaseId,omitempty" yaml:"leaseId,omitempty"`
 	RegistryCredentialsFile string                            `json:"registryCredentialsFile,omitempty" yaml:"registryCredentialsFile,omitempty"`
 	RegistryUsername        string                            `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty"`
@@ -396,6 +397,7 @@ func (h *Handler) displayBuildResults(ctx context.Context, api *buildapiclient.C
 			Message:                 st.Message,
 			ContainerImage:          st.ContainerImage,
 			DiskImage:               st.DiskImage,
+			Artifacts:               st.Artifacts,
 			RegistryCredentialsFile: credsFile,
 		}
 		if st.Flash != nil {
@@ -481,11 +483,21 @@ func (h *Handler) displayBuildResultsText(st *buildcontract.BuildResponse, creds
 		valueColor = color.New(color.FgHiGreen).SprintFunc()
 	}
 
+	// Server-reported artifacts are authoritative; the per-image lines below
+	// are a fallback for servers that do not return them.
+	hasArtifacts := len(st.Artifacts) > 0
+	for _, a := range st.Artifacts {
+		clilog.Infof("%s %s\n", labelColor(fmt.Sprintf("Artifact (%s):", a.Kind)), valueColor(a.URL))
+		if a.Digest != "" {
+			clilog.Infof("  %s %s\n", labelColor("Digest:"), valueColor(a.Digest))
+		}
+	}
+
 	if h.opts.Registry.UseInternalRegistry {
-		if st.ContainerImage != "" {
+		if st.ContainerImage != "" && !hasArtifacts {
 			clilog.Infof("%s %s\n", labelColor("Container image:"), valueColor(st.ContainerImage))
 		}
-		if st.DiskImage != "" {
+		if st.DiskImage != "" && !hasArtifacts {
 			clilog.Infof("%s %s\n", labelColor("Disk image:"), valueColor(st.DiskImage))
 		}
 		if credsFile != "" {
@@ -501,6 +513,9 @@ func (h *Handler) displayBuildResultsText(st *buildcontract.BuildResponse, creds
 		return
 	}
 
+	if hasArtifacts {
+		return
+	}
 	if st.ContainerImage != "" && h.opts.Registry.ContainerPush != "" {
 		clilog.Infof("%s %s\n", labelColor("Container image pushed to:"), valueColor(h.opts.Registry.ContainerPush))
 	}

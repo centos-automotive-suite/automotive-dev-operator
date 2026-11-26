@@ -5,14 +5,14 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // ArtifactStatus describes an output actually published by a build stage.
 type ArtifactStatus struct {
 	// +kubebuilder:validation:Enum=container;disk;s3
-	Kind string `json:"kind"`
+	Kind string `json:"kind" yaml:"kind"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=2048
-	URL string `json:"url"`
+	URL string `json:"url" yaml:"url"`
 	// Digest is the OCI digest or a checksum of uploaded bytes, never an S3 ETag.
 	// +kubebuilder:validation:Pattern=`^sha256:[a-f0-9]{64}$`
 	// +optional
-	Digest string `json:"digest,omitempty"`
+	Digest string `json:"digest,omitempty" yaml:"digest,omitempty"`
 }
 
 // FlashOutcomeStatus excludes device credentials and command configuration.

@@ -435,3 +435,82 @@ func TestBuildResultRenderFormatted(t *testing.T) {
 		t.Fatalf("RenderFormatted(yaml) error: %v", gotErr)
 	}
 }
+
+var testArtifacts = []buildcontract.ArtifactStatus{
+	{Kind: "container", URL: "quay.io/org/img:tag", Digest: "sha256:" + strings.Repeat("a", 64)},
+	{Kind: "s3", URL: "s3://bucket/disk.raw.xz"},
+}
+
+func TestBuildResultArtifactsStructured(t *testing.T) {
+	result := BuildResult{Name: "b", Phase: "Completed", Artifacts: testArtifacts}
+
+	jsonOut, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	yamlOut, err := yaml.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, unmarshal := range map[string]func() (map[string]any, error){
+		"json": func() (map[string]any, error) { var m map[string]any; return m, json.Unmarshal(jsonOut, &m) },
+		"yaml": func() (map[string]any, error) { var m map[string]any; return m, yaml.Unmarshal(yamlOut, &m) },
+	} {
+		m, err := unmarshal()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		arts, ok := m["artifacts"].([]any)
+		if !ok || len(arts) != 2 {
+			t.Fatalf("%s: artifacts = %v, want 2 entries", name, m["artifacts"])
+		}
+		first, _ := arts[0].(map[string]any)
+		if first["kind"] != "container" || first["url"] != "quay.io/org/img:tag" || first["digest"] != testArtifacts[0].Digest {
+			t.Errorf("%s: first artifact = %v", name, first)
+		}
+		second, _ := arts[1].(map[string]any)
+		if _, ok := second["digest"]; ok {
+			t.Errorf("%s: empty digest should be omitted, got %v", name, second)
+		}
+	}
+
+	empty, err := json.Marshal(BuildResult{Name: "b", Phase: "Completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(empty), "artifacts") {
+		t.Errorf("artifacts should be omitted when empty, got %s", empty)
+	}
+}
+
+func TestDisplayBuildResultsTextPrintsArtifacts(t *testing.T) {
+	for _, internal := range []bool{true, false} {
+		h := &Handler{opts: Options{Output: &commandopts.Output{}, Registry: &commandopts.Registry{
+			UseInternalRegistry: internal,
+			ContainerPush:       "flag-value-should-not-print",
+		}}}
+		st := &buildcontract.BuildResponse{
+			Name:           "test-build",
+			Phase:          "Completed",
+			ContainerImage: "quay.io/org/img:tag",
+			Artifacts:      testArtifacts,
+		}
+
+		out := captureStdout(t, func() {
+			h.displayBuildResultsText(st, "")
+		})
+
+		for _, want := range []string{"quay.io/org/img:tag", testArtifacts[0].Digest, "s3://bucket/disk.raw.xz", "container", "s3"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("internal=%v: output missing %q, got:\n%s", internal, want, out)
+			}
+		}
+		if strings.Count(out, "quay.io/org/img:tag") != 1 {
+			t.Errorf("internal=%v: container URL should print once, got:\n%s", internal, out)
+		}
+		if strings.Contains(out, "flag-value-should-not-print") {
+			t.Errorf("internal=%v: should print server artifacts, not flag value, got:\n%s", internal, out)
+		}
+	}
+}
