@@ -483,8 +483,9 @@ func (h *Handler) displayBuildResultsText(st *buildcontract.BuildResponse, creds
 		valueColor = color.New(color.FgHiGreen).SprintFunc()
 	}
 
-	// Server-reported artifacts are authoritative; the per-image lines below
-	// are a fallback for servers that do not return them.
+	// Server-reported artifacts are authoritative. For external registries the
+	// push-destination lines below are a fallback for servers that do not
+	// return artifacts; internal-registry image lines always print.
 	hasArtifacts := len(st.Artifacts) > 0
 	for _, a := range st.Artifacts {
 		clilog.Infof("%s %s\n", labelColor(fmt.Sprintf("Artifact (%s):", a.Kind)), valueColor(a.URL))
@@ -494,10 +495,11 @@ func (h *Handler) displayBuildResultsText(st *buildcontract.BuildResponse, creds
 	}
 
 	if h.opts.Registry.UseInternalRegistry {
-		if st.ContainerImage != "" && !hasArtifacts {
+		// Artifacts hold cluster-local URLs; these lines carry the external route.
+		if st.ContainerImage != "" {
 			clilog.Infof("%s %s\n", labelColor("Container image:"), valueColor(st.ContainerImage))
 		}
-		if st.DiskImage != "" && !hasArtifacts {
+		if st.DiskImage != "" {
 			clilog.Infof("%s %s\n", labelColor("Disk image:"), valueColor(st.DiskImage))
 		}
 		if credsFile != "" {

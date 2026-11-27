@@ -485,7 +485,7 @@ func TestBuildResultArtifactsStructured(t *testing.T) {
 }
 
 func TestDisplayBuildResultsTextPrintsArtifacts(t *testing.T) {
-	for _, internal := range []bool{true, false} {
+	for _, internal := range []bool{false} {
 		h := &Handler{opts: Options{Output: &commandopts.Output{}, Registry: &commandopts.Registry{
 			UseInternalRegistry: internal,
 			ContainerPush:       "flag-value-should-not-print",
@@ -511,6 +511,37 @@ func TestDisplayBuildResultsTextPrintsArtifacts(t *testing.T) {
 		}
 		if strings.Contains(out, "flag-value-should-not-print") {
 			t.Errorf("internal=%v: should print server artifacts, not flag value, got:\n%s", internal, out)
+		}
+	}
+}
+
+// Internal-registry artifacts carry cluster-local URLs, so the externally
+// translated image lines must still print alongside them.
+func TestDisplayBuildResultsTextInternalRegistryKeepsExternalURL(t *testing.T) {
+	h := &Handler{opts: Options{Output: &commandopts.Output{}, Registry: &commandopts.Registry{
+		UseInternalRegistry: true,
+	}}}
+	st := &buildcontract.BuildResponse{
+		Name:           "test-build",
+		Phase:          "Completed",
+		ContainerImage: "default-route.apps.example.com/ns/img:tag",
+		DiskImage:      "default-route.apps.example.com/ns/disk:tag",
+		Artifacts: []buildcontract.ArtifactStatus{
+			{Kind: "container", URL: "image-registry.openshift-image-registry.svc:5000/ns/img:tag"},
+		},
+	}
+
+	out := captureStdout(t, func() {
+		h.displayBuildResultsText(st, "")
+	})
+
+	for _, want := range []string{
+		"image-registry.openshift-image-registry.svc:5000/ns/img:tag",
+		"Container image: default-route.apps.example.com/ns/img:tag",
+		"Disk image: default-route.apps.example.com/ns/disk:tag",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q, got:\n%s", want, out)
 		}
 	}
 }
